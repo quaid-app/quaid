@@ -176,7 +176,10 @@ enum Commands {
         action: commands::skills::SkillsAction,
     },
     /// Call a raw MCP tool
-    Call { tool: String, params: Option<String> },
+    Call {
+        tool: String,
+        params: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -189,25 +192,53 @@ async fn main() -> Result<()> {
         Commands::Init => commands::init::run(&db),
         Commands::Get { slug } => commands::get::run(&db, &slug, cli.json),
         Commands::Put { slug } => commands::put::run(&db, &slug),
-        Commands::List { wing, r#type, limit } => commands::list::run(&db, wing, r#type, limit, cli.json),
-        Commands::Search { query, wing, limit } => commands::search::run(&db, &query, wing, limit, cli.json),
-        Commands::Query { query, depth, token_budget, wing } => {
-            commands::query::run(&db, &query, &depth, token_budget, wing, cli.json).await
+        Commands::List {
+            wing,
+            r#type,
+            limit,
+        } => commands::list::run(&db, wing, r#type, limit, cli.json),
+        Commands::Search { query, wing, limit } => {
+            commands::search::run(&db, &query, wing, limit, cli.json)
         }
+        Commands::Query {
+            query,
+            depth,
+            token_budget,
+            wing,
+        } => commands::query::run(&db, &query, &depth, token_budget, wing, cli.json).await,
         Commands::Ingest { path, force } => commands::ingest::run(&db, &path, force),
-        Commands::Import { path, validate_only } => commands::import::run(&db, &path, validate_only),
-        Commands::Export { path, raw, import_id } => commands::export::run(&db, &path, raw, import_id),
+        Commands::Import {
+            path,
+            validate_only,
+        } => commands::import::run(&db, &path, validate_only),
+        Commands::Export {
+            path,
+            raw,
+            import_id,
+        } => commands::export::run(&db, &path, raw, import_id),
         Commands::Embed { all, stale } => commands::embed::run(&db, all, stale),
-        Commands::Link { from, to, relationship, valid_from, valid_until } => {
-            commands::link::run(&db, &from, &to, &relationship, valid_from, valid_until)
-        }
+        Commands::Link {
+            from,
+            to,
+            relationship,
+            valid_from,
+            valid_until,
+        } => commands::link::run(&db, &from, &to, &relationship, valid_from, valid_until),
         Commands::Unlink { link_id } => commands::link::unlink(&db, link_id),
-        Commands::Backlinks { slug, temporal } => commands::link::backlinks(&db, &slug, temporal, cli.json),
+        Commands::Backlinks { slug, temporal } => {
+            commands::link::backlinks(&db, &slug, temporal, cli.json)
+        }
         Commands::Tag { slug, tags } => commands::tags::tag(&db, &slug, &tags),
         Commands::Untag { slug, tags } => commands::tags::untag(&db, &slug, &tags),
         Commands::Timeline { slug, limit } => commands::timeline::run(&db, &slug, limit, cli.json),
-        Commands::Graph { slug, depth, temporal } => commands::graph::run(&db, &slug, depth, &temporal, cli.json),
-        Commands::Check { slug, all, r#type } => commands::check::run(&db, slug, all, r#type, cli.json),
+        Commands::Graph {
+            slug,
+            depth,
+            temporal,
+        } => commands::graph::run(&db, &slug, depth, &temporal, cli.json),
+        Commands::Check { slug, all, r#type } => {
+            commands::check::run(&db, slug, all, r#type, cli.json)
+        }
         Commands::Gaps { limit, resolved } => commands::gaps::run(&db, limit, resolved, cli.json),
         Commands::Compact => commands::compact::run(&db),
         Commands::Config { action } => commands::config::run(&db, action),

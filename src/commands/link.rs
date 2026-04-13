@@ -1,7 +1,14 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-pub fn run(db: &Connection, from: &str, to: &str, relationship: &str, valid_from: Option<String>, valid_until: Option<String>) -> Result<()> {
+pub fn run(
+    db: &Connection,
+    from: &str,
+    to: &str,
+    relationship: &str,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+) -> Result<()> {
     todo!("link: create typed temporal link")
 }
 

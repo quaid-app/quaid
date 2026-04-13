@@ -553,26 +553,25 @@ CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resol
 
 -- ============================================================
 -- knowledge_gaps: queries the brain couldn't answer well
--- Populated when brain_query returns low-confidence results.
--- Research skill resolves gaps via web research + ingest pipeline.
+-- Privacy-safe by default: raw query text is NOT retained
+-- unless explicitly approved.  Only query_hash is stored on
+-- detection; query_text is populated post-approval.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS knowledge_gaps (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    query_text        TEXT    NOT NULL,       -- the original query that found a gap
-    context           TEXT    NOT NULL DEFAULT '',  -- why this gap matters / what triggered it
-    confidence_score  REAL    DEFAULT NULL,   -- highest score from the search that triggered the gap (NULL = no results)
-    sensitivity       TEXT    NOT NULL DEFAULT 'internal',  -- 'internal' | 'redacted' | 'external'
-    -- Sensitivity is ALWAYS 'internal' at creation (enforced by brain_gap — no caller override).
-    -- Escalation requires brain_gap_approve, which populates the audit fields below.
-    approved_by       TEXT    DEFAULT NULL,   -- who approved the sensitivity escalation (user ID or agent name)
-    approved_at       TEXT    DEFAULT NULL,   -- when escalation was approved
-    redacted_query    TEXT    DEFAULT NULL,   -- anonymised query for 'redacted' sensitivity (entity names stripped)
-    resolved_at       TEXT    DEFAULT NULL,   -- NULL = unresolved
-    resolved_by_slug  TEXT    DEFAULT NULL,   -- slug of the page that filled the gap
-    detected_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_hash       TEXT    NOT NULL,   -- SHA-256 of original query, always stored
+    query_text       TEXT    DEFAULT NULL,  -- raw text retained only after approval
+    context          TEXT    NOT NULL DEFAULT '',
+    confidence_score REAL    DEFAULT NULL,
+    sensitivity      TEXT    NOT NULL DEFAULT 'internal',
+    approved_by      TEXT    DEFAULT NULL,
+    approved_at      TEXT    DEFAULT NULL,
+    redacted_query   TEXT    DEFAULT NULL,
+    resolved_at      TEXT    DEFAULT NULL,
+    resolved_by_slug TEXT    DEFAULT NULL,
+    detected_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     CHECK (sensitivity IN ('internal', 'external', 'redacted')),
-    -- Invariant: non-internal sensitivity requires approval audit trail
-    CHECK (sensitivity = 'internal' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+    CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
 );
 
 CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at) WHERE resolved_at IS NULL;
@@ -593,7 +592,7 @@ CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at) WH
 - **Temporal links (`valid_from`, `valid_until`, `relationship`):** Links carry typed relationships and temporal validity windows. `valid_until IS NULL` = currently active. `valid_from` is nullable (NULL = unknown start date). Each link has a surrogate `id` used by `brain_link_close` for unambiguous targeting. Multiple intervals with unknown start dates are allowed — dedup and non-overlap enforced in application logic.
 - **Freshness timestamps:** `updated_at` bumped on any page-scoped mutation. `truth_updated_at` bumped only when `compiled_truth` changes (Tiers 2-4). `timeline_updated_at` bumped only when timeline content or `timeline_entries` change (Tier 1). Staleness = `timeline_updated_at` > `truth_updated_at` by 30+ days.
 - **Contradictions:** Detected by `gbrain check` (CLI) and `brain_check` (MCP). Stored with `resolved_at` for tracking. Unresolved contradictions surface in briefings and maintenance reports.
-- **Knowledge gaps:** Logged by `brain_gap` (MCP) when `brain_query` returns no results or only low-confidence matches (below configurable threshold). `confidence_score` stores the highest search score from the triggering query. **Sensitivity is always `internal` at creation — `brain_gap` does not accept a sensitivity parameter.** Escalation to `redacted` or `external` requires a separate `brain_gap_approve` call that records `approved_by`, `approved_at`, and optionally `redacted_query` (the anonymised version of the query for `redacted` mode). A CHECK constraint enforces that non-internal sensitivity always has an approval audit trail. The research skill (`skills/research/SKILL.md`) refuses external calls for any gap without an approval record. When a gap is resolved via ingest, `resolved_at` and `resolved_by_slug` are set. Unresolved gaps surface in briefings alongside contradictions.
+- **Knowledge gaps:** Logged by `brain_gap` (MCP) when `brain_query` returns no results or only low-confidence matches (below configurable threshold). **Privacy-safe by default:** only a SHA-256 `query_hash` is stored at detection time; raw `query_text` is `NULL` until explicitly approved. `confidence_score` stores the highest search score from the triggering query. **Sensitivity is always `internal` at creation — `brain_gap` does not accept a sensitivity parameter.** Escalation to `redacted` or `external` requires a separate `brain_gap_approve` call that records `approved_by`, `approved_at`, and optionally populates `query_text` and `redacted_query` (the anonymised version for `redacted` mode). A CHECK constraint enforces that `query_text` can only be non-NULL when an approval audit trail exists. The research skill (`skills/research/SKILL.md`) refuses external calls for any gap without an approval record. When a gap is resolved via ingest, `resolved_at` and `resolved_by_slug` are set. Unresolved gaps surface in briefings alongside contradictions.
 
 ---
 
@@ -2795,7 +2794,7 @@ brain.db contains sensitive personal intelligence: deal assessments, people eval
 **Operational:**
 - No telemetry. No analytics. No phone-home. The gbrain binary itself makes zero network calls at runtime.
 - Skills are local markdown files. The binary does not exfiltrate data.
-- **Network boundary for agent-driven skills:** The enrichment skill (`skills/enrich/SKILL.md`) and research skill (`skills/research/SKILL.md`) instruct the agent to call external APIs (Crustdata, Exa, Brave, Happenstance). These network calls are made by the agent, not by the gbrain binary — but the effect is the same: brain content (queries, entity names) can reach third-party services. The `knowledge_gaps.sensitivity` field controls this: gaps default to `internal` (no external research), and must be explicitly upgraded to `redacted` or `external` before the research skill will issue network calls. Agents must respect this classification.
+- **Network boundary for agent-driven skills:** The enrichment skill (`skills/enrich/SKILL.md`) and research skill (`skills/research/SKILL.md`) instruct the agent to call external APIs (Crustdata, Exa, Brave, Happenstance). These network calls are made by the agent, not by the gbrain binary — but the effect is the same: brain content (queries, entity names) can reach third-party services. The `knowledge_gaps.sensitivity` field controls this: gaps default to `internal` (no external research), and must be explicitly upgraded to `redacted` or `external` before the research skill will issue network calls. Raw query text (`query_text`) is never retained at detection time — only a `query_hash` is stored; `query_text` is populated only after explicit approval. Agents must respect this classification.
 - `gbrain export` writes plaintext markdown. Treat export directories with the same sensitivity as the DB.
 - `.env` files or API keys for enrichment skills (Crustdata, Exa) are the user's responsibility. gbrain never stores them in brain.db.
 

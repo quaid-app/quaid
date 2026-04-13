@@ -1,0 +1,75 @@
+[package]
+name = "gbrain"
+version = "0.1.0"
+edition = "2021"
+description = "Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One static binary."
+license = "MIT"
+repository = "https://github.com/macro88/gigabrain"
+readme = "README.md"
+keywords = ["knowledge-base", "sqlite", "embeddings", "mcp", "rag"]
+categories = ["command-line-utilities", "database"]
+
+[[bin]]
+name = "gbrain"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Database — bundled = SQLite compiled into binary, no system dependency
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# sqlite-vec — vector search as a SQLite extension, statically linked
+sqlite-vec = "0.1"
+
+# Embeddings — pure Rust ML framework, no ONNX runtime, true static linking
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+safetensors = "0.4"
+tokenizers = "0.20"
+
+# MCP server (stdio transport, JSON-RPC 2.0)
+rmcp = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Markdown parsing
+pulldown-cmark = "0.11"
+
+# Regex
+regex = "1"
+
+# Async runtime (required by rmcp)
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# SHA-256 for content hashing (idempotency keys, chunk dedup)
+sha2 = "0.10"
+
+# UUID for import batch IDs
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["bundled", "embed-model"]
+bundled = ["rusqlite/bundled"]
+# embed-model: include_bytes!() model weights into binary (~90MB, zero first-run download)
+embed-model = []
+# online-model: download weights on first run (~10MB binary, requires internet once)
+online-model = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

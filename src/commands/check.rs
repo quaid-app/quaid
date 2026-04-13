@@ -2,11 +2,11 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 pub fn run(
-    db: &Connection,
-    slug: Option<String>,
-    all: bool,
-    check_type: Option<String>,
-    json: bool,
+    _db: &Connection,
+    _slug: Option<String>,
+    _all: bool,
+    _check_type: Option<String>,
+    _json: bool,
 ) -> Result<()> {
     todo!("check: contradiction detection")
 }

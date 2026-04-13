@@ -2,11 +2,11 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 pub fn run(
-    db: &Connection,
-    query: &str,
-    wing: Option<String>,
-    limit: u32,
-    json: bool,
+    _db: &Connection,
+    _query: &str,
+    _wing: Option<String>,
+    _limit: u32,
+    _json: bool,
 ) -> Result<()> {
     todo!("search: FTS5 full-text search")
 }

@@ -2,20 +2,25 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 pub fn run(
-    db: &Connection,
-    from: &str,
-    to: &str,
-    relationship: &str,
-    valid_from: Option<String>,
-    valid_until: Option<String>,
+    _db: &Connection,
+    _from: &str,
+    _to: &str,
+    _relationship: &str,
+    _valid_from: Option<String>,
+    _valid_until: Option<String>,
 ) -> Result<()> {
     todo!("link: create typed temporal link")
 }
 
-pub fn unlink(db: &Connection, link_id: u64) -> Result<()> {
+pub fn unlink(_db: &Connection, _link_id: u64) -> Result<()> {
     todo!("unlink: close temporal link")
 }
 
-pub fn backlinks(db: &Connection, slug: &str, temporal: Option<String>, json: bool) -> Result<()> {
+pub fn backlinks(
+    _db: &Connection,
+    _slug: &str,
+    _temporal: Option<String>,
+    _json: bool,
+) -> Result<()> {
     todo!("backlinks: list backlinks for a page")
 }

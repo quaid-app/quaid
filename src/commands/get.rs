@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-pub fn run(db: &Connection, slug: &str, json: bool) -> Result<()> {
+pub fn run(_db: &Connection, _slug: &str, _json: bool) -> Result<()> {
     todo!("get: read page by slug")
 }

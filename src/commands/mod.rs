@@ -21,4 +21,3 @@ pub mod stats;
 pub mod tags;
 pub mod timeline;
 pub mod validate;
-pub mod version;

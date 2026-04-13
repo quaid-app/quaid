@@ -9,6 +9,6 @@ pub enum ConfigAction {
     List,
 }
 
-pub fn run(db: &Connection, action: ConfigAction) -> Result<()> {
+pub fn run(_db: &Connection, _action: ConfigAction) -> Result<()> {
     todo!("config: get/set/list brain config")
 }

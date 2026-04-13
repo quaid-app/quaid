@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-pub fn run(db: &Connection, slug: &str, depth: u32, temporal: &str, json: bool) -> Result<()> {
+pub fn run(_db: &Connection, _slug: &str, _depth: u32, _temporal: &str, _json: bool) -> Result<()> {
     todo!("graph: N-hop graph neighbourhood")
 }

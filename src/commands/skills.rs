@@ -7,6 +7,6 @@ pub enum SkillsAction {
     List,
 }
 
-pub fn run(action: SkillsAction) -> Result<()> {
+pub fn run(_action: SkillsAction) -> Result<()> {
     todo!("skills: manage and inspect brain skills")
 }

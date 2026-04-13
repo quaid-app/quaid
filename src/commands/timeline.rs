@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-pub fn run(db: &Connection, slug: &str, limit: u32, json: bool) -> Result<()> {
+pub fn run(_db: &Connection, _slug: &str, _limit: u32, _json: bool) -> Result<()> {
     todo!("timeline: show timeline entries for page")
 }

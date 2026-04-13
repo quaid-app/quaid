@@ -2,11 +2,26 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** Spec complete, implementation in progress — see [Phased Delivery](docs/spec.md#phased-delivery)
+**Status:** `Sprint 0 complete` — repository scaffold, CI, and phase proposals are in place. Phase 1 (Core) has not started. Nothing is implemented yet. [See the roadmap →](#roadmap)
 
 ---
 
 Inspired by [Garry Tan's GBrain work](https://gist.github.com/garrytan/49c88e83cf8d7ae95e087426368809cb), GigaBrain adapts the same core concept — a personal knowledge brain with compiled truth and append-only timelines — to a local-first Rust + SQLite architecture built for portable, offline use. No API keys. No internet required. No Docker. One static binary, drop it anywhere.
+
+## Roadmap
+
+GigaBrain is built in explicit phases. Each phase has a hard gate — no phase begins until the previous one is reviewed and merged.
+
+| Phase | Status | What ships |
+| ----- | ------ | ---------- |
+| **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
+| **Phase 1** — Core storage + CLI | 🔜 Not started | `gbrain init`, `import`, `get`, `put`, `search`, `link`, `graph`, `stats`, `compact` |
+| **Phase 2** — Intelligence layer | 🔜 Not started | Local embeddings, hybrid search, MCP server, `query`, `check`, `gaps` |
+| **Phase 3** — Polish + release | 🔜 Not started | Benchmarks, cross-compiled binaries, fat skill finalization |
+
+OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
+
+---
 
 ## Why
 
@@ -31,7 +46,9 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 **Thin harness, fat skills.** The binary is plumbing. The intelligence lives in `SKILL.md` files that any agent reads at session start. Workflows, heuristics, edge cases — all in plain markdown, not compiled code. Swap or extend skills without rebuilding.
 
-## Features
+## Planned features
+
+> These are the target features for v0.1. None are implemented yet. The spec and OpenSpec proposals define exactly how each will work.
 
 - **Single static binary** — ~90MB including embedded BGE-small-en-v1.5 model weights. Zero runtime dependencies.
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
@@ -57,29 +74,33 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> **Note:** GigaBrain is not yet released. The spec is complete; see [Phased Delivery](docs/spec.md#phased-delivery) for build status.
+> **Not yet available.** GigaBrain is pre-implementation — Sprint 0 (scaffold) is complete, but Phase 1 (Core) has not started. The release install instructions below describe what will ship at v0.1.
 
-Once available, install from a GitHub release:
+Once Phase 3 ships, install from a GitHub release:
 
 ```bash
 VERSION="v0.1.0"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o /tmp/gbrain
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o /tmp/gbrain.sha256
-echo "$(cat /tmp/gbrain.sha256)  /tmp/gbrain" | shasum -a 256 --check
-cp /tmp/gbrain /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o gbrain
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o gbrain.sha256
+echo "$(cat gbrain.sha256)  gbrain" | shasum -a 256 --check
+cp gbrain /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
 ```
 
-Or build from source:
+Or build from source (the scaffold compiles today; full implementation begins in Phase 1):
 
 ```bash
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Binary at target/release/gbrain (~90MB with embedded model weights)
+# Binary at target/release/gbrain (~90MB with embedded model weights once Phase 2 ships)
 ```
 
+---
+
 ## Usage
+
+> **Planned API.** These commands are the target surface for Phase 1 and Phase 2. They reflect the spec exactly but are not yet implemented. See [`docs/spec.md`](docs/spec.md) for full command signatures.
 
 ```bash
 # Create a new brain
@@ -168,6 +189,29 @@ gbrain skills doctor
 
 The `original` type is for your own thinking — distinct from world knowledge. Everything else is compiled external intelligence.
 
+## Contributing
+
+GigaBrain is actively looking for contributors as Phase 1 begins.
+
+**How we work:**
+
+1. **Read the spec first.** [`docs/spec.md`](docs/spec.md) is the authoritative design document — schema, algorithms, CLI surface, skill design, benchmarks. Everything is defined there.
+2. **Proposals before code.** Every meaningful change (code, docs, tests, benchmarks) requires an OpenSpec change proposal in [`openspec/changes/`](openspec/changes/) following the instructions in [`openspec/`](openspec/). This is the design record before implementation.
+3. **Check the phase proposals.** The four phase proposals in `openspec/changes/` define the full scope and acceptance criteria for each phase. Pick up work that aligns with the current active phase.
+4. **CI gates everything.** PRs must pass `cargo check` + `cargo test` before review.
+
+**Good first contributions for Sprint 0 / Phase 1 prep:**
+- Review the [`sprint-0-repo-scaffold`](openspec/changes/sprint-0-repo-scaffold/proposal.md) and [`p1-core-storage-cli`](openspec/changes/p1-core-storage-cli/proposal.md) proposals and raise questions in issues
+- Improve skill stub content in [`skills/`](skills/)
+- Add fixture pages to [`tests/fixtures/`](tests/fixtures/)
+
+**Ground rules:**
+- No implementation PRs until the Sprint 0 PR merges to `main`
+- Keep PRs scoped to a single phase concern
+- Document decisions — don't leave reasoning in PR comments alone
+
+---
+
 ## Build from source
 
 ```bash
@@ -195,9 +239,12 @@ cargo test
 - **Not a note-taking app** — structured knowledge pages. Use Obsidian for freeform notes.
 - **Not multimodal** — text only.
 
-## Spec
+## Spec and design documents
 
-The full technical specification — schema, search algorithms, skill design, benchmarks, design decisions — is in [docs/spec.md](docs/spec.md).
+- [`docs/spec.md`](docs/spec.md) — full technical specification: schema, search algorithms, CLI surface, skill design, benchmarks, and design decisions
+- [`openspec/changes/`](openspec/changes/) — structured change proposals for all four phases; the design record before implementation
+- [`AGENTS.md`](AGENTS.md) — orientation for AI agents working in this repo
+- [`CLAUDE.md`](CLAUDE.md) — Claude-specific context and conventions
 
 ## Acknowledgements
 

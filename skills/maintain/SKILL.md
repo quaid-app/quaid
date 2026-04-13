@@ -1,0 +1,24 @@
+---
+name: gbrain-maintain
+description: |
+  Maintain brain integrity: detect contradictions, resolve knowledge gaps,
+  find orphaned pages, and clean stale assertions.
+---
+
+# Maintain Skill
+
+> Stub — full content to be authored in Phase 2 implementation.
+
+## Operations
+
+- `gbrain check --all` — run full contradiction detection across all assertions
+- `gbrain validate --all` — check referential integrity, stale embeddings, broken links
+- `gbrain gaps` — list unresolved knowledge gaps
+- Manual orphan review: pages with no links in or out
+
+## TODO
+
+- [ ] Contradiction resolution workflow
+- [ ] Orphan page detection heuristics
+- [ ] Stale assertion cleanup rules
+- [ ] Knowledge gap prioritization

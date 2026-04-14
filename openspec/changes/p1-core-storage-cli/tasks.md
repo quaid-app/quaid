@@ -61,28 +61,28 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Spec:** ingest-export/spec.md — Markdown frontmatter parsing, Compiled_truth / timeline split
 > **Design decision:** split at first bare --- line after frontmatter; render_page must be byte-exact for roundtrip_raw
 
-- [ ] Implement parse_frontmatter(raw: &str) -> (HashMap<String, String>, String):
+- [x] Implement parse_frontmatter(raw: &str) -> (HashMap<String, String>, String):
   - If file starts with ---
 , extract YAML block up to next ---
 ; parse with serde_yaml
   - Return empty map + full string if no frontmatter present
-- [ ] Implement split_content(body: &str) -> (String, String):
+- [x] Implement split_content(body: &str) -> (String, String):
   - Split at first line that is exactly --- after frontmatter has been stripped
   - compiled_truth = everything above; timeline = everything below
   - If no boundary: compiled_truth = body, timeline = empty string
-- [ ] Implement extract_summary(compiled_truth: &str) -> String:
+- [x] Implement extract_summary(compiled_truth: &str) -> String:
   - Return the first non-heading, non-empty paragraph (200 chars max); fall back to first line
-- [ ] Implement render_page(page: &Page) -> String:
+- [x] Implement render_page(page: &Page) -> String:
   - Emit frontmatter YAML block, then compiled_truth, then 
 ---
 , then timeline
   - Must produce byte-exact output for a round-trip on canonical input
-- [ ] Unit test: parse valid frontmatter — fields match; body starts after frontmatter
-- [ ] Unit test: parse file with no frontmatter — empty map, full body
-- [ ] Unit test: split_content with boundary — correct halves
-- [ ] Unit test: split_content with no boundary — full body in compiled_truth, empty timeline
-- [ ] Unit test: render then re-parse then re-render is idempotent
-- [ ] cargo test markdown passes
+- [x] Unit test: parse valid frontmatter — fields match; body starts after frontmatter
+- [x] Unit test: parse file with no frontmatter — empty map, full body
+- [x] Unit test: split_content with boundary — correct halves
+- [x] Unit test: split_content with no boundary — full body in compiled_truth, empty timeline
+- [x] Unit test: render then re-parse then re-render is idempotent
+- [x] cargo test markdown passes
 
 ---
 

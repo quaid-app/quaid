@@ -57,6 +57,17 @@
   - Leela's Link contract clarification (slugs at app layer; IDs at DB layer; three data-loss bugs corrected)
   - Bender's validation plan (anticipatory QA checklist for T02–T06)
 - Inbox files deleted after merge.
+
+## Phase 1 Markdown Slice (T03)
+
+- Implemented `src/core/markdown.rs`: `parse_frontmatter`, `split_content`, `extract_summary`, `render_page` — tasks 4.1–4.10 complete.
+- `parse_frontmatter` parses YAML via `serde_yaml::Value` then converts scalars to strings. Non-scalar values (sequences, maps) are silently skipped. Malformed YAML degrades to empty map (no error propagation — matches spec signature).
+- `split_content` uses byte-offset search for `\n---\n` (or prefix/suffix variants) to preserve exact positions for round-trip fidelity. Only the first `---` line is consumed; subsequent separators remain in timeline.
+- `render_page` sorts frontmatter keys alphabetically for deterministic output. Timeline separator (`\n---\n`) is only emitted when timeline is non-empty. Canonical input (sorted keys, unquoted values) round-trips byte-exact.
+- `extract_summary` collects the first consecutive block of non-heading, non-empty lines, joins with space, truncates to 200 chars. Falls back to first non-empty line (even headings) if no paragraph qualifies.
+- Module-level `#![allow(dead_code)]` is temporary — remove when migrate.rs or commands wire the functions.
+- 21 unit tests structured per rust-best-practices skill: nested `mod` per function, descriptive names reading as sentences.
+- All gates pass: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` (28/28 including 7 db tests).
 - Fry, Leela, Bender histories updated with cross-team context.
 - Ready for git commit.
 

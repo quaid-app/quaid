@@ -19,3 +19,21 @@
 - Fixture guidance provided: canonical, boundary-trap, no-frontmatter.
 - Critical implementation traps documented: HashMap order nondeterminism, trim() fidelity loss, type coercion underspecification, dual `---` roles.
 - Orchestration log written. Inbox cleared. Cross-agent histories updated.
+
+## 2026-04-14T04:07:24Z Phase 1 T06 put Command Coverage Spec
+
+- Locked comprehensive unit test specification for T06 put command before code lands.
+- Three core test cases frozen: create (version 1), update (OCC success), conflict (OCC failure).
+- Implementation seam specified: pure helper function + thin CLI wrapper (enables deterministic unit coverage).
+- Four assertion guards documented: frontmatter comparison, markdown split fidelity, OCC semantics, Phase 1 room behavior.
+- Test naming convention provided (4 test names in kebab-case).
+- Status: BLOCKED — implementation not ready; coverage plan locked.
+
+## 2026-04-14T04:07:24Z Scribe Merge (T05, T07, T03 approval, T06 spec)
+
+- Scribe wrote 3 orchestration logs (Fry T05+T07, Bender T03 approval, Scruffy T06 spec).
+- Scribe wrote session log for Phase 1 command slice window (3h execution).
+- Four inbox decisions merged into canonical decisions.md (no duplicates found).
+- Inbox files deleted after merge.
+- Cross-agent history updates applied.
+- Ready for git commit.

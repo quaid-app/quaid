@@ -81,3 +81,28 @@
 - Inbox files deleted after merge.
 - Git commit staged and ready.
 
+## 2026-04-14T04:07:24Z Phase 1 Command Slice — T05 init, T07 get (COMPLETE)
+
+- Implemented `src/commands/init.rs` (T05): existence check before db::open prevents re-initialization; no schema migration on existing DBs.
+- Implemented `src/commands/get.rs` (T07): extracted `get_page()` as public helper for OCC reuse in T06; frontmatter stored as JSON with defensive deserialization; `--json` output supported.
+- Public `get_page(db, slug)` helper enables T06 put command to read current version for OCC checks without circular module deps.
+- Tests: 3 for init (creation, idempotent re-run, nonexistent parent rejection); 4 for get (data round-trip, markdown render, not-found error, frontmatter deser).
+- Total test count: 48 (41 baseline + 7 new).
+- All gates pass: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` (48/48).
+- Integration points: Bender can now use `get_page` for round-trip test harness; T06 put can import `get_page` for version reads.
+- In-flight: T06 put command implementation (stdin seam + OCC compare-and-swap logic + 3+ test cases per Scruffy spec).
+- Blocker: lib.rs export (Bender concern, Phase 1 gate requirement for round-trip tests).
+- Branch: phase1/p1-core-storage-cli.
+
+## 2026-04-14T04:07:24Z Scribe Merge (T05, T07, T03 approval, T06 spec)
+
+- Scribe wrote 3 orchestration logs (Fry: T05+T07 complete; Bender: T03 approved; Scruffy: T06 spec locked).
+- Scribe wrote session log for Phase 1 command slice window.
+- Four inbox decisions merged into canonical decisions.md:
+  - Bender's T03 markdown slice approval (APPROVED; 2 non-blocking concerns logged for Phase 2)
+  - Fry's T05+T07 implementation decisions (get_page helper, JSON frontmatter, --json output, no main.rs changes needed)
+  - Scruffy's T06 put unit test spec (3 core cases + 4 assertion guards + implementation seam requirement)
+- Inbox files deleted after merge (all three inbox .md files removed).
+- Cross-agent history updates applied (Fry, Bender, Scruffy histories appended with session context).
+- Ready for git commit.
+

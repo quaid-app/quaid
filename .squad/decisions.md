@@ -306,6 +306,102 @@ Phase 2 (blocked on Phase 1 gate):
 
 **Status:** Strategy prepared. Test module ready once Fry lands code.
 
+### 2026-04-14: T03 Markdown Slice — Bender approval with two non-blocking concerns
+
+**By:** Bender (Tester)  
+**Status:** APPROVED
+
+**What:** Reviewed `src/core/markdown.rs` (commit `0ae8a46`) against all spec invariants. All 4 public functions (`parse_frontmatter`, `split_content`, `extract_summary`, `render_page`) match spec; 19/19 unit tests pass; no violations found.
+
+**Approval Decision:** Ship T03 as complete.
+
+**Non-blocking Concerns (Documented for future phases):**
+
+1. **Naive YAML rendering loses structured values (Phase 2 hardening)**
+   - Impact: Data loss on round-trip for non-scalar frontmatter
+   - Current mitigation: Phase 1 uses string-scalar frontmatter only; HashMap<String, String> type constraint enforced
+   - Phase 2 action: Fry should use `serde_yaml::to_string()` for frontmatter serialization when values can originate from user input
+
+2. **No lib.rs — integration tests blocked (Phase 1 gate blocker)**
+   - Impact: `tests/roundtrip_semantic.rs` and `tests/roundtrip_raw.rs` cannot import core modules from external test files
+   - Classification: Structural prerequisite, not a markdown.rs bug
+   - Blocker level: Blocks Phase 1 ship gate (round-trip tests required)
+   - Action: Fry must add `src/lib.rs` re-exporting `pub mod core` before round-trip integration tests can run
+
+**Routing:** Fry: Log lib.rs gap and YAML serialization hardening as follow-up tasks; lib.rs is Phase 1 blocker.
+
+### 2026-04-14: Phase 1 Init + Get Slice — T05, T07 implementation complete
+
+**By:** Fry (Implementer)  
+**Status:** COMPLETE
+
+**What:** Implemented `src/commands/init.rs` (T05) and `src/commands/get.rs` (T07) — first two usable CLI commands.
+
+**T05 init.rs decisions:**
+1. Existence check before `db::open` prevents re-initialization of existing database
+2. No schema migration on existing DBs; `init` is strictly creation-only
+
+**T07 get.rs decisions:**
+1. `get_page()` extracted as public helper for OCC reuse in T06 and beyond (no circular deps)
+2. Frontmatter stored as JSON in schema; `get_page` deserializes with fallback to empty map on malformed JSON
+3. `--json` output serializes full `Page` struct; default is canonical markdown via `render_page`
+
+**Wiring:** main.rs already correct from Sprint 0 scaffold; no changes needed.
+
+**Test coverage:**
+- init: 3 tests (creation, idempotent re-run, nonexistent parent rejection)
+- get: 4 tests (data round-trip, markdown render, not-found error, frontmatter deser)
+- Total new: 7 tests; 48 tests pass overall (41 baseline + 7 new)
+
+**Gates passed:** `cargo fmt --check` ✓, `cargo clippy -- -D warnings` ✓, `cargo test` ✓
+
+**Integration points:**
+- Bender: `get_page` available for round-trip test harness integration
+- T06 (put): Can import `get_page` to read current version for OCC checks
+
+### 2026-04-14: T06 put Command — Unit test coverage specification locked
+
+**By:** Scruffy (Coverage Master)  
+**Status:** BLOCKED — implementation not ready; coverage plan locked
+
+**What:** Prepared comprehensive unit test specification for T06 `put` command before code lands. Three core test cases locked; coverage targets frozen to prevent drift.
+
+**Required test cases (minimum):**
+
+1. **Create path:** Insert version 1, derive fields from stdin markdown
+   - Parse frontmatter + split content
+   - Store title, page_type, summary, wing, room, compiled_truth, timeline
+   - version = 1
+
+2. **Update path (OCC success):** Compare-and-swap when expected version matches
+   - Insert initial page at version = 1
+   - Call put with `expected_version = Some(1)` and changed markdown
+   - Update succeeds, version becomes 2, slug stable, content fully replaced
+
+3. **Conflict path (OCC failure):** Reject stale version without mutation
+   - Insert page at version = 2
+   - Call put with `expected_version = Some(1)`
+   - Returns conflict with `current_version = 2`, row unchanged, version remains 2
+
+**Implementation seam required:**
+- Pure helper: `put_page(&Connection, slug, raw markdown, expected_version) → Result<version | OccError>`
+- CLI `run()` as thin wrapper: reads stdin, formats messages
+- This enables deterministic unit coverage without fake terminal plumbing
+
+**Assertion guards:**
+1. Frontmatter: compare deserialized maps, not raw JSON string
+2. Markdown split: assert exact truth/timeline values, boundary newlines
+3. OCC semantics: stale version must fail without row mutation
+4. Phase 1 room: stored as empty string even when headings exist
+
+**Test naming:**
+- `put_creates_page_from_stdin_markdown_with_version_one`
+- `put_updates_existing_page_when_expected_version_matches`
+- `put_returns_conflict_and_preserves_row_when_expected_version_is_stale`
+- `put_derives_summary_wing_and_room_from_markdown_and_slug` (can fold into create)
+
+**Status:** Ready for implementation. Specification locked; awaiting Fry's code land.
+
 ## Governance
 
 - All meaningful changes require team consensus

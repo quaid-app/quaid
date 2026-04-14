@@ -329,10 +329,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T01, T14
 > **Spec:** design.md — novelty module purpose
 
-- [ ] Implement check_novelty(content: &str, existing_page: &Page, conn: &Connection) -> Result<bool, SearchError>:
+- [x] Implement check_novelty(content: &str, existing_page: &Page, conn: &Connection) -> Result<bool, SearchError>:
   - Jaccard similarity on token sets + cosine similarity on embeddings if available
   - Return true if content is sufficiently novel (below similarity threshold)
-- [ ] Unit test: identical content — not novel; clearly different content — novel
+- [x] Unit test: identical content — not novel; clearly different content — novel
 
 ---
 

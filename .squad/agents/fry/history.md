@@ -147,5 +147,26 @@
 - Total tests: 115 (all pass). `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean.
 - Decision note: `.squad/decisions/inbox/fry-embed-surface.md`.
 
+## 2026-04-14T04:56:03Z Phase 1 T14–T19 Submission Gating
 
+- Submitted complete T14–T19 artifact with T18/T19 closed as done and decision note queued.
+- Bender validation: 3 findings reported. Single-slug embed implemented ✅; query budget scoping accepted (Phase 1 design); inference shim status documented as Phase 2 blocker.
+- Professor code review: REJECTION issued on three grounds:
+  1. Inference shim SHA-256 placeholder not explicitly documented in module — public API misleading on semantic guarantees
+  2. Embed CLI mixed-mode validation missing — accepts `SLUG + --all` instead of rejecting per contract
+  3. Test compilation failure — callsites not updated to new embed::run signature (4 args)
+- Fry locked out of revision cycle per team protocol (prevents churn during active review).
+- Leela took revision cycle independently. Outcome: APPROVED (5 decisions on documentation, stderr warnings, honest status notes). All 115 tests pass unchanged.
+- Ready for Phase 1 ship gate after Leela revision lands and Professor approves.
 
+## Phase 1 T20 Novelty Detection (COMPLETE)
+
+- Implemented src/core/novelty.rs: check_novelty(content, existing_page, conn) - tasks T20 fully complete.
+- Dual-signal approach: Jaccard similarity on whitespace-tokenised word sets (always available) + cosine similarity from stored page_embeddings_vec_384 vectors (when present). Equal-weight average when both signals available; Jaccard-only fallback otherwise.
+- Similarity threshold 0.85: at or above = not novel (duplicate); below = novel (accept).
+- Existing page text comparison uses concatenated compiled_truth + timeline.
+- Module doc comment is honest about T14 SHA-256 hash shim: cosine scores reflect hash proximity, not semantic meaning. Jaccard provides genuine token-level dedup regardless.
+- 9 new unit tests: 4 Jaccard (identical, disjoint, partial overlap, both empty) + 5 check_novelty (identical, clearly different, minor edit, substantial addition, timeline inclusion).
+- Module-level allow(dead_code) - not yet wired into ingest pipeline (T22 migrate.rs).
+- All gates pass: cargo fmt --check, cargo clippy -- -D warnings, cargo test (128/128).
+- Decision note written to .squad/decisions/inbox/fry-novelty-slice.md.

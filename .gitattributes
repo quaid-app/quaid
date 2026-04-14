@@ -1,3 +1,22 @@
+# Normalize text files to LF so Windows hosts and the Linux devcontainer
+# don't constantly fight over line endings.
+* text=auto eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Common binary assets and SQLite artifacts.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.db binary
+*.db-shm binary
+*.db-wal binary
+*.safetensors binary
+
 # Squad: union merge for append-only team state files
 .squad/decisions.md merge=union
 .squad/agents/*/history.md merge=union

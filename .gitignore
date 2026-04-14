@@ -1,3 +1,20 @@
+# Rust build artifacts
+/target/
+
+# Local SQLite working data
+/brain.db
+/brain.db-journal
+/brain.db-shm
+/brain.db-wal
+
+# Local environment overrides
+.env
+.env.*
+
+# Cross-platform OS cruft
+.DS_Store
+Thumbs.db
+
 # Squad: ignore runtime state (logs, inbox, sessions)
 .squad/orchestration-log/
 .squad/log/

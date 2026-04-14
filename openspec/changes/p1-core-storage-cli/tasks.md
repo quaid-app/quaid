@@ -106,10 +106,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02
 > **Spec:** crud-commands/spec.md — gbrain init command
 
-- [ ] Call db::open(path) where path is CLI arg or default_db_path() (already in main.rs)
-- [ ] If file already exists: print Database already exists at <path> and exit 0
-- [ ] On success: print Brain initialized at <path> and exit 0
-- [ ] On error: print to stderr and exit 1
+- [x] Call db::open(path) where path is CLI arg or default_db_path() (already in main.rs)
+- [x] If file already exists: print Database already exists at <path> and exit 0
+- [x] On success: print Brain initialized at <path> and exit 0
+- [x] On error: print to stderr and exit 1
 
 ---
 
@@ -138,10 +138,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02, T03
 > **Spec:** crud-commands/spec.md — gbrain get command
 
-- [ ] Query SELECT * FROM pages WHERE slug = ?
-- [ ] If not found: print error to stderr, exit 1
-- [ ] Call render_page(page) and print to stdout
-- [ ] Unit test: put a page, get it back — rendered output matches input
+- [x] Query SELECT * FROM pages WHERE slug = ?
+- [x] If not found: print error to stderr, exit 1
+- [x] Call render_page(page) and print to stdout
+- [x] Unit test: put a page, get it back — rendered output matches input
 
 ---
 

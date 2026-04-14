@@ -34,7 +34,12 @@ enum Commands {
     /// Read a page by slug
     Get { slug: String },
     /// Write or update a page (reads from stdin)
-    Put { slug: String },
+    Put {
+        slug: String,
+        /// Expected current version for OCC (omit for new pages or unconditional upsert)
+        #[arg(long)]
+        expected_version: Option<i64>,
+    },
     /// List pages with optional filters
     List {
         #[arg(long)]
@@ -225,7 +230,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Init { .. } | Commands::Version => unreachable!(),
         Commands::Get { slug } => commands::get::run(&db, &slug, cli.json),
-        Commands::Put { slug } => commands::put::run(&db, &slug),
+        Commands::Put {
+            slug,
+            expected_version,
+        } => commands::put::run(&db, &slug, expected_version),
         Commands::List {
             wing,
             r#type,

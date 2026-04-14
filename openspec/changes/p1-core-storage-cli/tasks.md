@@ -119,17 +119,17 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Spec:** crud-commands/spec.md — gbrain put command, OCC conflict on put
 > **Design decision:** compare-and-swap on version column; INSERT for new pages, compare-and-swap UPDATE for existing
 
-- [ ] Read markdown from stdin
-- [ ] Call parse_frontmatter + split_content + extract_summary + derive_wing + derive_room
-- [ ] For new pages: INSERT INTO pages with version=1
-- [ ] For existing pages with --expected-version N:
+- [x] Read markdown from stdin
+- [x] Call parse_frontmatter + split_content + extract_summary + derive_wing + derive_room
+- [x] For new pages: INSERT INTO pages with version=1
+- [x] For existing pages with --expected-version N:
   - UPDATE pages SET ..., version = version + 1 WHERE slug = ? AND version = N
   - If rows_affected == 0: print conflict error with current version and exit 1
-- [ ] For existing pages without --expected-version: upsert without version check
-- [ ] Print success message including resulting version
-- [ ] Unit test: create page — version is 1
-- [ ] Unit test: update with correct version — version becomes 2
-- [ ] Unit test: update with stale version — conflict error printed, exit 1
+- [x] For existing pages without --expected-version: upsert without version check
+- [x] Print success message including resulting version
+- [x] Unit test: create page — version is 1
+- [x] Unit test: update with correct version — version becomes 2
+- [x] Unit test: update with stale version — conflict error printed, exit 1
 
 ---
 

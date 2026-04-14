@@ -94,3 +94,35 @@
 2. Open PR to main
 3. Create GitHub labels: `phase-1`, `phase-2`, `phase-3`, `squad`, `squad:fry`, `squad:bender`, etc.
 4. Create GitHub issues for each phase/workstream (see `.squad/decisions/inbox/leela-sprint-zero.md`)
+
+## 2026-04-14 T10 Contract Review — Tags Architecture Lock
+
+**What was done:**
+- Reviewed T10 tags command implementation contract before Fry's code landed
+- Identified three-way conflict: schema + types + prior decisions all said `tags` table; tasks.md + spec scenario were stale drafts referencing defunct `pages.tags` JSON pattern
+- Published contract decision: **tags live exclusively in `tags` table**
+  - List: SELECT from tags table (no OCC)
+  - Add: INSERT OR IGNORE (no OCC, idempotent)
+  - Remove: DELETE (no OCC, silent no-op on nonexistent)
+  - No page version bump on tag operations
+- Corrected gate-blocking artifacts:
+  1. `tasks.md` T10: three bullet points updated to reference `tags` table, removed stale OCC/re-put language
+  2. `specs/crud-commands/spec.md` Add tag scenario: clarified "inserted into tags table; page row not updated"
+- Decision note written to `.squad/decisions/inbox/leela-tags-contract-review.md`
+- Impact: Unblocked Fry's T10 implementation; tags now proceed on corrected contract with no page version bump
+
+## 2026-04-14 Phase 1 CLI Expansion Merge — Session Complete
+
+**Scribe snapshot (2026-04-14T04:21:54Z):**
+- Orchestration logs created for Fry (T06–T12 completion: 86 tests passing) and Leela (T10 contract review findings)
+- Session log recorded to `.squad/log/2026-04-14T04-21-54Z-phase1-cli-expansion.md`
+- Five inbox decisions merged into canonical `decisions.md`:
+  - Fry's T08 list + T09 stats (11 tests, dynamic SQL, pragma_database_list path resolution)
+  - Fry's T06 put slice (OCC 3-path contract, SQLite timestamp, frontmatter defaults, 8 tests)
+  - Fry's T11 link + T12 compact (slug-to-ID resolution, link-close UPDATE-first, 10 tests)
+  - Fry's T10 tags (unified subcommand, tags table direct writes, no OCC, 8 tests)
+  - Leela's T10 contract review (tags table exclusive, 3 operations locked, 2 artifact corrections applied)
+- Inbox files deleted after merge
+- Fry and Leela histories updated with cross-team context
+- Ready for git commit
+

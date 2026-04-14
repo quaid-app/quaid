@@ -114,3 +114,14 @@
 - Decision note written to `.squad/decisions/inbox/fry-p1-list-stats-slice.md`.
 - Task checkboxes updated in `openspec/changes/p1-core-storage-cli/tasks.md`.
 
+## Phase 1 T11 link.rs + T12 compact.rs + T10 tags.rs (COMPLETE)
+
+- Implemented `src/commands/link.rs` (T11): slug-to-ID resolution in command layer; link-close uses UPDATE-first pattern for valid_until. Also implemented link-close (by ID), links (list outbound), backlinks (list inbound), and unlink (delete) to unblock runtime panics.
+- Implemented `src/commands/compact.rs` (T12): thin delegation to `db::compact()` + success message.
+- Implemented `src/commands/tags.rs` (T10): unified `Tags` subcommand (list/add/remove) per Leela's contract review. Tags live in `tags` table exclusively — no OCC, no page version bump. `INSERT OR IGNORE` for idempotent add; silent no-op on remove of nonexistent tags.
+- Tests: 10 for link (create, close, by-ID, nonexistent ID, page-not-found, unlink, list, compact), 8 for tags (empty list, add, duplicate idempotency, remove, nonexistent remove, nonexistent page error, version-unchanged assertion, alphabetical ordering). Total: 86 tests (47 baseline + 39 new).
+- All gates pass: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` (86/86).
+- Decision notes written to inbox: fry-p1-link-compact-slice.md, fry-p1-tags-slice.md, fry-p1-put-slice.md (T06 prior session).
+- Integration: Leela provided T10 contract review (tags-contract-review.md) — corrections applied to tasks.md and spec.md; Fry's implementation proceeded on corrected contract.
+- Next lane: T13 FTS5 search command.
+

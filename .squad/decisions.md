@@ -402,6 +402,112 @@ Phase 2 (blocked on Phase 1 gate):
 
 **Status:** Ready for implementation. Specification locked; awaiting Fry's code land.
 
+### 2026-04-14: T08 list.rs + T09 stats.rs implementation choices
+
+**Date:** 2026-04-14
+**Author:** Fry
+**Status:** Verified ✅
+
+**list.rs — dynamic query construction:**
+`list_pages` builds the SQL string with optional `AND wing = ?` / `AND type = ?` clauses using `Box<dyn ToSql>` parameter bags. This avoids four separate prepared statements for the four filter combinations while staying injection-safe (all values are bound parameters, never interpolated). Default limit 50 is enforced by clap's `default_value`.
+
+**stats.rs — DB file size via pragma_database_list:**
+Rather than threading the file path through from `main.rs`, `gather_stats` reads the path from `SELECT file FROM pragma_database_list WHERE name = 'main'`. This keeps the function signature clean (only `&Connection`) and works for any open database. Falls back to 0 bytes if `fs::metadata` fails (e.g., in-memory DB).
+
+**Test coverage:**
+- list.rs: 7 tests — no filters, wing filter, type filter, combined filters, limit cap, empty DB, ordering by updated_at DESC.
+- stats.rs: 4 tests — empty DB zeros, page+type counts, FTS trigger row count, nonzero file size.
+- No main.rs changes needed; clap dispatch was already wired.
+
+### 2026-04-14: T06 put.rs — OCC Implementation Decisions
+
+**Author:** Fry
+**Date:** 2026-04-14
+**Change:** p1-core-storage-cli
+**Scope:** T06
+
+**OCC three-path contract:** New page → INSERT version=1. Existing + `--expected-version N` → compare-and-swap UPDATE (WHERE version = N). Existing without flag → unconditional UPDATE (version bump, no check). This matches the spec and design doc decision 7.
+
+**Conflict error message format:** `"Conflict: page updated elsewhere (current version: {N})"` — matches spec scenario verbatim. CLI exits 1 via `anyhow::bail!`.
+
+**Timestamp via SQLite, not chrono:** `now_iso_from(db)` queries `strftime('%Y-%m-%dT%H:%M:%SZ', 'now')` from SQLite instead of adding a `chrono` dependency. Keeps the dependency graph lean and timestamps consistent with schema defaults.
+
+**Frontmatter defaults:** Missing `title` falls back to the slug; missing `type` falls back to `"concept"`. This prevents empty NOT NULL columns without requiring the user to always specify both.
+
+**Test strategy:** `put_from_string` helper mirrors `run()` logic without stdin. 8 tests cover: create (version=1, wing derivation, type default), OCC update (correct version, stale version conflict), unconditional upsert, put→get round-trip, frontmatter JSON storage, FTS5 trigger firing.
+
+**Validation:** fmt ✅, clippy ✅, test 57/57 ✅
+
+### 2026-04-14: T11 link.rs + T12 compact.rs — Implementation Choices
+
+**Author:** Fry
+**Date:** 2026-04-14
+**Scope:** T11 (link command), T12 (compact command)
+
+**Link: slug-to-ID resolution in command layer:**
+`resolve_page_id(db, slug)` lives in `commands/link.rs` (not `core/db.rs`). The link command resolves both from and to slugs to page IDs before any INSERT/UPDATE. If either page doesn't exist, the command bails with "page not found: {slug}" before touching the links table.
+
+**Link close: UPDATE-first pattern:**
+When `--valid-until` is provided and a matching open link exists (same from, to, relationship, and `valid_until IS NULL`), the command updates the existing row instead of inserting a new one. If no open link matches, it falls through to INSERT (creating a link with both valid_from and valid_until set).
+
+**Compact: thin delegation to db::compact:**
+`compact.rs` is a one-liner that delegates to `db::compact()` and prints a success message. Removed the `#[allow(dead_code)]` annotation from `db::compact()` since it's now wired.
+
+**Also implemented (bonus):**
+`link-close` (by ID), `links` (outbound list), `backlinks` (inbound list), and `unlink` (delete) are implemented in the same file since they were stubbed there and share the same slug-resolution logic. These were not in T11's task list but were already wired in main.rs and would have panicked at runtime if any user hit them.
+
+**Test coverage:** 10 new tests (78 total, up from 68): create link, close link, link-close by ID, link-close nonexistent ID, from-page not found, to-page not found, unlink, links/backlinks listing, compact on live DB, compact on empty DB.
+
+### 2026-04-14: T10 Tags Slice — Implementation Decisions
+
+**Author:** Fry
+**Date:** 2026-04-14
+**Change:** p1-core-storage-cli
+**Task:** T10
+
+**Unified `Tags` subcommand replaces `Tag`/`Untag`:**
+The spec defines a single `gbrain tags <SLUG> [--add TAG] [--remove TAG]` command. The prior scaffold had two separate subcommands (`Tag`, `Untag`) with positional args. Replaced both with a single `Tags` subcommand using `--add`/`--remove` flags (both `Vec<String>`, repeatable). Without flags, lists tags. This matches the spec exactly.
+
+**No OCC, no page version bump:**
+Per Leela's contract review, tags write directly to the `tags` table via `INSERT OR IGNORE` / `DELETE`. Page row is never touched. Version is not incremented. This is verified by a dedicated test (`tags_do_not_bump_page_version`).
+
+**Page existence validated before any tag operation:**
+`resolve_page_id` runs first. If the slug doesn't exist, the command fails fast with "page not found" — no orphan tag rows can be created.
+
+**Idempotent add, silent remove of nonexistent tags:**
+`INSERT OR IGNORE` makes duplicate adds a no-op. Removing a tag that doesn't exist succeeds silently (DELETE affects 0 rows). Both behaviours are tested.
+
+**Test coverage:** 8 unit tests: empty list, add+list, duplicate idempotency, remove, remove-nonexistent noop, nonexistent page error, version-unchanged assertion, alphabetical ordering. Gates: fmt ✅, clippy ✅, test 86/86 ✅
+
+### 2026-04-14: T10 Tags Contract Review — Architecture Decision
+
+**Author:** Leela  
+**Date:** 2026-04-14  
+**Change:** p1-core-storage-cli  
+**Subject:** Where do tags live — `pages.tags` JSON field or the `tags` table?
+
+**Finding:** Three-way conflict across T10 artifacts:
+- Schema (sql), types (types.rs), and prior decisions locked on separate `tags` table
+- Tasks.md T10 and spec scenario remained stale, referencing defunct `pages.tags` JSON pattern
+
+**Decision — Tags live exclusively in the `tags` table:**
+
+| Operation | Mechanism | OCC needed? |
+|---|---|---|
+| List | `SELECT tag FROM tags WHERE page_id = ...` | No |
+| Add | `INSERT OR IGNORE INTO tags (page_id, tag)` | No |
+| Remove | `DELETE FROM tags WHERE page_id = ... AND tag = ...` | No |
+
+Tags are independent of the page row. They do not bump `version`. No OCC re-put required — that pattern exists only for `pages` content edits.
+
+**Rendering note:** When `gbrain get` renders a page, the implementation SHOULD JOIN the `tags` table and emit tags in the frontmatter block for display. This is read-path rendering only; no write-path frontmatter mutation occurs.
+
+**Corrections required (gate-blocking):**
+1. tasks.md T10 — three bullet points corrected to reference `tags` table, remove OCC/re-put language
+2. specs/crud-commands/spec.md — Add tag scenario THEN clause clarified to "inserted into tags table" not "page updated (OCC-safe)"
+
+**Gate impact:** Fry blocked until corrections applied. Resolution: corrections applied; implementation proceeded on corrected contract.
+
 ## Governance
 
 - All meaningful changes require team consensus

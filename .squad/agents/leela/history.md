@@ -45,12 +45,16 @@
 - GitHub issues and OpenSpec both drive work intake.
 - Meaningful changes require an OpenSpec proposal before implementation.
 
-## 2026-04-14 Scribe Merge
+## 2026-04-14 Scribe Merge (2026-04-14T03:50:40Z)
 
-- Orchestration logs written for Leela, Fry, Bender (Phase 1 startup).
-- Session log recorded to `.squad/log/2026-04-14T03-38-04Z-phase1-start.md`.
-- Decisions inbox merged into `decisions.md`; inbox files deleted.
-- Cross-agent updates: Leela and Fry histories updated.
+- Orchestration logs written for Leela (Link contract review) and Fry (T02 db.rs completion).
+- Session log recorded to `.squad/log/2026-04-14T03-50-40Z-phase1-db-slice.md`.
+- Three inbox decisions merged into `decisions.md`:
+  - Leela's Link contract clarification (slugs at app layer, IDs at DB layer, three type corrections)
+  - Fry's db.rs decisions (sqlite-vec auto-extension, schema DDL, error types)
+  - Bender's validation plan (anticipatory QA checklist)
+- Inbox files deleted after merge.
+- Fry, Leela, Bender histories updated with cross-team context.
 - Ready for git commit.
 
 

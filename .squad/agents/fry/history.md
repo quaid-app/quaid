@@ -48,11 +48,15 @@
 - Link schema note: the `links` table uses `from_page_id`/`to_page_id` (integer FK to pages), not `from_slug`/`to_slug`. The `Link` struct uses slugs for the application layer — resolution happens in the db layer on insert/read. This is documented in types.rs doc comments.
 - `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test db` all pass clean.
 
-## 2026-04-14 Scribe Merge
+## 2026-04-14 Scribe Merge (2026-04-14T03:50:40Z)
 
-- Orchestration logs written for Leela, Fry, Bender (Phase 1 startup).
-- Session log recorded to `.squad/log/2026-04-14T03-38-04Z-phase1-start.md`.
-- Decisions inbox merged into `decisions.md`; inbox files deleted.
-- Cross-agent updates: Leela and Fry histories updated.
+- Orchestration logs written for Fry (T02 db.rs completion) and Leela (Link contract review).
+- Session log recorded to `.squad/log/2026-04-14T03-50-40Z-phase1-db-slice.md`.
+- Three inbox decisions merged into `decisions.md`:
+  - Fry's db.rs implementation decisions (sqlite-vec auto-extension, schema DDL, error types)
+  - Leela's Link contract clarification (slugs at app layer; IDs at DB layer; three data-loss bugs corrected)
+  - Bender's validation plan (anticipatory QA checklist for T02–T06)
+- Inbox files deleted after merge.
+- Fry, Leela, Bender histories updated with cross-team context.
 - Ready for git commit.
 

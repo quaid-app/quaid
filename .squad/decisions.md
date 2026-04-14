@@ -157,6 +157,58 @@ Phase 2 (blocked on Phase 1 gate):
 
 **Why:** User request — ensuring branch hygiene and team consensus on all changes.
 
+### 2026-04-14: DB Layer Implementation — T02 database.rs slice
+
+**By:** Fry
+
+**What:** Completed `src/core/db.rs` with sqlite-vec auto-extension registration, schema DDL application, and error type alignment:
+1. **sqlite-vec** loaded via `sqlite3_auto_extension(Some(transmute(...)))` (process-global, acceptable for single-binary CLI)
+2. **Schema DDL** applied as-is from `schema.sql` via `execute_batch`, preserving PRAGMAs (WAL, foreign_keys)
+3. **Error types** use `thiserror::Error` for `DbError` (core/ layer boundary; MCP layer handles conversion to anyhow)
+4. **Link schema** uses integer FKs (`from_page_id`, `to_page_id`) internally; struct resolves slugs at app layer
+
+**Why:** Foundation-level plumbing. These choices propagate to markdown parsing (T03), search (T04), and MCP (T08). Documented now to prevent re-alignment work downstream.
+
+**Status:** Validated. Tests pass. `cargo check/clippy/fmt` clean on branch `phase1/p1-core-storage-cli`.
+
+### 2026-04-14: Link Contract Clarification — slugs at app layer, IDs in DB
+
+**By:** Leela (Lead)
+
+**What:** Resolved ambiguity between schema (`from_page_id`, `to_page_id` integers) and task spec (`from_slug`, `to_slug` strings). Decision: **slugs are the correct app-layer contract**.
+- `Link` struct holds `from_slug` and `to_slug` (application-layer identity, stable across schema migrations)
+- DB layer resolves slugs to page IDs on insert (`SELECT id FROM pages WHERE slug = ?`)
+- DB layer reverses join on read (`SELECT * FROM links WHERE from_page_id = ? ...` then resolve IDs back to slugs)
+- Callers (CLI, MCP) never see integer page IDs
+
+**Corrections Applied (data-loss bugs):**
+1. `Link.context: String` — was missing from struct; schema has it. Added to prevent silent data loss on round-trip.
+2. `Link.id: Option<i64>` — was `i64` (sentinel value problem). Changed to Option; `None` before insert, `Some(id)` after.
+3. `Page.truth_updated_at` and `Page.timeline_updated_at` — both missing from struct. Added to support incremental embedding (stale chunk detection).
+
+**Why:** Standard view/data model separation. Slugs are the stable external identity (used in CLI, MCP, docs). Integer IDs are DB-layer plumbing for referential integrity and index performance.
+
+**Routing:** Fry must use corrected `Link` and `Page` fields in all db.rs read/write paths (T03+). Bender's validation checklist updated.
+
+**Status:** Unblocked. No architectural changes needed. Type corrections applied.
+
+### 2026-04-14: Phase 1 Foundation Validation Plan — Bender's checklist (anticipatory)
+
+**By:** Bender (Tester)
+
+**What:** Authored comprehensive validation checklist for tasks 2.1–2.6 (type system) before code lands. Minimum useful checks:
+- Schema–struct field alignment (all 16 `pages` columns mapped to `Page` fields; all 8 `links` columns mapped to `Link` fields)
+- Error enum hygiene (`OccError::Conflict { current_version }` variant, `thiserror` not `anyhow`)
+- `SearchMergeStrategy` exhaustiveness (exactly `SetUnion` and `Rrf`)
+- `type` keyword handling (Rust reserved; must rename to `page_type` with serde remap)
+- Edge cases: empty slugs, version = 0, frontmatter type stability, timestamp format validation
+
+**Execution:** After Fry lands T02–T06, run `cargo check` (hard gate), diff struct fields against schema columns, verify error types, confirm compile gate passes.
+
+**Estimated time:** 15 minutes once code lands.
+
+**Status:** Plan ready, waiting on code.
+
 ## Governance
 
 - All meaningful changes require team consensus

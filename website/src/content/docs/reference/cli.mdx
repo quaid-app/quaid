@@ -1,0 +1,336 @@
+---
+title: CLI Reference
+description: Planned `gbrain` commands, options, and examples.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+> **Planned API.** This is the target CLI surface defined in `docs/spec.md`. Some commands may not be implemented yet.
+
+## Global options
+
+| Option | Description |
+| --- | --- |
+| `--db <PATH>` | Path to `brain.db` (env: `GBRAIN_DB`, default: `./brain.db`) |
+| `--json` | JSON output instead of human-readable text |
+| `--version` | Print version |
+| `--tools-json` | Print MCP tool discovery JSON |
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `init [PATH]` | Create a new `brain.db` |
+| `get <SLUG>` | Read a page by slug |
+| `put <SLUG> [FILE]` | Write/update a page (stdin or file) |
+| `search <QUERY>` | Full-text keyword search (FTS5) |
+| `query <QUESTION>` | Hybrid search (FTS5 + vectors) |
+| `ingest <FILE>` | Ingest a source document |
+| `import <DIR>` | Import a markdown directory |
+| `export [--dir <PATH>]` | Export a brain to a markdown directory |
+| `embed [<SLUG>]` | Generate/regenerate embeddings |
+| `link <FROM> <TO>` | Create a typed, temporal cross-reference |
+| `link-close <LINK_ID>` | Close a link interval by ID |
+| `links <SLUG>` | List outbound links (with IDs) |
+| `unlink <FROM> <TO>` | Remove a cross-reference |
+| `backlinks <SLUG>` | Show pages linking to a slug |
+| `graph <SLUG>` | N-hop neighborhood graph as JSON |
+| `timeline <SLUG>` | Show timeline entries |
+| `timeline-add <SLUG>` | Add a structured timeline entry |
+| `tags <SLUG>` | List tags for a page |
+| `tag <SLUG> <TAG>` | Add a tag |
+| `untag <SLUG> <TAG>` | Remove a tag |
+| `list` | List pages with filters |
+| `stats` | Brain statistics |
+| `check [SLUG]` | Run contradiction checks |
+| `gaps` | List unresolved knowledge gaps |
+| `validate` | Run integrity checks |
+| `compact` | Checkpoint WAL → single file |
+| `config get|set|list` | Read/write/list config |
+| `skills` | List active skills (embedded + external) |
+| `skills doctor` | Show skill resolution order + hashes |
+| `serve` | Start MCP server (stdio) |
+| `version` | Version info (and migration state) |
+| `call <TOOL> <JSON>` | Raw MCP tool call |
+| `pipe` | JSONL streaming mode |
+
+---
+
+## Command details
+
+### `init`
+
+Create a new brain database.
+
+```bash
+gbrain init ~/brain.db
+```
+
+### `get`
+
+Read a page by slug.
+
+```bash
+gbrain get people/pedro-franceschi
+```
+
+### `put`
+
+Write/update a page from stdin (or a file).
+
+```bash
+cat updated.md | gbrain put people/pedro-franceschi
+```
+
+### `search`
+
+FTS5 keyword search.
+
+```bash
+gbrain search "river ai"
+```
+
+### `query`
+
+Hybrid search (FTS5 + vectors) with progressive depth.
+
+```bash
+gbrain query "who knows Jensen Huang?" --depth auto
+```
+
+### `ingest`
+
+Ingest a source document (meeting/article/doc/conversation).
+
+```bash
+gbrain ingest ./notes/meeting.md --type meeting
+```
+
+### `import`
+
+Import a markdown directory into the brain.
+
+```bash
+gbrain import /path/to/notes/ --db ~/brain.db
+```
+
+### `export`
+
+Export a brain to a markdown directory.
+
+```bash
+gbrain export --dir ./export/
+```
+
+### `embed`
+
+Generate embeddings for one page or in batches.
+
+```bash
+gbrain embed people/pedro-franceschi
+gbrain embed --stale
+gbrain embed --all
+```
+
+### `link`
+
+Create a typed, temporal cross-reference.
+
+```bash
+gbrain link people/pedro-franceschi companies/brex --relationship founded --valid-from 2017-01-01
+```
+
+### `link-close`
+
+Close a link interval by link ID.
+
+```bash
+gbrain link-close 123 --valid-until 2021-01-01
+```
+
+### `links`
+
+List outbound links (optionally include IDs + temporal metadata).
+
+```bash
+gbrain links people/pedro-franceschi --temporal all --json
+```
+
+### `unlink`
+
+Remove a cross-reference entirely.
+
+```bash
+gbrain unlink people/pedro-franceschi companies/brex --relationship founded
+```
+
+### `backlinks`
+
+Find pages that link **to** a slug.
+
+```bash
+gbrain backlinks companies/brex
+```
+
+### `graph`
+
+Fetch an N-hop neighborhood (pages + links) as JSON.
+
+```bash
+gbrain graph people/pedro-franceschi --depth 2
+```
+
+### `timeline`
+
+Show timeline entries for a page.
+
+```bash
+gbrain timeline people/pedro-franceschi
+```
+
+### `timeline-add`
+
+Add a structured timeline entry.
+
+```bash
+gbrain timeline-add people/pedro-franceschi --date 2026-04-14 --summary "Met at demo day" --source meeting/42
+```
+
+### `tags`, `tag`, `untag`
+
+Work with tags.
+
+```bash
+gbrain tags people/pedro-franceschi
+gbrain tag people/pedro-franceschi yc-alum
+gbrain untag people/pedro-franceschi yc-alum
+```
+
+### `list`
+
+List pages with filters.
+
+```bash
+gbrain list --type person --tag yc-alum --limit 50 --sort updated
+```
+
+### `stats`
+
+Show brain statistics.
+
+```bash
+gbrain stats
+```
+
+### `check`
+
+Run contradiction checks (single page or whole brain).
+
+```bash
+gbrain check --all
+```
+
+### `gaps`
+
+List unresolved knowledge gaps.
+
+```bash
+gbrain gaps --limit 20
+```
+
+### `validate`
+
+Integrity checks (links/assertions/embeddings/etc.).
+
+```bash
+gbrain validate --all
+```
+
+### `compact`
+
+Checkpoint WAL so the brain is transportable as one file.
+
+```bash
+gbrain compact
+```
+
+### `config`
+
+Read/write/list config.
+
+```bash
+gbrain config list
+gbrain config get search_merge_strategy
+gbrain config set search_merge_strategy set-union
+```
+
+### `skills`
+
+Inspect skill resolution order and hashes.
+
+```bash
+gbrain skills
+gbrain skills doctor
+```
+
+### `serve`
+
+Start the MCP server (stdio).
+
+```bash
+gbrain serve
+```
+
+### `version`
+
+Print version info (and migration state).
+
+```bash
+gbrain version
+```
+
+### `call`
+
+Raw tool call helper (good for debugging).
+
+```bash
+gbrain call brain_search '{\"query\":\"river ai\",\"limit\":10}'
+```
+
+### `pipe`
+
+JSONL streaming mode (one JSON object per line).
+
+```bash
+cat requests.jsonl | gbrain pipe
+```
+
+## Examples
+
+<Tabs>
+  <TabItem label="Create + search">
+    ```bash
+    gbrain init ~/brain.db
+    gbrain import /path/to/notes/ --db ~/brain.db
+    gbrain search "river ai"
+    gbrain query "who has worked with Jensen Huang?"
+    ```
+  </TabItem>
+  <TabItem label="Read + write">
+    ```bash
+    gbrain get people/pedro-franceschi
+    cat updated.md | gbrain put people/pedro-franceschi
+    ```
+  </TabItem>
+  <TabItem label="Links + graph">
+    ```bash
+    gbrain link people/pedro-franceschi companies/brex --relationship founded --valid-from 2017-01-01
+    gbrain graph people/pedro-franceschi --depth 2
+    ```
+  </TabItem>
+  <TabItem label="MCP">
+    ```bash
+    GBRAIN_DB=~/brain.db gbrain serve
+    ```
+  </TabItem>
+</Tabs>

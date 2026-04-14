@@ -1,0 +1,56 @@
+---
+title: GigaBrain
+description: The personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. No API keys. No internet. One static binary.
+template: splash
+hero:
+  tagline: Your knowledge, compiled. One binary, zero dependencies, runs anywhere.
+  actions:
+    - text: Get Started
+      link: /guides/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/macro88/gigabrain
+      icon: github
+      variant: minimal
+---
+
+import { CardGrid, Card } from "@astrojs/starlight/components";
+
+## Why GigaBrain?
+
+<CardGrid stagger>
+  <Card title="Single Binary" icon="seti:binary">
+    ~90MB static binary. Drop it anywhere. Zero runtime dependencies — no Docker,
+    no Node, no Python.
+  </Card>
+  <Card title="SQLite Everything" icon="seti:db">
+    FTS5 full-text search + `sqlite-vec` vector similarity + typed link graph.
+    All in one `brain.db` file you own completely.
+  </Card>
+  <Card title="Local Embeddings" icon="star">
+    BGE-small-en-v1.5 runs fully offline via pure-Rust candle. No OpenAI API key.
+    No internet required.
+  </Card>
+  <Card title="MCP-Ready" icon="puzzle">
+    `gbrain serve` exposes all tools over stdio JSON-RPC 2.0. Plug into Claude
+    Code, any MCP-compatible agent, instantly.
+  </Card>
+  <Card title="Hybrid Search" icon="magnifier">
+    FTS5 keyword + vector semantic search with set-union merge. Exact-match
+    short-circuit. Finds what you mean, not just what you typed.
+  </Card>
+  <Card title="Fat Skills" icon="document">
+    Agent workflows live in plain markdown SKILL.md files. Swap or extend
+    without rebuilding. The intelligence is yours.
+  </Card>
+</CardGrid>
+
+---
+
+## Status
+
+GigaBrain is currently in **Sprint 0 (scaffold complete)**. Phase 1 (Core) is
+next — the docs describe the *planned* surface area and design, even where
+implementation is still pending.
+

@@ -36,6 +36,18 @@
 - `cargo check`, `cargo clippy -- -D warnings`, and `cargo fmt --check` all pass clean.
 - Decision note written to `.squad/decisions/inbox/fry-p1-foundation-slice.md`.
 
+## Phase 1 Database Layer Slice (T02)
+
+- Implemented `src/core/db.rs`: `open()`, `compact()`, `set_version()` — tasks 3.1–3.5 complete.
+- sqlite-vec loaded via `sqlite3_auto_extension` with `std::sync::Once` guard for process-global idempotency. Uses explicit `transmute` type annotation to satisfy `clippy::missing_transmute_annotations`.
+- `open()` returns `Result<Connection, DbError>` (not `anyhow::Result`) per design decision 10. The `?` propagation to `anyhow::Result` in `main.rs` auto-converts via `thiserror`'s `Error` impl.
+- Schema DDL executed via `conn.execute_batch(include_str!("../schema.sql"))` — PRAGMAs at the top of schema.sql are handled correctly by `sqlite3_exec` under the hood.
+- vec0 virtual table and embedding_models seed are separate from schema.sql since they depend on the sqlite-vec extension being loaded first.
+- `compact` is `#[allow(dead_code)]` until task 6.8 wires the compact command.
+- 7 unit tests covering: table creation, user_version, WAL, foreign keys, path validation, idempotency, compact, and embedding model seed.
+- Link schema note: the `links` table uses `from_page_id`/`to_page_id` (integer FK to pages), not `from_slug`/`to_slug`. The `Link` struct uses slugs for the application layer — resolution happens in the db layer on insert/read. This is documented in types.rs doc comments.
+- `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test db` all pass clean.
+
 ## 2026-04-14 Scribe Merge
 
 - Orchestration logs written for Leela, Fry, Bender (Phase 1 startup).

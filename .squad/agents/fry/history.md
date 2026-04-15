@@ -10,6 +10,7 @@
 - The core implementation target is a Rust CLI plus MCP server.
 - The system is intentionally local-first and zero-network for embeddings.
 - Every meaningful implementation starts with an OpenSpec proposal.
+- Doc parity requires matching artifact names exactly: CI produces a `coverage-report` artifact (not `lcov.info`); spec URLs must use `macro88/gigabrain`, not `[owner]`; checksum verify must use `shasum --check` directly against the `.sha256` file, not `echo ... | shasum --check`.
 - Always run `cargo fmt --all` before committing Rust code — CI enforces `cargo fmt --check` as the first gate and will skip all subsequent steps (clippy, check, test) if formatting fails.
 - Local Windows dev environment lacks MSVC SDK libs (`msvcrt.lib`), so clippy/build/test cannot run locally. Use CI (Linux) for full validation. Only `cargo fmt` works locally.
 - CI runs `cargo clippy -- -D warnings` which treats all warnings as errors. Stub functions with `todo!()` bodies must prefix all params with `_` to avoid unused variable errors.
@@ -210,3 +211,27 @@
 - `cargo fmt`, `cargo clippy -- -D warnings` clean.
 - Commit `5886ec2` on `phase1/p1-core-storage-cli`. SG-6 checkbox NOT marked — requires Nibbler re-approval.
 - Decision note: `.squad/decisions/inbox/fry-sg6-fixes.md`.
+
+## Phase 3 Coverage + Release Workflow Hardening (Tasks 1.1–1.4)
+
+- **Task 1.1 Audit:** ci.yml had no coverage job; release.yml checksum format was hash-only (fragile, non-standard); release job had no artifact verification before publishing.
+- **Task 1.2 Coverage job:** Added `coverage` job to ci.yml using `cargo-llvm-cov` with `llvm-tools-preview`. Runs in parallel with `test` after `check` gate. Uses same `cargo test` path under the hood — no separate unreviewed test path.
+- **Task 1.3 Coverage outputs:**
+  - Machine-readable: `lcov.info` uploaded as GitHub Actions artifact.
+  - Human-readable: text summary posted to GitHub Job Summary (visible on every PR/push).
+  - Optional third-party: Codecov upload with `continue-on-error: true` — never blocks CI. Guarded to skip on fork PRs.
+- **Task 1.4 Release hardening:**
+  - Switched `.sha256` files from hash-only to standard `hash  filename` format. Enables direct `shasum -a 256 --check` verification.
+  - Added artifact existence verification step: all 8 files (4 binaries + 4 checksums) must be present before release creation.
+  - Added post-download checksum re-verification in release job.
+  - Updated release body template, README, docs-site quick-start, and install page to match the new standard checksum format.
+  - Updated Zapp's `RELEASE_CHECKLIST.md` to reflect the new checksum format.
+- **Spec reference:** All changes satisfy `specs/coverage-reporting/spec.md` and `specs/release-readiness/spec.md`.
+- All four tasks marked `[x]` in `openspec/changes/p3-polish-benchmarks/tasks.md`.
+
+### Learnings
+
+- `cargo llvm-cov report` reuses profraw data from the previous `cargo llvm-cov --lcov` run — no test re-execution needed for the text summary.
+- Standard `.sha256` format (`hash  filename`) is strictly better than hash-only: enables `shasum --check` directly, matches conventions from Go, Terraform, kubectl, etc.
+- Codecov v4 requires a token even for public repos. Making it `continue-on-error: true` with an optional `CODECOV_TOKEN` secret satisfies the "additive and non-blocking" spec requirement.
+- Release artifact verification should always happen as a separate step before `softprops/action-gh-release` — the action doesn't validate completeness itself.

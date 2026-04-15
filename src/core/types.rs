@@ -84,6 +84,19 @@ pub struct SearchResult {
     pub wing: String,
 }
 
+// ── Chunk ───────────────────────────────────────────────────────
+
+/// A derived embedding/search chunk from a page section or timeline entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chunk {
+    pub page_slug: String,
+    pub heading_path: String,
+    pub content: String,
+    pub content_hash: String,
+    pub token_count: usize,
+    pub chunk_type: String,
+}
+
 // ── KnowledgeGap ──────────────────────────────────────────────
 
 /// An unanswered query detected by the brain.
@@ -146,6 +159,16 @@ pub enum SearchError {
     Sqlite(#[from] rusqlite::Error),
 
     #[error("search failed: {message}")]
+    Internal { message: String },
+}
+
+/// Errors from text embedding and vector inference operations.
+#[derive(Debug, Error)]
+pub enum InferenceError {
+    #[error("input text is empty")]
+    EmptyInput,
+
+    #[error("inference failed: {message}")]
     Internal { message: String },
 }
 

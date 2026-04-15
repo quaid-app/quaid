@@ -6,6 +6,16 @@ use crate::core::chunking::chunk_page;
 use crate::core::inference::{embed, embedding_to_blob};
 
 pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Result<()> {
+    // Modes are mutually exclusive: exactly one of <SLUG>, --all, or --stale.
+    if slug.is_some() && (all || stale) {
+        anyhow::bail!(
+            "embed modes are mutually exclusive: provide a <SLUG>, --all, or --stale — not a combination"
+        );
+    }
+    if all && stale {
+        anyhow::bail!("--all and --stale are mutually exclusive");
+    }
+
     let (model_name, vec_table) = active_model(db)?;
     // T14 incomplete: the active model uses SHA-256 hash projections, not the real
     // BGE-small-en-v1.5 Candle model.  Warn so the output is not mistaken for
@@ -40,9 +50,9 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
             continue;
         }
 
-        // When a specific slug is given, always re-embed (no stale check).
-        // When iterating all pages: --stale skips unchanged, --all embeds everything.
-        if slug.is_none() && stale && !all && !page_needs_refresh(db, pid, &model_name, &chunks)? {
+        // Explicit slug: always re-embed (no stale check).
+        // --all / --stale: skip pages whose content_hash is unchanged.
+        if slug.is_none() && !page_needs_refresh(db, pid, &model_name, &chunks)? {
             continue;
         }
 
@@ -258,6 +268,67 @@ mod tests {
             .expect("second metadata count");
 
         assert_eq!(first_count, second_count);
+    }
+
+    #[test]
+    fn run_with_all_skips_unchanged_pages() {
+        let conn = open_test_db();
+        insert_test_page(
+            &conn,
+            "people/alice",
+            "## State\nAlice is investing.",
+            "2024-01-01 Joined Acme",
+        );
+
+        run(&conn, None, true, false).expect("initial embed");
+        let first_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
+            .expect("initial metadata count");
+
+        // --all on unchanged content must skip (spec: skip if content_hash unchanged)
+        run(&conn, None, true, false).expect("second all embed");
+        let second_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
+            .expect("second metadata count");
+
+        assert_eq!(first_count, second_count);
+    }
+
+    #[test]
+    fn run_rejects_slug_with_all_flag() {
+        let conn = open_test_db();
+        insert_test_page(&conn, "people/alice", "## State\nAlice is investing.", "");
+
+        let result = run(&conn, Some("people/alice".to_owned()), true, false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn run_rejects_slug_with_stale_flag() {
+        let conn = open_test_db();
+        insert_test_page(&conn, "people/alice", "## State\nAlice is investing.", "");
+
+        let result = run(&conn, Some("people/alice".to_owned()), false, true);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn run_rejects_all_with_stale() {
+        let conn = open_test_db();
+        let result = run(&conn, None, true, true);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
     }
 
     #[test]

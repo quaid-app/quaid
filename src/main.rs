@@ -60,6 +60,7 @@ enum Commands {
     /// Semantic / hybrid query
     Query {
         query: String,
+        /// Retrieval depth (Phase 2: progressive expansion; deferred in Phase 1)
         #[arg(long, default_value = "auto")]
         depth: String,
         #[arg(long, default_value = "10")]

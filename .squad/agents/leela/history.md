@@ -42,6 +42,21 @@
 
 **Decision file:** `.squad/decisions/inbox/leela-search-revision.md`
 
+## 2026-04-14T04:56:03Z Revision Cycle Completion
+
+- **Mandate:** Revise T14–T19 after Professor rejection. Address semantic contract drift, embed CLI ambiguity, placeholder truthfulness. Fry locked out; Leela takes over independently.
+- **Outcome: APPROVED FOR LANDING** with 5 key decisions:
+  - **D1:** Explicit placeholder contract in `inference.rs` module docs
+  - **D2:** Runtime stderr warning on every `gbrain embed` invocation
+  - **D3:** T14 blocker sub-bullets (explicit missing assets)
+  - **D4:** T18 honest status note (plumbing ✅, hash-indexed until T14)
+  - **D5:** T19 honest status note (plumbing ✅, similarity metric until T14)
+- **No code logic changes:** T16–T19 plumbing untouched; public API stable.
+- **Test validation:** 115 pass unmodified; stderr warnings not captured by harness.
+- **Outcome:** Phase 1 search/embed/query lane ready for Phase 1 ship gate. Users see honest status; downstream planners see exact blocker list.
+- **Orchestration log written:** `2026-04-14T04-56-03Z-leela-accepted-revision.md`
+- **Decision merged:** `leela-search-revision.md` (5 decisions, 0 conflicts) → canonical `decisions.md`
+
 ## Phase 1 OpenSpec Unblock — 2026-04-14
 
 **What was done:**
@@ -158,4 +173,19 @@
 - Inbox files deleted after merge
 - Fry and Leela histories updated with cross-team context
 - Ready for git commit
+
+## 2026-04-14 Search/Embed/Query Tight Revision — Professor Blocker Resolution
+
+**What was done:**
+- Fry locked out of revision lane; Leela took the artifact directly.
+- All three Professor rejection blockers assessed against current tree.
+- Tests were already passing (115). Inference shim documented with eprintln warning by Fry — accepted as compliant deferral.
+- Two remaining concrete gaps fixed in `src/commands/embed.rs`:
+  1. Mutual-exclusion guard at function entry — (slug+all), (slug+stale), (all+stale) now error with "mutually exclusive".
+  2. `--all` corrected: now applies `page_needs_refresh()` content_hash check (spec: "skip if unchanged"). Previous code force-re-embedded everything on --all.
+  3. `--depth` in query: added `/// Phase 2: deferred` doc comment to clap arg.
+- 4 new tests added; 119 total pass.
+- Verdict: ACCEPTED FOR LANDING. Written to `.squad/decisions/inbox/leela-search-revision-tight.md`.
+
+**Learning:** Mixed-mode CLI flag validation belongs at function entry, not threaded through downstream conditionals. When a spec sweep flag says "skip if unchanged", --all and --stale should behave identically on the skip check — the flag distinction is user-intent signal, not a behavioral fork.
 

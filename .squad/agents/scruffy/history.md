@@ -37,3 +37,9 @@
 - Inbox files deleted after merge.
 - Cross-agent history updates applied.
 - Ready for git commit.
+
+## 2026-04-14T05:24:00Z T20 novelty coverage locked
+
+- Reworked `src/core/novelty.rs` around deterministic branch contracts: lexical duplicate threshold first, embedding near-duplicate fallback second.
+- Added three focused unit tests for the requested invariants: identical content rejected, clearly different content accepted without embeddings, clearly different content accepted even with stored placeholder embeddings.
+- Switched novelty tests to `db::open(":memory:")` so the coverage stays deterministic and avoids filesystem scratch state.

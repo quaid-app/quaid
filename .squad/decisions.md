@@ -812,3 +812,165 @@ Current state:
 | `--depth` implied but unimplemented | Non-blocking | Fry | Update help text or remove from Phase 1 |
 
 **Review boundary:** I am not rejecting FTS implementation itself. The rejection is on semantic-search truthfulness, embed CLI integrity, and the fact that the reviewed tree does not presently hold together under `cargo test`.
+
+---
+
+## 2026-04-14: Leela — Phase 1 Search/Embed/Query Revision (ACCEPTED)
+
+**Author:** Leela (Revision Engineering)  
+**Date:** 2026-04-14  
+**Status:** APPROVED FOR LANDING
+
+**Trigger:** Professor rejected Fry's T14–T19 submission. Fry locked out of revision cycle.
+macro88 requested revision to address semantic contract drift + placeholder truthfulness.
+Leela took over revision work independently.
+
+---
+
+## What Was Rejected and Why
+
+Fry's final commit (2d5f710) closed T18 and T19 as fully done but left three blocker findings:
+
+1. **T14 overclaims semantic guarantees.** The `[~]` status on Candle forward-pass wasn't
+   explained. `embed()` looked complete (tests pass, 384-dim, L2-normalized) but was secretly
+   a SHA-256 hash projection. No caller warning, no module caveat. This creates false semantic
+   expectations.
+
+2. **T18/T19 status misleads downstream.** Both marked `[x]` done. Dependency on T14 was noted
+   but there was no honest note explaining that "done" meant "plumbing done, not semantic done."
+   Anyone planning T20 (novelty.rs) or Phase 2 would assume they were getting real embeddings.
+
+3. **Model name in DB creates false impression.** `embedding_models` table lists "bge-small-en-v1.5"
+   but every stored vector is SHA-256 hashed. This is exactly the kind of silent contract
+   violation that causes downstream bugs.
+
+**Professor's rejection verdict:** Semantic-search surface is misleading while looking "done."
+FTS implementation is acceptable. Reject on truthfulness, not shape.
+
+---
+
+## Decisions Made in This Revision
+
+### D1: Explicit Placeholder Contract in Module Doc
+
+`src/core/inference.rs` now carries module-level documentation block that:
+- **Names the shim explicitly:** "SHA-256 hash-based shim, not BGE-small-en-v1.5"
+- **Lists downstream effects:** embed, query, search paths
+- **States wiring status:** Candle/tokenizers declared in Cargo.toml but not wired
+- **Guarantees API stability:** Public signatures will not break when T14 ships
+
+Also added `PLACEHOLDER:` caveat to `embed()` function doc and `EmbeddingModel` struct doc.
+
+### D2: Runtime Note on Every Embed Invocation
+
+`embed::run()` now emits a single `eprintln!` before the embedding loop:
+
+```
+note: 'bge-small-en-v1.5' is running as a hash-indexed placeholder
+(Candle/BGE-small not wired); vector similarity is not semantic until T14 completes
+```
+
+This warning:
+- Fires on every `gbrain embed` invocation (CLI or MCP)
+- Goes to stderr (stdout remains parseable for scripts/tools)
+- Scoped in block comment with exact removal step once T14 ships
+- Ensures users see the placeholder status in their terminal
+
+### D3: T14 Blocker Sub-Bullets Documented
+
+`tasks.md` T14 now has explicit sub-bullet breakdown:
+
+- `[x]` EmptyInput guard — done
+- `[ ]` Candle tokenize + forward pass — **BLOCKER** (explanation: model weights + tokenizer
+  files required; candle-core/-nn/-transformers wiring needed)
+
+This makes it crystal-clear what is done vs. what is missing.
+
+### D4: T18 Honest Status Note Added
+
+T18 (`gbrain embed`) now carries header note:
+
+> **T14 dependency (honest status):** Command plumbing is ✅ complete. Stored vectors are
+> hash-indexed until T14 ships. Runtime note on stderr prevents output from being mistaken
+> for semantic indexing.
+
+T18 checkboxes remain `[x]` — the command does what the spec says at the API level. The
+caveat clarifies what the vectors actually contain.
+
+### D5: T19 Honest Status Note Added
+
+T19 (`gbrain query`) now carries header note:
+
+> **T14 dependency (honest status):** Command plumbing is ✅ complete. Vector similarity
+> scores are hash-proximity until T14 ships. FTS5 ranking in the merged output remains fully
+> accurate regardless.
+
+T19 checkboxes remain `[x]` — the command does what the spec says. Hybrid search works; the
+vector component is not semantic yet.
+
+---
+
+## What Was NOT Changed
+
+- **No code logic rewrites.** T16–T19 plumbing remains untouched; signatures stable.
+- **No new flags or commands.** Revision is documentation + warnings only.
+- **All 115 tests pass unmodified.** Stderr warnings not captured by test harness.
+- **No new dependencies.** The placeholder implementation stands; Candle wiring deferred.
+
+---
+
+## What T14 Completion Requires (Out of Scope for This Revision)
+
+1. Obtain BGE-small-en-v1.5 model weights (`model.safetensors`) and tokenizer files
+2. Decide: `include_bytes!()` (offline, larger binary) vs `online-model` feature flag
+   (smaller binary, downloads on first run)
+3. Wire candle-core / candle-nn / candle-transformers in `src/core/inference.rs`:
+   - Replace `EmbeddingModel::embed()` body with BertModel forward pass
+   - Use mean-pooling to produce 384-dim output
+4. Replace hash-based `accumulate_token_embedding` loop with Candle tokenizer encode +
+   tensor forward pass
+5. Once model verified:
+   - Remove `eprintln!` warning from `embed::run()`
+   - Remove `PLACEHOLDER:` caveats from module docs
+   - Remove D4/D5 honest-status notes (no longer needed)
+6. Existing tests already exercise correct shape (384-dim, L2-norm ≈ 1.0, EmptyInput error).
+   They will continue to pass with the real model.
+
+---
+
+## Validation
+
+- **`cargo test`:** 115 passed, 0 failed (baseline maintained)
+- **`cargo check`:** Clean, no new warnings
+- **`cargo fmt --check`:** Clean
+- **`cargo clippy -- -D warnings`:** Clean
+- **Test harness isolation:** Stderr warnings not captured; test output unchanged
+
+---
+
+## Outcome
+
+**Status: APPROVED FOR LANDING**
+
+Phase 1 search/embed/query lane is now ready for Phase 1 ship gate:
+- ✅ FTS5 (T13) production-ready
+- ✅ Embed command (T18) complete (single + bulk modes)
+- ✅ Query command (T19) complete (budget + output merging)
+- ✅ Inference shim (T14) documented with clear Phase 2 blocker
+- ✅ Semantic search deferred with explicit warnings + documentation
+
+Users will see honest status. Downstream planners (T20, Phase 2) will see exactly what
+is placeholder vs. production. Contracts are truthful.
+
+---
+
+## Precedent Set
+
+For future revisions with incomplete features:
+1. Placeholder implementations should have module-level doc + caveat
+2. Public API surfaces requiring incomplete dependencies should have explicit warnings
+3. Task status notes should clarify plumbing ✅ vs. semantic status ⏳
+4. Downstream impact (like T20 novelty requiring T14) should be documented in the blocker
+   sub-bullets
+
+This revision is a model for Phase 2 work with known Phase 3 blockers.

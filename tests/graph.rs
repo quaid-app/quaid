@@ -107,6 +107,44 @@ fn graph_cli_human_output_skips_self_link_back_to_root() {
         vec!["people/alice"],
         "self-links must not render the root back into the tree; got: {output}"
     );
+    assert!(
+        !output.contains("→ people/alice"),
+        "text output must never contain '→ <root>' for a self-link; got: {output}"
+    );
+}
+
+#[test]
+fn graph_cli_human_self_link_plus_real_neighbour_renders_only_neighbour() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "people/alice", "person", "Alice");
+    insert_page(&conn, "companies/acme", "company", "Acme");
+    insert_link(&conn, "people/alice", "people/alice", "knows", None, None);
+    insert_link(
+        &conn,
+        "people/alice",
+        "companies/acme",
+        "works_at",
+        None,
+        None,
+    );
+
+    let mut out = Vec::<u8>::new();
+    gbrain::commands::graph::run_to(&conn, "people/alice", 1, "current", false, &mut out).unwrap();
+    let output = String::from_utf8(out).unwrap();
+    let lines: Vec<_> = output.lines().collect();
+
+    assert_eq!(
+        lines,
+        vec!["people/alice", "  → companies/acme (works_at)"],
+        "self-link must be suppressed but real neighbours must still render; got: {output}"
+    );
+    assert!(
+        !output.contains("→ people/alice"),
+        "root must never appear as its own neighbour; got: {output}"
+    );
 }
 
 #[test]

@@ -155,6 +155,11 @@ pub fn neighborhood_graph(
         for row in rows {
             let (link_id, target_id, to_slug, to_type, to_title, rel, vf, vu) = row?;
 
+            // Self-links (from == to) are not neighbours; skip them entirely.
+            if target_id == page_id {
+                continue;
+            }
+
             if seen_edges.insert(link_id) {
                 edges.push(GraphEdge {
                     from: current_slug.clone(),
@@ -465,5 +470,74 @@ mod tests {
         assert_eq!(result.edges[0].relationship, "works_at");
         assert_eq!(result.edges[0].valid_from.as_deref(), Some("2024-01"));
         assert!(result.edges[0].valid_until.is_none());
+    }
+
+    // ── Self-link never produces a neighbour ─────────────────
+
+    #[test]
+    fn self_link_excluded_from_graph_result() {
+        let conn = open_test_db();
+        insert_page(&conn, "people/alice", "person", "Alice");
+        insert_link(&conn, "people/alice", "people/alice", "knows", None, None);
+
+        let result = neighborhood_graph("people/alice", 1, TemporalFilter::All, &conn).unwrap();
+
+        assert_eq!(
+            result.nodes.len(),
+            1,
+            "self-link must not add root as neighbour"
+        );
+        assert!(
+            result.edges.is_empty(),
+            "self-link edge must not appear in result"
+        );
+    }
+
+    #[test]
+    fn self_link_plus_real_neighbours_excludes_only_self() {
+        let conn = open_test_db();
+        insert_page(&conn, "people/alice", "person", "Alice");
+        insert_page(&conn, "companies/acme", "company", "Acme");
+        insert_link(&conn, "people/alice", "people/alice", "knows", None, None);
+        insert_link(
+            &conn,
+            "people/alice",
+            "companies/acme",
+            "works_at",
+            None,
+            None,
+        );
+
+        let result = neighborhood_graph("people/alice", 1, TemporalFilter::All, &conn).unwrap();
+
+        assert_eq!(
+            result.nodes.len(),
+            2,
+            "root + acme only, self-link excluded"
+        );
+        assert_eq!(
+            result.edges.len(),
+            1,
+            "only the works_at edge, not the self-link"
+        );
+        assert_eq!(result.edges[0].to, "companies/acme");
+    }
+
+    #[test]
+    fn intermediate_self_link_excluded() {
+        let conn = open_test_db();
+        insert_page(&conn, "a", "concept", "A");
+        insert_page(&conn, "b", "concept", "B");
+        insert_link(&conn, "a", "b", "related", None, None);
+        insert_link(&conn, "b", "b", "self_ref", None, None);
+
+        let result = neighborhood_graph("a", 2, TemporalFilter::All, &conn).unwrap();
+
+        assert_eq!(result.nodes.len(), 2);
+        assert_eq!(
+            result.edges.len(),
+            1,
+            "only a→b edge, b→b self-link excluded"
+        );
     }
 }

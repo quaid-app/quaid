@@ -55,6 +55,10 @@ fn render_text_graph<W: Write>(
 
     let mut edges_by_from: HashMap<&str, Vec<&graph::GraphEdge>> = HashMap::new();
     for edge in &result.edges {
+        // Defense-in-depth: never render a self-link as a neighbour.
+        if edge.from == edge.to {
+            continue;
+        }
         edges_by_from
             .entry(edge.from.as_str())
             .or_default()

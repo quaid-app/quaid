@@ -125,7 +125,7 @@ These are known design choices that are _not_ oversights:
 
 | Deferral | Reasoning |
 | -------- | --------- |
-| npm global install (`npm install -g gigabrain`) | Planned follow-on. npm packaging requires its own approved scope and release contract before it can ship. Not in this release. |
+| npm global install (`npm install -g gbrain`) | Planned follow-on. npm packaging requires its own approved scope and release contract before it can ship. Not in this release. |
 | Homebrew tap, winget, or other package managers | Same dependency as npm. Tracked as future distribution work. Not in this release. |
 | `curl \| sh` one-command installer | Requires a stable hosted script and a hardened install contract. Tracked as future work. Not in this release. |
 | First-class `chunks` table | `page_embeddings` columns are sufficient for v1. Promote if progressive retrieval lifecycle becomes painful. |

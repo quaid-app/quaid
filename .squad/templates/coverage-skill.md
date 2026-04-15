@@ -53,7 +53,7 @@ Rust projects on GitHub need coverage reporting that:
      uses: taiki-e/install-action@cargo-llvm-cov
 
    - name: Generate coverage LCOV
-     run: cargo llvm-cov --lcov --output-path lcov.info --summary-only --fail-under-lines 80
+     run: cargo llvm-cov --lcov --output-path lcov.info --summary-only  # Informational only; no merge-gating threshold yet
 
    - name: Upload to Codecov (free for public)
      uses: codecov/codecov-action@v4
@@ -79,9 +79,10 @@ Rust projects on GitHub need coverage reporting that:
 - ⚠️ Requires `llvm-tools-preview` component (~100MB download)
 - ⚠️ Codecov is external service (though it never blocks CI with `fail_ci_if_error: false`)
 
-**Coverage thresholds (gates):**
-- Phase 1/2: aspirational ≥70% (doesn't fail)
-- Phase 3: enforced via Codecov checks: fail if delta >2%
+**Coverage thresholds (optional, future):**
+- Currently informational — coverage does not gate merges
+- Future option: add `--fail-under-lines <N>` to enforce a floor
+- Future option: configure Codecov status checks to fail if delta exceeds a threshold
 
 ---
 
@@ -192,7 +193,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run tests with coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info --summary-only --fail-under-lines 80
+        run: cargo llvm-cov --lcov --output-path lcov.info --summary-only  # Informational only; no merge-gating threshold yet
 
       # Primary: Upload to Codecov (PR comments + badge)
       - name: Upload to Codecov
@@ -247,5 +248,5 @@ If you skip `rustup component add llvm-tools-preview`, cargo-llvm-cov will silen
 
 ✅ CI time increase: ~15s (install) + 30s (coverage) = ~45s per push
 
-✅ Zero maintenance after setup (Codecov runs automatically on token-free public repos)
+✅ Low maintenance after setup (configure `CODECOV_TOKEN` secret for uploads; upload is skipped when the token is not configured)
 

@@ -35,6 +35,8 @@ cargo build --release
 
 #### Cross-compile for a fully static Linux binary
 
+[`cross`](https://github.com/cross-rs/cross) requires a container runtime (Docker or Podman) to build inside target-specific containers.
+
 ```bash
 cargo install cross
 cross build --release --target x86_64-unknown-linux-musl      # Linux x86_64

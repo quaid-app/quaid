@@ -45,7 +45,7 @@ No other binary names are covered by public install docs. If names in the workfl
 
 The following channels are **not supported** in this release. Confirm none appear as current options:
 
-- [ ] `npm install -g gigabrain` — not available; label as planned follow-on if mentioned
+- [ ] `npm install -g gbrain` — not available; label as planned follow-on if mentioned
 - [ ] `curl | sh` one-command installer — not available; label as planned follow-on if mentioned
 - [ ] Homebrew tap, winget, or any other package manager entry — not available; label as planned follow-on if mentioned
 - [ ] Release notes do not promise npm publishing or a simplified installer in this version

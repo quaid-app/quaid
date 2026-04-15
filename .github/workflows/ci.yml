@@ -111,7 +111,9 @@ jobs:
             coverage-summary.txt
 
       - name: Upload to Codecov (optional, non-blocking)
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          secrets.CODECOV_TOKEN != '' &&
+          (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: codecov/codecov-action@v4
         continue-on-error: true
         with:

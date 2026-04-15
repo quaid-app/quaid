@@ -14,7 +14,14 @@
 }
 
 :root[data-theme="dark"] {
-  --sl-color-bg: radial-gradient(
+  --sl-color-bg: #060d16;
+  --sl-color-bg-nav: rgba(6, 13, 22, 0.75);
+  --sl-color-bg-sidebar: rgba(6, 13, 22, 0.80);
+}
+
+/* Gradient applied to page shell, not the color token */
+body[data-theme="dark"] {
+  background: radial-gradient(
       1200px 800px at 20% 10%,
       rgba(19, 137, 253, 0.14),
       transparent 55%
@@ -25,8 +32,6 @@
       transparent 60%
     ),
     linear-gradient(180deg, #060d16 0%, #050b13 45%, #040910 100%);
-  --sl-color-bg-nav: rgba(6, 13, 22, 0.75);
-  --sl-color-bg-sidebar: rgba(6, 13, 22, 0.80);
 }
 
 header.header {
@@ -76,7 +81,7 @@ header.header {
 }
 
 /* Glowing sidebar active item */
-[aria-current="page"] {
+nav.sidebar [aria-current="page"] {
   background: rgba(19, 137, 253, 0.12) !important;
   border-left: 2px solid #1389fd;
 }

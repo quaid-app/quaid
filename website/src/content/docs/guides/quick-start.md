@@ -60,6 +60,6 @@ GBRAIN_DB=~/brain.db ./target/release/gbrain serve
 
 ## What's Next?
 
-- [CLI Reference](/gigabrain/reference/cli/) — full flag and subcommand reference
-- [MCP Server](/gigabrain/guides/mcp-server/) — connect Claude Code or any MCP agent
-- [Architecture](/gigabrain/reference/architecture/) — how the internals fit together
+- [CLI Reference](/reference/cli/) — full flag and subcommand reference
+- [MCP Server](/guides/mcp-server/) — connect Claude Code or any MCP agent
+- [Architecture](/reference/architecture/) — how the internals fit together

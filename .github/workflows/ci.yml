@@ -112,11 +112,13 @@ jobs:
 
       - name: Upload to Codecov (optional, non-blocking)
         if: >-
-          secrets.CODECOV_TOKEN != '' &&
+          env.CODECOV_TOKEN != '' &&
           (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: codecov/codecov-action@v4
         continue-on-error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
           fail_ci_if_error: false

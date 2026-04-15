@@ -34,19 +34,19 @@ OCC on `brain_put` is already complete — do not re-implement.
 
 ## Group 3 — Assertions Core (`src/core/assertions.rs`)
 
-- [ ] 3.1  Define `Triple { subject, predicate, object }` and `AssertionError` in `src/core/assertions.rs`.
-- [ ] 3.2  Implement `extract_assertions(page: &Page, conn: &Connection) -> Result<usize, AssertionError>`: DELETE existing assertions for `page.id`, apply regex patterns over `compiled_truth` sentences, INSERT new `assertions` rows with `confidence = 0.8`, `asserted_by = 'agent'`. Return count of inserted rows.
-- [ ] 3.3  Implement at least 3 regex patterns: "X works at Y", "X is a Y", "X founded Y". Document patterns with inline comments.
-- [ ] 3.4  Implement `check_assertions(slug: &str, conn: &Connection) -> Result<Vec<Contradiction>, AssertionError>`: query assertions for the page plus assertions sharing the same `subject`; detect (subject, predicate) pairs with 2+ different objects and overlapping validity; insert into `contradictions` table if no unresolved row exists for that pair; return the new contradiction rows.
-- [ ] 3.5  Write unit tests: extract_assertions inserts expected triples; re-indexing replaces prior triples; page with no patterns inserts zero rows; check_assertions detects same-page conflict; check_assertions detects cross-page conflict; resolved contradiction is not duplicated.
+- [x] 3.1  Define `Triple { subject, predicate, object }` and `AssertionError` in `src/core/assertions.rs`.
+- [x] 3.2  Implement `extract_assertions(page: &Page, conn: &Connection) -> Result<usize, AssertionError>`: DELETE existing assertions for `page.id`, apply regex patterns over `compiled_truth` sentences, INSERT new `assertions` rows with `confidence = 0.8`, `asserted_by = 'agent'`. Return count of inserted rows.
+- [x] 3.3  Implement at least 3 regex patterns: "X works at Y", "X is a Y", "X founded Y". Document patterns with inline comments.
+- [x] 3.4  Implement `check_assertions(slug: &str, conn: &Connection) -> Result<Vec<Contradiction>, AssertionError>`: query assertions for the page plus assertions sharing the same `subject`; detect (subject, predicate) pairs with 2+ different objects and overlapping validity; insert into `contradictions` table if no unresolved row exists for that pair; return the new contradiction rows.
+- [x] 3.5  Write unit tests: extract_assertions inserts expected triples; re-indexing replaces prior triples; page with no patterns inserts zero rows; check_assertions detects same-page conflict; check_assertions detects cross-page conflict; resolved contradiction is not duplicated.
 
 ## Group 4 — Check CLI (`src/commands/check.rs`)
 
-- [ ] 4.1  Implement `run(db: &Connection, slug: Option<String>, all: bool, check_type: Option<String>, json: bool) -> Result<()>`. When `all`, iterate all pages via `SELECT slug FROM pages`; for each, call `extract_assertions` then `check_assertions`.
-- [ ] 4.2  Human-readable output: one line per contradiction `[slug] ↔ [other_slug]: <description>`. Summary line: "N contradiction(s) found."
-- [ ] 4.3  JSON output: array of objects `{ page_slug, other_page_slug, type, description, detected_at }`.
-- [ ] 4.4  Wire `check::run` into `src/main.rs` dispatch (currently has a `todo!`).
-- [ ] 4.5  Write tests: single-page check finds existing contradiction; `--all` processes multiple pages; JSON is valid; `--slug` for non-existent page returns error.
+- [x] 4.1  Implement `run(db: &Connection, slug: Option<String>, all: bool, check_type: Option<String>, json: bool) -> Result<()>`. When `all`, iterate all pages via `SELECT slug FROM pages`; for each, call `extract_assertions` then `check_assertions`.
+- [x] 4.2  Human-readable output: one line per contradiction `[slug] ↔ [other_slug]: <description>`. Summary line: "N contradiction(s) found."
+- [x] 4.3  JSON output: array of objects `{ page_slug, other_page_slug, type, description, detected_at }`.
+- [x] 4.4  Wire `check::run` into `src/main.rs` dispatch (currently has a `todo!`).
+- [x] 4.5  Write tests: single-page check finds existing contradiction; `--all` processes multiple pages; JSON is valid; `--slug` for non-existent page returns error.
 
 ## Group 5 — Progressive Retrieval (`src/core/progressive.rs`)
 

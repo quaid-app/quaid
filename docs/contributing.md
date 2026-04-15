@@ -175,7 +175,7 @@ gh issue create --title "[Phase 1] Code review: db.rs, search.rs, inference.rs" 
 gh issue create --title "[Phase 1] Adversarial review: MCP server" --body "Nibbler adversarially reviews the MCP server for OCC enforcement and injection risks." --label "squad:nibbler,phase-1"
 gh issue create --title "[Phase 2] Intelligence layer" --body "Fry implements Phase 2. OpenSpec: openspec/changes/p2-intelligence-layer/proposal.md. Blocked until Phase 1 gate passes." --label "squad:fry,phase-2"
 gh issue create --title "[Phase 3] Benchmarks + release gates" --body "Kif establishes BEIR baseline and all release gates. OpenSpec: openspec/changes/p3-polish-benchmarks/proposal.md" --label "squad:kif,phase-3"
-gh issue create --title "[Phase 3] v0.1.0 release" --body "Zapp coordinates the v0.1.0 GitHub Release after Phase 3 gates pass." --label "squad:zapp,phase-3"
+gh issue create --title "[Phase 1] v0.1.0 release" --body "Zapp coordinates the v0.1.0 GitHub Release after Phase 1 gates pass." --label "squad:zapp,phase-1"
 ```
 
 > **Note:** Labels must exist before issue creation — `gh issue create --label` silently ignores labels that do not exist yet.

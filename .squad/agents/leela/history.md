@@ -116,6 +116,52 @@
 - Ready for git commit.
 
 
+## Phase 2 Kickoff — 2026-04-15
+
+**What was done:**
+- Phase 1 confirmed complete (v0.1.0 shipped, tagged on `main`).
+- Created branch `phase2/p2-intelligence-layer` from `main`.
+- Updated `.squad/identity/now.md` to Phase 2 focus.
+- Wrote team execution split to `.squad/decisions/inbox/leela-phase2-kickoff.md`.
+- Committed p0 OpenSpec archive (was untracked in `openspec/changes/archive/`).
+- Opened PR `phase2/p2-intelligence-layer` → `main` (no-merge policy; owner reviews).
+- Closed Phase 1 GitHub issues #2, #3, #4, #5.
+- Updated Phase 2 issue #6 with branch + PR link.
+- Created Phase 2 sub-issues for each agent lane.
+
+**Team execution lanes:**
+- Fry → Groups 1–9 (all implementation)
+- Scruffy → 90%+ coverage, ≥200 tests
+- Bender → integration + ship-gate scenarios
+- Amy → project docs
+- Hermes → website docs
+- Professor → peer review gate (graph, progressive, OCC)
+- Nibbler → adversarial review (MCP write surface)
+- Mom → temporal edge cases
+
+**Key architecture context for Phase 2:**
+- All Phase 2 tables already exist in schema — NO DDL changes needed.
+- OCC on `brain_put` is already done — do not re-implement.
+- `src/core/novelty.rs` logic is complete; only plumbing into ingest needed (Group 6).
+- `src/commands/link.rs` is fully implemented — Groups 9.1–9.3 delegate to it.
+- MCP error code convention: `-32001` not found, `-32003` db error (established in Phase 1).
+- Graph BFS must be iterative (not recursive) — D1 from design.md.
+- Token budget from `config` table (key: `default_token_budget`), not hard-coded.
+
+**Key file paths:**
+- OpenSpec proposal: `openspec/changes/p2-intelligence-layer/proposal.md`
+- Design decisions: `openspec/changes/p2-intelligence-layer/design.md`
+- Task list: `openspec/changes/p2-intelligence-layer/tasks.md` (10 groups, 50+ tasks)
+- Specs: `openspec/changes/p2-intelligence-layer/specs/*/spec.md`
+- Decisions inbox: `.squad/decisions/inbox/leela-phase2-kickoff.md`
+
+**Learnings:**
+- When Phase N completes, immediately create the Phase N+1 branch from main — don't let it sit as untracked local state.
+- GitHub issues for completed phases should be closed at kickoff of the next phase, not left open.
+- OpenSpec archives are version-controlled artifacts — commit them to the active branch, not left untracked.
+
+---
+
 ## Sprint 0 — 2026-04-13
 
 **What was done:**

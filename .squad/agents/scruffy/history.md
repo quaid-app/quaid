@@ -10,6 +10,7 @@
 - The team wants high unit-test coverage, not token test presence.
 - Proposal-first work helps define the invariants tests must guard.
 - Coverage depth is a first-class role in this squad.
+- Coverage review is not just artifact existence; README/docs must point to the same free GitHub coverage surface, and status wording must stay synchronized across repo docs.
 
 ## 2026-04-14T03:59:44Z Scribe Merge (T03 completion)
 
@@ -53,3 +54,16 @@
 - Added `tests/roundtrip_semantic.rs` to verify import -> export -> re-import preserves page count and normalized exported markdown hashes across the canonicalized corpus.
 - Added MCP server unit coverage for tools capability exposure, not-found mapping (`-32001`), and OCC conflict mapping (`-32009` with `current_version`).
 - Pattern note: semantic round-trip needs normalized line endings because some fixtures carry CRLF timeline bytes through the first export before canonical re-import collapses them to LF.
+
+## 2026-04-15 P3 Release — Inspectability Gate Review & Re-review & Approval
+
+**Role:** P3 Release gate review (task 5.2 coverage inspectability)
+
+**What happened:**
+- Scruffy's initial review (task 5.2) verified coverage outputs are free and GitHub-visible (lcov.info artifact + job summary), but identified two blocking issues: coverage surface not documented in public docs, README/docs-site status messaging still drifts.
+- Marked task 5.2 blocked with specific doc revision requirements. Amy added coverage guidance to README/docs pages pointing to GitHub Actions surface and stating coverage is informational. Hermes synced docs-site roadmap/status with README.
+- Re-reviewed after fixes. Both doc accuracy issues resolved. Task 5.2 **APPROVED**.
+
+**Outcome:** P3 Release gate 5.2 (inspectability) **COMPLETE & APPROVED**. Coverage surface documented and GitHub-visible, status messaging aligned across all surfaces, sign-off complete.
+
+**Decision notes:** `.squad/decisions.md` (merged from inbox) — documents Scruffy's task 5.2 review, blocking issues, and re-review approval.

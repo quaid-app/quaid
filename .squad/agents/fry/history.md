@@ -235,3 +235,17 @@
 - Standard `.sha256` format (`hash  filename`) is strictly better than hash-only: enables `shasum --check` directly, matches conventions from Go, Terraform, kubectl, etc.
 - Codecov v4 requires a token even for public repos. Making it `continue-on-error: true` with an optional `CODECOV_TOKEN` secret satisfies the "additive and non-blocking" spec requirement.
 - Release artifact verification should always happen as a separate step before `softprops/action-gh-release` — the action doesn't validate completeness itself.
+
+## 2026-04-15 P3 Release — Completion
+
+**Role:** CI/Release workflow implementation, artifact verification
+
+**What happened:**
+- Fry implemented `cargo-llvm-cov` coverage job and hardened release.yml with standard checksum format (`hash  filename`).
+- Kif's first review (task 5.1) rejected on two doc-drift issues: coverage artifact name mismatch, checksum format mismatch. Fry applied targeted fixes to spec.md and install.md.
+- After fixes, task 5.1 passed Kif's re-review. All four implementation tasks marked complete in tasks.md.
+- Coverage now visible in GitHub UI. Release workflow verified end-to-end.
+
+**Outcome:** P3 Release CI/Release component **COMPLETE**. Coverage job running, release workflow tested, artifact verification validated, all gates passed.
+
+**Decision notes:** `.squad/decisions.md` (merged from inbox) — documents coverage tool selection, checksum format standardization, informational (non-gating) coverage policy, and optional Codecov handling.

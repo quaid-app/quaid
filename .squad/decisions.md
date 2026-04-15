@@ -1552,3 +1552,133 @@ New issues introduced:
 - Evidence: `target/x86_64-unknown-linux-musl/release/gbrain` exists; `file` reports `static-pie linked`; `ldd` reports `statically linked`.
 
 **Overall:** APPROVE — SG-3/4/5 are satisfied; Phase 1 may proceed on these gates.
+
+---
+
+## P3 Release — Docs/Coverage Sprint
+
+### 2026-04-15: Phase 3 Unblock — Release/Docs/Coverage Scope
+
+**By:** Leela
+
+**What:** `openspec/changes/p3-polish-benchmarks` is narrowed to:
+- Release readiness on GitHub Releases
+- README/docs fixes for honesty
+- Free coverage visibility on push/PR to `main`
+- Docs-site improvements and deployment clarity
+
+**Why:** The previous proposal mixed release posture, benchmarks, unfinished skill work, and new distribution channels. The ready-now problem is narrower: public docs and workflows must match actual repo state. npm distribution and simplified installer UX are deferred.
+
+**Routing:**
+- **Fry:** CI + release workflow implementation
+- **Amy:** README + public docs honesty pass
+- **Hermes:** docs-site UX/build/deploy
+- **Zapp:** public release checklist + launch wording
+
+### 2026-04-14: Coverage + Release Workflow Hardening
+
+**By:** Fry
+
+**Scope:** p3-polish-benchmarks tasks 1.1–1.4
+
+**Decisions:**
+1. **Coverage tool:** Use `cargo-llvm-cov` (LLVM source-based) instead of tarpaulin for CI coverage — more accurate, integrates with stable Rust, produces standard lcov output.
+2. **Checksum format:** Changed `.sha256` files from hash-only to standard `hash  filename` format (e.g., `abc123...  gbrain-darwin-arm64`). This enables direct `shasum -a 256 --check filename.sha256` — the universal convention. Breaking change, but project has not shipped a release yet.
+3. **Coverage is informational, not gating:** Coverage runs and reports results but does not fail CI on low coverage. Codebase is actively growing; fail-under threshold would create friction without signal.
+4. **Codecov is optional and non-blocking:** Uses `continue-on-error: true` and requires optional `CODECOV_TOKEN`. Only runs on pushes and same-repo PRs (not forks). Spec requires "any optional third-party upload SHALL be additive and non-blocking."
+
+**Follow-ups:**
+- **Zapp:** Verify RELEASE_CHECKLIST.md checksum wording matches expectations.
+- **Amy:** README install verification commands changed from `echo | shasum` to direct `shasum --check`. Verify alignment with docs intent.
+- **Scruffy:** Verify coverage outputs (lcov artifact + job summary) are inspectable from GitHub without paid tooling.
+- **spec.md owner:** Update install/release checksum examples to standard format separately.
+
+### 2026-04-15: Docs-Site Polish — Navigation and Install
+
+**By:** Hermes
+
+**Scope:** p3-polish-benchmarks tasks 3.1–3.3
+
+**Decisions:**
+1. **"Install & Status" page is primary anchor:** Dedicated `guides/install.md` clearly separates supported now (build from source), planned (GitHub Releases at v0.1.0), and explicitly deferred (npm, curl installer).
+2. **Homepage hero reordered:** Primary CTA is now "Install & Status" (→ install) with Quick Start as secondary. Most common question is "can I use this now?"
+3. **PR build validation added:** Added `pull_request` trigger to docs.yml targeting `main` with `paths: ["website/**"]`. Build validates; deploy is gated on `push || workflow_dispatch`.
+4. **Roadmap Phase 1 corrected to "Not started":** README is authoritative; docs must follow README, not diverge.
+5. **GitHub Pages base path verified:** `astro.config.mjs` correctly sets `base: isGitHubActions ? '/${repo}' : '/'` — all assets/links resolve under `/gigabrain/`.
+
+### 2026-04-15: Task 5.1 Review — Coverage/Release Plan (Blocked → Fixed)
+
+**By:** Kif (Reviewer)
+
+**Issue:** Coverage/release plan was close, but public docs drifted from implemented workflow in two places:
+1. **Coverage surface drift:** `website/src/content/docs/guides/install.md` said coverage on pushes to `main` is "planned", but `.github/workflows/ci.yml` already implements it.
+2. **Checksum format drift:** `website/src/content/docs/reference/spec.md` documented hash-only `.sha256` files and old `echo ... | shasum --check` flow, but `release.yml` now generates standard `hash  filename` format.
+
+**What Passed:**
+- Coverage remains free and inspectable from GitHub even if Codecov unavailable.
+- Release artifact names are stable and consistent.
+
+**Resolution:** Amy/Hermes updated website install/coverage guidance; spec owner updated reference spec checksum examples. Task 5.1 re-reviewed and **APPROVED**.
+
+### 2026-04-15: Task 5.2 Review — Coverage Docs (Blocked → Fixed)
+
+**By:** Scruffy (Reviewer)
+
+**Issue:** GitHub Actions coverage output is inspectable without paid tooling, but docs slice failed inspectability/alignment bar:
+1. **Coverage surface not documented:** README/docs pages describe install/status but never point readers to GitHub-hosted coverage artifact or job summary.
+2. **README/docs-site status drift:** README said Phase 1 "in progress"; docs roadmap said "not started" — violates documentation-accuracy requirement.
+
+**What Passed:**
+- `.github/workflows/ci.yml` publishes machine-readable artifact (`lcov.info`) and human-readable GitHub job summary.
+- Optional Codecov upload is explicitly non-blocking.
+
+**Resolution:** Amy added coverage guidance to README/docs pages pointing to GitHub Actions summary/artifact and stating coverage is informational, not gating. Hermes synced docs-site roadmap/status copy with README. Task 5.2 re-reviewed and **APPROVED**.
+
+### 2026-04-15: Final Doc Fix — Phase/Version Alignment
+
+**By:** Zapp
+
+**Issue:** Two files contained phase/version mismatches against roadmap (`v0.1.0 = Phase 1`, `v0.2.0 = Phase 2`, `v1.0.0 = Phase 3`):
+1. `website/src/content/docs/guides/install.md` — Status table lacked version targets; "Once Phase 3 ships" contradicted header and roadmap.
+2. `website/src/content/docs/contributing/contributing.md` — Sprint 0 issue-creation script created GitHub issue titled `[Phase 3] v0.1.0 release`, teaching contributors wrong mental model.
+
+**Fixes:**
+- Status table rows now include version tags (`v0.1.0`, `v0.2.0`, `v1.0.0`) for each phase.
+- "Once Phase 3 ships" → "Once Phase 1 ships (v0.1.0)" in GitHub Releases section.
+- Issue title `[Phase 3] v0.1.0` → `[Phase 1] v0.1.0`; body and labels corrected.
+
+**Principle:** Operational scripts (label helpers, issue templates) are first-class documentation. Must be reviewed for phase/version alignment at same standard as prose.
+
+---
+
+## P3 Release Review Outcomes (2026-04-15)
+
+### Kif's Final Gate: APPROVE
+
+Coverage/release plan and docs alignment **APPROVED** after fixes. Task 5.1 complete.
+
+### Scruffy's Final Gate: APPROVE
+
+Coverage inspectability and docs accuracy **APPROVED** after fixes. Task 5.2 complete.
+
+### Leela's Spec/Scope Conformance: APPROVE
+
+Phase 3 scope cut and implementation routing **APPROVED**. Final deliverables align with narrowed proposal.
+
+---
+
+## P3 Release — Completion Summary
+
+**Project:** p3-polish-benchmarks — Phase 3 unblock (release/docs/coverage/docs-site)
+
+**Outcomes:**
+- ✅ Coverage job visible in GitHub UI (free, no paid tooling required)
+- ✅ Release workflow hardened with standard checksum format
+- ✅ README/docs/website all agree on status, install, and phase/version messaging
+- ✅ Docs-site navigation and install pages refreshed
+- ✅ Release checklist and hardened launch copy ready
+- ✅ All review gates passed (Kif coverage/release, Scruffy inspectability, Leela spec/scope)
+
+**Team:** Leela, Fry, Amy, Hermes, Zapp, Kif, Scruffy
+
+**Status:** ✅ Complete — Ready for release

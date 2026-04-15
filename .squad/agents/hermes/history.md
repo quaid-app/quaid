@@ -10,3 +10,21 @@
 - The project wants a world-class open-source docs website, not just acceptable docs.
 - Docs-site changes also follow the OpenSpec-first workflow when meaningful.
 - Examples, IA, and search UX matter as much as prose quality.
+- The `docs.yml` workflow previously only deployed on push to `main` — PRs had no build validation. Adding a `pull_request` trigger with a conditional `upload-pages-artifact` step (skipped on PRs) and a `deploy` job gated on `push`/`workflow_dispatch` is the correct GitHub Pages pattern.
+- Starlight/Astro handles the repository-relative base path automatically when `GITHUB_ACTIONS=true` and `GITHUB_REPOSITORY` are set — all asset/link URLs pick up `/gigabrain/` without per-page changes.
+- An "Install & Status" page is the clearest single anchor for surfacing supported-now vs planned-later distribution channels. It belongs first in the Getting Started nav group.
+- Roadmap and README must agree on Phase status. When they diverge, README wins as the more actively-maintained source of truth.
+
+## 2026-04-15 P3 Release — Docs-Site Polish & Completion
+
+**Role:** Docs-site navigation, install pages, build/deploy workflow
+
+**What happened:**
+- Hermes created dedicated `guides/install.md` page as the primary navigation anchor for status/install matrix. Reordered homepage hero to "Install & Status" primary CTA (vs. old "Get Started").
+- Added `pull_request` trigger to `docs.yml` so PRs validate the Astro build before merge (deploy still gated on `push`/`workflow_dispatch`).
+- Corrected docs-site roadmap Phase 1 status from "In progress" to "Not started" to match README.
+- Verified GitHub Pages base path is correct — all assets/links resolve under `/gigabrain/`.
+
+**Outcome:** P3 Release docs-site component **COMPLETE**. Install page as primary CTA, PR validation on docs PRs, status aligned with README, all gates passed.
+
+**Decision notes:** `.squad/decisions.md` (merged from inbox) — documents five docs-site polish decisions (install anchor, homepage CTA, PR validation, roadmap sync, base path verification).

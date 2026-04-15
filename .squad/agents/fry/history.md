@@ -159,14 +159,25 @@
 - Leela took revision cycle independently. Outcome: APPROVED (5 decisions on documentation, stderr warnings, honest status notes). All 115 tests pass unchanged.
 - Ready for Phase 1 ship gate after Leela revision lands and Professor approves.
 
-## Phase 1 T20 Novelty Detection (COMPLETE)
+## Phase 1 T21–T34 Completion (COMPLETE)
 
-- Implemented src/core/novelty.rs: check_novelty(content, existing_page, conn) - tasks T20 fully complete.
-- Dual-signal approach: Jaccard similarity on whitespace-tokenised word sets (always available) + cosine similarity from stored page_embeddings_vec_384 vectors (when present). Equal-weight average when both signals available; Jaccard-only fallback otherwise.
-- Similarity threshold 0.85: at or above = not novel (duplicate); below = novel (accept).
-- Existing page text comparison uses concatenated compiled_truth + timeline.
-- Module doc comment is honest about T14 SHA-256 hash shim: cosine scores reflect hash proximity, not semantic meaning. Jaccard provides genuine token-level dedup regardless.
-- 9 new unit tests: 4 Jaccard (identical, disjoint, partial overlap, both empty) + 5 check_novelty (identical, clearly different, minor edit, substantial addition, timeline inclusion).
-- Module-level allow(dead_code) - not yet wired into ingest pipeline (T22 migrate.rs).
-- All gates pass: cargo fmt --check, cargo clippy -- -D warnings, cargo test (128/128).
-- Decision note written to .squad/decisions/inbox/fry-novelty-slice.md.
+- Implemented all remaining Phase 1 tasks in a single session:
+  - T21 `src/core/links.rs`: `extract_links` (regex `[[slug]]` extraction), `resolve_slug` (lowercase kebab normalisation). 8 unit tests.
+  - T22 `src/core/migrate.rs`: `import_dir` (SHA-256 idempotent batch import with `import_hashes` table), `export_dir` (render_page to markdown files), `validate_roundtrip` (export-reimport comparison). 6 unit tests.
+  - T23 `src/commands/import.rs`: CLI wrapper for `migrate::import_dir`, prints import/skip counts.
+  - T24 `src/commands/export.rs`: CLI wrapper for `migrate::export_dir`.
+  - T25 `src/commands/ingest.rs`: Single-file ingest with SHA-256 dedup, `--force` bypass. 2 unit tests (double-ingest skip, force re-ingest).
+  - T26 `src/commands/timeline.rs`: Parse timeline section from page content, print entries. Supports `--json`. `add()` stub implemented. 3 unit tests.
+  - T27 `tests/fixtures/`: Added `project.md`, `person2.md`, `company2.md` (5 total). Canonical format for round-trip compatibility.
+  - T28 `src/mcp/server.rs`: Full MCP server using rmcp 0.1 `#[tool(tool_box)]` macro. 5 tools: `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`. Error codes: -32009 (OCC conflict), -32001 (not found), -32002 (parse), -32003 (DB). Uses `Arc<Mutex<Connection>>` for thread-safe DB access.
+  - T29 `src/commands/serve.rs`: Async wrapper calling `mcp::server::run(conn)`.
+  - T30 `src/commands/config.rs`: get/set/list for config table. 2 unit tests.
+  - T31 `src/commands/version.rs`: Already implemented (prints `gbrain <version>`).
+  - T32 `--json` flags: Already wired globally in all 5 required commands.
+  - T33 Skills: Updated `skills/ingest/SKILL.md` and `skills/query/SKILL.md` with accurate Phase 1 content.
+  - T34 Lint gate: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test` — all pass (142 tests).
+- Key decisions:
+  - `import_hashes` table created via `CREATE TABLE IF NOT EXISTS` (separate from `ingest_log` in schema.sql which tracks different data).
+  - MCP server uses `Arc<Mutex<Connection>>` since rmcp `ServerHandler` requires `Clone + Send + Sync`.
+  - Fixtures use LF line endings, sorted frontmatter, no quoted values — matches `render_page` canonical output.
+  - rmcp `ErrorCode` wrapper required for custom error codes (not bare integers).

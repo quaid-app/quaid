@@ -2,46 +2,65 @@
 name: gbrain-ingest
 description: |
   Ingest meeting notes, articles, documents, and conversations into GigaBrain.
-  Handles Tier 1-4 processing: immediate memory, recent consolidation, long-term knowledge, and temporal archive.
+  Handles idempotent ingestion with SHA-256 deduplication.
 ---
 
 # Ingest Skill
 
-> Stub — full content to be authored in Phase 1 implementation.
-
 ## Overview
 
 The ingest skill processes raw source documents into structured brain pages.
-It handles novelty detection, entity extraction, link creation, assertion logging,
-and idempotent write operations.
+Each file is SHA-256 hashed for idempotent ingestion — re-ingesting the same
+file is a no-op unless `--force` is used.
 
-## Tiers
+## Commands
 
-1. **Tier 1 (Immediate)** — Write directly as meeting/conversation pages
-2. **Tier 2 (Recent)** — Consolidate into entity compiled_truth sections
-3. **Tier 3 (Long-term)** — Cross-link entities, detect contradictions
-4. **Tier 4 (Archive)** — Timeline entries, temporal sub-chunking
+### Single file ingest
 
-## Source Attribution Format
-
-All ingested pages should include source attribution in frontmatter:
-```yaml
-sources:
-  - authority: primary|secondary|tertiary
-    type: meeting|article|conversation|manual
-    ref: "meeting/2024-03-01" | "https://..." | "file/..."
-    date: YYYY-MM-DD
+```bash
+gbrain ingest /path/to/document.md
+gbrain ingest /path/to/document.md --force  # re-ingest even if hash matches
 ```
+
+The file must be valid markdown with optional YAML frontmatter. Frontmatter
+fields `title`, `type`, `slug`, and `wing` are used if present; otherwise
+defaults are derived from the file name and content.
+
+### Batch import
+
+```bash
+gbrain import /path/to/directory/          # import all .md files
+gbrain import /path/to/directory/ --validate-only  # parse-only, no writes
+```
+
+Walks the directory recursively for `.md` files. SHA-256 hashes are checked
+against the `import_hashes` table; already-imported files are skipped.
+After import, embeddings are automatically refreshed.
+
+### Export
+
+```bash
+gbrain export /path/to/output/
+```
+
+Exports all pages as canonical markdown files to the output directory.
+Files are written to `<output>/<slug>.md`, creating parent directories as needed.
+
+## Idempotency
+
+- SHA-256 of raw file bytes is the idempotency key
+- Stored in `import_hashes` table (source_hash, source_path, ingested_at)
+- `--force` bypasses the hash check and re-ingests
+
+## Frontmatter Handling
+
+- `slug`: used as-is if present; otherwise derived from file path
+- `title`: used as-is if present; otherwise set to slug
+- `type`: used as-is if present; defaults to `concept`
+- `wing`: used as-is if present; otherwise derived from slug prefix
 
 ## Filing Disambiguation
 
 When the same entity could go in multiple wings, prefer the wing
 that matches the slug prefix (e.g., `people/` → `people` wing).
 
-## TODO
-
-- [ ] Full ingest workflow (Tiers 1-4)
-- [ ] Novelty check integration
-- [ ] Assertion extraction rules
-- [ ] Contradiction detection hooks
-- [ ] Source attribution normalization

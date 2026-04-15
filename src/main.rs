@@ -312,7 +312,7 @@ async fn main() -> Result<()> {
         Commands::Compact => commands::compact::run(&db),
         Commands::Config { action } => commands::config::run(&db, action),
         Commands::Validate { all } => commands::validate::run(&db, all),
-        Commands::Serve => commands::serve::run(&db).await,
+        Commands::Serve => commands::serve::run(db).await,
         Commands::Stats => commands::stats::run(&db, cli.json),
         Commands::Skills { action } => commands::skills::run(action),
         Commands::Call { tool, params } => commands::call::run(&db, &tool, params).await,

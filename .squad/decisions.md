@@ -1222,3 +1222,333 @@ Do **not** freeze paraphrase or semantic-near-duplicate expectations in novelty 
 - Keep asserting that clearly different content remains novel when embeddings are absent.
 - Keep asserting that clearly different content remains novel even when placeholder embeddings are present.
 - Defer any "same meaning, different wording" assertions until Candle/BGE embeddings replace the shim.
+
+
+### Bender SG-7 Roundtrip Sign-off — 2026-04-15
+
+**Verdict:** CONDITIONAL APPROVE
+
+**roundtrip_semantic test quality:**
+The test (`import_export_reimport_preserves_page_count_and_rendered_content_hashes`) is solid. It runs a full import→export→reimport→export cycle against all 5 fixture files and asserts:
+1. Page counts match at every stage (import count, export count, reimport count, re-export count).
+2. SHA-256 content hashes of every exported `.md` file match between export cycle 1 and cycle 2 (via `BTreeMap<relative_path, sha256>`).
+
+This proves **normalized idempotency** — once data enters the DB, the rendered representation is stable across cycles. It does NOT prove lossless import from arbitrary source markdown. Specifically, YAML sequence frontmatter values (`tags: [fintech, b2b, saas]` in `company.md` and `person.md`) are silently dropped by `parse_yaml_to_map` → `yaml_value_to_string` returning `None` for non-scalar values. This loss is invisible to the semantic test because it compares export₁ vs export₂, not export vs original source. This is a **known Phase 2 concern** (flagged during T03 review as "Naive YAML rendering loses structured values").
+
+**roundtrip_raw test quality:**
+The test (`export_reproduces_canonical_markdown_fixture_byte_for_byte`) is clean. It constructs a canonical inline fixture with sorted frontmatter keys, no YAML arrays, no quoted scalars, and asserts `exported_bytes == canonical.as_bytes()`. The fixture is genuinely canonical — it matches the exact output format of `render_page()`: sorted keys, `---` separators, truth section, timeline section. Byte-exact assertion is the strongest possible check.
+
+**cargo test roundtrip result:** PASS (both tests pass — `roundtrip_raw` in 1.49s, `roundtrip_semantic` in 29.71s)
+
+**Evidence of actual data integrity check:** Yes — SHA-256 hashes of full rendered content per file (semantic) and byte-exact comparison against canonical fixture (raw). These are not superficial count-only checks.
+
+**Coverage gaps:**
+1. **No source→export fidelity test.** Neither test checks that importing original fixture files preserves all frontmatter keys. A test comparing `fixture_frontmatter_keys ⊆ exported_frontmatter_keys` would catch the tag-dropping issue. Not blocking for Phase 1 since the YAML array limitation is already documented, but should be added in Phase 2 when structured frontmatter support lands.
+2. **No edge-case fixture.** No fixture tests: empty compiled_truth, empty timeline, empty frontmatter, unicode in slugs, very long content. These are Phase 2 concerns but worth noting.
+3. **Misleading `cargo test roundtrip` filter.** The test function names don't contain "roundtrip" — running `cargo test roundtrip` matches internal unit tests but requires `--test roundtrip_raw --test roundtrip_semantic` to actually hit the integration tests. Not a code issue but a CI footgun — whoever wrote SG-7's verification command should know the correct invocation.
+
+**Determinism:** Both tests are fully deterministic — no randomness, no time-dependency, no network. Uses `BTreeMap` for ordered comparison, `sort()` on file lists, sorted frontmatter keys. Zero flap risk.
+
+**Conditions for full approval:**
+- Phase 2 must add a source→export frontmatter preservation test once YAML array support lands.
+- CI should invoke `cargo test --test roundtrip_raw --test roundtrip_semantic` explicitly (or just `cargo test` which runs all).
+
+
+### 2026-04-15T03:16:08Z: User directive — always update openspec tasks on completion
+
+**By:** macro88 (via Copilot)
+**What:** When completing any task from an openspec tasks.md file, always mark that task `[x]` immediately. Do not batch updates until end of phase — update as each task is done. If an openspec reaches 100% task completion and all ship gates pass, archive it using the openspec-archive-change skill.
+**Why:** User request — the p1-core-storage-cli openspec was reporting 57% when 88% was actually done, because Fry and the team never updated the task checkboxes as work landed.
+
+
+### Fry SG-6 Fixes — 2026-04-15
+
+**Verdict:** IMPLEMENTED (pending Nibbler re-review)
+
+Addressed all 5 categories from Nibbler's SG-6 rejection of `src/mcp/server.rs`:
+
+1. **OCC bypass closed.** `brain_put` now rejects updates to existing pages when `expected_version` is `None`. Returns `-32009` with `current_version` in error data so the client knows what to send. New page creation (INSERT path) still allows `None`.
+
+2. **Slug + content validation added.** `validate_slug()` enforces `[a-z0-9/_-]` charset and 512-char max. `validate_content()` caps at 1 MB. Both return `-32602` (invalid params). Applied at top of `brain_get` and `brain_put`.
+
+3. **Error code consistency.** Centralized `map_db_error(rusqlite::Error)` correctly routes SQLITE_CONSTRAINT_UNIQUE → `-32009`, FTS5 parse errors → `-32602`, all others → `-32003`. `map_search_error(SearchError)` delegates to `map_db_error` for SQLite variants. No more generic `-32003` leaking for distinguishable error classes.
+
+4. **Resource exhaustion capped.** `brain_list`, `brain_query`, `brain_search` all clamp `limit` to `MAX_LIMIT = 1000`. Added `limit` field to `BrainQueryInput` and `BrainSearchInput` (previously missing vs spec). Results are truncated after retrieval.
+
+5. **Mutex poisoning recovery.** All `self.db.lock()` calls now use `unwrap_or_else(|e| e.into_inner())` which recovers the underlying connection from a poisoned mutex. Safe for SQLite connections — they aren't corrupted by a handler panic.
+
+**Tests:** 304 pass (8 new: OCC bypass rejection, invalid slug, oversized content, empty slug, plus existing tests updated). `cargo clippy -- -D warnings` clean.
+
+**Commit:** `5886ec2` on `phase1/p1-core-storage-cli`.
+
+
+# Decision: T14 BGE-small Inference + T34 musl Static Binary
+
+**By:** Fry
+**Date:** 2026-04-15
+**Status:** IMPLEMENTED
+
+## T14 — BGE-small-en-v1.5 Forward Pass
+
+### Decision
+Full Candle BERT forward pass implemented in `src/core/inference.rs`. The SHA-256 hash shim is retained as a runtime fallback when model files are unavailable.
+
+### Architecture
+- `EmbeddingModel` wraps `EmbeddingBackend` enum: `Candle { model, tokenizer, device }` or `HashShim`
+- Model loading attempted at first `embed()` call via `OnceLock`; falls back to `HashShim` with stderr warning
+- `--features online-model` enables `hf-hub` for HuggingFace Hub download; without it, checks `~/.gbrain/models/bge-small-en-v1.5/` and HF cache
+- Forward pass: tokenize → BertModel::forward → mean pooling (broadcast_as) → L2 normalize → 384-dim Vec<f32>
+
+### Known Issues
+- **hf-hub 0.3.2 redirect bug:** HuggingFace now returns relative URLs in HTTP 307 Location headers. hf-hub 0.3.2's ureq-based client fails to resolve these. Workaround: manually download model files via `curl -sL`. Phase 2 should bump hf-hub or implement direct HTTP download.
+- **Candle broadcast semantics:** Unlike PyTorch, Candle requires explicit `broadcast_as()` for shape-mismatched tensor ops. All three broadcast sites (mask×output, sum÷count, mean÷norm) are explicitly handled.
+
+### Feature Flag Changes
+- `embed-model` removed from `[features] default` (was never wired)
+- `online-model = ["hf-hub"]` is the active download path (optional dependency)
+- Default build has no download capability; requires pre-cached model files
+
+### Phase 2 Recommendations
+- Bump `hf-hub` when a fix for relative redirects lands, or implement a simple `ureq` direct download
+- Implement `embed-model` feature with `include_bytes!()` for zero-network binary (~90MB)
+- Add a `gbrain model download` command for explicit model fetch
+
+---
+
+## T34 — musl Static Binary
+
+### Decision
+`x86_64-unknown-linux-musl` static binary build succeeds. Binary is fully statically linked, 8.8MB stripped.
+
+### Build Requirements
+```bash
+sudo apt-get install -y musl-tools
+rustup target add x86_64-unknown-linux-musl
+
+CC_x86_64_unknown_linux_musl=musl-gcc \
+CXX_x86_64_unknown_linux_musl=g++ \
+CFLAGS_x86_64_unknown_linux_musl="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t" \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+### Known Issues
+- **sqlite-vec musl compat:** sqlite-vec 0.1.x uses glibc-specific `u_int8_t`/`u_int16_t`/`u_int64_t` type aliases not available in musl. Workaround: pass `-D` defines via CFLAGS.
+- **C++ compiler:** gemm (candle dependency) requires a C++ compiler. `musl-g++` doesn't exist; using host `g++` with musl-gcc linker works.
+
+### Verification
+- `ldd`: "statically linked"
+- `file`: "ELF 64-bit LSB pie executable, x86-64, static-pie linked, stripped"
+- Size: 8.8MB (without embedded model weights)
+
+
+# Verdict: SG-8 — BEIR nDCG@10 Baseline Established
+
+**Agent:** Kif (Benchmark Expert)  
+**Date:** 2026-04-15  
+**Ship Gate:** SG-8  
+**Status:** ✅ Complete
+
+---
+
+## Summary
+
+Phase 1 BEIR-proxy nDCG@10 baseline recorded in `benchmarks/README.md`. The baseline establishes measurement methodology and records perfect search quality (nDCG@10 = 1.0000) on the synthetic fixture corpus using hash-based embeddings.
+
+## Evidence
+
+**Commit:** 204edf3 "bench: establish Phase 1 BEIR-proxy nDCG@10 baseline"
+
+**Baseline Numbers:**
+- **nDCG@10:** 1.0000 (8/8 queries)
+- **Hit@1:** 100.0% (8/8)
+- **Hit@3:** 100.0% (8/8)
+
+**Query Set:**
+8 synthetic queries with explicit ground-truth relevance judgments over 5 fixture pages (2 people, 2 companies, 1 project).
+
+**Latency (wall-clock, release build):**
+- FTS5 search: ~155ms (cold start)
+- Hybrid query: ~420ms (cold start)
+- Import (5 files): ~3.7s
+
+## Methodology
+
+### Corpus
+- 5 fixture pages from `tests/fixtures/`
+- Content: Brex founders (Pedro, Henrique), Acme Corp, Brex company, GigaBrain project
+- Total unique entities: 2 people, 2 companies, 1 project
+
+### Queries & Ground Truth
+
+| # | Query | Expected Relevant | Result |
+|---|-------|-------------------|--------|
+| 1 | who founded brex | people/pedro-franceschi OR people/henrique-dubugras | ✓ |
+| 2 | technology company developer tools | companies/acme | ✓ |
+| 3 | knowledge brain sqlite embeddings | projects/gigabrain | ✓ |
+| 4 | corporate card fintech startup | companies/brex | ✓ |
+| 5 | brazilian entrepreneur yc | people/pedro-franceschi OR people/henrique-dubugras | ✓ |
+| 6 | rust sqlite vector search | projects/gigabrain | ✓ |
+| 7 | developer productivity apis | companies/acme | ✓ |
+| 8 | brex cto technical leadership | people/henrique-dubugras | ✓ |
+
+### Metric Calculation
+- **nDCG@10:** Binary relevance, standard DCG formula with log2(i+1) discounting
+- Perfect score (1.0000) indicates all relevant documents ranked at position 1
+
+## Interpretation
+
+Perfect baseline is expected given:
+1. **Small corpus:** Only 5 pages, limited noise
+2. **Targeted queries:** Designed with clear lexical overlap to ground-truth
+3. **Hash-based embeddings:** Still capture lexical similarity effectively at this scale
+
+## Constraints & Limitations
+
+1. **Non-semantic embeddings:** Uses SHA-256 hash shim, not BGE-small-en-v1.5
+   - Semantic baseline to be established after T14 completes
+   - Current baseline measures FTS5 + hash-vector hybrid retrieval
+
+2. **Synthetic corpus:** Not adversarial
+   - Queries explicitly designed to have clear answers
+   - Does not reflect real-world knowledge graph complexity
+
+3. **No regression gate yet:** Baseline establishes measurement only
+   - Regression gate (no more than 2% drop) planned for Phase 3
+
+## Next Steps
+
+1. **T14 completion:** Wire real BGE-small-en-v1.5 embeddings
+2. **Semantic baseline:** Re-run queries with semantic embeddings, record delta
+3. **BEIR expansion:** Add NFCorpus, FiQA, NQ subsets (Phase 3)
+4. **Regression gate:** Enable CI gate once semantic baseline stable
+
+## Verdict
+
+**SG-8 is COMPLETE.**
+
+The Phase 1 baseline:
+- ✅ Recorded in benchmarks/README.md
+- ✅ Methodology documented (reproducible)
+- ✅ Numbers measured and committed
+- ✅ Interpretation and next steps explicit
+
+No regression gate activated yet — this is establishment only, as specified in the ship gate requirement.
+
+---
+
+**Kif, Benchmark Expert**  
+*Measured without flinching.*
+
+
+### Leela SG-6 Final Fixes — 2026-04-15
+
+**Author:** Leela (Lead)
+**Status:** Implemented — pending Nibbler re-review
+**Commit:** `ba5fb20` on `phase1/p1-core-storage-cli`
+
+---
+
+## Context
+
+Nibbler rejected `src/mcp/server.rs` twice. Fry is locked out under the reviewer rejection protocol after authoring both the original and the first revision. Leela took direct ownership of the two remaining blockers from Nibbler's second rejection.
+
+---
+
+## Fix 1: OCC create-path guard
+
+**Blocker:** When `brain_put` received `expected_version: Some(n)` for a page that did not exist, the code silently created the page at version 1, ignoring the supplied version. This violates the OCC contract — a client supplying `expected_version` is asserting knowledge of current state; if that state doesn't exist, the call must fail.
+
+**Change:** Added a guard at the top of the `None =>` branch in the `match existing_version` block in `src/mcp/server.rs`. When `input.expected_version` is `Some(n)` and `existing_version` is `None`, the handler returns:
+- Error code: `-32009`
+- Message: `"conflict: page does not exist at version {n}"`
+- Data: `{ "current_version": null }`
+
+**Test added:** `brain_put_rejects_create_with_expected_version_when_page_does_not_exist` — verifies error code `-32009` and `current_version: null` data.
+
+---
+
+## Fix 2: Bounded result materialization
+
+**Blocker:** `search_fts()` materialized every matching row into a `Vec` with no SQL `LIMIT` before returning. `hybrid_search()` consumed that full result set before merging and truncating. The handler-level `results.truncate(limit)` in server.rs was present but ineffective — the DB already did a full table scan and all rows were in memory.
+
+**Change:** Added `limit: usize` parameter to both `search_fts` (in `src/core/fts.rs`) and `hybrid_search` (in `src/core/search.rs`):
+
+- `search_fts`: appends `LIMIT ?n` to the SQL query, pushing the bound into SQLite so only `limit` rows are ever transferred from the DB engine.
+- `hybrid_search`: passes `limit` down to `search_fts` and calls `merged.truncate(limit)` after the set-union/RRF merge step.
+
+All callers updated:
+- `src/mcp/server.rs`: `brain_query` and `brain_search` compute `limit` (clamped to `MAX_LIMIT`) before the call and pass it in. The now-redundant post-call `truncate` removed.
+- `src/commands/search.rs`: passes `limit as usize` to `search_fts`.
+- `src/commands/query.rs`: passes `limit as usize` to `hybrid_search`.
+- All tests in `src/core/fts.rs` and `src/core/search.rs`: pass `1000` as limit (exceeds any test fixture size; does not change test semantics).
+
+---
+
+## Verification
+
+- `cargo clippy -- -D warnings`: clean
+- `cargo test`: 152 unit tests + 2 integration tests pass (was 151; +1 new test for Fix 1)
+- Fry's 5 fixes from the previous revision remain intact and untouched
+
+
+### Nibbler SG-6 Final Review — 2026-04-15
+
+**Verdict:** APPROVE
+
+Both prior blockers are fixed correctly:
+- `brain_put` now rejects `expected_version: Some(...)` on the create path with `-32009` and `current_version: null`, so the impossible OCC create/update bypass is closed (`src/mcp/server.rs:220-230`).
+- `search_fts()` now accepts a `limit` and pushes it into SQL, and `hybrid_search()` threads that limit through before merge/truncate, eliminating the previous unbounded FTS materialization path (`src/core/fts.rs:10-58`, `src/core/search.rs:13-38`).
+
+I did not find a viable bypass for either fix, and I did not find any new Phase 1 security/correctness blockers in `src/mcp/server.rs`, `src/core/fts.rs`, `src/core/search.rs`, `src/commands/search.rs`, or `src/commands/query.rs`.
+
+
+### Nibbler SG-6 Re-review — 2026-04-15
+
+**Verdict:** REJECT
+
+Per-blocker status:
+1. OCC bypass: NOT FIXED — `brain_put` now checks existence first (`src/mcp/server.rs:214-220`) and rejects `expected_version: None` for existing pages (`src/mcp/server.rs:247-257`), but the create path still accepts any supplied `expected_version` and inserts version 1 anyway (`src/mcp/server.rs:220-246`). That still permits impossible create/version combinations instead of rejecting them as OCC conflicts/bad params.
+2. Input validation: FIXED — `validate_slug()` and `validate_content()` exist (`src/mcp/server.rs:23-62`) and are called at MCP entry points for `brain_get` and `brain_put` (`src/mcp/server.rs:162-185`). Slug validation is a byte-level equivalent of `^[a-z0-9/_-]+$`, plus non-empty and max 512 chars; content is capped at 1,048,576 bytes.
+3. Error code mapping: FIXED — `map_db_error()` maps UNIQUE constraint failures via extended code 2067 to `-32009`, FTS5 parse/syntax failures containing `fts5` to `-32602`, and all other SQLite errors to `-32003` (`src/mcp/server.rs:64-89`). `map_search_error()` routes SQLite-backed search failures through that mapper (`src/mcp/server.rs:91-98`).
+4. Resource limits: NOT FIXED — handler-level clamps exist in all three handlers (`src/mcp/server.rs:311-312`, `329-330`, `344-357`) and `brain_put` enforces the 1 MB content cap (`src/mcp/server.rs:183-184`, `50-61`), but `brain_search` and `brain_query` still fetch unbounded result sets before truncating. `search_fts()` materializes every row into a `Vec` with no SQL `LIMIT` (`src/core/fts.rs:20-55`), and `hybrid_search()` consumes that full FTS result set before merge/truncate (`src/core/search.rs:26-31`).
+5. Mutex recovery: FIXED — all five lock acquisitions in `src/mcp/server.rs` use `unwrap_or_else(|e| e.into_inner())` (`src/mcp/server.rs:164`, `185`, `306`, `324`, `342`).
+
+New issues introduced:
+- None beyond the remaining blockers above.
+
+**Final verdict:** REJECT
+
+
+### Nibbler SG-6 Adversarial Review — 2026-04-15
+
+**Verdict:** REJECT
+
+**OCC enforcement:** `brain_put` does not enforce OCC on all write paths. For existing pages, omitting `expected_version` takes the unconditional update path (`src/mcp/server.rs:210-241`), so any caller can bypass the compare-and-swap check. For missing pages, the create path ignores `expected_version` entirely and inserts version 1 (`src/mcp/server.rs:137-165`), even if the caller supplied a stale or nonsensical version. The compare-and-swap update itself is atomic for updates (`WHERE slug = ?10 AND version = ?11`), so cross-process stale updates fail correctly, but create races can still degrade into a UNIQUE constraint / `-32003` database error instead of a clean OCC-style conflict.
+
+**Injection vectors:** SQL injection risk is low in the reviewed paths because slug, wing, type, expected version, and FTS query text are passed as bound parameters (`src/mcp/server.rs:131-145`, `168-189`, `211-230`, `293-305`; `src/core/fts.rs:20-41`; `src/core/search.rs:69-87`). I do not see a direct path traversal in `src/mcp/server.rs` because it never converts slugs into filesystem paths. However, slugs are not validated at all, so malformed values are accepted and persisted raw. `content` is also unbounded; the server accepts arbitrarily large request bodies and stores them after full in-memory parsing. FTS5 `MATCH` input is parameterized, so this is not SQL injection, but malformed or adversarial FTS syntax can still trigger SQLite parse/runtime errors that surface as generic DB errors.
+
+**Error code consistency:** `brain_get` maps not-found by substring-matching the error message (`src/mcp/server.rs:86-92`), which is brittle but currently works with `get_page()`’s `bail!("page not found: {slug}")` (`src/commands/get.rs:54-60`). More importantly, create-race failures on `brain_put` fall through as `-32003` DB errors, not `-32009`, and malformed FTS queries also leak as `-32003` instead of a bad-input/parse-style code. Mutex poisoning is mapped with `rmcp::Error::internal_error(...)`, which introduces a different error code family than the application-specific `-3200x` set.
+
+**Resource exhaustion:** There is no clamp on `brain_list.limit`; a caller can request an enormous `u32` and the server will try to honor it (`src/mcp/server.rs:292-305`). Worse, `brain_query` and `brain_search` ignore the spec’s `limit` field entirely and return all FTS matches (`src/mcp/server.rs:246-279`; `src/core/fts.rs:20-55`; `src/core/search.rs:26-32`). Combined with unbounded `content`, this leaves obvious memory/response-size exhaustion paths.
+
+**Mutex poisoning:** Not safely handled. Every handler calls `self.db.lock()` and converts `PoisonError` to `internal_error` (`src/mcp/server.rs:77-80`, `99-102`, `251-254`, `269-272`, `287-290`). After one panic while the mutex is held, subsequent calls will keep failing instead of recovering the connection or rebuilding state.
+
+**If REJECT:** Specific required fixes before re-review:
+1. Enforce OCC on all MCP writes: require `expected_version` for updates, reject impossible create/version combinations, and make create-race/conflict paths return a deliberate conflict/not-found code instead of raw `-32003`.
+2. Add hard limits and validation: clamp list/query/search result counts, add request-size bounds for `content`, and validate/sanitize slug shape before persistence.
+3. Normalize error mapping: remove string-based not-found detection where possible, distinguish bad FTS input from unexpected DB failures, and define a recovery strategy for poisoned mutexes instead of permanently wedging the server behind internal errors.
+
+
+### Professor SG-3/SG-4/SG-5 Verdict — 2026-04-15
+
+**SG-3 (import/export roundtrip):** APPROVE
+- Evidence: Built `target/debug/gbrain`, imported `tests/fixtures/` into `.squad/review-artifacts/professor/sg3-test.db`, exported to `.squad/review-artifacts/professor/sg3-export/`, re-imported into `sg3-test2.db`, and compared `gbrain --json list --limit 1000` outputs. Both DBs contained 5 pages with identical slugs: `companies/acme`, `companies/brex`, `people/henrique-dubugras`, `people/pedro-franceschi`, `projects/gigabrain`.
+
+**SG-4 (MCP 5 tools):** APPROVE  
+- Evidence: `src/mcp/server.rs` registers exactly `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`; `cargo test mcp` passed; live `gbrain serve` session accepted `initialize`, returned 5 names from `tools/list`, and successfully answered `tools/call` requests for all 5 tools.
+
+**SG-5 (musl static binary):** APPROVE
+- Evidence: `target/x86_64-unknown-linux-musl/release/gbrain` exists; `file` reports `static-pie linked`; `ldd` reports `statically linked`.
+
+**Overall:** APPROVE — SG-3/4/5 are satisfied; Phase 1 may proceed on these gates.

@@ -22,16 +22,16 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** nothing
 > **Spec:** core-storage/spec.md
 
-- [ ] Define Page struct: slug, title, page_type, wing, room, summary, compiled_truth, timeline, tags: Vec<String>, version: i64, created_at, updated_at
-- [ ] Define Link struct: id, from_slug, to_slug, relationship, valid_from: Option<String>, valid_until: Option<String>, created_at
-- [ ] Define SearchResult struct: slug, summary, score: f64, wing
-- [ ] Define Chunk struct: page_slug, heading_path, content, content_hash, token_count, chunk_type (truth | timeline)
-- [ ] Define KnowledgeGap struct (stub only, used in Phase 3)
-- [ ] Define error enums using thiserror: DbError, ParseError, OccError::Conflict { current_version: i64 }, SearchError, InferenceError
-- [ ] Define SearchMergeStrategy enum: SetUnion, Rrf
-- [ ] Derive Debug, Clone, serde::Serialize, serde::Deserialize on all public structs
+- [x] Define Page struct: slug, title, page_type, wing, room, summary, compiled_truth, timeline, tags: Vec<String>, version: i64, created_at, updated_at
+- [x] Define Link struct: id, from_slug, to_slug, relationship, valid_from: Option<String>, valid_until: Option<String>, created_at
+- [x] Define SearchResult struct: slug, summary, score: f64, wing
+- [x] Define Chunk struct: page_slug, heading_path, content, content_hash, token_count, chunk_type (truth | timeline)
+- [x] Define KnowledgeGap struct (stub only, used in Phase 3)
+- [x] Define error enums using thiserror: DbError, ParseError, OccError::Conflict { current_version: i64 }, SearchError, InferenceError
+- [x] Define SearchMergeStrategy enum: SetUnion, Rrf
+- [x] Derive Debug, Clone, serde::Serialize, serde::Deserialize on all public structs
 - [ ] Unit test: construct a Page, serialize to JSON, deserialize back — assert field round-trip
-- [ ] cargo check passes after this task
+- [x] cargo check passes after this task
 
 ---
 
@@ -341,8 +341,8 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T01
 > **Spec:** ingest-export/spec.md (wiki-link extraction used by import)
 
-- [ ] Implement extract_links(content: &str) -> Vec<String>: find [[slug]] patterns in markdown
-- [ ] Implement resolve_slug(raw: &str) -> String: normalise path to lowercase kebab-case
+- [x] Implement extract_links(content: &str) -> Vec<String>: find [[slug]] patterns in markdown
+- [x] Implement resolve_slug(raw: &str) -> String: normalise path to lowercase kebab-case
 
 ---
 
@@ -351,7 +351,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02, T03, T04, T14, T15, T21
 > **Spec:** ingest-export/spec.md — gbrain import command, gbrain export command, Round-trip tests
 
-- [ ] Implement import_dir(path: &Path, conn: &mut Connection, validate_only: bool) -> Result<ImportStats, anyhow::Error>:
+- [x] Implement import_dir(path: &Path, conn: &mut Connection, validate_only: bool) -> Result<ImportStats, anyhow::Error>:
   - Walk directory recursively; collect all .md files
   - For each file: compute SHA-256; check ingest_log; skip if present
   - Parse frontmatter + split_content + derive_wing + derive_room + extract_summary
@@ -360,13 +360,13 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
   - Call embed logic after transaction commits
   - If validate_only: parse only, no writes; collect errors; return error if any found
   - Print summary: Imported N pages (M skipped)
-- [ ] Implement export_dir(output_path: &Path, conn: &Connection) -> Result<(), anyhow::Error>:
+- [x] Implement export_dir(output_path: &Path, conn: &Connection) -> Result<(), anyhow::Error>:
   - Query all pages; for each call render_page; write to <output>/<slug>.md creating parent dirs as needed
-- [ ] Implement validate_roundtrip(conn: &Connection) -> Result<(), anyhow::Error> (used in tests)
-- [ ] Unit test: import test corpus from tests/fixtures/, verify page count matches file count
-- [ ] Unit test: re-import same corpus — 0 new pages, all skipped
+- [x] Implement validate_roundtrip(conn: &Connection) -> Result<(), anyhow::Error> (used in tests)
+- [x] Unit test: import test corpus from tests/fixtures/, verify page count matches file count
+- [x] Unit test: re-import same corpus — 0 new pages, all skipped
 - [ ] Unit test: modify 1 fixture (new SHA-256) — 1 re-imported, rest skipped
-- [ ] Unit test: export — each page file exists at correct slug path
+- [x] Unit test: export — each page file exists at correct slug path
 
 ---
 
@@ -375,8 +375,8 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T22
 > **Spec:** ingest-export/spec.md — gbrain import command
 
-- [ ] Call migrate::import_dir(path, conn, validate_only)
-- [ ] Exit 1 if --validate-only found parse errors
+- [x] Call migrate::import_dir(path, conn, validate_only)
+- [x] Exit 1 if --validate-only found parse errors
 
 ---
 
@@ -385,8 +385,8 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T22
 > **Spec:** ingest-export/spec.md — gbrain export command
 
-- [ ] Call migrate::export_dir(output_path, conn)
-- [ ] Print: Exported N pages to <output_dir>
+- [x] Call migrate::export_dir(output_path, conn)
+- [x] Print: Exported N pages to <output_dir>
 
 ---
 
@@ -395,10 +395,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02, T03, T04, T14
 > **Spec:** ingest-export/spec.md — gbrain ingest command
 
-- [ ] Compute SHA-256 of file content; check ingest_log
-- [ ] If present and no --force: print Already ingested (SHA-256 match), use --force to re-ingest and exit 0
-- [ ] Otherwise: parse, insert/update page, update ingest_log
-- [ ] Unit test: ingest same file twice without --force — second call is skipped
+- [x] Compute SHA-256 of file content; check ingest_log
+- [x] If present and no --force: print Already ingested (SHA-256 match), use --force to re-ingest and exit 0
+- [x] Otherwise: parse, insert/update page, update ingest_log
+- [x] Unit test: ingest same file twice without --force — second call is skipped
 
 ---
 
@@ -406,7 +406,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** T07
 
-- [ ] Print timeline entries for a slug in chronological order (parse timeline section, split at ---)
+- [x] Print timeline entries for a slug in chronological order (parse timeline section, split at ---)
 
 ---
 
@@ -416,7 +416,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Spec:** ingest-export/spec.md — Round-trip tests
 > **Reviewer:** Bender sign-off required before ship gate
 
-- [ ] Ensure tests/fixtures/ contains at least 5 representative .md files: at least one person, company, and project page — each with frontmatter, compiled_truth sections, and timeline entries
+- [x] Ensure tests/fixtures/ contains at least 5 representative .md files: at least one person, company, and project page — each with frontmatter, compiled_truth sections, and timeline entries
 - [ ] tests/roundtrip_semantic.rs: import tests/fixtures/, export to output dir, re-import, assert page count identical and all content hashes match
 - [ ] tests/roundtrip_raw.rs: import a single canonically-formatted fixture, export it, assert exported file is byte-for-byte identical to input
 - [ ] cargo test roundtrip passes — both tests green
@@ -430,14 +430,14 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Design decision:** rmcp 0.1, stdio transport, tokio runtime on serve entry; reuse core functions, no logic duplication
 > **Reviewer:** Nibbler adversarial review required before ship gate
 
-- [ ] Register all 5 tools with JSON schema: brain_get, brain_put, brain_query, brain_search, brain_list
-- [ ] brain_get: accept {slug} — core get — return rendered markdown; not-found returns error -32001
-- [ ] brain_put: accept {slug, content, expected_version?} — core put with OCC — return {version: N}; OCC conflict returns error -32009 with {current_version: N}
-- [ ] brain_query: accept {query, limit?, wing?} — hybrid_search — return JSON array of {slug, summary, score}
-- [ ] brain_search: accept {query, limit?, wing?} — search_fts — return JSON array of results
-- [ ] brain_list: accept {wing?, type?, limit?} — list query — return JSON array of pages
-- [ ] Implement MCP error code mapping: OccError to -32009, not found to -32001, parse error to -32002, DB error to -32003
-- [ ] Server exits cleanly when stdin closes
+- [x] Register all 5 tools with JSON schema: brain_get, brain_put, brain_query, brain_search, brain_list
+- [x] brain_get: accept {slug} — core get — return rendered markdown; not-found returns error -32001
+- [x] brain_put: accept {slug, content, expected_version?} — core put with OCC — return {version: N}; OCC conflict returns error -32009 with {current_version: N}
+- [x] brain_query: accept {query, limit?, wing?} — hybrid_search — return JSON array of {slug, summary, score}
+- [x] brain_search: accept {query, limit?, wing?} — search_fts — return JSON array of results
+- [x] brain_list: accept {wing?, type?, limit?} — list query — return JSON array of pages
+- [x] Implement MCP error code mapping: OccError to -32009, not found to -32001, parse error to -32002, DB error to -32003
+- [x] Server exits cleanly when stdin closes
 - [ ] Unit test: send initialize + tools/list — 5 tool names in response
 - [ ] Unit test: brain_get on non-existent slug — -32001 error code
 - [ ] Unit test: brain_put with stale expected_version — -32009 with current version in error data
@@ -448,9 +448,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** T28
 
-- [ ] Wrap server startup in tokio runtime (use #[tokio::main] or tokio::runtime::Builder)
-- [ ] Open DB connection, call mcp::server::run(conn), await clean exit
-- [ ] Wire serve in src/main.rs (replace stub)
+- [x] Wrap server startup in tokio runtime (use #[tokio::main] or tokio::runtime::Builder)
+- [x] Open DB connection, call mcp::server::run(conn), await clean exit
+- [x] Wire serve in src/main.rs (replace stub)
 
 ---
 
@@ -460,9 +460,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** T02
 
-- [ ] gbrain config set <KEY> <VALUE>: upsert into config table
-- [ ] gbrain config get <KEY>: print value or Not set
-- [ ] Used by hybrid search for search_merge_strategy key
+- [x] gbrain config set <KEY> <VALUE>: upsert into config table
+- [x] gbrain config get <KEY>: print value or Not set
+- [x] Used by hybrid search for search_merge_strategy key
 
 ---
 
@@ -470,7 +470,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** nothing
 
-- [ ] Print gbrain <version> using the CARGO_PKG_VERSION env macro
+- [x] Print gbrain <version> using the CARGO_PKG_VERSION env macro
 
 ---
 
@@ -478,8 +478,8 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** T07, T08, T09, T17, T19
 
-- [ ] Add --json flag to: get, list, stats, search, query
-- [ ] When --json set, serialize output as JSON to stdout via serde_json
+- [x] Add --json flag to: get, list, stats, search, query
+- [x] When --json set, serialize output as JSON to stdout via serde_json
 
 ---
 
@@ -487,9 +487,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** T22, T19
 
-- [ ] Review skills/ingest/SKILL.md and skills/query/SKILL.md
-- [ ] Update both files to accurately describe Phase 1 CLI commands and MCP tools
-- [ ] Verify skill extraction path works at runtime
+- [x] Review skills/ingest/SKILL.md and skills/query/SKILL.md
+- [x] Update both files to accurately describe Phase 1 CLI commands and MCP tools
+- [x] Verify skill extraction path works at runtime
 
 ---
 
@@ -498,9 +498,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** all T01-T33
 > **Reviewers:** Scruffy (test coverage), Professor (static binary)
 
-- [ ] cargo fmt --check passes
-- [ ] cargo clippy -- -D warnings passes with zero warnings
-- [ ] cargo test passes with zero failures
+- [x] cargo fmt --check passes
+- [x] cargo clippy -- -D warnings passes with zero warnings
+- [x] cargo test passes with zero failures
 - [ ] cross build --release --target x86_64-unknown-linux-musl succeeds
 - [ ] ldd on the musl binary confirms not a dynamic executable
 
@@ -511,8 +511,8 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > All items below must be confirmed before Phase 2 begins.
 > Professor gates SG-3, SG-4, SG-5. Nibbler gates SG-6. Bender gates SG-7. Fry owns SG-1, SG-2, SG-8, SG-9.
 
-- [ ] **SG-1** cargo test passes with zero failures
-- [ ] **SG-2** cargo clippy -- -D warnings passes; cargo fmt --check passes
+- [x] **SG-1** cargo test passes with zero failures
+- [x] **SG-2** cargo clippy -- -D warnings passes; cargo fmt --check passes
 - [ ] **SG-3** gbrain import tests/fixtures/ then gbrain export then re-import — semantic diff = 0 (Professor sign-off)
 - [ ] **SG-4** gbrain serve connects to an MCP client; all 5 tools respond correctly; tools/list returns all 5 names (Professor sign-off)
 - [ ] **SG-5** musl binary has no dynamic dependencies confirmed via ldd (Professor sign-off)

@@ -105,29 +105,24 @@ pub fn neighborhood_graph(
     let mut queue: VecDeque<(i64, u32)> = VecDeque::new();
     queue.push_back((root.0, 0));
 
-    // Build the temporal clause
+    // Build the temporal clause: active links must have started and not yet ended.
     let temporal_clause = match filter {
-        TemporalFilter::Active => " AND (l.valid_until IS NULL OR l.valid_until >= date('now'))",
+        TemporalFilter::Active => {
+            " AND (l.valid_from IS NULL OR l.valid_from <= date('now'))\
+             AND (l.valid_until IS NULL OR l.valid_until >= date('now'))"
+        }
         TemporalFilter::All => "",
     };
 
-    // Outbound + inbound queries give us the full neighbourhood (undirected BFS).
-    // We query both directions so that a link A→B makes B reachable from A and
-    // vice versa.  Edge deduplication uses link row IDs.
+    // Outbound-only BFS: a page's neighbourhood is the set of pages it explicitly
+    // links to.  Inbound links are accessible via `gbrain backlinks`, keeping the
+    // two directions orthogonal and the rendering unambiguous.
     let outbound_sql = format!(
         "SELECT l.id, l.to_page_id, p.slug, p.type, p.title, \
                 l.relationship, l.valid_from, l.valid_until \
          FROM links l \
          JOIN pages p ON l.to_page_id = p.id \
          WHERE l.from_page_id = ?1{temporal_clause}"
-    );
-
-    let inbound_sql = format!(
-        "SELECT l.id, l.from_page_id, p.slug, p.type, p.title, \
-                l.relationship, l.valid_from, l.valid_until \
-         FROM links l \
-         JOIN pages p ON l.from_page_id = p.id \
-         WHERE l.to_page_id = ?1{temporal_clause}"
     );
 
     let mut seen_edges: HashSet<i64> = HashSet::new();
@@ -137,89 +132,46 @@ pub fn neighborhood_graph(
             continue;
         }
 
-        // Resolve the current node's slug for edge recording
+        // Resolve the current node's slug for edge recording.
         let current_slug: String =
             conn.query_row("SELECT slug FROM pages WHERE id = ?1", [page_id], |row| {
                 row.get(0)
             })?;
 
-        // Process outbound links
-        {
-            let mut stmt = conn.prepare_cached(&outbound_sql)?;
-            let rows = stmt.query_map([page_id], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                ))
-            })?;
+        let mut stmt = conn.prepare_cached(&outbound_sql)?;
+        let rows = stmt.query_map([page_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+            ))
+        })?;
 
-            for row in rows {
-                let (link_id, target_id, to_slug, to_type, to_title, rel, vf, vu) = row?;
+        for row in rows {
+            let (link_id, target_id, to_slug, to_type, to_title, rel, vf, vu) = row?;
 
-                if seen_edges.insert(link_id) {
-                    edges.push(GraphEdge {
-                        from: current_slug.clone(),
-                        to: to_slug.clone(),
-                        relationship: rel,
-                        valid_from: vf,
-                        valid_until: vu,
-                    });
-                }
-
-                if visited.insert(target_id) {
-                    nodes.push(GraphNode {
-                        slug: to_slug,
-                        node_type: to_type,
-                        title: to_title,
-                    });
-                    queue.push_back((target_id, current_depth + 1));
-                }
+            if seen_edges.insert(link_id) {
+                edges.push(GraphEdge {
+                    from: current_slug.clone(),
+                    to: to_slug.clone(),
+                    relationship: rel,
+                    valid_from: vf,
+                    valid_until: vu,
+                });
             }
-        }
 
-        // Process inbound links
-        {
-            let mut stmt = conn.prepare_cached(&inbound_sql)?;
-            let rows = stmt.query_map([page_id], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                ))
-            })?;
-
-            for row in rows {
-                let (link_id, source_id, from_slug, from_type, from_title, rel, vf, vu) = row?;
-
-                if seen_edges.insert(link_id) {
-                    edges.push(GraphEdge {
-                        from: from_slug.clone(),
-                        to: current_slug.clone(),
-                        relationship: rel,
-                        valid_from: vf,
-                        valid_until: vu,
-                    });
-                }
-
-                if visited.insert(source_id) {
-                    nodes.push(GraphNode {
-                        slug: from_slug,
-                        node_type: from_type,
-                        title: from_title,
-                    });
-                    queue.push_back((source_id, current_depth + 1));
-                }
+            if visited.insert(target_id) {
+                nodes.push(GraphNode {
+                    slug: to_slug,
+                    node_type: to_type,
+                    title: to_title,
+                });
+                queue.push_back((target_id, current_depth + 1));
             }
         }
     }
@@ -449,28 +401,31 @@ mod tests {
         assert_eq!(result.nodes.len(), 1);
     }
 
-    // ── Inbound links are traversed ──────────────────────────
+    // ── Temporal filter respects valid_from (future links not active) ──
 
     #[test]
-    fn inbound_links_are_included_in_graph() {
+    fn temporal_active_excludes_future_links() {
         let conn = open_test_db();
         insert_page(&conn, "people/alice", "person", "Alice");
         insert_page(&conn, "companies/acme", "company", "Acme");
-        // Only inbound link to alice (acme → alice)
+        // Link starting far in the future
         insert_link(
             &conn,
-            "companies/acme",
             "people/alice",
-            "employs",
-            None,
+            "companies/acme",
+            "works_at",
+            Some("2099-01-01"),
             None,
         );
 
         let result = neighborhood_graph("people/alice", 1, TemporalFilter::Active, &conn).unwrap();
 
-        assert_eq!(result.nodes.len(), 2);
-        let slugs: HashSet<&str> = result.nodes.iter().map(|n| n.slug.as_str()).collect();
-        assert!(slugs.contains("companies/acme"));
+        assert_eq!(
+            result.nodes.len(),
+            1,
+            "future-dated link should be excluded from active graph"
+        );
+        assert!(result.edges.is_empty());
     }
 
     // ── Graph node fields are correct ────────────────────────

@@ -19,18 +19,18 @@ OCC on `brain_put` is already complete — do not re-implement.
 ## Group 1 — Graph Core (`src/core/graph.rs`)
 
 - [x] 1.1  Define `TemporalFilter` enum (`Active`, `All`) and `GraphNode` / `GraphEdge` / `GraphResult` structs in `src/core/graph.rs`. Derive `Serialize` on all output types.
-- [x] 1.2  Implement `neighborhood_graph(slug: &str, depth: u32, filter: TemporalFilter, conn: &Connection) -> Result<GraphResult, GraphError>` using iterative BFS with `HashSet<i64>` visited set. Hard-cap depth at 10.
-- [x] 1.3  Add temporal filter SQL: default `WHERE (l.valid_until IS NULL OR l.valid_until >= date('now'))`, `TemporalFilter::All` omits the clause.
+- [x] 1.2  Implement `neighborhood_graph(slug: &str, depth: u32, filter: TemporalFilter, conn: &Connection) -> Result<GraphResult, GraphError>` using iterative BFS with `HashSet<i64>` visited set. Hard-cap depth at 10. **Contract: outbound links only** — inbound reachability is the domain of `gbrain backlinks`.
+- [x] 1.3  Add temporal filter SQL: `Active` clause `WHERE (l.valid_from IS NULL OR l.valid_from <= date('now')) AND (l.valid_until IS NULL OR l.valid_until >= date('now'))` — excludes both past-closed and future links; `TemporalFilter::All` omits the clause.
 - [x] 1.4  Add `GraphError` enum (`PageNotFound`, `Sqlite(rusqlite::Error)`) using `thiserror`. Ensure `PageNotFound` is returned when the root slug doesn't exist.
-- [x] 1.5  Write unit tests: zero-hop returns root only; single-hop returns direct neighbours; cycle between A↔B terminates without infinite loop; temporal filter excludes past-closed links; `All` filter includes them; unknown slug returns `PageNotFound`.
+- [x] 1.5  Write unit tests: zero-hop returns root only; single-hop returns direct outbound neighbours; cycle between A↔B terminates without infinite loop; temporal Active filter excludes past-closed links; temporal Active filter excludes future-dated links; `All` filter includes past-closed links; unknown slug returns `PageNotFound`.
 
 ## Group 2 — Graph CLI (`src/commands/graph.rs`)
 
 - [x] 2.1  Implement `run(db: &Connection, slug: &str, depth: u32, temporal: &str, json: bool) -> Result<()>` calling `core::graph::neighborhood_graph`. Map `temporal` string to `TemporalFilter` (default `"active"`).
-- [x] 2.2  Human-readable output: print root slug, then indented lines `  → <to_slug> (<relationship>)` for each edge.
+- [x] 2.2  Human-readable output: print root slug, then indented lines `  → <to_slug> (<relationship>)` for each **outbound** edge. Root can never appear as its own neighbour.
 - [x] 2.3  JSON output: emit `{"nodes": [...], "edges": [...]}` via `serde_json::to_string_pretty`.
 - [x] 2.4  Wire `graph::run` into `src/main.rs` dispatch (currently has a `todo!`).
-- [x] 2.5  Write CLI integration tests: human output format; JSON output is valid JSON with `nodes` and `edges` keys; unknown slug exits with non-zero code.
+- [x] 2.5  Write CLI integration tests: human output asserts root slug present and correct `→ <to> (<rel>)` format via `run_to` writer capture; JSON output asserts valid JSON with `nodes` and `edges` keys plus correct output shapes via `run_to`; unknown slug exits with non-zero code; temporal `all` flag includes closed links.
 
 ## Group 3 — Assertions Core (`src/core/assertions.rs`)
 

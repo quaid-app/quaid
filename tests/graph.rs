@@ -1,7 +1,7 @@
 //! Integration tests for `gbrain graph` (tasks 2.5).
 
 use gbrain::core::db;
-use gbrain::core::graph::{self, GraphError, TemporalFilter};
+use gbrain::core::graph::{self, TemporalFilter};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -64,9 +64,23 @@ fn graph_cli_human_output_shows_root_and_edges() {
         None,
     );
 
-    // Call the CLI command function directly
-    let result = gbrain::commands::graph::run(&conn, "people/alice", 2, "current", false);
-    assert!(result.is_ok());
+    let mut out = Vec::<u8>::new();
+    gbrain::commands::graph::run_to(&conn, "people/alice", 2, "current", false, &mut out).unwrap();
+    let output = String::from_utf8(out).unwrap();
+
+    assert!(
+        output.contains("people/alice"),
+        "text output must contain root slug; got: {output}"
+    );
+    assert!(
+        output.contains("→ companies/acme (works_at)"),
+        "text output must show outbound edge; got: {output}"
+    );
+    // Root must not appear as its own neighbour
+    assert!(
+        !output.contains("→ people/alice"),
+        "root slug must not appear as a destination; got: {output}"
+    );
 }
 
 // ── JSON output is valid JSON with nodes and edges keys ──────
@@ -88,18 +102,44 @@ fn graph_cli_json_output_has_nodes_and_edges() {
         None,
     );
 
-    // Use the core function to get the result
-    let result =
-        graph::neighborhood_graph("people/alice", 2, TemporalFilter::Active, &conn).unwrap();
-    let json_str = serde_json::to_string_pretty(&result).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    let mut out = Vec::<u8>::new();
+    gbrain::commands::graph::run_to(&conn, "people/alice", 2, "current", true, &mut out).unwrap();
+    let output = String::from_utf8(out).unwrap();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(output.trim()).expect("CLI --json output must be valid JSON");
 
     assert!(parsed.get("nodes").is_some(), "JSON must have 'nodes' key");
     assert!(parsed.get("edges").is_some(), "JSON must have 'edges' key");
-    assert!(parsed["nodes"].is_array());
-    assert!(parsed["edges"].is_array());
-    assert_eq!(parsed["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(parsed["edges"].as_array().unwrap().len(), 1);
+    assert!(parsed["nodes"].is_array(), "'nodes' must be an array");
+    assert!(parsed["edges"].is_array(), "'edges' must be an array");
+    assert_eq!(
+        parsed["nodes"].as_array().unwrap().len(),
+        2,
+        "expected 2 nodes"
+    );
+    assert_eq!(
+        parsed["edges"].as_array().unwrap().len(),
+        1,
+        "expected 1 edge"
+    );
+
+    // Verify node output shape: each node has slug, type, title
+    let alice = parsed["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["slug"] == "people/alice")
+        .expect("alice node must be present");
+    assert!(alice.get("slug").is_some());
+    assert!(alice.get("type").is_some());
+    assert!(alice.get("title").is_some());
+
+    // Verify edge output shape: from, to, relationship
+    let edge = &parsed["edges"][0];
+    assert_eq!(edge["from"], "people/alice");
+    assert_eq!(edge["to"], "companies/acme");
+    assert_eq!(edge["relationship"], "works_at");
 }
 
 // ── Unknown slug returns error ───────────────────────────────
@@ -110,9 +150,14 @@ fn graph_cli_unknown_slug_returns_error() {
     let db_path = dir.path().join("test.db");
     let conn = open_test_db(&db_path);
 
-    let result = gbrain::commands::graph::run(&conn, "nobody/ghost", 1, "current", false);
+    let mut out = Vec::<u8>::new();
+    let result =
+        gbrain::commands::graph::run_to(&conn, "nobody/ghost", 1, "current", false, &mut out);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("page not found"));
+    assert!(
+        result.unwrap_err().to_string().contains("page not found"),
+        "error must contain 'page not found'"
+    );
 }
 
 // ── JSON node objects have expected fields ────────────────────

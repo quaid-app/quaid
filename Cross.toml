@@ -1,0 +1,11 @@
+# Cross-compilation configuration for musl static builds.
+#
+# sqlite-vec uses BSD-style types (u_int8_t, u_int16_t, etc.) which are
+# not defined in strict musl environments. We pass CFLAGS through to
+# the container so cc-rs can inject the necessary -D defines.
+
+[target.x86_64-unknown-linux-musl.env]
+passthrough = ["CFLAGS"]
+
+[target.aarch64-unknown-linux-musl.env]
+passthrough = ["CFLAGS"]

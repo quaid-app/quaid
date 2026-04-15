@@ -57,6 +57,13 @@ jobs:
 
       - name: Build (Linux musl via cross)
         if: matrix.os == 'ubuntu-latest'
+        env:
+          CFLAGS: >-
+            -Du_int8_t=uint8_t
+            -Du_int16_t=uint16_t
+            -Du_int32_t=uint32_t
+            -Du_int64_t=uint64_t
+            -Wno-incompatible-pointer-types
         run: cross build --release --target ${{ matrix.target }}
 
       - name: Rename binary

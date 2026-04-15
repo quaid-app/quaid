@@ -43,3 +43,13 @@
 - Reworked `src/core/novelty.rs` around deterministic branch contracts: lexical duplicate threshold first, embedding near-duplicate fallback second.
 - Added three focused unit tests for the requested invariants: identical content rejected, clearly different content accepted without embeddings, clearly different content accepted even with stored placeholder embeddings.
 - Switched novelty tests to `db::open(":memory:")` so the coverage stays deterministic and avoids filesystem scratch state.
+
+## 2026-04-15T03:48:02Z Phase 1 missing tests completed (T01, T22, T27, T28)
+
+- Added `core::types` serde round-trip coverage for `Page`, asserting slug/title/version plus tags stored in `frontmatter` survive JSON serialization.
+- Extended `core::migrate` coverage with the SHA-256 idempotency branch: after importing a copied fixture corpus, mutating one fixture causes exactly one re-import and the remaining files are skipped.
+- Added `src/lib.rs` so integration tests can reach crate modules from `tests/`.
+- Added `tests/roundtrip_raw.rs` with a constructed canonical markdown fixture for byte-exact export verification.
+- Added `tests/roundtrip_semantic.rs` to verify import -> export -> re-import preserves page count and normalized exported markdown hashes across the canonicalized corpus.
+- Added MCP server unit coverage for tools capability exposure, not-found mapping (`-32001`), and OCC conflict mapping (`-32009` with `current_version`).
+- Pattern note: semantic round-trip needs normalized line endings because some fixtures carry CRLF timeline bytes through the first export before canonical re-import collapses them to LF.

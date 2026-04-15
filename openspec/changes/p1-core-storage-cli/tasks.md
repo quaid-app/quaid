@@ -30,7 +30,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 - [x] Define error enums using thiserror: DbError, ParseError, OccError::Conflict { current_version: i64 }, SearchError, InferenceError
 - [x] Define SearchMergeStrategy enum: SetUnion, Rrf
 - [x] Derive Debug, Clone, serde::Serialize, serde::Deserialize on all public structs
-- [ ] Unit test: construct a Page, serialize to JSON, deserialize back — assert field round-trip
+- [x] Unit test: construct a Page, serialize to JSON, deserialize back — assert field round-trip
 - [x] cargo check passes after this task
 
 ---
@@ -365,7 +365,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 - [x] Implement validate_roundtrip(conn: &Connection) -> Result<(), anyhow::Error> (used in tests)
 - [x] Unit test: import test corpus from tests/fixtures/, verify page count matches file count
 - [x] Unit test: re-import same corpus — 0 new pages, all skipped
-- [ ] Unit test: modify 1 fixture (new SHA-256) — 1 re-imported, rest skipped
+- [x] Unit test: modify 1 fixture (new SHA-256) — 1 re-imported, rest skipped
 - [x] Unit test: export — each page file exists at correct slug path
 
 ---
@@ -417,9 +417,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Reviewer:** Bender sign-off required before ship gate
 
 - [x] Ensure tests/fixtures/ contains at least 5 representative .md files: at least one person, company, and project page — each with frontmatter, compiled_truth sections, and timeline entries
-- [ ] tests/roundtrip_semantic.rs: import tests/fixtures/, export to output dir, re-import, assert page count identical and all content hashes match
-- [ ] tests/roundtrip_raw.rs: import a single canonically-formatted fixture, export it, assert exported file is byte-for-byte identical to input
-- [ ] cargo test roundtrip passes — both tests green
+- [x] tests/roundtrip_semantic.rs: import tests/fixtures/, export to output dir, re-import, assert page count identical and all content hashes match
+- [x] tests/roundtrip_raw.rs: import a single canonically-formatted fixture, export it, assert exported file is byte-for-byte identical to input
+- [x] cargo test roundtrip passes — both tests green
 
 ---
 
@@ -438,9 +438,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 - [x] brain_list: accept {wing?, type?, limit?} — list query — return JSON array of pages
 - [x] Implement MCP error code mapping: OccError to -32009, not found to -32001, parse error to -32002, DB error to -32003
 - [x] Server exits cleanly when stdin closes
-- [ ] Unit test: send initialize + tools/list — 5 tool names in response
-- [ ] Unit test: brain_get on non-existent slug — -32001 error code
-- [ ] Unit test: brain_put with stale expected_version — -32009 with current version in error data
+- [x] Unit test: send initialize + tools/list — 5 tool names in response
+- [x] Unit test: brain_get on non-existent slug — -32001 error code
+- [x] Unit test: brain_put with stale expected_version — -32009 with current version in error data
 
 ---
 

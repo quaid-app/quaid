@@ -334,6 +334,7 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
 mod tests {
     use super::*;
     use crate::core::db;
+    use std::path::Path;
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
@@ -436,5 +437,47 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         export_dir(&conn, dir.path()).unwrap();
         validate_roundtrip(&conn, dir.path()).unwrap();
+    }
+
+    #[test]
+    fn import_dir_reimports_only_fixture_with_new_sha_after_content_change() {
+        fn copy_fixture_tree(from: &Path, to: &Path) {
+            for file in collect_md_files(from).unwrap() {
+                let relative = file.strip_prefix(from).unwrap();
+                let destination = to.join(relative);
+                if let Some(parent) = destination.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::copy(&file, destination).unwrap();
+            }
+        }
+
+        let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let fixture_count = collect_md_files(&fixtures_dir).unwrap().len();
+        let corpus_dir = tempfile::TempDir::new().unwrap();
+        copy_fixture_tree(&fixtures_dir, corpus_dir.path());
+
+        let db_dir = tempfile::TempDir::new().unwrap();
+        let db_path = db_dir.path().join("test_brain.db");
+        let conn = db::open(db_path.to_str().unwrap()).unwrap();
+
+        let initial_stats = import_dir(&conn, corpus_dir.path(), false).unwrap();
+        assert_eq!(initial_stats.imported, fixture_count);
+        assert_eq!(initial_stats.skipped, 0);
+
+        let modified_fixture = corpus_dir.path().join("person.md");
+        let original = fs::read_to_string(&modified_fixture).unwrap();
+        let original_hash = sha256_hex(original.as_bytes());
+        let updated = original.replace(
+            "Brazilian entrepreneur who moved to the US to build at scale.",
+            "Brazilian entrepreneur who moved to the US to build fintech infrastructure at scale.",
+        );
+        let updated_hash = sha256_hex(updated.as_bytes());
+        assert_ne!(original_hash, updated_hash);
+        fs::write(&modified_fixture, updated).unwrap();
+
+        let reimport_stats = import_dir(&conn, corpus_dir.path(), false).unwrap();
+        assert_eq!(reimport_stats.imported, 1);
+        assert_eq!(reimport_stats.skipped, fixture_count - 1);
     }
 }

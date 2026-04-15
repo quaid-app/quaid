@@ -190,3 +190,53 @@ pub enum DbError {
     #[error("schema error: {message}")]
     Schema { message: String },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Page;
+    use std::collections::HashMap;
+
+    #[test]
+    fn page_serde_roundtrip_preserves_identifying_fields_and_tags_frontmatter() {
+        let page = Page {
+            slug: "people/alice".to_string(),
+            page_type: "person".to_string(),
+            title: "Alice".to_string(),
+            summary: "Operator".to_string(),
+            compiled_truth: "Alice runs ops.".to_string(),
+            timeline: "- **2024** | role — Joined Acme".to_string(),
+            frontmatter: HashMap::from([
+                ("slug".to_string(), "people/alice".to_string()),
+                ("tags".to_string(), "operator, founder".to_string()),
+                ("title".to_string(), "Alice".to_string()),
+                ("type".to_string(), "person".to_string()),
+                ("wing".to_string(), "people".to_string()),
+            ]),
+            wing: "people".to_string(),
+            room: String::new(),
+            version: 7,
+            created_at: "2026-04-15T00:00:00Z".to_string(),
+            updated_at: "2026-04-15T00:00:00Z".to_string(),
+            truth_updated_at: "2026-04-15T00:00:00Z".to_string(),
+            timeline_updated_at: "2026-04-15T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&page).unwrap();
+        let round_trip: Page = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            (
+                round_trip.slug,
+                round_trip.title,
+                round_trip.version,
+                round_trip.frontmatter.get("tags").cloned(),
+            ),
+            (
+                "people/alice".to_string(),
+                "Alice".to_string(),
+                7,
+                Some("operator, founder".to_string()),
+            )
+        );
+    }
+}

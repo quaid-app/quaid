@@ -360,3 +360,78 @@ pub async fn run(conn: Connection) -> anyhow::Result<()> {
     _service.waiting().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db;
+    use serde_json::json;
+
+    fn open_test_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("server.db");
+        let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        (dir, conn)
+    }
+
+    #[test]
+    fn get_info_enables_tools_capability_and_exposes_core_tool_methods() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        let info = <GigaBrainServer as ServerHandler>::get_info(&server);
+
+        let _tool_methods = (
+            GigaBrainServer::brain_get
+                as fn(&GigaBrainServer, BrainGetInput) -> Result<CallToolResult, rmcp::Error>,
+            GigaBrainServer::brain_put
+                as fn(&GigaBrainServer, BrainPutInput) -> Result<CallToolResult, rmcp::Error>,
+            GigaBrainServer::brain_query
+                as fn(&GigaBrainServer, BrainQueryInput) -> Result<CallToolResult, rmcp::Error>,
+            GigaBrainServer::brain_search
+                as fn(&GigaBrainServer, BrainSearchInput) -> Result<CallToolResult, rmcp::Error>,
+            GigaBrainServer::brain_list
+                as fn(&GigaBrainServer, BrainListInput) -> Result<CallToolResult, rmcp::Error>,
+        );
+
+        assert!(info.capabilities.tools.is_some());
+    }
+
+    #[test]
+    fn brain_get_returns_not_found_error_code_for_missing_slug() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_get(BrainGetInput {
+                slug: "definitely-does-not-exist".to_string(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_put_returns_occ_conflict_error_with_current_version_for_stale_write() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        server
+            .brain_put(BrainPutInput {
+                slug: "notes/test".to_string(),
+                content: "---\ntitle: Test\ntype: note\n---\nInitial content\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/test".to_string(),
+                content: "---\ntitle: Test\ntype: note\n---\nUpdated content\n".to_string(),
+                expected_version: Some(0),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32009));
+        assert_eq!(error.data, Some(json!({ "current_version": 1 })));
+    }
+}

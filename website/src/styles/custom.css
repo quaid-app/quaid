@@ -1,9 +1,20 @@
-/* GigaBrain — StackBlitz-inspired dark theme */
+/* GigaBrain — StackBlitz-inspired theme */
+
+/* ── Accent colours (both modes) ── */
 :root {
+  --sl-color-accent-low: #cce3ff;
+  --sl-color-accent: #0070f3;
+  --sl-color-accent-high: #003d8f;
+}
+
+/* ── Dark mode overrides ── */
+:root[data-theme="dark"] {
   --sl-color-accent-low: #002a5e;
   --sl-color-accent: #1389fd;
   --sl-color-accent-high: #93c5fd;
-  --sl-color-white: #ffffff;
+  --sl-color-bg: #060d16;
+  --sl-color-bg-nav: rgba(6, 13, 22, 0.75);
+  --sl-color-bg-sidebar: rgba(6, 13, 22, 0.80);
   --sl-color-gray-1: #f0f4ff;
   --sl-color-gray-2: #bfcfe8;
   --sl-color-gray-3: #7a90b0;
@@ -13,14 +24,8 @@
   --sl-color-black: #060d16;
 }
 
-:root[data-theme="dark"] {
-  --sl-color-bg: #060d16;
-  --sl-color-bg-nav: rgba(6, 13, 22, 0.75);
-  --sl-color-bg-sidebar: rgba(6, 13, 22, 0.80);
-}
-
-/* Gradient applied to page shell, not the color token */
-body[data-theme="dark"] {
+/* ── Dark mode gradient background ── */
+:root[data-theme="dark"] body {
   background: radial-gradient(
       1200px 800px at 20% 10%,
       rgba(19, 137, 253, 0.14),
@@ -34,37 +39,16 @@ body[data-theme="dark"] {
     linear-gradient(180deg, #060d16 0%, #050b13 45%, #040910 100%);
 }
 
-header.header {
+/* ── Header ── */
+:root[data-theme="dark"] header.header {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid rgba(19, 137, 253, 0.18);
 }
 
-/* Code blocks */
-.expressive-code .frame {
-  border: 1px solid rgba(19, 137, 253, 0.35);
-  box-shadow: 0 0 24px rgba(19, 137, 253, 0.08);
-  border-radius: 8px;
-}
-
-.expressive-code .copy button {
-  border: 1px solid rgba(19, 137, 253, 0.25);
-}
-
-/* Links */
-.sl-markdown-content a {
-  color: #4da6ff;
-  text-decoration-color: rgba(19, 137, 253, 0.4);
-}
-
-.sl-markdown-content a:hover {
-  color: #93c5fd;
-  text-decoration-color: rgba(0, 212, 255, 0.8);
-}
-
-/* Gradient hero headline */
+/* ── Hero headline gradient (both modes) ── */
 .hero h1 {
-  background: linear-gradient(135deg, #1389fd 0%, #00d4ff 60%, #7dd3fc 100%);
+  background: linear-gradient(135deg, #0070f3 0%, #00aaff 60%, #38bdf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -72,56 +56,109 @@ header.header {
   line-height: 1.15;
 }
 
-/* Hero tagline */
+:root[data-theme="dark"] .hero h1 {
+  background: linear-gradient(135deg, #1389fd 0%, #00d4ff 60%, #7dd3fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Hero tagline ── */
 .hero .tagline {
   font-size: 1.15rem;
-  color: var(--sl-color-gray-2);
   max-width: 540px;
   margin: 0 auto;
 }
 
-/* Glowing sidebar active item */
+/* ── Sidebar active item ── */
 nav.sidebar [aria-current="page"] {
-  background: rgba(19, 137, 253, 0.12) !important;
-  border-left: 2px solid #1389fd;
+  background: rgba(0, 112, 243, 0.08) !important;
+  border-left: 2px solid var(--sl-color-accent);
 }
 
-/* Feature cards */
+/* ── Feature cards ── */
 .sl-card {
-  border: 1px solid rgba(19, 137, 253, 0.14);
-  background: rgba(6, 13, 22, 0.6);
+  border: 1px solid rgba(0, 112, 243, 0.18);
   border-radius: 10px;
-  box-shadow: 0 0 0 rgba(19, 137, 253, 0);
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+:root[data-theme="dark"] .sl-card {
+  background: rgba(6, 13, 22, 0.6);
+  border-color: rgba(19, 137, 253, 0.14);
 }
 
 .sl-card:hover {
   transform: translateY(-3px);
-  border-color: rgba(0, 212, 255, 0.28);
-  box-shadow: 0 4px 32px rgba(19, 137, 253, 0.12);
+  border-color: rgba(0, 170, 255, 0.35);
+  box-shadow: 0 4px 32px rgba(0, 112, 243, 0.12);
 }
 
-/* Inline code */
+/* ── Code blocks ── */
+.expressive-code .frame {
+  border-radius: 8px;
+}
+
+:root[data-theme="dark"] .expressive-code .frame {
+  border: 1px solid rgba(19, 137, 253, 0.35);
+  box-shadow: 0 0 24px rgba(19, 137, 253, 0.08);
+}
+
+:root[data-theme="light"] .expressive-code .frame {
+  border: 1px solid rgba(0, 112, 243, 0.20);
+}
+
+/* ── Inline code ── */
 :not(pre) > code {
-  background: rgba(19, 137, 253, 0.10);
-  border: 1px solid rgba(19, 137, 253, 0.20);
   border-radius: 4px;
   padding: 0.1em 0.35em;
   font-size: 0.9em;
 }
 
-/* Tables */
+:root[data-theme="dark"] :not(pre) > code {
+  background: rgba(19, 137, 253, 0.10);
+  border: 1px solid rgba(19, 137, 253, 0.20);
+}
+
+:root[data-theme="light"] :not(pre) > code {
+  background: rgba(0, 112, 243, 0.06);
+  border: 1px solid rgba(0, 112, 243, 0.18);
+}
+
+/* ── Links ── */
+:root[data-theme="dark"] .sl-markdown-content a {
+  color: #4da6ff;
+  text-decoration-color: rgba(19, 137, 253, 0.4);
+}
+
+:root[data-theme="dark"] .sl-markdown-content a:hover {
+  color: #93c5fd;
+  text-decoration-color: rgba(0, 212, 255, 0.8);
+}
+
+/* ── Tables ── */
 .sl-markdown-content table {
-  border: 1px solid rgba(19, 137, 253, 0.15);
   border-radius: 8px;
   overflow: hidden;
 }
 
-.sl-markdown-content thead tr {
+:root[data-theme="dark"] .sl-markdown-content table {
+  border: 1px solid rgba(19, 137, 253, 0.15);
+}
+
+:root[data-theme="dark"] .sl-markdown-content thead tr {
   background: rgba(19, 137, 253, 0.10);
 }
 
-/* Aside/callout blocks */
+:root[data-theme="light"] .sl-markdown-content table {
+  border: 1px solid rgba(0, 112, 243, 0.15);
+}
+
+:root[data-theme="light"] .sl-markdown-content thead tr {
+  background: rgba(0, 112, 243, 0.06);
+}
+
+/* ── Aside/callout blocks ── */
 .starlight-aside {
-  border-left-color: #1389fd;
+  border-left-color: var(--sl-color-accent);
 }

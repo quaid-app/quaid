@@ -189,3 +189,16 @@
 
 **Learning:** Mixed-mode CLI flag validation belongs at function entry, not threaded through downstream conditionals. When a spec sweep flag says "skip if unchanged", --all and --stale should behave identically on the skip check — the flag distinction is user-intent signal, not a behavioral fork.
 
+## 2026-04-15 SG-6 Final Blockers — Direct Fix (Nibbler 2nd Rejection)
+
+**What was done:**
+- Fry locked out after two rejections on `src/mcp/server.rs`; Leela took the two remaining Nibbler SG-6 blockers directly.
+- **Fix 1 — OCC create-path**: Added guard in `None =>` branch of `brain_put`. When `expected_version: Some(n)` is supplied for a non-existent page, returns `-32009` with `current_version: null`. Previously silently created at version 1. Added test: `brain_put_rejects_create_with_expected_version_when_page_does_not_exist`.
+- **Fix 2 — Bounded result materialization**: Added `limit: usize` to `search_fts` (with SQL `LIMIT ?n`) and `hybrid_search` (passes limit to FTS + truncates merged result). Updated all callers: server.rs, commands/search.rs, commands/query.rs, all FTS/search tests. Handler-level `truncate` removed from server.rs (now redundant).
+- `cargo clippy -- -D warnings` clean; 152 unit + 2 integration tests pass.
+- Committed: `ba5fb20` — `fix(mcp): address Nibbler SG-6 final blockers — OCC create-path and result truncation`
+- Decision artifact: `.squad/decisions/inbox/leela-sg6-final-fixes.md`
+- SG-6 NOT marked done — requires Nibbler approval.
+
+**Learning:** "Truncate after materialization" is never sufficient for resource exhaustion protection. The limit must be pushed into the DB query (SQL LIMIT) to prevent full scans on large corpora. Always trace the result cardinality back to the SQL layer, not just the handler layer.
+

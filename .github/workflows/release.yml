@@ -74,7 +74,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           file ${{ matrix.artifact }}
-          file ${{ matrix.artifact }} | grep -q "statically linked" \
+          file ${{ matrix.artifact }} | grep -qE "statically linked|static-pie linked" \
             || (echo "ERROR: binary is not statically linked" && exit 1)
 
       - name: Generate SHA-256 checksum

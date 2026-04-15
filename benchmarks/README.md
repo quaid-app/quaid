@@ -32,7 +32,7 @@ These run entirely locally with no API keys required.
 
 ## Phase 1 Baseline — BEIR-style nDCG@10 Proxy
 
-**Established:** 2025-04-15  
+**Established:** 2026-04-15  
 **Embedding Model:** SHA-256 hash-based shim (non-semantic, deterministic)  
 **Note:** This baseline uses hash-based embeddings. Full semantic evaluation with BGE-small-en-v1.5 will be recorded after T14 completes.
 

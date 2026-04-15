@@ -20,6 +20,7 @@
 - `init` and `version` commands don't require a database connection; dispatch them before `db::open()` in main.
 - Reviewed and proposed adoption of `rust-best-practices` skill (Apollo GraphQL handbook, 9 chapters) at `.agents/skills/rust-best-practices/`. Decision note at `.squad/decisions/inbox/fry-rust-skill-adoption.md`. Key caveats: `#[expect]` needs MSRV ≥1.81, `rustfmt` import grouping needs nightly, snapshot testing (`insta`) deferred to Phase 1 test work.
 - Error handling split already matches skill guidance: `thiserror` for `src/core/`, `anyhow` for `src/commands/` and `main.rs`.
+- Phase 3 release-readiness work ships via branch `p3/release-readiness-docs-coverage` → draft PR #15. Includes CI coverage job, release workflow hardening, release checklist, docs-site polish, and README accuracy fixes. All P3 tasks marked complete in `openspec/changes/p3-polish-benchmarks/tasks.md`.
 
 ## Core Context
 

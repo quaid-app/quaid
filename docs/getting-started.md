@@ -21,6 +21,19 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ---
 
+## Install options
+
+| Method | Status |
+| ------ | ------ |
+| Build from source (`cargo build --release`) | ✅ Scaffold compiles today; full implementation ships with Phase 1 |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Ships when v0.1.0 releases |
+| `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
+| One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
+
+> **Deferred distribution channels.** npm global installation and a one-command installer are planned follow-on work. They are not part of this release and will be proposed separately when ready.
+
+---
+
 ## Build from source
 
 ```bash
@@ -43,6 +56,8 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 ---
 
 ## Your first brain
+
+> **Planned commands — not yet available.** The steps below are the target workflow for Phase 1. They reflect the spec exactly but are not yet implemented. Build from source to track progress; see [Status](#status) and [Install options](#install-options) above.
 
 ### 1. Initialize
 

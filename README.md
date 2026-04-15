@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** `Sprint 0 complete` — repository scaffold, CI, and phase proposals are in place. Phase 1 (Core) has not started. Nothing is implemented yet. [See the roadmap →](#roadmap)
+**Status:** `Phase 1 in progress` — Sprint 0 (scaffold) is complete. Phase 1 (Core storage, CLI, search, MCP) is in active development. No release yet. [See the roadmap →](#roadmap)
 
 ---
 
@@ -15,7 +15,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | Phase | Status | What ships |
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
-| **Phase 1** — Core storage + CLI | 🔜 Not started | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
+| **Phase 1** — Core storage + CLI | 🔨 In progress | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | 🔜 Not started | `link`, `graph`, `stats`, `check`, `gaps` |
 | **Phase 3** — Polish + release | 🔜 Not started | Benchmarks, cross-compiled binaries, fat skill finalization |
 
@@ -74,27 +74,40 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> **Not yet available.** GigaBrain is pre-implementation — Sprint 0 (scaffold) is complete, but Phase 1 (Core) has not started. The release install instructions below describe what will ship at v0.1.
+> **Not yet available.** Phase 1 (Core) is in active development — Sprint 0 (scaffold) is complete. The install options below show the full matrix: what works today, what ships with v0.1.0, and what is explicitly deferred.
 
-Once Phase 3 ships, install from a GitHub release:
+### Install options
+
+| Method | Status |
+| ------ | ------ |
+| Build from source (`cargo build --release`) | ✅ Scaffold compiles today; full implementation ships with Phase 1 |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Ships when v0.1.0 releases |
+| `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
+| One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
+
+**GitHub Releases** and **build from source** are the only supported binary distribution channels for this release.
+
+Download a pre-built binary from a GitHub Release:
 
 ```bash
 VERSION="v0.1.0"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o gbrain
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o gbrain.sha256
-echo "$(cat gbrain.sha256)  gbrain" | shasum -a 256 --check
-cp gbrain /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
+shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
+mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
 ```
 
-Or build from source (the scaffold compiles today; full implementation begins in Phase 1):
+Or build from source (available now — scaffold compiles; full features land with Phase 1):
 
 ```bash
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Binary at target/release/gbrain (~90MB with embedded model weights once Phase 2 ships)
+# Binary at target/release/gbrain (~90MB with embedded model weights once Phase 1 ships)
 ```
+
+> **Deferred distribution channels.** npm global installation (`npm install -g gbrain`), Homebrew, and a one-command curl installer are planned follow-on work. They are **not part of this release** and will be proposed separately when implementation is ready.
 
 ---
 

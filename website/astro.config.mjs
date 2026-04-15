@@ -30,7 +30,11 @@ export default defineConfig({
         },
         {
           label: "Getting Started",
-          items: ["guides/getting-started", "guides/quick-start"],
+          items: [
+            "guides/install",
+            "guides/quick-start",
+            "guides/getting-started",
+          ],
         },
         { label: "CLI Reference", items: ["reference/cli"] },
         { label: "MCP Server", items: ["guides/mcp-server"] },

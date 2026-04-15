@@ -7,10 +7,14 @@ hero:
   image:
     html: <div style="font-size:4rem;text-align:center;line-height:1">🧠</div>
   actions:
-    - text: Get Started
-      link: /guides/getting-started/
+    - text: Install & Status
+      link: /guides/install/
       icon: right-arrow
       variant: primary
+    - text: Quick Start
+      link: /guides/quick-start/
+      icon: rocket
+      variant: secondary
     - text: View on GitHub
       link: https://github.com/macro88/gigabrain
       icon: github
@@ -19,13 +23,13 @@ hero:
 
 import { CardGrid, Card } from "@astrojs/starlight/components";
 
-## Install
+## Current Status
 
-```bash
-git clone https://github.com/macro88/gigabrain
-cd gigabrain && cargo build --release
-# → target/release/gbrain (~90MB, fully static, zero deps)
-```
+> **Phase 1 in progress.** The repository scaffold, CI, schema, and skill stubs are in place. Phase 1 (core storage, CLI, search, MCP) is in active development. Build from source works today. Pre-built binaries ship when v0.1.0 releases. npm and one-command installer are deferred follow-on work.
+
+**[Install & Status →](/guides/install/)** — supported-now vs planned channels  
+**[Roadmap →](/contributing/roadmap/)** — phased delivery plan and ship gates  
+**[Contributing →](/contributing/contributing/)** — how to propose and land a change
 
 ---
 
@@ -67,11 +71,3 @@ cd gigabrain && cargo build --release
     Agent workflows live in plain markdown SKILL.md files. Swap or extend without rebuilding. The intelligence is yours.
   </Card>
 </CardGrid>
-
----
-
-## Status
-
-GigaBrain is currently in **Sprint 0 (scaffold complete)**. Phase 1 (Core storage, CLI, search, MCP) is in **active development** — the docs describe the planned surface area and design, even where implementation is still pending.
-
-See the [Roadmap](/contributing/roadmap/) for the delivery plan.

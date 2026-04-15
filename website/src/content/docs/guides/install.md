@@ -10,9 +10,9 @@ GigaBrain has completed **Sprint 0** — the repository scaffold, CI, schema, an
 | Phase | Status | What ships |
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI workflows |
-| **Phase 1** — Core storage + CLI | 🔨 In progress | `gbrain init`, `import`, `get`, `put`, `search`, embeddings, hybrid search, MCP server |
-| **Phase 2** — Intelligence layer | ⏳ Planned | `link`, `graph`, `check`, `gaps`, progressive retrieval, full MCP surface |
-| **Phase 3** — Polish + release | ⏳ Planned | Benchmark suite, cross-compiled binaries, full skill finalization |
+| **Phase 1** — Core storage + CLI | 🔨 In progress | `gbrain init`, `import`, `get`, `put`, `search`, embeddings, hybrid search, MCP server — ships as **v0.1.0** |
+| **Phase 2** — Intelligence layer | ⏳ Planned | `link`, `graph`, `check`, `gaps`, progressive retrieval, full MCP surface — ships as **v0.2.0** |
+| **Phase 3** — Polish + release | ⏳ Planned | Benchmark suite, full skill suite, release pipeline hardening — ships as **v1.0.0** |
 
 See the [Roadmap](/contributing/roadmap/) for ship gates and detailed scope.
 
@@ -49,7 +49,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64
 
 ### GitHub Releases (planned for v0.1.0)
 
-Once Phase 3 ships, pre-built binaries will be available from GitHub Releases:
+Once Phase 1 ships (v0.1.0), pre-built binaries will be available from GitHub Releases:
 
 ```bash
 VERSION="v0.1.0"

@@ -1,68 +1,46 @@
 ---
 id: p3-polish-benchmarks
-title: "Phase 3: Polish, Benchmarks, and Release Gates"
+title: "Phase 3: Release Readiness, Coverage, and Docs Polish"
 status: proposed
 type: feature
 phase: 3
-owner: fry
-reviewers: [leela, kif, bender, scruffy, zapp]
+owner: leela
+reviewers: [fry, amy, hermes, zapp, kif, scruffy]
 created: 2026-04-13
-depends_on: p2-intelligence-layer
+depends_on: p1-core-storage-cli
 ---
 
-# Phase 3: Polish, Benchmarks, and Release Gates
+# Phase 3: Release Readiness, Coverage, and Docs Polish
 
-## What
+## Why
 
-Complete the skill suite, wire up the full benchmark harness, and ship v0.1.0.
+The repo has outgrown its current public story. `README.md`, the docs site, and the release/coverage workflows no longer line up cleanly with what the tree actually supports, which makes release prep noisy and reviewable only by tribal knowledge.
 
-### Skills
-- Briefing skill with "what shifted" report
-- Alerts skill (interrupt-driven notifications)
-- Research skill (knowledge gap resolution via `brain_gap` / `brain_gaps`)
-- Upgrade skill (agent-guided binary + skill version management)
-- Enrichment skill (Crustdata, Exa, Partiful integration patterns)
-- `gbrain skills doctor`
+The existing `p3-polish-benchmarks` proposal is also too broad for the work that is ready right now. This change narrows the immediate slice to release readiness, docs honesty, free coverage visibility on `main`, and docs-site polish, while explicitly deferring npm global distribution and one-command installer UX until they are implementation-ready.
 
-### Knowledge Gap Pipeline
-- `brain_gap` — log what the agent can't answer
-- `brain_gaps` — list unresolved gaps
-- `brain_gap_approve` — escalate sensitivity (internal → external/redacted, requires audit)
-- `gbrain gaps` CLI
+## What Changes
 
-### Offline CI Gates (mandatory)
-- BEIR subset (NQ + FiQA): nDCG@10, no regression > 2% between releases
-- Corpus-reality tests: 7K+ file import, SMS test, temporal sub-chunk test, idempotency, contradiction detection
-- Concurrency stress: 4 parallel `brain_put` writers with stale versions → OCC invariants hold
-- Embedding migration: model A → model B → rollback, zero cross-model contamination
-- Round-trip integrity (semantic + byte-exact)
-- Static binary verification (ldd/otool gate)
+- Tighten the Phase 3 scope to public release readiness: GitHub release assets, checksum/documentation alignment, and a reviewable ship surface.
+- Add free coverage reporting on pushes to `main` and PRs targeting `main`, with coverage output visible through GitHub-hosted or other no-cost public surfaces.
+- Fix stale public docs in `README.md` and the docs site so current status, supported install paths, and deferred work are stated honestly.
+- Improve the docs site build/deploy flow and information architecture around install, release, coverage, and contribution entry points.
+- Document npm global distribution and simplified installer UX as follow-on work, not as part of this implementation slice.
 
-### Advisory Benchmarks
-- LongMemEval R@5 ≥ 85%
-- LoCoMo F1 ≥ +30% over FTS5 baseline
-- Ragas context_precision + recall
+## Capabilities
 
-### Release Tooling
-- `gbrain validate --all`
-- `--json` verified on all commands
-- `pipe` mode (JSONL streaming)
-- CI/CD release pipeline → GitHub Releases with SHA-256 checksums
+### New Capabilities
+- `release-readiness`: GitHub release workflow hardening, checksum/install alignment, and a reviewable public release checklist.
+- `coverage-reporting`: Free coverage generation and visibility on pushes to `main` and PRs to `main`.
+- `documentation-accuracy`: Honest, synchronized README and public docs for current status, supported install paths, and deferred work.
+- `docs-site`: Docs-site build/deploy and navigation improvements for release, install, and contribution flows.
 
-## Ship Gate (v0.1.0)
+### Modified Capabilities
+- None.
 
-1. All offline CI gates pass
-2. Advisory benchmarks documented (not blocking)
-3. All 8 skills functional and embedded
-4. `gbrain serve` exposes all 20+ MCP tools
-5. Cross-compiled binaries on GitHub Releases with SHA-256 checksums
-6. `README.md` quick-start works end-to-end
+## Impact
 
-## Reviewer Gates
-
-- **Kif**: benchmark harness review, nDCG@10 baseline, latency p95
-- **Scruffy**: unit coverage on gap tracking, alerts, skills doctor
-- **Bender**: full concurrency stress suite, kill-before-commit recovery, embedding migration
-- **Mom**: pathological corpus (7K+ files, malformed frontmatter, cyclic imports)
-- **Nibbler**: sensitivity escalation abuse on knowledge gaps, upgrade skill supply chain
-- **Zapp**: launch assets review before GitHub Releases goes public
+- `README.md` public install/status/release copy
+- `website/**` content, navigation, and GitHub Pages deployment behavior
+- `.github/workflows/ci.yml`, `docs.yml`, and `release.yml`
+- Release-facing asset names, checksum expectations, and coverage/report links
+- Follow-on planning for npm packaging and installer UX, without adding those delivery channels yet

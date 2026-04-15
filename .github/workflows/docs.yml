@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
     paths: ["website/**"]
+  pull_request:
+    branches: [main]
+    paths: ["website/**"]
   workflow_dispatch:
 
 permissions:
@@ -24,12 +27,14 @@ jobs:
           node-version: "22"
       - run: cd website && npm ci --no-audit --no-fund
       - run: cd website && npm run build
-      - uses: actions/upload-pages-artifact@v3
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: website/dist
 
   deploy:
     needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

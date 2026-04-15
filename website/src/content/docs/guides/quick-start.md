@@ -3,16 +3,34 @@ title: Quick Start
 description: "Get a brain running in minutes: init, put, search, serve."
 ---
 
-> **Planned API.** These commands are the target surface for Phase 1 and Phase 2. They reflect the spec but may not be implemented yet.
+> **Planned API.** These commands are the target surface for Phase 1 and Phase 2. Phase 1 is in active development — these commands are not yet available. See [Getting Started](/guides/getting-started/) for current status.
 
 ## 1) Install
 
-Build from source (for now):
+| Method | Status |
+| ------ | ------ |
+| Build from source | ✅ Available today |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Ships with v0.1.0 |
+| `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
+| One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
+
+Build from source:
 
 ```bash
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
+```
+
+Once v0.1.0 ships on GitHub Releases, you can download a pre-built binary instead:
+
+```bash
+VERSION="v0.1.0"
+PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
+shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
+mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
 ```
 
 ## 2) Initialize a brain

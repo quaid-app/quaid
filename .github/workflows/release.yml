@@ -71,7 +71,7 @@ jobs:
             || (echo "ERROR: binary is not statically linked" && exit 1)
 
       - name: Generate SHA-256 checksum
-        run: shasum -a 256 ${{ matrix.artifact }} | awk '{print $1}' > ${{ matrix.artifact }}.sha256
+        run: shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -96,11 +96,62 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
+      - name: Verify all release artifacts exist
+        run: |
+          expected=(
+            gbrain-darwin-arm64
+            gbrain-darwin-arm64.sha256
+            gbrain-darwin-x86_64
+            gbrain-darwin-x86_64.sha256
+            gbrain-linux-x86_64
+            gbrain-linux-x86_64.sha256
+            gbrain-linux-aarch64
+            gbrain-linux-aarch64.sha256
+          )
+          missing=0
+          for f in "${expected[@]}"; do
+            if [ ! -f "artifacts/$f" ]; then
+              echo "::error::Missing expected release artifact: $f"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then exit 1; fi
+          echo "All 8 release artifacts present"
+
+      - name: Re-verify checksums after download
+        run: |
+          cd artifacts
+          for bin in gbrain-darwin-arm64 gbrain-darwin-x86_64 gbrain-linux-x86_64 gbrain-linux-aarch64; do
+            echo "Verifying $bin..."
+            shasum -a 256 --check "$bin.sha256"
+          done
+          echo "All checksums verified"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**
           generate_release_notes: true
+          body: |
+            ## Install
+
+            Download the pre-built binary for your platform from the assets below and verify the checksum:
+
+            ```bash
+            VERSION="${{ github.ref_name }}"
+            PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
+            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
+            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
+            shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
+            mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+            ```
+
+            Or build from source: `cargo build --release`
+
+            **Supported channels:** GitHub Releases and build from source.
+            npm, Homebrew, and one-command installer scripts are not available in this release.
+
+            ---
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:

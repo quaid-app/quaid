@@ -95,6 +95,10 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 **Depends on:** Phase 2 ship gate
 
 **Planned scope:**
+- Release readiness: GitHub Release workflow hardening, checksum verification, and a reviewable public release checklist
+- Free coverage reporting on pushes to `main` and PRs targeting `main`
+- Docs polish: honest README and public docs for current status, supported install paths, and deferred work
+- Docs-site build/deploy and navigation improvements
 - Briefing skill with "what shifted" report
 - Alerts skill (interrupt-driven notifications vs. scheduled briefings)
 - Research skill (knowledge gap resolution)
@@ -108,7 +112,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 - `pipe` mode
 - Full CI/CD release pipeline with all gates
 
-**Gate:** All benchmark targets met; `v0.1.0` release artifacts built and verified static.
+**Gate:** All benchmark targets met; `v1.0.0` release artifacts built and verified static.
 
 ---
 
@@ -118,6 +122,8 @@ These are known design choices that are _not_ oversights:
 
 | Deferral | Reasoning |
 | -------- | --------- |
+| npm global installation (`npm install -g gbrain`) | Requires npm packaging, registry account, and publish pipeline. Deferred until core release contract is fully polished. Will be proposed as a separate change. |
+| One-command curl installer | Adds operational surface area, signing concerns, and support burden. Deferred follow-on — not part of the v0.1.0 or v1.0.0 release scope. |
 | First-class `chunks` table | `page_embeddings` columns are sufficient for v1. Promote if progressive retrieval lifecycle becomes painful. |
 | Room-level palace filtering | Deferred until benchmarks on a real corpus prove it helps. Wing-only in v1. |
 | LLM-assisted contradiction detection | The binary stays dumb. Cross-page reasoning lives in the maintain skill. |

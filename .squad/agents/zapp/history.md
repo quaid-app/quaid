@@ -18,7 +18,22 @@
 - When a status table lists phases without version tags, readers cannot cross-reference the roadmap — always include both the phase label and the version target in the same row.
 - Operational scripts (issue creation commands, label helpers) are docs too: a mismatched label like `[Phase 3] v0.1.0 release` teaches contributors the wrong mental model before they've even opened a file.
 
-## 2026-04-15 P3 Release — Release Checklist & Final Doc Fix & Completion
+## 2026-04-15 Release Contract Audit — Fix 'for this release' ambiguity
+
+**Role:** Release-facing copy, release contract clarity
+
+**What happened:**
+- User flagged that docs appeared to imply a release existed or would happen after each phase but no release was present.
+- Audit found two concrete issues: (1) README.md used "this release" language implying v0.1.0 was already shipped, and the curl snippet was presented as immediately usable; (2) docs/contributing.md had `[Phase 3] v0.1.0 release` in the issue script, contradicting the version target table (`v0.1.0 = Phase 1`).
+- Discovered PR #19 (`fix/v0.1.0-release-gap`) already existed, correctly documenting that Phase 1 is complete and v0.1.0 is pending tag push.
+- Added two commits to PR #19: (1) replaced "only supported binary distribution channels for this release" with explicit build-from-source (available now) / GitHub Releases (pending v0.1.0 tag) split, plus a "Not yet available" callout on the curl block; (2) corrected contributing.md issue script label from phase-3 to phase-1.
+- Decision logged to `.squad/decisions/inbox/zapp-release-contract.md` (gitignored; local only).
+
+**Outcome:** PR #19 now carries full release-contract clarity: Phase 1 complete, v0.1.0 pending tag, no false implication of an existing release. PR #18 (opened on wrong base) was already closed.
+
+**Decision:** Option (b) — tighten wording. No premature release was published.
+
+
 
 **Role:** Release-facing copy, checklist, phase/version alignment sign-off
 

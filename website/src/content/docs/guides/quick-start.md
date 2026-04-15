@@ -3,14 +3,14 @@ title: Quick Start
 description: "Get a brain running in minutes: init, put, search, serve."
 ---
 
-> **Planned API.** These commands are the target surface for Phase 1 and Phase 2. Phase 1 is in active development — these commands are not yet available. See [Getting Started](/guides/getting-started/) for current status.
+> Phase 1 commands are implemented and available. Build from source to use them now. See [Getting Started](/guides/getting-started/) for current status.
 
 ## 1) Install
 
 | Method | Status |
 | ------ | ------ |
-| Build from source | ✅ Available today |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Ships with v0.1.0 |
+| Build from source | ✅ Available now |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v0.1.0 tag push |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 

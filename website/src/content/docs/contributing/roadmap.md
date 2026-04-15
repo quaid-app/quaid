@@ -28,11 +28,13 @@ Sprint 0 establishes the full repository structure before any core implementatio
 
 ---
 
-## Phase 1 — Core Storage, CLI, Search, and MCP 🔨
+## Phase 1 — Core Storage, CLI, Search, and MCP ✅
 
-**Status: In progress**  
+**Status: Complete**  
 **Owner:** Fry  
 **Depends on:** Sprint 0
+
+**Release:** `v0.1.0` — tag pending. All ship gates passed; pushing the `v0.1.0` tag triggers the release workflow.
 
 The smallest complete slice that proves GigaBrain's value proposition. When Phase 1 ships, a real user can import their markdown brain, search it semantically and by keyword, export without data loss, and connect any MCP-compatible agent via `gbrain serve`.
 
@@ -62,7 +64,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 - Full unit test suite
 - Embedded skills finalized
 
-**Ship gate (all must pass before Phase 2):**
+**Ship gate (all passed — Phase 2 unblocked):**
 1. `cargo test` passes
 2. `gbrain import <corpus>` → `gbrain export` → semantic diff = 0
 3. `gbrain serve` connects to Claude Code with all 5 MCP tools responding correctly

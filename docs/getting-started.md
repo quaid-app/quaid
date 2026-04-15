@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **GigaBrain is not yet released.** Sprint 0 (repository scaffold + CI) is complete. Phase 1 (core storage, CLI, search, MCP) is in active development.
+> **Phase 1 is complete.** All ship gates passed. The `v0.1.0` GitHub Release will be published when the tag is pushed. Build from source is available now.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -25,8 +25,8 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Scaffold compiles today; full implementation ships with Phase 1 |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Ships when v0.1.0 releases |
+| Build from source (`cargo build --release`) | ✅ Available now — Phase 1 complete |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v0.1.0 tag push |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
@@ -57,7 +57,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first brain
 
-> **Planned commands — not yet available.** The steps below are the target workflow for Phase 1. They reflect the spec exactly but are not yet implemented. Build from source to track progress; see [Status](#status) and [Install options](#install-options) above.
+> Phase 1 commands are implemented and available. Build from source to use them now; see [Status](#status) and [Install options](#install-options) above.
 
 ### 1. Initialize
 

@@ -5,12 +5,12 @@ description: Current project status, supported install paths, and planned future
 
 ## Project Status
 
-GigaBrain has completed **Sprint 0** — the repository scaffold, CI, schema, and skill stubs are in place. Phase 1 (core storage, CLI, search, and MCP server) is in active development.
+GigaBrain has completed **Phase 1** — core storage, CLI, search, and MCP server are implemented. All Phase 1 ship gates passed.
 
 | Phase | Status | What ships |
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI workflows |
-| **Phase 1** — Core storage + CLI | 🔨 In progress | `gbrain init`, `import`, `get`, `put`, `search`, embeddings, hybrid search, MCP server — ships as **v0.1.0** |
+| **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, embeddings, hybrid search, MCP server — ships as **v0.1.0** |
 | **Phase 2** — Intelligence layer | ⏳ Planned | `link`, `graph`, `check`, `gaps`, progressive retrieval, full MCP surface — ships as **v0.2.0** |
 | **Phase 3** — Polish + release | ⏳ Planned | Benchmark suite, full skill suite, release pipeline hardening — ships as **v1.0.0** |
 
@@ -22,7 +22,7 @@ See the [Roadmap](/contributing/roadmap/) for ship gates and detailed scope.
 
 ### Build from source
 
-The scaffold compiles today. Full functionality ships in Phase 1.
+The full Phase 1 binary compiles today. Build from source for all features.
 
 **Requirements:** Rust stable toolchain. No other system dependencies — SQLite and sqlite-vec are bundled. Embeddings are offline-first: the build uses cached BGE-small weights from the HuggingFace cache when present, can download them when built with the `online-model` feature, and otherwise falls back to a hash-based shim.
 
@@ -45,13 +45,13 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64
 
 ---
 
-## Install — Planned (Not Yet Available)
+## Install — Pending v0.1.0 Tag
 
-> The following install paths are **planned for future releases** and are not available today.
+> The following install path will be available once the `v0.1.0` tag is pushed, triggering the release workflow.
 
-### GitHub Releases (planned for v0.1.0)
+### GitHub Releases (pending v0.1.0 tag push)
 
-Once Phase 1 ships (v0.1.0), pre-built binaries will be available from GitHub Releases:
+Pre-built binaries will be available from GitHub Releases once `v0.1.0` is tagged:
 
 ```bash
 VERSION="v0.1.0"

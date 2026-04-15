@@ -85,9 +85,11 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
-**GitHub Releases** and **build from source** are the only supported binary distribution channels for this release.
+**Build from source** is the only supported installation channel today. **GitHub Releases** (pre-built binaries) will ship when v0.1.0 is cut — that happens after Phase 1 gates pass and the tag is pushed.
 
-Download a pre-built binary from a GitHub Release:
+> **Not yet available.** The commands below will work once v0.1.0 is published on GitHub Releases. They are shown here so you know exactly what to run when the release lands.
+
+Download a pre-built binary from a GitHub Release (available once v0.1.0 ships):
 
 ```bash
 VERSION="v0.1.0"

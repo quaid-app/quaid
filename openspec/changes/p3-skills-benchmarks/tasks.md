@@ -63,7 +63,7 @@
 
 ## 8. Cross-checks and reviewer gates
 
-- [ ] 8.1 Professor reviews `validate.rs` integrity check SQL for correctness: interval overlap detection, referential integrity queries, embedding model resolution.
+- [x] 8.1 Professor reviews `validate.rs` integrity check SQL for correctness: interval overlap detection, referential integrity queries, embedding model resolution.
 - [ ] 8.2 Nibbler reviews `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` MCP tools for adversarial edge cases: gap injection, stats information leakage, raw data size limits.
 - [x] 8.3 Leela reviews all 5 SKILL.md files for completeness, clarity, and agent-executability: can an agent follow each skill end-to-end without ambiguity?
 - [ ] 8.4 Scruffy verifies benchmark harnesses produce reproducible results: re-run each offline benchmark twice and confirm identical scores.

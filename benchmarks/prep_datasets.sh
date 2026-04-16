@@ -2,7 +2,8 @@
 # benchmarks/prep_datasets.sh
 #
 # Download and verify pinned benchmark datasets to benchmarks/datasets/.
-# Reads pin metadata from benchmarks/datasets.lock (TOML).
+# ALL configuration is read from benchmarks/datasets.lock (TOML).
+# No URLs, hashes, or commit SHAs are hardcoded in this script.
 #
 # Usage:
 #   ./benchmarks/prep_datasets.sh              # download all datasets
@@ -29,6 +30,66 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DATASETS_DIR="${DATASETS_DIR:-${SCRIPT_DIR}/datasets}"
 LOCK_FILE="${SCRIPT_DIR}/datasets.lock"
 
+# ── Lockfile parser ──────────────────────────────────────────────────────────
+
+# Read a value from datasets.lock given a TOML section and key.
+# Handles both top-level [section] and nested [section.subsection].
+# Usage: lockfile_get "beir.nq" "sha256"  →  prints the value (unquoted)
+lockfile_get() {
+    local section="$1"
+    local key="$2"
+
+    [[ -f "$LOCK_FILE" ]] || die "Lockfile not found: ${LOCK_FILE}"
+
+    # Convert dotted section to TOML header pattern
+    local header
+    header="$(echo "$section" | sed 's/\./\\]\\.\\[/g; s/^/\\[/; s/$/\\]/')"
+    # e.g. "beir.nq" → "\[beir\]\.\[nq\]" which matches [beir.nq]
+    # but we actually need to match both [beir.nq] and indented [beir.nq] forms
+
+    local in_section=false
+    local result=""
+
+    while IFS= read -r line; do
+        # Strip leading/trailing whitespace
+        local trimmed
+        trimmed="$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')"
+
+        # Skip comments and blank lines
+        [[ -z "$trimmed" || "$trimmed" == \#* ]] && continue
+
+        # Check for section headers
+        if [[ "$trimmed" =~ ^\[.*\]$ ]]; then
+            # Normalize the section header: strip brackets, spaces, and quotes
+            local found_section
+            found_section="$(echo "$trimmed" | sed 's/^\[*//; s/\]*$//; s/[[:space:]]//g')"
+            if [[ "$found_section" == "$section" ]]; then
+                in_section=true
+            else
+                # If we were in the target section and hit a new one, stop
+                if $in_section; then
+                    break
+                fi
+            fi
+            continue
+        fi
+
+        # If we're in the target section, look for the key
+        if $in_section && [[ "$trimmed" =~ ^${key}[[:space:]]*= ]]; then
+            result="$(echo "$trimmed" | sed "s/^${key}[[:space:]]*=[[:space:]]*//" | sed 's/^"//; s/".*$//' | sed "s/^'//; s/'.*$//")"
+            # Strip inline comments: value  # comment
+            result="$(echo "$result" | sed 's/[[:space:]]*#.*$//')"
+            break
+        fi
+    done < "$LOCK_FILE"
+
+    if [[ -z "$result" ]]; then
+        die "Key '${key}' not found in section [${section}] of ${LOCK_FILE}"
+    fi
+
+    echo "$result"
+}
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 log()  { echo "[prep_datasets] $*"; }
@@ -53,13 +114,6 @@ verify_hash() {
 
     if [[ "${SKIP_HASH_CHECK:-0}" == "1" ]]; then
         warn "SKIP_HASH_CHECK=1 — skipping SHA-256 verification for ${name}"
-        return 0
-    fi
-
-    # Skip verification if hash is a placeholder (ends with digits only — not a real SHA-256)
-    if echo "$expected" | grep -qE '^[0-9a-f]{3,10}$'; then
-        warn "Hash for ${name} appears to be a placeholder — skipping verification."
-        warn "Run: ./benchmarks/prep_datasets.sh --compute-hashes  to get real hashes."
         return 0
     fi
 
@@ -155,11 +209,12 @@ done
 # ── BEIR: NQ ─────────────────────────────────────────────────────────────────
 
 download_beir_nq() {
-    local url="https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nq.zip"
+    local url
+    url="$(lockfile_get "beir.nq" "url")"
+    local expected_hash
+    expected_hash="$(lockfile_get "beir.nq" "sha256")"
     local archive="${DATASETS_DIR}/beir/nq.zip"
     local dest_dir="${DATASETS_DIR}/beir/nq"
-    # SHA-256 from datasets.lock:
-    local expected_hash="1e0ad51568a47e48c4d81c64a5d2562b8dc3d3e8c4f2d5e0e3e9d0b6f4c8a7b3"
 
     case "$MODE" in
         compute-hashes)
@@ -179,10 +234,12 @@ download_beir_nq() {
 # ── BEIR: FiQA ───────────────────────────────────────────────────────────────
 
 download_beir_fiqa() {
-    local url="https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip"
+    local url
+    url="$(lockfile_get "beir.fiqa" "url")"
+    local expected_hash
+    expected_hash="$(lockfile_get "beir.fiqa" "sha256")"
     local archive="${DATASETS_DIR}/beir/fiqa.zip"
     local dest_dir="${DATASETS_DIR}/beir/fiqa"
-    local expected_hash="9e2d4a3c6f1b5e8d0c7a4f2b9e6d3a0c7e4f2b9d6a3e0f7b4e1c8d5a2f9b6e3"
 
     case "$MODE" in
         compute-hashes)
@@ -202,8 +259,10 @@ download_beir_fiqa() {
 # ── LongMemEval ───────────────────────────────────────────────────────────────
 
 download_longmemeval() {
-    local repo="xiaowu0162/LongMemEval"
-    local commit="a3f7c2e1d4b8f5a9c6e0d2b7f4a1e8c5d9b3f6a2"
+    local repo
+    repo="$(lockfile_get "longmemeval" "repo")"
+    local commit
+    commit="$(lockfile_get "longmemeval" "commit")"
     local dest_dir="${DATASETS_DIR}/longmemeval"
 
     case "$MODE" in
@@ -229,8 +288,10 @@ download_longmemeval() {
 # ── LoCoMo ───────────────────────────────────────────────────────────────────
 
 download_locomo() {
-    local repo="snap-research/locomo"
-    local commit="b8d4f2a7c1e9f3b5d8a2e7c4f1b9d6a3e0c7f4b2"
+    local repo
+    repo="$(lockfile_get "locomo" "repo")"
+    local commit
+    commit="$(lockfile_get "locomo" "commit")"
     local dest_dir="${DATASETS_DIR}/locomo"
 
     case "$MODE" in
@@ -256,19 +317,23 @@ download_locomo() {
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 log "=== GigaBrain Benchmark Dataset Prep ==="
-log "Mode:    ${MODE}"
-log "Subset:  ${SUBSET}"
-log "Output:  ${DATASETS_DIR}"
+log "Mode:     ${MODE}"
+log "Subset:   ${SUBSET}"
+log "Output:   ${DATASETS_DIR}"
+log "Lockfile: ${LOCK_FILE}"
 echo ""
+
+# Validate lockfile exists
+[[ -f "$LOCK_FILE" ]] || die "Lockfile not found: ${LOCK_FILE}"
 
 mkdir -p "${DATASETS_DIR}"
 
 case "$SUBSET" in
     all)
-        [[ "$SUBSET" == "all" || "$SUBSET" == "nq"           ]] && download_beir_nq
-        [[ "$SUBSET" == "all" || "$SUBSET" == "fiqa"         ]] && download_beir_fiqa
-        [[ "$SUBSET" == "all" || "$SUBSET" == "longmemeval"  ]] && download_longmemeval
-        [[ "$SUBSET" == "all" || "$SUBSET" == "locomo"       ]] && download_locomo
+        download_beir_nq
+        download_beir_fiqa
+        download_longmemeval
+        download_locomo
         ;;
     nq)          download_beir_nq ;;
     fiqa)        download_beir_fiqa ;;

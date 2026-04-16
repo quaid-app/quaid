@@ -292,10 +292,10 @@ fn check_embeddings(db: &Connection, violations: &mut Vec<Violation>) -> Result<
     }
 
     // 2. All page_embeddings reference the active model
-    let active_model: String = db.query_row(
-        "SELECT name FROM embedding_models WHERE active = 1 LIMIT 1",
+    let (active_model, vec_table): (String, String) = db.query_row(
+        "SELECT name, vec_table FROM embedding_models WHERE active = 1 LIMIT 1",
         [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
 
     let stale_model_count: i64 = db.query_row(
@@ -331,7 +331,48 @@ fn check_embeddings(db: &Connection, violations: &mut Vec<Violation>) -> Result<
         });
     }
 
+    // 4. All vec_rowids resolve in the active model's vec table
+    if !is_safe_identifier(&vec_table) {
+        violations.push(Violation {
+            check: "embeddings".into(),
+            violation_type: "unsafe_vec_table".into(),
+            details: serde_json::json!({
+                "vec_table": vec_table.as_str(),
+            }),
+        });
+        return Ok(());
+    }
+
+    let sql = format!(
+        "SELECT pe.id, pe.vec_rowid FROM page_embeddings pe \
+         LEFT JOIN {vec_table} v ON v.rowid = pe.vec_rowid \
+         WHERE pe.model = ?1 AND v.rowid IS NULL"
+    );
+    let mut stmt = db.prepare(&sql)?;
+    let rows = stmt.query_map([&active_model], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    for row in rows {
+        let (id, vec_rowid) = row?;
+        violations.push(Violation {
+            check: "embeddings".into(),
+            violation_type: "stale_vec_rowid".into(),
+            details: serde_json::json!({
+                "page_embedding_id": id,
+                "vec_rowid": vec_rowid,
+                "vec_table": vec_table.as_str(),
+            }),
+        });
+    }
+
     Ok(())
+}
+
+fn is_safe_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 #[cfg(test)]
@@ -452,6 +493,39 @@ mod tests {
             .violations
             .iter()
             .any(|v| v.violation_type == "active_model_count"));
+    }
+
+    #[test]
+    fn detects_stale_vec_rowid() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/vec");
+        let page_id: i64 = conn
+            .query_row("SELECT id FROM pages WHERE slug='test/vec'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, \
+             chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'bge-small-en-v1.5', 42, 'truth_section', 0, 'hello', 'hash', 1, '')",
+            [page_id],
+        )
+        .unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: false,
+                assertions: false,
+                embeddings: true,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "stale_vec_rowid"));
     }
 
     #[test]

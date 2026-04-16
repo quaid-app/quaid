@@ -10,16 +10,17 @@
 # To update pins: download new archives, compute sha256, update here.
 
 [beir]
-# BEIR evaluation framework
-# https://github.com/beir-cellar/beir
-repo = "beir-cellar/beir"
-commit = "1.0.1"                    # release tag (treated as version pin)
+# BEIR evaluation framework — v1.0.1 release
+# https://github.com/beir-cellar/beir/releases/tag/v1.0.1
+repo   = "beir-cellar/beir"
+commit = "c3334fd5b336dba03c5e3e605a82fcfb1bdf667d"
+tag    = "v1.0.1"
 
   [beir.nq]
   # NQ (Natural Questions) BEIR subset
-  # ~50k query set, 2.6M corpus — we use the dev split (3610 queries)
+  # ~50k query set, 2.6M corpus — we use the test split (3610 queries)
   url      = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nq.zip"
-  sha256   = "1e0ad51568a47e48c4d81c64a5d2562b8dc3d3e8c4f2d5e0e3e9d0b6f4c8a7b3"  # UPDATE: run prep_datasets.sh --compute-hashes
+  sha256   = "2553bf7bfbab47b1436ca00a34bce57320e18e611fd00999a2a3a1b4714be752"
   size_mb  = 490
   split    = "test"
 
@@ -27,23 +28,25 @@ commit = "1.0.1"                    # release tag (treated as version pin)
   # FiQA (Financial QA) BEIR subset
   # 57k corpus, 6648 train + 648 test queries
   url      = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip"
-  sha256   = "9e2d4a3c6f1b5e8d0c7a4f2b9e6d3a0c7e4f2b9d6a3e0f7b4e1c8d5a2f9b6e3"  # UPDATE: run prep_datasets.sh --compute-hashes
+  sha256   = "32c7df99ed21252fdfb2cf3f5673502a8d245ee0c44c4a133570d92ce2b3ad02"
   size_mb  = 17
   split    = "test"
 
 [longmemeval]
 # LongMemEval — multi-session memory benchmark
 # https://github.com/xiaowu0162/LongMemEval
+# Pinned: 2025-10-24 "Update links for key expansion and timestamped events"
 repo     = "xiaowu0162/LongMemEval"
-commit   = "a3f7c2e1d4b8f5a9c6e0d2b7f4a1e8c5d9b3f6a2"  # UPDATE: pin to latest stable commit
+commit   = "982fbd7045c9977e9119b5424cab0d7790d19413"
 ref      = "main"
 data_dir = "data"
 
 [locomo]
 # LoCoMo — conversational memory benchmark (long-term, multi-session)
 # https://github.com/snap-research/locomo
+# Pinned: 2024-08-13 "Updated Readme" (latest commit on main)
 repo     = "snap-research/locomo"
-commit   = "b8d4f2a7c1e9f3b5d8a2e7c4f1b9d6a3e0c7f4b2"  # UPDATE: pin to latest stable commit
+commit   = "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376"
 ref      = "main"
 data_dir = "locomo10"
 
@@ -51,13 +54,3 @@ data_dir = "locomo10"
 # Ragas evaluation framework — installed via requirements.txt
 # Pinned via benchmarks/requirements.txt (pip), NOT a git clone
 version = "0.1.21"
-
-# ── Verification Notes ───────────────────────────────────────────────────────
-#
-# SHA-256 hashes marked "UPDATE" are placeholders.
-# Run the following to compute real hashes after first download:
-#
-#   ./benchmarks/prep_datasets.sh --compute-hashes
-#
-# Commit hashes for LongMemEval and LoCoMo should be updated to the latest
-# stable commits before each major release evaluation cycle.

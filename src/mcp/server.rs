@@ -1022,11 +1022,15 @@ impl GigaBrainServer {
         if input.query.trim().is_empty() {
             return Err(invalid_params("query must not be empty"));
         }
-        let context = input.context.unwrap_or_default();
+        let mut context = input.context.unwrap_or_default();
         if context.len() > MAX_GAP_CONTEXT_LEN {
             return Err(invalid_params(format!(
                 "context exceeds maximum length of {MAX_GAP_CONTEXT_LEN} characters"
             )));
+        }
+        if !context.is_empty() {
+            // Do not persist caller-provided context to avoid leaking sensitive query text.
+            context.clear();
         }
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -2411,15 +2415,16 @@ mod tests {
 
         // Verify stored with NULL query_text and internal sensitivity
         let db = server.db.lock().unwrap();
-        let (query_text, sensitivity): (Option<String>, String) = db
+        let (query_text, sensitivity, context): (Option<String>, String, String) = db
             .query_row(
-                "SELECT query_text, sensitivity FROM knowledge_gaps WHERE id = ?1",
+                "SELECT query_text, sensitivity, context FROM knowledge_gaps WHERE id = ?1",
                 [parsed["id"].as_i64().unwrap()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         assert!(query_text.is_none());
         assert_eq!(sensitivity, "internal");
+        assert!(context.is_empty());
     }
 
     #[test]
@@ -2443,6 +2448,31 @@ mod tests {
         let id1: serde_json::Value = serde_json::from_str(&extract_text(&r1)).unwrap();
         let id2: serde_json::Value = serde_json::from_str(&extract_text(&r2)).unwrap();
         assert_eq!(id1["id"], id2["id"]);
+    }
+
+    #[test]
+    fn brain_gap_context_is_redacted_in_listings() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        server
+            .brain_gap(BrainGapInput {
+                query: "sensitive query".to_string(),
+                context: Some("sensitive query with extra details".to_string()),
+            })
+            .unwrap();
+
+        let result = server
+            .brain_gaps(BrainGapsInput {
+                resolved: None,
+                limit: None,
+            })
+            .unwrap();
+
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(parsed.len(), 1);
+        let context = parsed[0]["context"].as_str().unwrap_or_default();
+        assert!(context.is_empty());
     }
 
     // ── brain_gaps ───────────────────────────────────────────

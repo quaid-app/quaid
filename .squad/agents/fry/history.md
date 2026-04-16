@@ -399,3 +399,13 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - `skills.rs` resolves skills in 3 layers: embedded (./skills/) → user-global (~/.gbrain/skills/) → local working directory, with later layers shadowing earlier ones
 - validate tests that create dangling FK references must use `PRAGMA foreign_keys = OFF` to insert then delete, since FK enforcement prevents direct dangling inserts
 - `dirs` crate added as dependency for `skills.rs` home directory resolution
+
+## 2026-04-16T06:25:29Z — Phase 3 Core Complete
+
+**Spawn:** fry-phase3-core (claude-opus-4.6, background, 1913s)
+
+**Work:** Completed Phase 3 groups 2-4 (Skills, Benchmarks, MCP Tools). Replaced all four CLI stubs (validate, call, pipe, skills), added 4 MCP tools (brain_gap, brain_gaps, brain_stats, brain_raw), added 16 new tests, marked 14 tasks done in openspec. Zero todo!() stubs remain in src/commands/. Clippy and fmt clean.
+
+**Decisions:** 4 decisions logged to .squad/decisions.md (call.rs dispatch, pub methods, dirs crate, INSERT OR REPLACE).
+
+**Status:** ✅ Ready for Phase 3 review cycle.

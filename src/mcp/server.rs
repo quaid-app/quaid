@@ -4,7 +4,7 @@ use rmcp::model::*;
 use rmcp::schemars;
 use rmcp::tool;
 use rmcp::{ServerHandler, ServiceExt};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::get::get_page;
@@ -27,6 +27,8 @@ const MAX_LIMIT: u32 = 1000;
 const MAX_RELATIONSHIP_LEN: usize = 64;
 const MAX_TAG_LEN: usize = 64;
 const MAX_TAGS_PER_REQUEST: usize = 100;
+const MAX_GAP_CONTEXT_LEN: usize = 500;
+const MAX_RAW_DATA_LEN: usize = 1_048_576; // 1 MB
 
 fn invalid_params(message: impl Into<String>) -> rmcp::Error {
     rmcp::Error::new(ErrorCode(-32602), message.into(), None)
@@ -380,8 +382,10 @@ pub struct BrainRawInput {
     pub slug: String,
     /// Source identifier (e.g. "crustdata", "exa", "meeting")
     pub source: String,
-    /// Arbitrary JSON data to store
+    /// Arbitrary JSON object to store (must be a JSON object, not array/scalar)
     pub data: serde_json::Value,
+    /// Set to true to overwrite an existing row for (slug, source). Default: false.
+    pub overwrite: Option<bool>,
 }
 
 #[tool(tool_box)]
@@ -1019,6 +1023,11 @@ impl GigaBrainServer {
             return Err(invalid_params("query must not be empty"));
         }
         let context = input.context.unwrap_or_default();
+        if context.len() > MAX_GAP_CONTEXT_LEN {
+            return Err(invalid_params(format!(
+                "context exceeds maximum length of {MAX_GAP_CONTEXT_LEN} characters"
+            )));
+        }
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
         let query_hash = {
@@ -1148,6 +1157,19 @@ impl GigaBrainServer {
         if input.source.is_empty() {
             return Err(invalid_params("source must not be empty"));
         }
+        if !input.data.is_object() {
+            return Err(invalid_params(
+                "data must be a JSON object, not an array or scalar",
+            ));
+        }
+        let data_json = serde_json::to_string(&input.data)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        if data_json.len() > MAX_RAW_DATA_LEN {
+            return Err(invalid_params(format!(
+                "data exceeds maximum size of {MAX_RAW_DATA_LEN} bytes"
+            )));
+        }
+        let overwrite = input.overwrite.unwrap_or(false);
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
         let page_id: i64 = db
@@ -1165,8 +1187,26 @@ impl GigaBrainServer {
                 other => map_db_error(other),
             })?;
 
-        let data_json = serde_json::to_string(&input.data)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        // Guard against silent replacement of existing source data.
+        let existing: Option<i64> = db
+            .query_row(
+                "SELECT id FROM raw_data WHERE page_id = ?1 AND source = ?2",
+                rusqlite::params![page_id, &input.source],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(map_db_error)?;
+
+        if existing.is_some() && !overwrite {
+            return Err(rmcp::Error::new(
+                ErrorCode(-32003),
+                format!(
+                    "raw data for source '{}' already exists on '{}'; set overwrite=true to replace",
+                    input.source, input.slug
+                ),
+                None,
+            ));
+        }
 
         db.execute(
             "INSERT OR REPLACE INTO raw_data (page_id, source, data, fetched_at) \
@@ -2493,6 +2533,7 @@ mod tests {
                 slug: "nobody/ghost".to_string(),
                 source: "test".to_string(),
                 data: json!({"key": "value"}),
+                overwrite: None,
             })
             .unwrap_err();
 
@@ -2514,6 +2555,7 @@ mod tests {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"funding": "$10M", "headcount": 50}),
+                overwrite: None,
             })
             .unwrap();
 
@@ -2547,6 +2589,7 @@ mod tests {
                 slug: "people/alice".to_string(),
                 source: "".to_string(),
                 data: json!({}),
+                overwrite: None,
             })
             .unwrap_err();
 
@@ -2563,10 +2606,162 @@ mod tests {
                 slug: "Invalid/SLUG!".to_string(),
                 source: "test".to_string(),
                 data: json!({}),
+                overwrite: None,
             })
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode(-32602));
+    }
+
+    #[test]
+    fn brain_raw_rejects_array_payload() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        let error = server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "crustdata".to_string(),
+                data: json!([1, 2, 3]),
+                overwrite: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+        assert!(error.message.contains("JSON object"));
+    }
+
+    #[test]
+    fn brain_raw_rejects_scalar_payload() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        for bad in [json!("string"), json!(42), json!(true), json!(null)] {
+            let error = server
+                .brain_raw(BrainRawInput {
+                    slug: "people/alice".to_string(),
+                    source: "crustdata".to_string(),
+                    data: bad,
+                    overwrite: None,
+                })
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode(-32602));
+        }
+    }
+
+    #[test]
+    fn brain_raw_rejects_duplicate_source_without_overwrite() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "crustdata".to_string(),
+                data: json!({"v": 1}),
+                overwrite: None,
+            })
+            .unwrap();
+
+        // Second write without overwrite must fail.
+        let error = server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "crustdata".to_string(),
+                data: json!({"v": 2}),
+                overwrite: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32003));
+        assert!(error.message.contains("overwrite=true"));
+    }
+
+    #[test]
+    fn brain_raw_overwrites_when_flag_is_true() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "crustdata".to_string(),
+                data: json!({"v": 1}),
+                overwrite: None,
+            })
+            .unwrap();
+
+        // Explicit overwrite must succeed and persist new data.
+        server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "crustdata".to_string(),
+                data: json!({"v": 2}),
+                overwrite: Some(true),
+            })
+            .unwrap();
+
+        let db = server.db.lock().unwrap();
+        let stored: String = db
+            .query_row(
+                "SELECT data FROM raw_data WHERE source = 'crustdata'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(v["v"], 2);
+    }
+
+    #[test]
+    fn brain_gap_rejects_oversized_context() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let big_context = "x".repeat(501);
+        let error = server
+            .brain_gap(BrainGapInput {
+                query: "who invented quantum socks".to_string(),
+                context: Some(big_context),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+        assert!(error.message.contains("context"));
+    }
+
+    #[test]
+    fn brain_gap_accepts_context_at_max_length() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let exact_context = "y".repeat(500);
+        server
+            .brain_gap(BrainGapInput {
+                query: "boundary test query".to_string(),
+                context: Some(exact_context),
+            })
+            .unwrap();
     }
 
     fn extract_text(result: &CallToolResult) -> String {

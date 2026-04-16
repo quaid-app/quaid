@@ -6,6 +6,9 @@ use std::io::BufRead;
 use crate::commands::call::dispatch_tool;
 use crate::mcp::server::GigaBrainServer;
 
+/// Maximum JSONL line size accepted on stdin (5 MB).
+const MAX_LINE_BYTES: usize = 5_242_880;
+
 #[derive(Deserialize)]
 struct PipeCommand {
     tool: String,
@@ -28,6 +31,16 @@ pub fn run(db: Connection) -> Result<()> {
 
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.len() > MAX_LINE_BYTES {
+            let err = serde_json::json!({
+                "error": format!(
+                    "line exceeds maximum size of {MAX_LINE_BYTES} bytes; rejected"
+                )
+            });
+            println!("{}", serde_json::to_string(&err).unwrap_or_default());
             continue;
         }
 

@@ -92,11 +92,26 @@ gbrain search "river ai"
 
 ### `query`
 
-Hybrid search (FTS5 + vectors) with progressive depth.
+Hybrid search combining FTS5 + vector similarity. Use `--depth auto` to enable progressive retrieval — the engine expands context until its token budget is exhausted, returning richer results for complex questions.
 
 ```bash
-gbrain query "who knows Jensen Huang?" --depth auto
+# Standard hybrid query
+gbrain query "who knows Jensen Huang?"
+
+# Progressive retrieval — expands context breadth automatically
+gbrain query "who works at Acme Corp?" --depth auto
+
+# JSON output
+gbrain query "people at Acme" --depth auto --json
 ```
+
+**Options:**
+
+| Option | Description |
+| --- | --- |
+| `--depth auto` | Enable token-budget progressive retrieval |
+| `--limit N` | Max results (default: 10) |
+| `--json` | Emit JSON result array |
 
 ### `ingest`
 
@@ -174,11 +189,44 @@ gbrain backlinks companies/brex
 
 ### `graph`
 
-Fetch an N-hop neighborhood (pages + links) as JSON.
+Traverse the N-hop neighborhood from a page, showing all linked pages and edges.
 
 ```bash
-gbrain graph people/pedro-franceschi --depth 2
+# Human-readable tree (default)
+gbrain graph people/alice --depth 2
+
+# Include historical (closed) links
+gbrain graph people/alice --depth 2 --temporal all
+
+# JSON output for programmatic use
+gbrain graph people/alice --depth 2 --json
 ```
+
+**Options:**
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--depth N` | `1` | Number of hops to traverse |
+| `--temporal active\|all` | `active` | `active` = only open links; `all` = include closed links |
+| `--json` | — | Emit JSON with `nodes` and `edges` arrays |
+
+**Example JSON output:**
+```json
+{
+  "nodes": [
+    { "slug": "people/alice", "page_type": "person", "summary": "Engineer at Acme." },
+    { "slug": "companies/acme", "page_type": "company", "summary": "Enterprise software." }
+  ],
+  "edges": [
+    {
+      "from": "people/alice",
+      "to": "companies/acme",
+      "relationship": "works_at",
+      "valid_from": "2023-01-01",
+      "valid_until": null
+    }
+  ]
+}
 
 ### `timeline`
 
@@ -224,18 +272,79 @@ gbrain stats
 
 ### `check`
 
-Run contradiction checks (single page or whole brain).
+Run contradiction detection by extracting assertions and comparing them for conflicts.
 
 ```bash
+# Check a single page
+gbrain check --slug people/alice
+
+# Scan entire brain
 gbrain check --all
+
+# JSON output with full contradiction records
+gbrain check --all --json
+```
+
+**Options:**
+
+| Option | Description |
+| --- | --- |
+| `--slug SLUG` | Check a single page |
+| `--all` | Check all pages in the brain |
+| `--json` | Emit a JSON array of contradiction records |
+
+**Example JSON output:**
+```json
+[
+  {
+    "page_slug": "people/alice",
+    "other_page_slug": "sources/alice-profile",
+    "type": "assertion_conflict",
+    "description": "Conflicting 'employer' values: 'Acme' vs 'Beta Corp'",
+    "detected_at": "2026-04-15T10:00:00Z"
+  }
+]
 ```
 
 ### `gaps`
 
-List unresolved knowledge gaps.
+List knowledge gaps — queries the brain couldn't answer with high confidence. Gaps are auto-logged when `query` returns low-result or low-confidence results.
 
 ```bash
-gbrain gaps --limit 20
+# List unresolved gaps
+gbrain gaps
+
+# Show more
+gbrain gaps --limit 50
+
+# Include already-resolved gaps
+gbrain gaps --resolved
+
+# JSON output
+gbrain gaps --json
+```
+
+**Options:**
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--limit N` | `20` | Max number of gaps to return |
+| `--resolved` | — | Include gaps that have been resolved |
+| `--json` | — | Emit a JSON array of gap records |
+
+**Example JSON output:**
+```json
+[
+  {
+    "id": 42,
+    "query_hash": "who-funds-acme",
+    "context": "who funds acme corp?",
+    "confidence_score": 0.12,
+    "sensitivity": "internal",
+    "resolved_at": null,
+    "detected_at": "2026-04-15T08:30:00Z"
+  }
+]
 ```
 
 ### `validate`

@@ -94,9 +94,9 @@ OCC on `brain_put` is already complete — do not re-implement.
 
 ## Group 10 — Phase 2 Ship Gate
 
-- [ ] 10.1  `cargo test` — all tests pass (target: 200+ unit tests).
-- [ ] 10.2  `cargo clippy -- -D warnings` — zero warnings.
-- [ ] 10.3  `cargo fmt --check` — clean.
+- [x] 10.1  `cargo test` — all tests pass (target: 200+ unit tests).
+- [x] 10.2  `cargo clippy -- -D warnings` — zero warnings.
+- [x] 10.3  `cargo fmt --check` — clean.
 - [ ] 10.4  Manual smoke test: `gbrain graph people/alice --depth 2`, `gbrain check --all`, `gbrain gaps`, `gbrain query "test" --depth auto`.
 - [ ] 10.5  Phase 1 round-trip tests (`tests/roundtrip_semantic.rs`, `tests/roundtrip_raw.rs`) still pass with no regressions.
 - [ ] 10.6  Professor review: `src/core/graph.rs` BFS correctness, `src/core/progressive.rs` budget logic, OCC protocol unchanged.

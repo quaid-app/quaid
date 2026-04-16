@@ -7,9 +7,9 @@ use rmcp::{ServerHandler, ServiceExt};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{check, link, tags, timeline};
 use crate::commands::get::get_page;
-use crate::core::assertions::AssertionError;
+use crate::commands::{check, link};
+
 use crate::core::fts::search_fts;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
@@ -113,23 +113,10 @@ fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
 
 fn map_graph_error(e: GraphError) -> rmcp::Error {
     match e {
-        GraphError::PageNotFound { slug } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("page not found: {slug}"),
-            None,
-        ),
+        GraphError::PageNotFound { slug } => {
+            rmcp::Error::new(ErrorCode(-32001), format!("page not found: {slug}"), None)
+        }
         GraphError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-    }
-}
-
-fn map_assertion_error(e: AssertionError) -> rmcp::Error {
-    match e {
-        AssertionError::PageNotFound { slug } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("page not found: {slug}"),
-            None,
-        ),
-        AssertionError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
     }
 }
 
@@ -511,6 +498,320 @@ impl GigaBrainServer {
 
         let json = serde_json::to_string_pretty(&entries)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Create a typed temporal link between two pages")]
+    fn brain_link(
+        &self,
+        #[tool(aggr)] input: BrainLinkInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.from_slug)?;
+        validate_slug(&input.to_slug)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        link::run(
+            &db,
+            &input.from_slug,
+            &input.to_slug,
+            &input.relationship,
+            input.valid_from,
+            input.valid_until,
+        )
+        .map_err(map_anyhow_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Linked {} → {} ({})",
+            input.from_slug, input.to_slug, input.relationship
+        ))]))
+    }
+
+    #[tool(description = "Close a temporal link by its database ID")]
+    fn brain_link_close(
+        &self,
+        #[tool(aggr)] input: BrainLinkCloseInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        link::close(&db, input.link_id, &input.valid_until).map_err(map_anyhow_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Closed link {} valid_until={}",
+            input.link_id, input.valid_until
+        ))]))
+    }
+
+    #[tool(description = "List inbound backlinks for a page")]
+    fn brain_backlinks(
+        &self,
+        #[tool(aggr)] input: BrainBacklinksInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.slug)?;
+        let filter = parse_temporal_filter(input.temporal.as_deref())?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let to_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [&input.slug],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
+                    ErrorCode(-32001),
+                    format!("page not found: {}", input.slug),
+                    None,
+                ),
+                other => map_db_error(other),
+            })?;
+
+        #[derive(Serialize)]
+        struct BacklinkRow {
+            id: i64,
+            from_slug: String,
+            relationship: String,
+            valid_from: Option<String>,
+            valid_until: Option<String>,
+        }
+
+        let temporal_clause = match filter {
+            TemporalFilter::Active => {
+                " AND (l.valid_from IS NULL OR l.valid_from <= date('now'))\
+                 AND (l.valid_until IS NULL OR l.valid_until >= date('now'))"
+            }
+            TemporalFilter::All => "",
+        };
+
+        let sql = format!(
+            "SELECT l.id, p.slug, l.relationship, l.valid_from, l.valid_until \
+             FROM links l JOIN pages p ON l.from_page_id = p.id \
+             WHERE l.to_page_id = ?1{temporal_clause} \
+             ORDER BY l.created_at DESC"
+        );
+
+        let mut stmt = db.prepare(&sql).map_err(map_db_error)?;
+
+        let rows: Vec<BacklinkRow> = stmt
+            .query_map([to_id], |row| {
+                Ok(BacklinkRow {
+                    id: row.get(0)?,
+                    from_slug: row.get(1)?,
+                    relationship: row.get(2)?,
+                    valid_from: row.get(3)?,
+                    valid_until: row.get(4)?,
+                })
+            })
+            .map_err(map_db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_error)?;
+
+        let json = serde_json::to_string_pretty(&rows)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "N-hop neighbourhood graph from a page")]
+    fn brain_graph(
+        &self,
+        #[tool(aggr)] input: BrainGraphInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.slug)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let depth = input.depth.unwrap_or(1).min(MAX_LIMIT);
+        let filter = parse_temporal_filter(input.temporal.as_deref())?;
+
+        let result =
+            graph::neighborhood_graph(&input.slug, depth, filter, &db).map_err(map_graph_error)?;
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Run contradiction detection on a page or all pages")]
+    fn brain_check(
+        &self,
+        #[tool(aggr)] input: BrainCheckInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let all = input.slug.is_none();
+        check::run(&db, input.slug, all, None, true).map_err(map_anyhow_error)?;
+
+        // Fetch unresolved contradictions as JSON
+        let mut stmt = db
+            .prepare(
+                "SELECT p.slug, COALESCE(other.slug, p.slug), c.type, c.description, c.detected_at \
+                 FROM contradictions c \
+                 JOIN pages p ON p.id = c.page_id \
+                 LEFT JOIN pages other ON other.id = c.other_page_id \
+                 WHERE c.resolved_at IS NULL \
+                 ORDER BY c.detected_at, p.slug",
+            )
+            .map_err(map_db_error)?;
+
+        use crate::core::assertions::Contradiction;
+        let contradictions: Vec<Contradiction> = stmt
+            .query_map([], |row| {
+                Ok(Contradiction {
+                    page_slug: row.get(0)?,
+                    other_page_slug: row.get(1)?,
+                    r#type: row.get(2)?,
+                    description: row.get(3)?,
+                    detected_at: row.get(4)?,
+                })
+            })
+            .map_err(map_db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_error)?;
+
+        let json = serde_json::to_string_pretty(&contradictions)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Show timeline entries for a page")]
+    fn brain_timeline(
+        &self,
+        #[tool(aggr)] input: BrainTimelineInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.slug)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let limit = input.limit.unwrap_or(50).min(MAX_LIMIT);
+
+        // Verify page exists
+        let page = get_page(&db, &input.slug).map_err(map_anyhow_error)?;
+
+        let page_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [&input.slug],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
+                    ErrorCode(-32001),
+                    format!("page not found: {}", input.slug),
+                    None,
+                ),
+                other => map_db_error(other),
+            })?;
+
+        // Query structured timeline_entries table
+        let mut stmt = db
+            .prepare(
+                "SELECT date, summary, source, detail FROM timeline_entries \
+                 WHERE page_id = ?1 ORDER BY date DESC LIMIT ?2",
+            )
+            .map_err(map_db_error)?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![page_id, limit], |row| {
+                let date: String = row.get(0)?;
+                let summary: String = row.get(1)?;
+                let source: String = row.get(2)?;
+                let detail: String = row.get(3)?;
+                let mut entry = format!("{date}: {summary}");
+                if !source.is_empty() {
+                    entry.push_str(&format!(" [source: {source}]"));
+                }
+                if !detail.is_empty() {
+                    entry.push_str(&format!("\n{detail}"));
+                }
+                Ok(entry)
+            })
+            .map_err(map_db_error)?;
+
+        let mut entries: Vec<String> = Vec::new();
+        for row in rows {
+            entries.push(row.map_err(map_db_error)?);
+        }
+
+        // Fall back to legacy timeline markdown field
+        if entries.is_empty() {
+            let timeline = page.timeline.trim();
+            if !timeline.is_empty() {
+                entries = timeline
+                    .split("\n---\n")
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .take(limit as usize)
+                    .collect();
+            }
+        }
+
+        #[derive(Serialize)]
+        struct TimelineOutput {
+            slug: String,
+            entries: Vec<String>,
+        }
+
+        let output = TimelineOutput {
+            slug: input.slug,
+            entries,
+        };
+
+        let json = serde_json::to_string_pretty(&output)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "List, add, or remove tags on a page")]
+    fn brain_tags(
+        &self,
+        #[tool(aggr)] input: BrainTagsInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.slug)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let page_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [&input.slug],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
+                    ErrorCode(-32001),
+                    format!("page not found: {}", input.slug),
+                    None,
+                ),
+                other => map_db_error(other),
+            })?;
+
+        let add = input.add.unwrap_or_default();
+        let remove = input.remove.unwrap_or_default();
+
+        for tag in &add {
+            db.execute(
+                "INSERT OR IGNORE INTO tags (page_id, tag) VALUES (?1, ?2)",
+                rusqlite::params![page_id, tag],
+            )
+            .map_err(map_db_error)?;
+        }
+
+        for tag in &remove {
+            db.execute(
+                "DELETE FROM tags WHERE page_id = ?1 AND tag = ?2",
+                rusqlite::params![page_id, tag],
+            )
+            .map_err(map_db_error)?;
+        }
+
+        // Return current tags
+        let mut stmt = db
+            .prepare("SELECT tag FROM tags WHERE page_id = ?1 ORDER BY tag")
+            .map_err(map_db_error)?;
+        let tags: Vec<String> = stmt
+            .query_map([page_id], |row| row.get(0))
+            .map_err(map_db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_error)?;
+
+        let json = serde_json::to_string_pretty(&tags)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }

@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** `Phase 1 complete` — all ship gates passed. `v0.1.0` release pending tag push. [See the roadmap →](#roadmap)
+**Status:** `Phase 2 complete` — intelligence layer shipped. `v0.2.0` release pending tag push. [See the roadmap →](#roadmap)
 
 ---
 
@@ -16,7 +16,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
-| **Phase 2** — Intelligence layer | 🔜 Not started | `link`, `graph`, `stats`, `check`, `gaps` |
+| **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
 | **Phase 3** — Polish + release | 🔜 Not started | Benchmarks, cross-compiled binaries, fat skill finalization |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
@@ -121,7 +121,7 @@ cargo build --release
 
 ## Usage
 
-> Phase 1 commands are implemented. Phase 2 commands (`link`, `graph`, `check`, `gaps`) are planned. See [`docs/spec.md`](docs/spec.md) for full command signatures.
+> All Phase 1 and Phase 2 commands are implemented. See [`docs/spec.md`](docs/spec.md) for full command signatures.
 
 ```bash
 # Create a new brain
@@ -182,7 +182,11 @@ Add to your MCP client config (e.g. Claude Code):
 }
 ```
 
-Available tools: `brain_query`, `brain_search`, `brain_get`, `brain_put`, `brain_ingest`, `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_timeline`, `brain_tags`, `brain_list`, `brain_check`, `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`.
+**Phase 1 tools (core read/write):** `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
+
+**Phase 2 tools (intelligence layer):** `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
+
+All 12 tools are available when you run `gbrain serve`.
 
 ## Skills
 

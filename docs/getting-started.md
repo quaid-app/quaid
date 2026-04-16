@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 1 is complete.** All ship gates passed. The `v0.1.0` GitHub Release will be published when the tag is pushed. Build from source is available now.
+> **Phase 2 is complete.** The intelligence layer — graph traversal, contradiction detection, progressive retrieval, novelty checking, and knowledge gaps — has shipped. Build from source to use all features now.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -150,7 +150,13 @@ Then start the server:
 gbrain serve
 ```
 
-The MCP server exposes tools over stdio JSON-RPC 2.0. Phase 1 ships five core tools: `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`. Later phases add the full surface — see [spec.md](spec.md#mcp-server).
+The MCP server exposes tools over stdio JSON-RPC 2.0.
+
+**Phase 1 tools (core read/write):** `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
+
+**Phase 2 tools (intelligence layer):** `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
+
+All 12 tools are live. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
@@ -188,6 +194,85 @@ The `original` type is for your own thinking — distinct from compiled external
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
 | `GBRAIN_DB` | `./brain.db` | Path to the active brain database |
+
+---
+
+---
+
+## Phase 2: Intelligence layer
+
+> Phase 2 commands are fully implemented. Build from source to use them.
+
+### Graph traversal
+
+Walk the knowledge graph from any page, up to N hops out:
+
+```bash
+# 2-hop neighbourhood, active links only (default)
+gbrain graph people/alice --depth 2
+
+# 3-hop including expired links
+gbrain graph people/alice --depth 3 --temporal all
+
+# JSON output for programmatic use
+gbrain graph people/alice --depth 2 --json
+```
+
+Example output:
+```
+people/alice
+  → companies/acme (works_at)
+    → people/bob (colleague)
+  → projects/atlas (leads)
+```
+
+### Contradiction detection
+
+Check one page or every page in the brain for conflicting assertions:
+
+```bash
+# Check a single page
+gbrain check --slug people/alice
+
+# Check the entire brain
+gbrain check --all
+
+# JSON output
+gbrain check --all --json
+```
+
+Example output:
+```
+[people/alice] ↔ [sources/linkedin-2023]: alice employer assertion conflicts: Acme vs. Beta Corp
+1 contradiction(s) found across 2 pages.
+```
+
+### Knowledge gaps
+
+GigaBrain automatically records low-confidence queries as knowledge gaps. List and triage them:
+
+```bash
+# List unresolved gaps (default)
+gbrain gaps
+
+# Include resolved gaps
+gbrain gaps --resolved
+
+# Limit output
+gbrain gaps --limit 10
+
+# JSON output for scripting
+gbrain gaps --json
+```
+
+Example output:
+```
+[1] who-founded-acme (confidence: 0.21, unresolved)
+[2] atlas-project-status (confidence: 0.18, unresolved)
+2 gap(s) found.
+```
+
+Use the `skills/research/` skill to resolve gaps: the research workflow queries external sources, writes new pages, and calls `brain_gap` to mark each gap resolved.
 
 ---
 

@@ -26,9 +26,12 @@ gigabrain/
 │   │   ├── fts.rs            # FTS5 search, BM25 scoring
 │   │   ├── inference.rs      # Candle init, BGE-small embeddings, vector search
 │   │   ├── search.rs         # Hybrid: SMS + FTS5 + vector + set-union merge
+│   │   ├── graph.rs          # N-hop BFS over links table (Phase 2)
+│   │   ├── assertions.rs     # Contradiction detection via assertions table (Phase 2)
+│   │   ├── gaps.rs           # Knowledge gap logging and resolution (Phase 2)
 │   │   ├── progressive.rs    # Token-budget-gated content expansion
-│   │   ├── palace.rs         # Wing/room derivation for palace filtering
-│   │   ├── novelty.rs        # Jaccard + cosine dedup
+│   │   ├── palace.rs         # Wing/room derivation for palace filtering (Phase 2: room-level)
+│   │   ├── novelty.rs        # Jaccard + cosine dedup (Phase 2: tiers 2–4)
 │   │   ├── migrate.rs        # import_dir / export_dir / validate_roundtrip
 │   │   ├── chunking.rs       # Temporal sub-chunking
 │   │   └── graph.rs          # Graph neighbourhood traversal (Phase 2)
@@ -240,10 +243,12 @@ Each phase has designated reviewers before it can ship:
 
 | Reviewer | Responsibilities |
 | -------- | ---------------- |
-| Professor | Code review on `db.rs`, `search.rs`, `inference.rs` |
-| Nibbler | Adversarial review on MCP server (OCC enforcement, injection safety) |
-| Bender | End-to-end round-trip validation sign-off |
+| Professor | Code review on `db.rs`, `search.rs`, `inference.rs`; graph BFS correctness, OCC conflict protocol |
+| Nibbler | Adversarial review on MCP server (OCC enforcement, injection safety); contradiction evasion |
+| Bender | End-to-end round-trip validation sign-off; ingest conflicting sources → contradiction detected |
 | Scruffy | Unit test coverage on markdown parser and search merge logic |
+| Mom | Temporal link edge cases, cyclic graph queries, zero-hop graph |
+| Kif | Palace wing filtering benchmark — wing-level filter reduces latency without precision drop |
 
 ---
 

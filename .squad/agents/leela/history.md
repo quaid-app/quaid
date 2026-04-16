@@ -405,6 +405,15 @@
 - Orchestration logs written for each completed agent
 - Session log recorded
 - Decision inbox merged to decisions.md (14 items)
+
+## 2026-04-17 P3 Archive Finalization
+
+**What was done:**
+- Reviewed uncommitted diff across all three `p3-polish-benchmarks` archive files. Changes were truthful and correct: `status: complete` → `status: shipped`, added `archived: 2026-04-17` frontmatter, Ship Gate section in tasks.md, and curly-quote normalization.
+- Committed and pushed to `phase3/p3-skills-benchmarks`. Branch now clean and fully synced with origin; PR #31 reflects final state.
+
+**Learning:**
+- When a Scribe commit lands ahead of an archive update, always inspect the remaining diff before committing — the changes may be a mix of trivial normalization and meaningful metadata corrections, both worth keeping.
 - Cross-agent history updates applied
 
 **Outcome:** Phase 2 architecture **COMPLETE**. Blockers visible to all teams. PR #22 open and in review queue. Team can execute Phase 2 implementation with clear gates and parallel lanes.

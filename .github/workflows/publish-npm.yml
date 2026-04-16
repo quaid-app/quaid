@@ -1,0 +1,40 @@
+name: Publish npm package
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sync version from tag
+        working-directory: packages/gbrain-npm
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          npm version "$TAG" --no-git-tag-version --allow-same-version
+
+      - name: Skip publish when token is absent
+        if: env.NPM_TOKEN == ''
+        run: echo "::notice::NPM_TOKEN is not configured; skipping npm publish for this release."
+
+      - name: Validate package (dry-run)
+        working-directory: packages/gbrain-npm
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        if: env.NPM_TOKEN != ''
+        working-directory: packages/gbrain-npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -96,6 +96,23 @@ CI runs `cargo check` and `cargo test` on every pull request. Both must pass bef
 
 ---
 
+## Release process secrets
+
+The shell installer and GitHub Release assets ship from the main release workflow. npm publication
+uses `.github/workflows/publish-npm.yml` and requires an `NPM_TOKEN` repository secret before the
+first public publish.
+
+If `NPM_TOKEN` is not configured, the npm publish workflow emits a notice and succeeds rather
+than failing the tag build. This keeps shell-first test releases such as `v0.9.0` green while npm
+publication remains intentionally staged. The workflow validates package structure via `npm pack
+--dry-run` unconditionally, so packaging regressions are caught even without a token.
+
+> **Note:** The `gbrain` package name on npm has existing published versions. Before the first
+> public publish, verify package ownership and version strategy (scoped name, version bump, or
+> `--tag` override) to avoid conflicts.
+
+---
+
 ## Tech stack
 
 | Component | Crate | Notes |

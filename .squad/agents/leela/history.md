@@ -466,3 +466,40 @@
 - **Status:** Task 8.1 left for re-review by different revision author per phase 3 workflow (Leela under reviewer lockout).
 
 **Next:** Await Nibbler re-review before proceeding to core-lane cross-checks.
+
+---
+
+## 2026-04-17 Phase 3 Archive Pass — Leela Sync
+
+**Session:** leela-phase3-archive  
+**Timestamp:** 2026-04-17
+
+**What happened:**
+- Audited three OpenSpec changes: `p3-skills-benchmarks`, `p3-polish-benchmarks`, `sprint-0-repo-scaffold`.
+- Found two actual regressions that tasks.md had marked complete but were not:
+  1. `ci.yml` missing `benchmarks` job (task 7.1 note was aspirational — added the job for real)
+  2. `cargo clippy` failing with 2 violations in `tests/concurrency_stress.rs` (task 8.6 was wrong — fixed both)
+- Removed a false pre-existing archive: `openspec/changes/archive/2026-04-17-p3-skills-benchmarks/` had `status: complete` but 8.2 and 8.4 open. Removed. Active copy now source of truth.
+- Archived `p3-polish-benchmarks` (all tasks genuinely complete) → `openspec/changes/archive/2026-04-17-p3-polish-benchmarks/`.
+- Cleaned up `sprint-0-repo-scaffold` active copy (archive from 2026-04-15 was already present).
+- Left `p3-skills-benchmarks` active: 8.2 Nibbler MCP adversarial review and 8.4 Scruffy benchmark reproducibility check are genuinely open.
+- Updated README.md and website roadmap from "✅ Complete" to honest "🔄 Implementation complete — reviewer sign-off pending."
+- Updated `now.md` to reflect current team focus: Nibbler and Scruffy reviewer gates.
+- Created `openspec/changes/p3-skills-benchmarks/` and `p3-polish-benchmarks/` artifact files on disk (they only existed as input artifacts, not in the filesystem).
+
+**Decisions filed:** `.squad/decisions/inbox/leela-phase3-archive.md`
+
+## Learnings
+
+- **Tasks.md notes can be forward-looking lies.** When a task note says "✓ Added X", always verify X exists in the codebase before accepting it. Optimistic notes written by a previous session are not the same as completed work.
+- **Archiving with open gates is an honesty violation.** A pre-existing archive had `status: complete` but two open reviewer checkboxes. The archive process must check the actual task status, not just copy files. Removed the false archive.
+- **OpenSpec artifact files may not exist on disk even when listed as input artifacts.** The input artifact system passes file content as context; the actual filesystem files may be absent. Always check with PowerShell before trying to edit.
+- **False archive removal is the right call when reviewer gates are genuinely open.** The team gate system (Nibbler adversarial review, Scruffy reproducibility verification) has real engineering value. Archiving before those gates close removes accountability and prevents the review from happening.
+
+## Learnings — Phase 3 Final Reconcile (2026-04-17)
+
+- **Inbox decisions confirm gate closure; tasks.md must reflect it.** Nibbler and Scruffy filed inbox decisions that closed their gates. The tasks.md still had `[ ] 8.2` — inbox decisions don't self-propagate into task checklists. Always update tasks.md to reflect closed gates before archiving.
+- **Archive/active split is a binary state.** The correct resolution for "active copy untracked + archive deleted" is: update active tasks, restore archive from HEAD, overwrite with updated files, delete active. There is never a valid "both exist" state.
+- **PR body must be the last thing updated, not the first.** It reflects the final state of the branch. Updating docs, archiving, and committing first ensures the PR body accurately describes what is actually in the branch.
+- **The `.squad/decisions/inbox/` is gitignored by design.** Decision records there are local-only scratchpads; they don't need to be committed. This is correct — they serve the team's working session, not the permanent repo record.
+- **`git restore <dir>` correctly restores all deleted tracked files under that path.** Useful for recovering a previously-archived set of files that were deleted in the working tree.

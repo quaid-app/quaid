@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** `Phase 3 complete` — all skills, benchmarks, and CLI polish shipped. `v1.0.0` release pipeline ready. [See the roadmap →](#roadmap)
+**Status:** `v1.0.0 ready to tag` — Phase 3 complete. All reviewer gates passed (Nibbler adversarial + Scruffy reproducibility). [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,7 +17,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI — **v1.0.0** |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v1.0.0`) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 

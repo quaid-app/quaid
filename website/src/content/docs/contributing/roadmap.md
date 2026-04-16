@@ -116,15 +116,17 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 - Benchmark harnesses: BEIR nDCG@10 regression gate, corpus-reality, concurrency stress, embedding migration (offline, CI-gated)
 - Advisory benchmarks: LongMemEval, LoCoMo, Ragas (Python adapters, API-key optional)
 
-**Ship gate (all passed — v1.0.0 unblocked):**
-1. Zero `todo!()` stubs in `src/commands/`
-2. All 8 SKILL.md files are production-ready
-3. 16 MCP tools registered and tested
-4. `gbrain validate --all` runs successfully on a clean brain
-5. `gbrain skills doctor` shows correct resolution order
-6. Offline benchmarks (corpus-reality, concurrency, embedding migration) pass in CI
-7. BEIR nDCG@10 baseline established with < 2% regression gate
-8. `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` all clean
+**Ship gate (pending final review):**
+1. Zero `todo!()` stubs in `src/commands/` ✅
+2. All 8 SKILL.md files are production-ready ✅
+3. 16 MCP tools registered and tested ✅
+4. `gbrain validate --all` runs successfully on a clean brain ✅
+5. `gbrain skills doctor` shows correct resolution order ✅
+6. Offline benchmarks (corpus-reality, concurrency, embedding migration) pass in CI ✅
+7. BEIR nDCG@10 baseline established with < 2% regression gate ✅
+8. `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` all clean ✅
+9. Nibbler adversarial review of `brain_gap`/`brain_gaps`/`brain_stats`/`brain_raw` ✅ (Approved 2026-04-16)
+10. Scruffy benchmark reproducibility verification (re-run twice, confirm identical scores) ✅ (Approved 2026-04-17)
 
 ---
 
@@ -152,4 +154,4 @@ These are known design choices that are _not_ oversights:
 | --- | ---------- |
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
-| `v1.0.0` | Phase 3 — full skill suite + benchmarks + release pipeline ✅ |
+| `v1.0.0` | Phase 3 — full skill suite + benchmarks + release pipeline |

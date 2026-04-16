@@ -2678,3 +2678,90 @@ The offline Rust test paths are stable, but the full reproducibility story for t
 5. Re-submit task 8.4 only after the full pinned-data → prep → baseline → rerun chain is executable end-to-end.
 
 **Task status:** Task 8.4 rejected. Awaiting revision per phase 3 workflow.
+
+### 2026-04-16: Fry — Novelty/Palace/Gaps implementation decisions (Tasks 6.1–8.7)
+
+**By:** Fry
+
+**What:**
+
+1. **query_hash idempotency fix:** Added `CREATE UNIQUE INDEX IF NOT EXISTS idx_gaps_query_hash ON knowledge_gaps(query_hash)` to `schema.sql`. This resolves the blocker identified by Bender and Nibbler — `INSERT OR IGNORE` now correctly deduplicates on repeated low-confidence queries. The index is additive (`IF NOT EXISTS`) so existing brains get the constraint on next open without migration.
+
+2. **Novelty check placement:** Wired `check_novelty` *after* slug resolution but *before* the upsert. This means:
+   - First-time ingest (no existing page) skips the check entirely — no false-positive rejection.
+   - The SHA-256 ingest_log dedup fires first (line 17), then novelty (line 32), then write. Two layers of dedup.
+   - Novelty check failure (e.g., embedding query error) is non-fatal — prints warning and proceeds with ingest.
+
+3. **Palace room: module-level `#![allow(dead_code)]` removed.** `classify_intent` gets a targeted `#[allow(dead_code)]` since it's implemented and tested but not consumed until Group 9 MCP wiring. Same treatment for `resolve_gap` and `GapsError::NotFound`.
+
+4. **Gap auto-logging threshold:** Matches spec exactly — `results.len() < 2 || all scores < 0.3`. MCP brain_query silently logs (no stderr in MCP context); CLI query.rs prints "Knowledge gap logged." to stderr.
+
+**Why:** Closes the schema blocker, wires the last two dead-code modules, and completes Groups 6-8 with CI green.
+
+### 2026-04-15: Mom — graph slice sign-off
+
+**By:** Mom
+
+**What:** Phase 2 graph slice tasks 1.1–2.5 APPROVED FOR LANDING.
+
+- Zero-hop behavior returns root only with no edges.
+- Self-links are suppressed in both graph results and text rendering, including mixed self-link + real-neighbour cases.
+- Active temporal filtering now correctly excludes future-dated and past-closed links while allowing null-bounded active links.
+- Cycle handling terminates cleanly in traversal and does not re-render the root on cyclic paths.
+- Depth requests above the contract cap stop at 10 hops in practice.
+- Weird-but-valid diamond graphs render shared descendants under each valid parent without looping.
+
+**Scope:** Graph slice only (tasks 1.1–2.5 on `phase2/p2-intelligence-layer`). This is not approval of full Phase 2 merge.
+
+**Why:** Full validation passed; graph slice is solid.
+
+### 2026-04-15: Nibbler — graph slice re-review and REJECTION (tasks 1.1-2.5)
+
+**By:** Nibbler
+
+**What:** Phase 2 graph slice tasks 1.1–2.5 REJECTED FOR LANDING.
+
+**Issues identified:**
+
+1. **Depth abuse** — `neighborhood_graph` still hard-caps depth at 10 and uses iterative BFS with a visited set. ✅ Solid.
+
+2. **Future-dated leakage** — Query now gates both `valid_from` and `valid_until`. ✅ Fixed for active view.
+
+3. **Root-can-never-be-its-own-neighbour contract still false in an allowed state:**
+   - Task 2.2 says the root can never appear as its own neighbour.
+   - The schema still permits self-links (`links.from_page_id == links.to_page_id`), and `commands/link.rs` does not reject them.
+   - `src/commands/graph.rs` prints every outbound edge before cycle suppression, so an outbound self-loop would still render as `→ <root> (...)`.
+   - That leaves an operator-facing lie in exactly the slice this command is supposed to clarify.
+
+**Required follow-up before approval:**
+
+1. Enforce one of these guardrails:
+   - reject self-links at link creation time, **or**
+   - suppress self-loop edges from human graph output (and ideally from the graph result if self-links are not a supported concept).
+2. Add a regression test proving `gbrain graph <root>` never prints `→ <root>` even when the database contains a self-link.
+
+**Scope caveat:** This rejection is for the graph slice only. It is not a restatement of the broader MCP write-surface review in issue #29.
+
+### 2026-04-16: Nibbler — graph slice final sign-off (tasks 1.1-2.5)
+
+**By:** Nibbler
+
+**Date:** 2026-04-16
+
+**What:** Phase 2 graph slice tasks 1.1–2.5 APPROVED FOR LANDING.
+
+**Re-checks:**
+
+1. **Depth abuse** — `neighborhood_graph` still hard-caps caller depth at 10. Traversal remains iterative with a visited set, so hostile cycles do not create unbounded walk behaviour. ✅
+
+2. **Future-dated leakage** — `TemporalFilter::Active` now gates both `valid_from` and `valid_until`, so links scheduled for the future do not leak into present-tense graph answers. ✅
+
+3. **Self-link / root rendering** — Core traversal now drops self-links before they can enter `GraphResult`. Human rendering also filters `from == to` as defense in depth. Path-aware rendering suppresses cycle-back-to-root output, so the root no longer prints as its own neighbour. ✅
+
+4. **Human-readable output shape** — Depth-2 edges render beneath their actual parent instead of flattening under the root. The text output now matches the outbound-only contract closely enough for operator use. ✅
+
+**Validation:** `cargo test graph` ✅
+
+**Scope caveat:** This is **not** closure of Nibbler issue #29. That issue is the broader Group 9 adversarial lane for the MCP write surface; this note approves only the graph slice tasks 1.1–2.5.
+
+**Why:** All blockers resolved; graph slice is ready for merge.

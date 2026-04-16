@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is in progress.** Skills, benchmarks, and CLI polish are substantially complete on `phase3/p3-skills-benchmarks`. CI gates and final review are pending before `v1.0.0` ships.
+> **Phase 3 is complete.** The current rollout focus is the `v0.9.0` simplified-install test release: shell installer first, with npm publication staged behind that validation cycle.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -26,11 +26,11 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — Phases 1–3 implementation complete |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v1.0.0 tag push |
-| `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
-| One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.0` test release |
+| `npm install -g gbrain` | 🚧 Staged — package and workflow are ready, public publish follows shell-installer testing |
+| One-command curl installer | ✅ Available — `curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \| sh` |
 
-> **Deferred distribution channels.** npm global installation and a one-command installer are planned follow-on work. They are not part of this release and will be proposed separately when ready.
+> **Shell-first rollout.** Use the shell installer or GitHub Releases for `v0.9.0` testing. The npm package is implemented, but public publication remains gated until the shell installer has soaked and `NPM_TOKEN` is configured for release automation.
 
 ---
 

@@ -124,6 +124,16 @@
 - GitHub issues and OpenSpec both drive work intake.
 - Meaningful changes require an OpenSpec proposal before implementation.
 
+## 2026-04-16T14:59:20Z Simplified-install v0.9.0 Release — Leela Completion
+
+- **Task:** Updated `.squad/identity/now.md` to reflect simplified-install / v0.9.0 shell-first focus
+- **Changes:**
+  1. Updated current sprint status and focus in `.squad/identity/now.md`
+  2. Confirmed simplified-install as active phase
+  3. Updated identity to reflect installation UX priority (shell-first approach)
+- **Status:** ✅ COMPLETE. Team identity aligned with v0.9.0 release focus (shell-first, installer-centric).
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-leela.md`
+
 ## 2026-04-14 Scribe Merge (2026-04-14T03:50:40Z)
 
 - Orchestration logs written for Leela (Link contract review) and Fry (T02 db.rs completion).
@@ -533,3 +543,27 @@
 - **PR body must be the last thing updated, not the first.** It reflects the final state of the branch. Updating docs, archiving, and committing first ensures the PR body accurately describes what is actually in the branch.
 - **The `.squad/decisions/inbox/` is gitignored by design.** Decision records there are local-only scratchpads; they don't need to be committed. This is correct — they serve the team's working session, not the permanent repo record.
 - **`git restore <dir>` correctly restores all deleted tracked files under that path.** Useful for recovering a previously-archived set of files that were deleted in the working tree.
+
+## 2026-04-18 Focus File Update — simplified-install / v0.9.0
+
+**What was done:**
+- Updated `.squad/identity/now.md` to replace stale "Phase 3 complete — v1.0.0 ready to tag" posture with truthful `simplified-install` / `v0.9.0` shell-first rollout status.
+- Old branch reference (`phase3/p3-skills-benchmarks`) replaced with active branch (`simplified-install`).
+- Status summary now distinguishes: fully done (A, B, C, D.1, D.3, D.4) vs. environment-blocked (D.2, D.5).
+
+**Key facts about the simplified-install change:**
+- Phase A (shell installer) and Phase B (npm scaffolding) are complete. No blocking implementation gaps.
+- D.2 (npm postinstall live test) is blocked: Windows host hits EBADPLATFORM; WSL has no Node runtime; v0.9.0 is not a real GitHub Release yet.
+- D.5 (publish-npm.yml token guard) is static-review only; no local Actions runner; `npm publish --dry-run` blocked by existing `gbrain@1.3.1` on public registry.
+- npm public publication stays gated behind: (1) confirmed shell-installer test on real v0.9.0 release, (2) NPM_TOKEN secret configured in repo.
+
+**Key file paths:**
+- Proposal: `openspec/changes/simplified-install/proposal.md`
+- Tasks: `openspec/changes/simplified-install/tasks.md`
+- Shell installer: `scripts/install.sh`
+- npm package: `packages/gbrain-npm/`
+- Publish workflow: `.github/workflows/publish-npm.yml`
+- Focus file: `.squad/identity/now.md`
+
+**Learning:**
+- Focus files go stale across phase transitions. Update `now.md` at the start of each new change, not just at the end of the previous one. A stale focus file misleads every agent that reads it on spawn.

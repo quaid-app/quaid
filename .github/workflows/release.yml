@@ -142,6 +142,12 @@ jobs:
           body: |
             ## Install
 
+            One-command installer:
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/${{ github.ref_name }}/scripts/install.sh | sh
+            ```
+
             Download the pre-built binary for your platform from the assets below and verify the checksum:
 
             ```bash
@@ -155,11 +161,16 @@ jobs:
 
             Or build from source: `cargo build --release`
 
-            **Supported channels:** GitHub Releases and build from source.
-            npm, Homebrew, and one-command installer scripts are not available in this release.
+            **Supported channels:** shell installer, GitHub Releases, and build from source.
+            npm packaging is staged but public publication may be skipped when `NPM_TOKEN` is not configured.
 
             ---
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload install script asset
+        run: gh release upload "${{ github.ref_name }}" scripts/install.sh#install.sh --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

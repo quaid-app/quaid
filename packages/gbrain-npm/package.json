@@ -1,0 +1,38 @@
+{
+  "name": "gbrain",
+  "version": "0.9.0",
+  "description": "GigaBrain personal knowledge brain CLI",
+  "bin": {
+    "gbrain": "bin/gbrain"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin/gbrain",
+    "scripts/postinstall.js",
+    "README.md"
+  ],
+  "keywords": [
+    "gigabrain",
+    "sqlite",
+    "mcp",
+    "knowledge-base"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/macro88/gigabrain.git"
+  }
+}

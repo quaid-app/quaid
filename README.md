@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** `v1.0.0 ready to tag` — Phase 3 complete. All reviewer gates passed (Nibbler adversarial + Scruffy reproducibility). [See the roadmap →](#roadmap)
+**Status:** `v0.9.0` test release in progress — Phase 3 is complete, and the simplified-install rollout is landing with the shell installer first. [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,7 +17,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v1.0.0`) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.0` test release) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -74,23 +74,29 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> Phase 3 is complete. Build from source today or download a pre-built binary from GitHub Releases once `v1.0.0` is tagged.
+> Phase 3 is complete. Build from source today, use GitHub Release binaries for `v0.9.0`, or try the shell installer during the current test-release cycle.
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v1.0.0` and later |
-| `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
-| One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.0` test release |
+| `npm install -g gbrain` | 🚧 Staged — package and workflow are ready, public publish follows shell-installer testing |
+| One-command curl installer | ✅ Available — `curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \| sh` |
 
-**Build from source** is available now. **GitHub Releases** (pre-built binaries) are available for `v1.0.0` and later.
+**Build from source** is available now. **GitHub Releases** and the **shell installer** are available for the `v0.9.0` test release. The npm package rollout is staged behind that shell-installer validation window.
+
+Install with the shell script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+```
 
 Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v1.0.0"
+VERSION="v0.9.0"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
@@ -113,7 +119,7 @@ cargo build --release
 # Binary at target/release/gbrain
 ```
 
-> **Deferred distribution channels.** npm global installation (`npm install -g gbrain`), Homebrew, and a one-command curl installer are planned follow-on work. They are **not part of this release** and will be proposed separately when implementation is ready.
+> **Shell-first rollout.** `v0.9.0` is the install-simplification test release: use the shell installer or GitHub Releases today. npm packaging is implemented, but public publication stays gated until the shell path is proven and `NPM_TOKEN` is configured for release automation.
 
 ---
 

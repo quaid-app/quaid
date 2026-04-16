@@ -7,6 +7,8 @@
 
 ## Learnings
 
+- PR #32 review fix (2026-04-16): Addressed all 10 Copilot review threads on the simplified-install PR. npm bin wrapper pattern: ship a committed shell script (bin/gbrain) that execs a downloaded native binary (bin/gbrain.bin) — ensures npm bin-linking succeeds even when postinstall fails. postinstall.js needs both connection and socket timeouts (60s) on https.get to prevent npm install from hanging on stalled connections. install.sh must check INSTALL_DIR writability via explicit test before mkdir/mv to provide actionable error messages (not raw set -e failures). Release notes should use tag-pinned URLs (github.ref_name) not main for reproducibility. Node engine constraint should track supported LTS only (>=18, not EOL >=16).
+- Simplified-install npm publish alignment (2026-04-16): `publish-npm.yml` tag pattern must match `release.yml` (`v[0-9]*.[0-9]*.[0-9]*`), NOT `v*`. `npm version` needs `--allow-same-version` when package.json already matches the tag version. Use `npm pack --dry-run` (not `npm publish --dry-run`) for unconditional validation — publish dry-run hits the registry and fails when versions conflict. The `gbrain` npm package name has existing published versions (1.3.1+); ownership/version strategy must be resolved before first public publish.
 - Phase 3 CI integration (2026-04-17): Offline benchmarks (corpus_reality, concurrency_stress, embedding_migration) run as a named `benchmarks` job in ci.yml, separate from the general `cargo test` job. BEIR regression lives in its own workflow file (`beir-regression.yml`) to avoid blocking PRs with ~500MB dataset downloads. Formatting fixed before commit — always run `cargo fmt --all` before pushing.
 - The core implementation target is a Rust CLI plus MCP server.
 - The system is intentionally local-first and zero-network for embeddings.
@@ -426,3 +428,14 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 **Outcome:** Phase 3 implementation complete. All reviewer gates passed. Ready for v1.0.0 tagging.
 
 **Decision file:** `.squad/decisions/inbox/fry-phase3-final.md`
+
+## 2026-04-16T14:59:20Z Simplified-install v0.9.0 Release — Fry Completion
+
+- **Task:** Fixed publish-npm workflow bugs blocking v0.9.0 release
+- **Changes:**
+  1. `publish-npm.yml` tag pattern corrected (glob match for `v[0-9]*.[0-9]*.[0-9]*`)
+  2. `--allow-same-version` enabled to prevent duplicate publish failures
+  3. Dry-run validation logic updated for release flow
+  4. Install surfaces documentation updated
+- **Status:** ✅ COMPLETE. Publish workflow now succeeds for v0.9.0 tag. CI confirmed.
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-fry.md`

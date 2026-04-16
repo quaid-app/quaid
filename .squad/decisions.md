@@ -2991,3 +2991,72 @@ The offline Rust test paths are stable, but the full reproducibility story for t
 **Priority:** Low. Do not block v1.0.0 release.
 
 **Status:** Captured in Nibbler review; deferred post-v1.0.0.
+
+## Simplified-install / v0.9.0 Release Lane (2026-04-16–2026-04-18)
+
+### 2026-04-16: npm publish workflow alignment (Fry)
+
+**What:** Fixed three bugs in .github/workflows/publish-npm.yml for v0.9.0 shell-first rollout:
+1. Tag pattern mismatch — aligned with elease.yml pattern
+2. 
+pm version idempotency — added --allow-same-version
+3. Unconditional package validation — added 
+pm pack --dry-run
+
+**Discovery:** npm package gbrain already has public versions (1.3.1). Publishing 0.9.0 requires package name strategy.
+
+**Decision:** MERGED. Workflow now handles token-present and token-absent paths.
+
+### 2026-04-16: Scruffy simplified-install validation truth
+
+**What:** Validated installer paths, normalized line endings. Keep verification honest.
+
+**Findings:** CRLF in install.sh breaks POSIX sh; Windows npm fails EBADPLATFORM; WSL lacks Node; GitHub Release didn't exist; npm package name collision.
+
+**Decision:** D.4 can close; D.2 & D.5 environment-blocked but documented.
+
+### 2026-04-16: Update Focus File for simplified-install / v0.9.0 (Leela)
+
+**What:** Updated .squad/identity/now.md to v0.9.0 shell-first focus (from v1.0.0 Phase 3 complete).
+
+**Decision:** MERGED. Team identity reflects correct milestone.
+
+### 2026-04-16: v0.9.0 Release Lane — Zapp Branch & Tag Strategy
+
+**What:** Created release/v0.9.0 branch, committed 19 files, pushed tag v0.9.0 to trigger CI.
+
+**Branch strategy:** From local HEAD to preserve unpushed fixes. Satisfies "not main" requirement.
+
+**Decision:** APPROVED. Release strategy sound.
+
+### 2026-04-18: v0.9.0 Release Lane Validation (Bender)
+
+**What:** Validated real CI execution against simplified-install proposal.
+
+**Results:**
+- Release workflow: all 4 platform builds successful, 9 assets uploaded
+- Binaries: 7.7–9.5MB each
+- npm workflow: token-guard works, publish skipped correctly
+- Asset alignment: all mappings verified
+
+**Decisions:**
+- D.5 CLOSED ✅ (token-guard proven)
+- D.2 OPEN (needs macOS/Linux runner for end-to-end npm postinstall test)
+
+**Decision:** APPROVED WITH ONE OPEN ITEM.
+
+### 2026-04-17: PR #31 Review Fixes (Fry)
+
+**What:** Addressed 5 Copilot review threads on PR #31.
+
+**Decisions:** Bumped Cargo.toml to 1.0.0; removed main from BEIR trigger; removed duplicate benchmarks job; mixed borrow/move working-as-intended.
+
+**Decision:** MERGED. PR ready for merge.
+
+### 2026-04-16: User directive — simplified-install v0.9.0 test release
+
+**By:** macro88
+
+**What:** Implement v0.9.0 test release; works without NPM_TOKEN; test shell installer first; no public npm yet.
+
+**Decision:** CAPTURED.

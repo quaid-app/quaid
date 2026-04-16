@@ -2573,3 +2573,108 @@ contradiction. No change to `alerts/SKILL.md` required.
 - Privacy behavior of `brain_gap`/`brain_gaps` around `context`
 
 **Task status:** Task 8.2 not marked complete. Different revision author required (nibbler under reviewer lockout).
+
+---
+
+## Leela Phase 3 Core Fixes Revision (leela-phase3-core-fixes-retry, 2026-04-16)
+
+**Scope:** OpenSpec task 8.1 (validate.rs + skills.rs). Response to Professor Phase 3 core review blockers.
+
+**Decisions:**
+
+### D-L1: Skills resolution is truly embedded
+
+The CLI now reads embedded skill content via `include_str!()` and labels those sources as `embedded://skills/<name>/SKILL.md`, then layers `~/.gbrain/skills` and `./skills` overrides in order. This removes cwd dependency while preserving the specified override order.
+
+**Rationale:** Phase 3 correctness gates require skill resolution to not depend on the working directory. Embedding default skills ensures deterministic behavior across execution contexts.
+
+### D-L2: Unsafe vec table names are validation violations
+
+`gbrain validate --embeddings` now treats an unsafe `embedding_models.vec_table` value as a validation violation and skips dynamic SQL in that case, preventing unsafe queries while still surfacing the problem.
+
+**Rationale:** Phase 3 correctness gates require validate to detect stale vector rowids safely. This decision preserves the spec-defined behavior while adding guardrails against false shadowing and unsafe SQL.
+
+**Task status:** Task 8.1 left for re-review by different revision author per phase 3 workflow.
+
+---
+
+## Mom Phase 3 MCP Edge-Case Fixes (mom-phase3-mcp-fixes, 2026-04-16)
+
+**Scope:** OpenSpec task 8.2 (brain_raw, brain_gap, pipe). Revision author response to Nibbler Phase 3 MCP review.
+
+**Decisions:**
+
+### D-M1: brain_raw data field restricted to JSON objects only
+
+`brain_raw` validates that `data` is a `serde_json::Value::Object` before any database work. Arrays, strings, numbers, booleans, and null are rejected with `-32602` (invalid params).
+
+**Rationale:** Raw storage semantics imply a keyed record from an external API. Arrays or scalars cannot carry the source + key structure assumed by downstream enrichment skills. Accepting them silently would corrupt the schema contract.
+
+### D-M2: brain_raw requires explicit overwrite flag to replace existing data
+
+A new `overwrite: Option<bool>` field (default `false`) is added to `BrainRawInput`. If a `(page_id, source)` row already exists and `overwrite` is not explicitly `true`, `brain_raw` returns `-32003` with a message directing the caller to set `overwrite=true`.
+
+**Rationale:** Silent `INSERT OR REPLACE` is the most dangerous path. A caller's stale write loop could silently clobber current enrichment data. The friction of an explicit flag is intentional — the caller must opt in to destructive behavior.
+
+### D-M3: brain_gap context capped at 500 characters
+
+`context` in `BrainGapInput` is validated to ≤ 500 characters. Longer values return `-32602`. The constant `MAX_GAP_CONTEXT_LEN = 500` is defined in `server.rs` alongside the other `MAX_*` constants.
+
+**Rationale:** The context field is a short clue for gap resolution — not a transcript or document. An unbounded context enables attack vectors: (1) a caller leaking raw PII or query text through the context field to bypass the query_hash-only privacy model; (2) trivial DB bloat. 500 chars is sufficient for any legitimate use.
+
+### D-M4: gbrain pipe blocks oversized JSONL lines at 5 MB
+
+`pipe.rs` checks `trimmed.len() > MAX_LINE_BYTES` (5 242 880 bytes) and emits a JSONL error line for that command, then continues processing subsequent lines. The process does not crash.
+
+**Rationale:** A single malformed or malicious super-large line must not OOM the process or block subsequent commands. The 5 MB cap matches the payload space needed for the largest plausible `brain_put` (1 MB content × safety margin). Errors are per-line, consistent with the rest of pipe's error handling contract.
+
+**Task status:** Task 8.2 left for re-review by different revision author per phase 3 workflow.
+
+---
+
+## Scruffy Phase 3 Benchmark Reproducibility Review (scruffy-phase3-benchmark-review, 2026-04-16)
+
+**Reviewer:** Scruffy  
+**Task:** OpenSpec 8.4 — verify benchmark harness reproducibility  
+**Verdict:** REJECTED
+
+### Verification Summary
+
+Ran the newly introduced offline Rust benchmark/test paths twice:
+- `cargo test --test beir_eval -- --nocapture`
+- `cargo test --test corpus_reality -- --nocapture`
+- `cargo test --test concurrency_stress -- --nocapture`
+- `cargo test --test embedding_migration -- --nocapture`
+- `./benchmarks/prep_datasets.sh --verify-only`
+
+Observed stable behavior across both passes for the runnable Rust paths. Acceptable variance: wall-clock durations shifted between runs; `Embedded ... chunks` lines interleaved differently under scheduler/test ordering.
+
+### Rejection Rationale
+
+The offline Rust test paths are stable, but the full reproducibility story for the benchmark lane is incomplete.
+
+#### Blocking Issue 1: Dataset pinning is not finalized
+
+`benchmarks/datasets.lock` carries explicit placeholder/update markers for BEIR SHA-256 values and benchmark repo commits. The file still says to "UPDATE" hashes/commits before real use — the lock is not yet a trustworthy reproducibility anchor.
+
+#### Blocking Issue 2: Prep script claims lockfile-driven behavior but hardcodes pins
+
+`benchmarks/prep_datasets.sh` says it reads pin metadata from `benchmarks/datasets.lock`, but in practice does not parse the lockfile; it embeds expected hashes/commits inline. Documented source of truth and executable source of truth can drift — exactly the silent nondeterminism this gate is supposed to catch.
+
+#### Blocking Issue 3: BEIR score reproducibility cannot be confirmed
+
+`benchmarks/baselines/beir.json` leaves `nq` and `fiqa` baseline scores as `null` with status `pending`. `tests/beir_eval.rs` returns early when no baseline is present, so the full offline regression path cannot prove identical scores yet.
+
+#### Blocking Issue 4: Benchmark docs overstate CI/release state
+
+`benchmarks/README.md` says the offline gates run in CI on every PR and that the BEIR gate runs via a dedicated CI job, but `.github/workflows/ci.yml` does not currently define those benchmark-specific jobs.
+
+### Required Revision Direction
+
+1. Finalize `benchmarks/datasets.lock` as the single real source of truth: replace placeholder SHA-256 values with verified ones; replace provisional repo-commit notes with the actual pinned commits intended for this phase.
+2. Make `benchmarks/prep_datasets.sh` consume `benchmarks/datasets.lock` instead of duplicating pins in shell constants.
+3. Establish real `nq` and `fiqa` baseline values in `benchmarks/baselines/beir.json`, then rerun the BEIR path twice and record identical scores (or explicitly justified bounded variance).
+4. Align `benchmarks/README.md` with actual workflow state in `.github/workflows/ci.yml` so the reproducibility story is operationally accurate.
+5. Re-submit task 8.4 only after the full pinned-data → prep → baseline → rerun chain is executable end-to-end.
+
+**Task status:** Task 8.4 rejected. Awaiting revision per phase 3 workflow.

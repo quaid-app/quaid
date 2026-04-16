@@ -449,3 +449,20 @@
 
 **Phase 3 progression:** Unblocked. Can proceed to cross-checks (8.1, 8.2, 8.4–8.7) and implementation (Groups 2–7).
 
+
+---
+
+## 2026-04-16 Phase 3 Task 8.1 — Core Fixes Retry (leela-phase3-core-fixes-retry)
+
+**Session:** leela-phase3-core-fixes-retry (866s, gpt-5.2-codex)  
+**Timestamp:** 2026-04-16T07:20:47Z
+
+**What happened:**
+- Task 8.1 REVISION SUBMITTED: Addressed Professor Phase 3 core review blockers.
+  - Decision D-L1: Skills resolution now truly embedded via `include_str!()` with `embedded://skills/<name>/SKILL.md` labeling. Layers `~/.gbrain/skills` and `./skills` overrides in order, removing cwd dependency.
+  - Decision D-L2: `gbrain validate --embeddings` treats unsafe `embedding_models.vec_table` values as validation violations and skips dynamic SQL in that case, preventing unsafe queries while still surfacing the problem.
+- 2 decisions merged to `decisions.md`.
+- Orchestration log written.
+- **Status:** Task 8.1 left for re-review by different revision author per phase 3 workflow (Leela under reviewer lockout).
+
+**Next:** Await Nibbler re-review before proceeding to core-lane cross-checks.

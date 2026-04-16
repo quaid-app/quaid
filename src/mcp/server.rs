@@ -355,10 +355,42 @@ pub struct BrainTagsInput {
     pub remove: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainGapInput {
+    /// Query string to log as a knowledge gap
+    pub query: String,
+    /// Optional context about the gap
+    pub context: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainGapsInput {
+    /// Include resolved gaps (default: false)
+    pub resolved: Option<bool>,
+    /// Maximum number of gaps to return (default: 20, max: 1000)
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainStatsInput {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainRawInput {
+    /// Page slug to attach raw data to
+    pub slug: String,
+    /// Source identifier (e.g. "crustdata", "exa", "meeting")
+    pub source: String,
+    /// Arbitrary JSON data to store
+    pub data: serde_json::Value,
+}
+
 #[tool(tool_box)]
 impl GigaBrainServer {
     #[tool(description = "Get a page by slug")]
-    fn brain_get(&self, #[tool(aggr)] input: BrainGetInput) -> Result<CallToolResult, rmcp::Error> {
+    pub fn brain_get(
+        &self,
+        #[tool(aggr)] input: BrainGetInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         match get_page(&db, &input.slug) {
@@ -378,7 +410,10 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Write or update a page")]
-    fn brain_put(&self, #[tool(aggr)] input: BrainPutInput) -> Result<CallToolResult, rmcp::Error> {
+    pub fn brain_put(
+        &self,
+        #[tool(aggr)] input: BrainPutInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         validate_content(&input.content)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -511,7 +546,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Hybrid semantic + FTS5 query")]
-    fn brain_query(
+    pub fn brain_query(
         &self,
         #[tool(aggr)] input: BrainQueryInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -549,7 +584,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "FTS5 full-text search")]
-    fn brain_search(
+    pub fn brain_search(
         &self,
         #[tool(aggr)] input: BrainSearchInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -565,7 +600,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List pages with optional filters")]
-    fn brain_list(
+    pub fn brain_list(
         &self,
         #[tool(aggr)] input: BrainListInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -619,7 +654,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Create a typed temporal link between two pages")]
-    fn brain_link(
+    pub fn brain_link(
         &self,
         #[tool(aggr)] input: BrainLinkInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -651,7 +686,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Close a temporal link by its database ID")]
-    fn brain_link_close(
+    pub fn brain_link_close(
         &self,
         #[tool(aggr)] input: BrainLinkCloseInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -667,7 +702,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List inbound backlinks for a page")]
-    fn brain_backlinks(
+    pub fn brain_backlinks(
         &self,
         #[tool(aggr)] input: BrainBacklinksInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -738,7 +773,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "N-hop neighbourhood graph from a page")]
-    fn brain_graph(
+    pub fn brain_graph(
         &self,
         #[tool(aggr)] input: BrainGraphInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -757,7 +792,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Run contradiction detection on a page or all pages")]
-    fn brain_check(
+    pub fn brain_check(
         &self,
         #[tool(aggr)] input: BrainCheckInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -830,7 +865,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Show timeline entries for a page")]
-    fn brain_timeline(
+    pub fn brain_timeline(
         &self,
         #[tool(aggr)] input: BrainTimelineInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -917,7 +952,7 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List, add, or remove tags on a page")]
-    fn brain_tags(
+    pub fn brain_tags(
         &self,
         #[tool(aggr)] input: BrainTagsInput,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -973,6 +1008,178 @@ impl GigaBrainServer {
         let json = serde_json::to_string_pretty(&tags)
             .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Log a knowledge gap (privacy-safe: stores query_hash, not raw query)")]
+    pub fn brain_gap(
+        &self,
+        #[tool(aggr)] input: BrainGapInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        if input.query.trim().is_empty() {
+            return Err(invalid_params("query must not be empty"));
+        }
+        let context = input.context.unwrap_or_default();
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let query_hash = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(input.query.as_bytes());
+            digest
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+
+        gaps::log_gap(&input.query, &context, None, &db).map_err(|e| {
+            rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None)
+        })?;
+
+        // Retrieve the gap ID
+        let gap_id: i64 = db
+            .query_row(
+                "SELECT id FROM knowledge_gaps WHERE query_hash = ?1",
+                [&query_hash],
+                |row| row.get(0),
+            )
+            .map_err(map_db_error)?;
+
+        let result = serde_json::json!({
+            "id": gap_id,
+            "query_hash": query_hash,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap(),
+        )]))
+    }
+
+    #[tool(description = "List knowledge gaps")]
+    pub fn brain_gaps(
+        &self,
+        #[tool(aggr)] input: BrainGapsInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let resolved = input.resolved.unwrap_or(false);
+        let limit = input.limit.unwrap_or(20).min(MAX_LIMIT) as usize;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let gap_list = gaps::list_gaps(resolved, limit, &db).map_err(|e| {
+            rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None)
+        })?;
+
+        let json = serde_json::to_string_pretty(&gap_list)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Brain statistics (page count, link count, etc.)")]
+    pub fn brain_stats(
+        &self,
+        #[tool(aggr)] _input: BrainStatsInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let page_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
+            .map_err(map_db_error)?;
+        let link_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM links", [], |row| row.get(0))
+            .map_err(map_db_error)?;
+        let assertion_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
+            .map_err(map_db_error)?;
+        let contradiction_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM contradictions WHERE resolved_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(map_db_error)?;
+        let gap_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_gaps WHERE resolved_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(map_db_error)?;
+        let embedding_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
+            .map_err(map_db_error)?;
+
+        let active_model: Option<String> = db
+            .query_row(
+                "SELECT name FROM embedding_models WHERE active = 1 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let db_size_bytes: u64 = db
+            .query_row(
+                "SELECT file FROM pragma_database_list WHERE name = 'main'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let result = serde_json::json!({
+            "page_count": page_count,
+            "link_count": link_count,
+            "assertion_count": assertion_count,
+            "contradiction_count": contradiction_count,
+            "gap_count": gap_count,
+            "embedding_count": embedding_count,
+            "active_model": active_model,
+            "db_size_bytes": db_size_bytes,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap(),
+        )]))
+    }
+
+    #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
+    pub fn brain_raw(
+        &self,
+        #[tool(aggr)] input: BrainRawInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.slug)?;
+        if input.source.is_empty() {
+            return Err(invalid_params("source must not be empty"));
+        }
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+
+        let page_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [&input.slug],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
+                    ErrorCode(-32001),
+                    format!("page not found: {}", input.slug),
+                    None,
+                ),
+                other => map_db_error(other),
+            })?;
+
+        let data_json = serde_json::to_string(&input.data)
+            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+
+        db.execute(
+            "INSERT OR REPLACE INTO raw_data (page_id, source, data, fetched_at) \
+             VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+            rusqlite::params![page_id, input.source, data_json],
+        )
+        .map_err(map_db_error)?;
+
+        let row_id = db.last_insert_rowid();
+        let result = serde_json::json!({ "id": row_id });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap(),
+        )]))
     }
 }
 
@@ -2120,6 +2327,242 @@ mod tests {
                 slug: "people/alice".to_string(),
                 add: Some(vec!["bad tag".to_string()]),
                 remove: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+    }
+
+    // ── Phase 3 MCP tests ────────────────────────────────────
+
+    // ── brain_gap ────────────────────────────────────────────
+
+    #[test]
+    fn brain_gap_with_empty_query_returns_invalid_params() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_gap(BrainGapInput {
+                query: "".to_string(),
+                context: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+    }
+
+    #[test]
+    fn brain_gap_stores_gap_with_null_query_text_and_internal_sensitivity() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let result = server
+            .brain_gap(BrainGapInput {
+                query: "who invented quantum socks".to_string(),
+                context: Some("test context".to_string()),
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(parsed["id"].as_i64().is_some());
+        assert!(parsed["query_hash"].as_str().is_some());
+
+        // Verify stored with NULL query_text and internal sensitivity
+        let db = server.db.lock().unwrap();
+        let (query_text, sensitivity): (Option<String>, String) = db
+            .query_row(
+                "SELECT query_text, sensitivity FROM knowledge_gaps WHERE id = ?1",
+                [parsed["id"].as_i64().unwrap()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(query_text.is_none());
+        assert_eq!(sensitivity, "internal");
+    }
+
+    #[test]
+    fn brain_gap_duplicate_is_idempotent() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let r1 = server
+            .brain_gap(BrainGapInput {
+                query: "same query".to_string(),
+                context: None,
+            })
+            .unwrap();
+        let r2 = server
+            .brain_gap(BrainGapInput {
+                query: "same query".to_string(),
+                context: None,
+            })
+            .unwrap();
+
+        let id1: serde_json::Value = serde_json::from_str(&extract_text(&r1)).unwrap();
+        let id2: serde_json::Value = serde_json::from_str(&extract_text(&r2)).unwrap();
+        assert_eq!(id1["id"], id2["id"]);
+    }
+
+    // ── brain_gaps ───────────────────────────────────────────
+
+    #[test]
+    fn brain_gaps_returns_array_with_limit() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        for i in 0..5 {
+            server
+                .brain_gap(BrainGapInput {
+                    query: format!("gap query {i}"),
+                    context: None,
+                })
+                .unwrap();
+        }
+
+        let result = server
+            .brain_gaps(BrainGapsInput {
+                resolved: None,
+                limit: Some(3),
+            })
+            .unwrap();
+
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(parsed.len(), 3);
+    }
+
+    #[test]
+    fn brain_gaps_defaults_to_unresolved() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        server
+            .brain_gap(BrainGapInput {
+                query: "unresolved gap".to_string(),
+                context: None,
+            })
+            .unwrap();
+
+        let result = server
+            .brain_gaps(BrainGapsInput {
+                resolved: None,
+                limit: None,
+            })
+            .unwrap();
+
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0]["resolved_at"].is_null());
+    }
+
+    // ── brain_stats ──────────────────────────────────────────
+
+    #[test]
+    fn brain_stats_returns_all_expected_fields() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        let result = server.brain_stats(BrainStatsInput {}).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(parsed["page_count"], 1);
+        assert!(parsed["link_count"].is_number());
+        assert!(parsed["assertion_count"].is_number());
+        assert!(parsed["contradiction_count"].is_number());
+        assert!(parsed["gap_count"].is_number());
+        assert!(parsed["embedding_count"].is_number());
+        assert!(parsed["active_model"].is_string());
+        assert!(parsed["db_size_bytes"].is_number());
+    }
+
+    // ── brain_raw ────────────────────────────────────────────
+
+    #[test]
+    fn brain_raw_with_unknown_slug_returns_not_found() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_raw(BrainRawInput {
+                slug: "nobody/ghost".to_string(),
+                source: "test".to_string(),
+                data: json!({"key": "value"}),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_raw_with_valid_slug_stores_row() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        let result = server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "crustdata".to_string(),
+                data: json!({"funding": "$10M", "headcount": 50}),
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(parsed["id"].as_i64().is_some());
+
+        // Verify data was stored
+        let db = server.db.lock().unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM raw_data WHERE source = 'crustdata'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn brain_raw_rejects_empty_source() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        let error = server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "".to_string(),
+                data: json!({}),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+    }
+
+    #[test]
+    fn brain_raw_rejects_invalid_slug() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_raw(BrainRawInput {
+                slug: "Invalid/SLUG!".to_string(),
+                source: "test".to_string(),
+                data: json!({}),
             })
             .unwrap_err();
 

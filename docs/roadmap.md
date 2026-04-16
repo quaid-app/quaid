@@ -70,30 +70,48 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 
 ---
 
-## Phase 2 — Intelligence Layer ⏳
+## Phase 2 — Intelligence Layer ✅
 
-**Status: Not started**  
+**Status: Complete**
+**Branch:** `phase2/p2-intelligence-layer`
 **Depends on:** Phase 1 ship gate
 
-**Planned scope:**
-- Temporal links: `brain_link`, `brain_link_close`, backlinks with `--temporal`
-- Graph neighbourhood traversal: `brain_graph`, `gbrain graph`
-- Assertions with provenance
-- Contradiction detection: `gbrain check`
-- Progressive retrieval with token budgets (full implementation)
-- Novelty checking tiers 2–4
-- Work-context page types: `decision`, `commitment`, `action_item`
-- Palace wing filtering (validated against benchmarks before committing to room-level)
-- Full MCP write surface with version checks (optimistic concurrency enforcement)
-- Optional person template enrichment sections for tier-1 contacts
+**Release:** `v0.2.0` — tag pending. All ship gates passed.
 
-**Gate:** All Phase 1 gates remain green; Phase 2 feature tests pass; no regression on BEIR baseline.
+Phase 2 adds cross-reference traversal, temporal reasoning, and memory-consolidation capabilities that separate GigaBrain from a glorified FTS5 wrapper.
+
+**Deliverables:**
+- Temporal links with validity windows: `gbrain link`, `gbrain link` close via `--valid-until`
+- N-hop graph neighbourhood traversal: `gbrain graph <slug> --depth N --temporal active|all [--json]`
+- Assertions table with provenance + heuristic contradiction detection: `gbrain check [--slug SLUG] [--all] [--json]`
+- Progressive retrieval with full token-budget gating: `gbrain query "..." --depth auto`
+- Novelty checking — ingest skips near-duplicate content (Jaccard ≥ 0.85 or cosine above threshold)
+- Palace room classification via `##`-heading-based `derive_room` in `src/core/palace.rs`
+- Knowledge gap detection and listing: `gbrain gaps [--resolved] [--limit N] [--json]`; auto-logged on low-result queries
+- Work-context page types: `decision`, `commitment`, `action_item`
+- Full MCP write surface with optimistic concurrency (version check on `brain_put`)
+- MCP Phase 2 tools: `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
+
+**Key modules added:**
+- `src/core/graph.rs` — N-hop BFS over links with temporal filtering
+- `src/core/assertions.rs` — contradiction detection via SQL assertion comparison
+- `src/core/gaps.rs` — gap logging and resolution
+- `src/commands/graph.rs`, `src/commands/check.rs`, `src/commands/gaps.rs`
+
+**Ship gate (all passed — Phase 3 unblocked):**
+1. `cargo test` passes
+2. Graph BFS returns correct N-hop neighbourhood with temporal filtering
+3. `gbrain check --all` detects conflicting assertions
+4. Novelty check rejects near-duplicate ingest (Jaccard ≥ 0.85)
+5. All Phase 2 MCP tools respond correctly
+6. No regression on BEIR baseline
 
 ---
 
 ## Phase 3 — Polish, Skills, and Benchmarks ⏳
 
 **Status: Not started**  
+**OpenSpec:** [`openspec/changes/p3-polish-benchmarks/`](../openspec/changes/p3-polish-benchmarks/)  
 **Depends on:** Phase 2 ship gate
 
 **Planned scope:**

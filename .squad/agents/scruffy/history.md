@@ -11,6 +11,14 @@
 - Proposal-first work helps define the invariants tests must guard.
 - Coverage depth is a first-class role in this squad.
 - Coverage review is not just artifact existence; README/docs must point to the same free GitHub coverage surface, and status wording must stay synchronized across repo docs.
+- Benchmark reproducibility review needs two layers: rerun offline gates twice for stable pass/fail behavior, then verify the pinned-data story is real (lockfile consumed, hashes finalized, baselines established).
+- For CI-gated benchmark reproducibility, compare pass/ignore counts across reruns and treat wall-clock durations as noise unless the harness explicitly gates latency.
+
+## 2026-04-16 Phase 3 — Benchmark Reproducibility Review (Task 8.4)
+
+- Re-ran the new offline Rust benchmark/test paths twice: `beir_eval` unit slice, `corpus_reality`, `concurrency_stress`, `embedding_migration`, plus `benchmarks/prep_datasets.sh --verify-only`.
+- Result: the runnable Rust paths were behaviorally stable across both passes; only acceptable variance was wall-clock duration and interleaving of `Embedded ... chunks` log lines under test scheduling.
+- Rejected task 8.4 anyway because the reproducibility contract is still incomplete: `benchmarks/datasets.lock` still carries placeholder hash/update notes, `prep_datasets.sh` advertises lockfile-driven pins but hardcodes values instead of reading the lock, and BEIR baselines remain `null`/`pending`, so identical benchmark scores cannot yet be verified end-to-end.
 
 ## 2026-04-14T03:59:44Z Scribe Merge (T03 completion)
 

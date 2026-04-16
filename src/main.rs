@@ -197,8 +197,18 @@ enum Commands {
     },
     /// Validate brain integrity
     Validate {
+        /// Run all checks (default if no specific flag given)
         #[arg(long)]
         all: bool,
+        /// Check link integrity
+        #[arg(long)]
+        links: bool,
+        /// Check assertion integrity
+        #[arg(long)]
+        assertions: bool,
+        /// Check embedding integrity
+        #[arg(long)]
+        embeddings: bool,
     },
     /// Start MCP stdio server
     Serve,
@@ -311,11 +321,27 @@ async fn main() -> Result<()> {
         Commands::Gaps { limit, resolved } => commands::gaps::run(&db, limit, resolved, cli.json),
         Commands::Compact => commands::compact::run(&db),
         Commands::Config { action } => commands::config::run(&db, action),
-        Commands::Validate { all } => commands::validate::run(&db, all),
+        Commands::Validate {
+            all,
+            links,
+            assertions,
+            embeddings,
+        } => {
+            let flags = if all || (!links && !assertions && !embeddings) {
+                commands::validate::CheckFlags::all()
+            } else {
+                commands::validate::CheckFlags {
+                    links,
+                    assertions,
+                    embeddings,
+                }
+            };
+            commands::validate::run(&db, &flags, cli.json)
+        }
         Commands::Serve => commands::serve::run(db).await,
         Commands::Stats => commands::stats::run(&db, cli.json),
-        Commands::Skills { action } => commands::skills::run(action),
-        Commands::Call { tool, params } => commands::call::run(&db, &tool, params).await,
-        Commands::Pipe => commands::pipe::run(&db),
+        Commands::Skills { action } => commands::skills::run(action, cli.json),
+        Commands::Call { tool, params } => commands::call::run(db, &tool, params),
+        Commands::Pipe => commands::pipe::run(db),
     }
 }

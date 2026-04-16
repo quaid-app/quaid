@@ -28,3 +28,21 @@
 **Outcome:** P3 Release docs-site component **COMPLETE**. Install page as primary CTA, PR validation on docs PRs, status aligned with README, all gates passed.
 
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — documents five docs-site polish decisions (install anchor, homepage CTA, PR validation, roadmap sync, base path verification).
+
+## 2026-04-17 Phase 3 Final — v1.0.0 Docs, Archival, PR
+
+**Role:** Docs-site Phase 3 completion, OpenSpec archival, PR creation
+
+**What happened:**
+- Updated homepage, install page, roadmap, getting-started, quick-start to reflect Phase 3 complete and v1.0.0 release-ready state.
+- Created new guide `guides/phase3-capabilities.md` — skills, validate, call, pipe, benchmarks, Phase 3 MCP tools — added to Astro sidebar.
+- Promoted Phase 3 MCP tools from stub "Other tools" note to full documented table + call examples in mcp-server guide.
+- Removed stale "Planned API" callout from CLI reference; all commands now implemented.
+- Updated README: Phase 3 complete, "Planned features" → "Features", install table shows v1.0.0 available, Contributing section updated.
+- Archived both `p3-polish-benchmarks` and `p3-skills-benchmarks` to `openspec/changes/archive/2026-04-17-*`; marked both `status: complete`.
+- Verified docs site build: 15 pages, zero errors.
+- Pushed branch and created PR #31: "Phase 3: Skills, Benchmarks, CLI Polish, and v1.0.0 Docs".
+
+**Outcome:** Phase 3 docs-site component **COMPLETE**. v1.0.0 status accurate across all public surfaces. All Phase 3 proposals archived. PR ready for Professor + Nibbler review.
+
+**Decision notes:** `.squad/decisions/inbox/hermes-phase3-site.md` — five decisions: Phase 3 guide as standalone page, simultaneous archival, "Planned API" removal, Phase 3 MCP tool promotion, README section rename.

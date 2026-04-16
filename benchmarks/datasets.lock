@@ -1,0 +1,56 @@
+# benchmarks/datasets.lock
+#
+# Pinned dataset references for reproducible benchmark runs.
+# ALL datasets MUST be pinned here — never use HEAD or floating refs in CI.
+#
+# Usage:
+#   ./benchmarks/prep_datasets.sh        # downloads & verifies
+#   ./benchmarks/prep_datasets.sh --verify-only  # check existing archives
+#
+# To update pins: download new archives, compute sha256, update here.
+
+[beir]
+# BEIR evaluation framework — v1.0.1 release
+# https://github.com/beir-cellar/beir/releases/tag/v1.0.1
+repo   = "beir-cellar/beir"
+commit = "c3334fd5b336dba03c5e3e605a82fcfb1bdf667d"
+tag    = "v1.0.1"
+
+  [beir.nq]
+  # NQ (Natural Questions) BEIR subset
+  # ~50k query set, 2.6M corpus — we use the test split (3610 queries)
+  url      = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nq.zip"
+  sha256   = "2553bf7bfbab47b1436ca00a34bce57320e18e611fd00999a2a3a1b4714be752"
+  size_mb  = 490
+  split    = "test"
+
+  [beir.fiqa]
+  # FiQA (Financial QA) BEIR subset
+  # 57k corpus, 6648 train + 648 test queries
+  url      = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip"
+  sha256   = "32c7df99ed21252fdfb2cf3f5673502a8d245ee0c44c4a133570d92ce2b3ad02"
+  size_mb  = 17
+  split    = "test"
+
+[longmemeval]
+# LongMemEval — multi-session memory benchmark
+# https://github.com/xiaowu0162/LongMemEval
+# Pinned: 2025-10-24 "Update links for key expansion and timestamped events"
+repo     = "xiaowu0162/LongMemEval"
+commit   = "982fbd7045c9977e9119b5424cab0d7790d19413"
+ref      = "main"
+data_dir = "data"
+
+[locomo]
+# LoCoMo — conversational memory benchmark (long-term, multi-session)
+# https://github.com/snap-research/locomo
+# Pinned: 2024-08-13 "Updated Readme" (latest commit on main)
+repo     = "snap-research/locomo"
+commit   = "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376"
+ref      = "main"
+data_dir = "locomo10"
+
+[ragas]
+# Ragas evaluation framework — installed via requirements.txt
+# Pinned via benchmarks/requirements.txt (pip), NOT a git clone
+version = "0.1.21"

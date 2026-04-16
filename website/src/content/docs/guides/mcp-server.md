@@ -1,10 +1,6 @@
 ---
 title: MCP Server
 description: Run `gbrain serve` and connect any MCP client over stdio JSON-RPC 2.0. Zero config — just a binary and a JSON block.
-sidebar:
-  badge:
-    text: New
-    variant: tip
 ---
 
 ## What `gbrain serve` does
@@ -85,9 +81,68 @@ Add to your MCP client config (example for Claude Code):
 | `brain_timeline` | Show structured timeline entries for a page |
 | `brain_tags` | List, add, or remove tags on a page |
 
-### Other tools
+### Phase 3 — Data management and brain health tools
 
-`brain_ingest`, `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
+| Tool | Description |
+| --- | --- |
+| `brain_gap` | Log a knowledge gap (query the brain couldn't answer) |
+| `brain_gaps` | List unresolved and resolved knowledge gaps |
+| `brain_stats` | Brain statistics (page count, link count, contradiction count, db size) |
+| `brain_raw` | Store raw structured data (API responses, JSON) for a page |
+
+---
+
+## Phase 3 tool examples
+
+### `brain_gap` — log a knowledge gap
+
+```json
+{
+  "query": "who funds acme corp?",
+  "context": "Asked during company research; no pages found."
+}
+```
+
+**Returns:** `{ "id": 42, "query_hash": "who-funds-acme" }`
+
+### `brain_gaps` — list knowledge gaps
+
+```json
+{ "resolved": false, "limit": 20 }
+```
+
+**Returns:** JSON array of gap records with `id`, `query_hash`, `context`, `confidence_score`, `sensitivity`, `resolved_at`, `detected_at`.
+
+### `brain_stats` — brain statistics
+
+```json
+{}
+```
+
+**Returns:**
+```json
+{
+  "page_count": 1234,
+  "link_count": 567,
+  "assertion_count": 890,
+  "open_gap_count": 12,
+  "embedding_count": 3456,
+  "active_model": "bge-small-en-v1.5",
+  "db_size_bytes": 52428800
+}
+```
+
+### `brain_raw` — store raw structured data
+
+```json
+{
+  "slug": "companies/acme",
+  "source": "crustdata",
+  "data": { "headcount": 320, "funding_total_usd": 45000000 }
+}
+```
+
+**Returns:** `{ "id": <row_id> }`
 
 ---
 

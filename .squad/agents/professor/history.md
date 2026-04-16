@@ -10,6 +10,7 @@
 - Review work should start from the proposal and the accepted project constraints.
 - This team expects explicit reviewer gating, not silent approval.
 - Maintainability and architectural coherence are key review criteria.
+- For CLI review, validate behavior from more than one working directory; path-dependent “embedded” resources can look correct at repo root while failing the shipped-binary contract.
 
 ## 2026-04-14 Update
 
@@ -72,3 +73,18 @@
 - **Scruffy completed graph cycle/self-loop render suppression** (commit `acd03ac`). Self-edges and cycles no longer print root back into human output. Traversal termination unchanged; human-facing contract now matches spec. All validation gates pass.
 - **Fry advancing slices:** Progressive retrieval (tasks 5.1–5.6) and assertions/check (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Token-budget logic and contradiction dedup verified. Awaiting Nibbler's final graph re-review before Phase 2 sign-off.
 
+---
+
+## 2026-04-16: Phase 3 Core Review — Rejection (tasks 8.1)
+
+**Scope:** validate.rs, skills.rs, call.rs, pipe.rs, Phase 3 MCP handlers  
+**Status:** Completed with REJECTION  
+
+**Blocked artifacts:**
+1. `src/commands/validate.rs` — missing stale-vector resolution check
+2. `src/commands/skills.rs` — incorrect embedded-vs-local skill resolution
+
+**Acceptable:** call.rs dispatch, pipe.rs continuation, Phase 3 MCP tools  
+
+**Decision:** professor-phase3-core-review.md merged to decisions.md  
+**Task 8.1:** Not marked complete; revision author must address blockers and resubmit.

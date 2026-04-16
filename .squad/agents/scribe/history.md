@@ -106,3 +106,47 @@ Scribe owns logs, orchestration records, and decision merging for GigaBrain.
 
 **Ready for git commit:** `.squad/orchestration-log/`, `.squad/log/`, `.squad/decisions.md` (merged), agent histories (updated).
 
+## 2026-04-17 Phase 3 Final Wrap-up Batch
+
+**Spawn manifest (6 agents, Phase 3 completion):**
+- ✅ Leela | Archive closure + final reconciliation | Both Phase 3 proposals archived; both reviewer gates closed
+- ✅ Fry | Phase 3 CI integration final | CI benchmarks job verified; clippy fixed; all 8 skills production-ready
+- ✅ Amy | Documentation status alignment | Docs/roadmap/getting-started updated to v1.0.0; feature count accuracy fixed
+- ✅ Hermes | Docs-site Phase 3 capabilities | New guide created; Phase 3 tools documented; README "Features" section updated
+- ✅ Nibbler | MCP adversarial review (gate 8.2) | Approved 2026-04-16; zero blocking findings; 3 low-priority follow-ups noted
+- ✅ Scruffy | Benchmark reproducibility (gate 8.4) | Approved 2026-04-17; determinism verified; all suites reproduced identically
+
+**Orchestration log written:**
+- `2026-04-17T23-59-59Z-phase3-final-wrap.md` (all 6 agents, summary, gate status)
+
+**Session log written:**
+- `2026-04-17-phase3-final-wrap.md` (Phase 3 completion outcome, decisions, follow-ups)
+
+**Inbox decisions merged (7 → canonical decisions.md):**
+1. `amy-phase3-docs.md` (D1–D6: roadmap status ✅ Complete, version targets v1.0.0, MCP tools 12→16, benchmark CI caveat, skills production-ready, two OpenSpec proposals named)
+2. `fry-phase3-final.md` (CI integration: benchmarks job, BEIR workflow separate, reviewer gates open, ship gate 8 assessment)
+3. `hermes-phase3-site.md` (D1–D5: Phase 3 capabilities guide, both proposals archived atomically, CLI reference "Planned API" removed, MCP tools table expanded, README "Planned features" → "Features")
+4. `leela-phase3-archive.md` (first pass: p3-polish archived, p3-skills held pending gates 8.2/8.4, sprint-0 orphan cleaned)
+5. `leela-phase3-final-reconcile.md` (final pass: both gates closed, p3-skills archived, tasks.md reconciled, docs updated to reflect Phase 3 complete, PR #31 body rewritten)
+6. `nibbler-phase3-review.md` (gate 8.2 APPROVED: brain_gap/brain_gaps/brain_stats/brain_raw reviewed; zero blockers; 3 low-priority follow-ups)
+7. `scruffy-phase3-repro.md` (gate 8.4 APPROVED: offline suite reproduced twice; determinism verified; all suites passed identically)
+- All 7 inbox files deleted after merge; zero deduplication conflicts
+- Decisions now complete with full Phase 3 justification trail
+
+**Cross-agent history updates:**
+- Leela: Archive closure, final reconciliation, both gates narrative
+- Fry: Phase 3 CI integration, ship gate 8 validation
+- All other agents: Implicit via decision merge and orchestration log reference
+
+**Phase 3 final status:**
+- 🔄 → ✅ **Engineering:** Complete (all tasks checked in openspec)
+- 🔄 → ✅ **Reviewer gate 8.2 (Nibbler):** APPROVED 2026-04-16 (zero blockers)
+- 🔄 → ✅ **Reviewer gate 8.4 (Scruffy):** APPROVED 2026-04-17 (determinism verified)
+- 🔄 → ✅ **Documentation:** Aligned (roadmap, README, getting-started, docs-site all reflect Phase 3 complete)
+- 🔄 → ✅ **Archival:** Both OpenSpec proposals in archive with honest status (complete)
+- 🔄 → ✅ **PR #31:** Body updated with final truth; ready for merge + v1.0.0 tagging
+
+**Ready for git commit:** `.squad/` changes only (orchestration-log, log, decisions.md merged, agent histories updated).
+
+**Next:** Git commit, merge PR #31, tag v1.0.0.
+

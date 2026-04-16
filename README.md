@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** `Phase 2 complete` — intelligence layer shipped. `v0.2.0` release pending tag push. [See the roadmap →](#roadmap)
+**Status:** `v1.0.0 ready to tag` — Phase 3 complete. All reviewer gates passed (Nibbler adversarial + Scruffy reproducibility). [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,7 +17,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Polish + release | 🔜 Not started | Benchmarks, cross-compiled binaries, fat skill finalization |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v1.0.0`) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -46,19 +46,19 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 **Thin harness, fat skills.** The binary is plumbing. The intelligence lives in `SKILL.md` files that any agent reads at session start. Workflows, heuristics, edge cases — all in plain markdown, not compiled code. Swap or extend skills without rebuilding.
 
-## Planned features
-
-> These features ship with v0.1.0. Phase 1 implementation is complete — build from source or wait for the GitHub Release binary.
+## Features
 
 - **Single static binary** — ~90MB including embedded BGE-small-en-v1.5 model weights. Zero runtime dependencies.
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
 - **Local embeddings** — BGE-small-en-v1.5 via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key, no internet
-- **MCP server** — `gbrain serve` exposes all tools over stdio JSON-RPC 2.0. Works with Claude Code, any MCP-compatible agent
+- **MCP server** — `gbrain serve` exposes all 16 tools over stdio JSON-RPC 2.0. Works with Claude Code, any MCP-compatible agent
 - **Hybrid search** — FTS5 keyword + vector semantic search with set-union merge, exact-match short-circuit, and optional palace-style hierarchical filtering
 - **Progressive retrieval** — token-budget-gated content expansion (summary → section → full page)
 - **Temporal knowledge graph** — typed links with validity windows, contradiction detection via assertions
 - **Knowledge gap tracking** — agent logs what it can't answer; research skill resolves gaps later
-- **Fat skills** — all agent workflows live in markdown SKILL.md files, embedded in the binary and overridable
+- **Fat skills** — all 8 agent workflows live in markdown SKILL.md files, embedded in the binary and overridable
+- **Integrity validation** — `gbrain validate --all` checks links, assertions, and embeddings
+- **JSONL streaming** — `gbrain pipe` for shell pipeline automation; `gbrain call` for raw MCP tool invocation
 
 ## Tech stack
 
@@ -74,25 +74,23 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> Phase 1 is complete. Build from source today or download a pre-built binary once the v0.1.0 GitHub Release is published.
+> Phase 3 is complete. Build from source today or download a pre-built binary from GitHub Releases once `v1.0.0` is tagged.
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — Phase 1 complete |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v0.1.0 tag push |
+| Build from source (`cargo build --release`) | ✅ Available now |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v1.0.0` and later |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
-**Build from source** is the only supported installation channel today. **GitHub Releases** (pre-built binaries) will ship when v0.1.0 is cut — that happens after Phase 1 gates pass and the tag is pushed.
+**Build from source** is available now. **GitHub Releases** (pre-built binaries) are available for `v1.0.0` and later.
 
-> **Not yet available.** The commands below will work once v0.1.0 is published on GitHub Releases. They are shown here so you know exactly what to run when the release lands.
-
-Download a pre-built binary from a GitHub Release (available once v0.1.0 ships):
+Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.1.0"
+VERSION="v1.0.0"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
@@ -106,7 +104,7 @@ chmod +x "${HOME}/.local/bin/gbrain"
 sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
 ```
 
-Or build from source (available now — scaffold compiles; full features land with Phase 1):
+Or build from source:
 
 ```bash
 git clone https://github.com/macro88/gigabrain
@@ -121,7 +119,7 @@ cargo build --release
 
 ## Usage
 
-> All Phase 1 and Phase 2 commands are implemented. See [`docs/spec.md`](docs/spec.md) for full command signatures.
+> All Phase 1, 2, and 3 commands are implemented. See [`docs/spec.md`](docs/spec.md) for full command signatures.
 
 ```bash
 # Create a new brain
@@ -164,6 +162,22 @@ gbrain serve
 
 # Compact WAL → single file for backup/transport
 gbrain compact
+
+# Validate brain integrity (Phase 3)
+gbrain validate --all          # all checks
+gbrain validate --links        # referential integrity only
+gbrain validate --assertions   # assertion dedup only
+gbrain validate --embeddings   # embedding model consistency only
+
+# Raw MCP tool invocation from CLI (Phase 3)
+gbrain call brain_stats '{}'
+
+# JSONL streaming mode for shell pipelines (Phase 3)
+echo '{"tool":"brain_search","input":{"query":"machine learning"}}' | gbrain pipe
+
+# Skill inspection (Phase 3)
+gbrain skills list             # list active skills and resolution order
+gbrain skills doctor           # verify skill hashes and shadowing
 ```
 
 ## MCP integration
@@ -186,11 +200,15 @@ Add to your MCP client config (e.g. Claude Code):
 
 **Phase 2 tools (intelligence layer):** `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
 
-All 12 tools are available when you run `gbrain serve`.
+**Phase 3 tools (gaps, stats, raw data):** `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
+
+All 16 tools are available when you run `gbrain serve`.
 
 ## Skills
 
 Skills are markdown files that tell agents how to use GigaBrain. They live in `skills/` and are embedded in the binary by default, extracted to `~/.gbrain/skills/` on first run. Drop a custom `SKILL.md` in your working directory to override any default.
+
+All 8 skills are production-ready as of Phase 3.
 
 | Skill | Purpose |
 | ----- | ------- |
@@ -205,6 +223,9 @@ Skills are markdown files that tell agents how to use GigaBrain. They live in `s
 
 ```bash
 # Check active skills and resolution order
+gbrain skills list
+
+# Verify skill hashes and shadowing
 gbrain skills doctor
 ```
 
@@ -216,23 +237,22 @@ The `original` type is for your own thinking — distinct from world knowledge. 
 
 ## Contributing
 
-GigaBrain is actively looking for contributors as Phase 1 begins.
+GigaBrain is open for contributions. All three phases have shipped. Phase 3 (`v1.0.0`) is complete.
 
 **How we work:**
 
 1. **Read the spec first.** [`docs/spec.md`](docs/spec.md) is the authoritative design document — schema, algorithms, CLI surface, skill design, benchmarks. Everything is defined there.
 2. **Proposals before code.** Every meaningful change (code, docs, tests, benchmarks) requires an OpenSpec change proposal in [`openspec/changes/`](openspec/changes/) following the instructions in [`openspec/`](openspec/). This is the design record before implementation.
-3. **Check the phase proposals.** The four phase proposals in `openspec/changes/` define the full scope and acceptance criteria for each phase. Pick up work that aligns with the current active phase.
+3. **Check the archived proposals.** Phase proposals in [`openspec/changes/archive/`](openspec/changes/archive/) are the full design record for all shipped phases.
 4. **CI gates everything.** PRs must pass `cargo check` + `cargo test` before review.
 
-**Good first contributions for Sprint 0 / Phase 1 prep:**
-- Review the [`sprint-0-repo-scaffold`](openspec/changes/sprint-0-repo-scaffold/proposal.md) and [`p1-core-storage-cli`](openspec/changes/p1-core-storage-cli/proposal.md) proposals and raise questions in issues
-- Improve skill stub content in [`skills/`](skills/)
-- Add fixture pages to [`tests/fixtures/`](tests/fixtures/)
+**Good first contributions:**
+- Improve skill content in [`skills/`](skills/) — override patterns, edge-case guidance
+- Add fixture pages to [`tests/fixtures/`](tests/fixtures/) for expanded benchmark coverage
+- Contribute advisory benchmark results (LongMemEval, LoCoMo, Ragas) from your own environment
 
 **Ground rules:**
-- No implementation PRs until the Sprint 0 PR merges to `main`
-- Keep PRs scoped to a single phase concern
+- Keep PRs scoped to a single concern
 - Document decisions — don't leave reasoning in PR comments alone
 
 ---

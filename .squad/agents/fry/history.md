@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- Phase 3 CI integration (2026-04-17): Offline benchmarks (corpus_reality, concurrency_stress, embedding_migration) run as a named `benchmarks` job in ci.yml, separate from the general `cargo test` job. BEIR regression lives in its own workflow file (`beir-regression.yml`) to avoid blocking PRs with ~500MB dataset downloads. Formatting fixed before commit — always run `cargo fmt --all` before pushing.
 - The core implementation target is a Rust CLI plus MCP server.
 - The system is intentionally local-first and zero-network for embeddings.
 - Every meaningful implementation starts with an OpenSpec proposal.
@@ -24,6 +25,7 @@
 - PR #15 review fix (2026-04-15): Addressed all 9 Copilot review comments. Install snippets across README, install.md, quick-start.md, spec.md, and release.yml now offer both `~/.local/bin` (user-local) and `sudo` (system-wide) install options. Removed inaccurate "embedded model weights" claims; install.md now documents the actual cached-HF / online-model / hash-shim behavior. Fixed typo and consolidated duplicate `## Learnings` headings in zapp history. All 9 threads replied to and resolved.
 - Graph BFS (Phase 2): bidirectional traversal (outbound + inbound links) with link-ID edge dedup via `HashSet<i64>` prevents duplicate edges in the result. The `prepare_cached()` API reuses compiled SQL across BFS iterations. Graph types live in `src/core/graph.rs` (not types.rs) because they're graph-specific. The CLI `--temporal` flag defaults to `"current"` which maps to `TemporalFilter::Active`.
 - Integration tests use `gbrain::` crate path via `src/lib.rs` (which re-exports `pub mod commands; pub mod core; pub mod mcp;`). Test helper pattern: `open_test_db()` returns a Connection with `std::mem::forget(dir)` to prevent TempDir cleanup during test.
+- PR #31 review fix (2026-04-17): Addressed 5 review threads. Bumped Cargo.toml 0.2.0→1.0.0, removed `main` from BEIR regression push trigger (release-only intent), removed duplicate `benchmarks` job in ci.yml. The `src/main.rs` mixed borrow/move comment was invalid — Rust match arms are exclusive so borrowing `&db` in some arms and moving `db` in others compiles fine. `serve`/`call`/`pipe` need ownership because `GigaBrainServer::new()` takes `Connection` by value.
 
 ## Core Context
 
@@ -388,3 +390,39 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - Contradiction dedup should only match unresolved rows; resolved contradictions must allow re-detection
 - MCP tool parameter matching should always normalize case before string comparison
 
+- Phase 3 OpenSpec (p3-skills-benchmarks) scoped and authored: 5 skill completions, 4 CLI stubs, 4 MCP tools, benchmark harnesses
+- p3-polish-benchmarks covers release/docs/coverage only — separate from this feature work
+- 4 MCP tools remain unimplemented: brain_gap, brain_gaps, brain_stats, brain_raw (all Phase 3)
+- validate.rs uses modular checks (--links, --assertions, --embeddings, --all) for targeted integrity verification
+- Benchmark strategy: Rust for offline CI gates, Python for advisory API-dependent benchmarks (LongMemEval, LoCoMo, Ragas)
+- Phase 3 wave 1 (groups 2-4) completed: all 4 CLI stubs replaced with working implementations (validate, call, pipe, skills), 4 MCP tools added (brain_gap, brain_gaps, brain_stats, brain_raw), --json wired for validate/skills. 273 tests passing.
+- `call.rs` uses a central `dispatch_tool()` function that maps tool names to MCP handler methods — reused by `pipe.rs` for JSONL streaming
+- `#[tool(tool_box)]` macro doesn't make methods pub — had to add explicit `pub` to all 16 brain_* methods for call.rs dispatch
+- `skills.rs` resolves skills in 3 layers: embedded (./skills/) → user-global (~/.gbrain/skills/) → local working directory, with later layers shadowing earlier ones
+- validate tests that create dangling FK references must use `PRAGMA foreign_keys = OFF` to insert then delete, since FK enforcement prevents direct dangling inserts
+- `dirs` crate added as dependency for `skills.rs` home directory resolution
+
+## 2026-04-16T06:25:29Z — Phase 3 Core Complete
+
+**Spawn:** fry-phase3-core (claude-opus-4.6, background, 1913s)
+
+**Work:** Completed Phase 3 groups 2-4 (Skills, Benchmarks, MCP Tools). Replaced all four CLI stubs (validate, call, pipe, skills), added 4 MCP tools (brain_gap, brain_gaps, brain_stats, brain_raw), added 16 new tests, marked 14 tasks done in openspec. Zero todo!() stubs remain in src/commands/. Clippy and fmt clean.
+
+**Decisions:** 4 decisions logged to .squad/decisions.md (call.rs dispatch, pub methods, dirs crate, INSERT OR REPLACE).
+
+**Status:** ✅ Ready for Phase 3 review cycle.
+
+## 2026-04-17 Phase 3 CI Integration Final
+
+**What was done:**
+- Verified and extended benchmarks job in `.github/workflows/ci.yml` (task 7.1 implementation)
+- Fixed two ship-gate regressions before archival:
+  1. Added missing `benchmarks` job to ci.yml (task 7.1 noted complete but job was absent)
+  2. Fixed 2 clippy violations in tests/concurrency_stress.rs (doc-overindented-list-items, let-and-return)
+- All 8 SKILL.md files verified production-ready (no stubs)
+- 16 MCP tools registered and tested
+- Ship gate 8 validated clean
+
+**Outcome:** Phase 3 implementation complete. All reviewer gates passed. Ready for v1.0.0 tagging.
+
+**Decision file:** `.squad/decisions/inbox/fry-phase3-final.md`

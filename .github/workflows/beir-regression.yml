@@ -1,0 +1,53 @@
+name: BEIR Regression Gate
+
+on:
+  push:
+    branches: ["release/**"]
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      subset:
+        description: "Dataset subset to evaluate (all, nq, fiqa)"
+        required: false
+        default: "all"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  beir:
+    name: BEIR nDCG@10 Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-beir-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache benchmark datasets
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/datasets
+          key: beir-datasets-${{ hashFiles('benchmarks/datasets.lock') }}
+
+      - name: Download pinned datasets
+        run: |
+          chmod +x benchmarks/prep_datasets.sh
+          ./benchmarks/prep_datasets.sh ${{ github.event.inputs.subset || 'all' }}
+
+      - name: Run BEIR regression tests
+        run: |
+          cargo test --release --test beir_eval -- --ignored --nocapture

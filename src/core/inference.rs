@@ -452,7 +452,7 @@ fn active_model(conn: &Connection) -> Result<(String, String), SearchError> {
     })
 }
 
-pub(crate) fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(std::mem::size_of_val(embedding));
     for value in embedding {
         blob.extend_from_slice(&value.to_le_bytes());

@@ -1,0 +1,53 @@
+# GigaBrain Advisory Benchmark Requirements
+#
+# Python dependencies for the advisory benchmark harnesses.
+# These benchmarks run manually before major releases — they require API keys
+# and/or a local Ollama instance. They are NOT required for CI.
+#
+# Install:
+#   pip install -r benchmarks/requirements.txt
+#
+# Recommended: use a virtual environment
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r benchmarks/requirements.txt
+
+# ── BEIR evaluation framework ─────────────────────────────────────────────
+# Used by beir_eval.py adapter (Python path) — Rust path uses the harness
+# in tests/beir_eval.rs with raw JSONL parsing.
+beir==1.0.1
+
+# ── Ragas — retrieval-augmented generation quality metrics ────────────────
+# Evaluates: context_precision, context_recall, faithfulness
+# Supports both OpenAI and Ollama as LLM judges.
+ragas==0.1.21
+
+# ── LangChain — Ragas integration adapter ─────────────────────────────────
+langchain==0.2.16
+langchain-openai==0.1.23
+langchain-community==0.2.16
+
+# ── Datasets — HuggingFace datasets loader ────────────────────────────────
+datasets==3.0.1
+
+# ── OpenAI — LLM judge for Ragas (optional: use Ollama instead) ──────────
+openai==1.50.2
+
+# ── Numpy / Pandas — evaluation helpers ──────────────────────────────────
+numpy==1.26.4
+pandas==2.2.3
+
+# ── Tqdm — progress bars ─────────────────────────────────────────────────
+tqdm==4.66.5
+
+# ── Requests — HTTP calls to gbrain API or Ollama ────────────────────────
+requests==2.32.3
+
+# ── LoCoMo evaluation helpers ─────────────────────────────────────────────
+# LoCoMo uses ROUGE-L and token-level F1, no extra pip package required.
+# rouge-score is included for F1 approximation.
+rouge-score==0.1.2
+
+# ── Ollama (optional LLM judge alternative to OpenAI) ─────────────────────
+# Install Ollama separately: https://ollama.ai
+# Pull a model: ollama pull llama3.2
+# No pip package — uses HTTP API via requests

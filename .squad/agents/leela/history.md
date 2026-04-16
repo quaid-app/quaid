@@ -98,6 +98,27 @@
 **Patterns learned:**
 - `openspec status --change "<name>" --json` is the canonical check for artifact readiness
 - spec-driven schema requires: proposal → design → specs/**/*.md → tasks.md (in dependency order)
+
+## Phase 3 Archive and Final Reconciliation — 2026-04-17
+
+**What was done:**
+- Conducted two archive passes on `p3-skills-benchmarks` and `p3-polish-benchmarks`
+- First pass (leela-phase3-archive.md): Archived p3-polish-benchmarks; held p3-skills-benchmarks pending gates 8.2 and 8.4
+- Second pass (leela-phase3-final-reconcile.md): Both gates closed; finalized p3-skills-benchmarks archive
+- Updated all documentation (README, roadmap, roadmap.md on docs-site) to reflect "Phase 3 complete"
+- Updated PR #31 body with final truth: both proposals archived, both gates passed, ready to merge and tag v1.0.0
+- Cleaned up sprint-0 orphan active copy
+
+**Key decisions:**
+- Archive only when gates are genuinely closed (not before)
+- Docs must reflect honest project state ("pending" → "complete" only after gates pass)
+- Atomicity: both Phase 3 proposals archived in same commit with docs for revert consistency
+
+**Outcome:** Phase 3 engineering and documentation complete. Both OpenSpec proposals in archive. PR #31 ready for merge + v1.0.0 tagging.
+
+**Files filed:**
+- `.squad/decisions/inbox/leela-phase3-archive.md` (first pass — gate hold rationale)
+- `.squad/decisions/inbox/leela-phase3-final-reconcile.md` (final pass — both gates closed, archive finalized)
 - `openspec instructions <artifact-id> --change "<name>" --json` gives template + rules for each artifact
 - Tasks must use `- [ ] N.M description` format or apply won't track them
 - GitHub issues and OpenSpec both drive work intake.
@@ -384,6 +405,15 @@
 - Orchestration logs written for each completed agent
 - Session log recorded
 - Decision inbox merged to decisions.md (14 items)
+
+## 2026-04-17 P3 Archive Finalization
+
+**What was done:**
+- Reviewed uncommitted diff across all three `p3-polish-benchmarks` archive files. Changes were truthful and correct: `status: complete` → `status: shipped`, added `archived: 2026-04-17` frontmatter, Ship Gate section in tasks.md, and curly-quote normalization.
+- Committed and pushed to `phase3/p3-skills-benchmarks`. Branch now clean and fully synced with origin; PR #31 reflects final state.
+
+**Learning:**
+- When a Scribe commit lands ahead of an archive update, always inspect the remaining diff before committing — the changes may be a mix of trivial normalization and meaningful metadata corrections, both worth keeping.
 - Cross-agent history updates applied
 
 **Outcome:** Phase 2 architecture **COMPLETE**. Blockers visible to all teams. PR #22 open and in review queue. Team can execute Phase 2 implementation with clear gates and parallel lanes.
@@ -409,3 +439,97 @@
 6. **No CI wait:** Did not wait for CI binary builds before creating the release — per task spec, the workflow picks up the tag automatically.
 
 **Outcome:** v0.2.0 live at https://github.com/macro88/gigabrain/releases/tag/v0.2.0. Release is marked Latest. Tag v0.2.0 pushed. Version bump committed to main.
+
+## 2026-04-17 Phase 3 Task 8.3 — Skills Review
+
+**Role:** Reviewer (task 8.3)
+
+**What happened:**
+- Reviewed all five Phase 3 SKILL.md files for completeness, clarity, and agent-executability.
+- All five approved: briefing, alerts, research, upgrade, enrich.
+- Resolved the 30-day vs. 90-day stale threshold discrepancy Amy flagged.
+
+**Stale threshold ruling:**
+- Spec scenario (`specs/skills/spec.md` line 28) says **30 days** — this is the BDD scenario and governs.
+- Task 1.2 description text said "90 days" — this was an authoring error in the task summary, not the spec.
+- `alerts/SKILL.md` uses 30 days → **correct**. No change to skill file required.
+- Corrected task 1.2 description text in `tasks.md` from ">90 days" to ">30 days (timeline_updated_at > truth_updated_at by 30+ days)".
+
+**Task 8.3 marked `[x]` in tasks.md.**
+
+**Decision note written to:** `.squad/decisions/inbox/leela-phase3-skills-review.md`
+
+**Learnings:**
+- When a spec has both BDD scenarios and task description summaries, the BDD scenario is the governing contract. Task descriptions are prose summaries that can drift. Always resolve conflicts by reading the scenario block directly.
+- A "thin harness, fat skills" SKILL.md needs exactly four elements to be agent-executable: (1) exact command sequences, (2) configurable parameters table, (3) failure modes table, and (4) explicit statements on what the skill does NOT do automatically. All five Phase 3 skills contain all four.
+- Approval workflow dependencies (like `brain_gap_approve`) that are not yet binary commands must be explicitly documented as such in the skill — without that note, an agent will try to shell-exec them and fail silently.
+
+---
+
+## 2026-04-16 Phase 3 Skills Review Complete — Task 8.3
+
+**Session:** leela-phase3-skills-review (176s, claude-sonnet-4.6)  
+**Timestamp:** 2026-04-16T06:02:45Z
+
+**What happened:**
+- Task 8.3 APPROVED: All five Phase 3 SKILL.md files pass completeness, clarity, and agent-executability review.
+- Stale threshold: **30 days (per spec scenario line 28, not 90 days).**
+- Task 1.2 corrected in `tasks.md` from >90 days to >30 days.
+- Decision merged to `decisions.md`. Orchestration log written.
+
+**Phase 3 progression:** Unblocked. Can proceed to cross-checks (8.1, 8.2, 8.4–8.7) and implementation (Groups 2–7).
+
+
+---
+
+## 2026-04-16 Phase 3 Task 8.1 — Core Fixes Retry (leela-phase3-core-fixes-retry)
+
+**Session:** leela-phase3-core-fixes-retry (866s, gpt-5.2-codex)  
+**Timestamp:** 2026-04-16T07:20:47Z
+
+**What happened:**
+- Task 8.1 REVISION SUBMITTED: Addressed Professor Phase 3 core review blockers.
+  - Decision D-L1: Skills resolution now truly embedded via `include_str!()` with `embedded://skills/<name>/SKILL.md` labeling. Layers `~/.gbrain/skills` and `./skills` overrides in order, removing cwd dependency.
+  - Decision D-L2: `gbrain validate --embeddings` treats unsafe `embedding_models.vec_table` values as validation violations and skips dynamic SQL in that case, preventing unsafe queries while still surfacing the problem.
+- 2 decisions merged to `decisions.md`.
+- Orchestration log written.
+- **Status:** Task 8.1 left for re-review by different revision author per phase 3 workflow (Leela under reviewer lockout).
+
+**Next:** Await Nibbler re-review before proceeding to core-lane cross-checks.
+
+---
+
+## 2026-04-17 Phase 3 Archive Pass — Leela Sync
+
+**Session:** leela-phase3-archive  
+**Timestamp:** 2026-04-17
+
+**What happened:**
+- Audited three OpenSpec changes: `p3-skills-benchmarks`, `p3-polish-benchmarks`, `sprint-0-repo-scaffold`.
+- Found two actual regressions that tasks.md had marked complete but were not:
+  1. `ci.yml` missing `benchmarks` job (task 7.1 note was aspirational — added the job for real)
+  2. `cargo clippy` failing with 2 violations in `tests/concurrency_stress.rs` (task 8.6 was wrong — fixed both)
+- Removed a false pre-existing archive: `openspec/changes/archive/2026-04-17-p3-skills-benchmarks/` had `status: complete` but 8.2 and 8.4 open. Removed. Active copy now source of truth.
+- Archived `p3-polish-benchmarks` (all tasks genuinely complete) → `openspec/changes/archive/2026-04-17-p3-polish-benchmarks/`.
+- Cleaned up `sprint-0-repo-scaffold` active copy (archive from 2026-04-15 was already present).
+- Left `p3-skills-benchmarks` active: 8.2 Nibbler MCP adversarial review and 8.4 Scruffy benchmark reproducibility check are genuinely open.
+- Updated README.md and website roadmap from "✅ Complete" to honest "🔄 Implementation complete — reviewer sign-off pending."
+- Updated `now.md` to reflect current team focus: Nibbler and Scruffy reviewer gates.
+- Created `openspec/changes/p3-skills-benchmarks/` and `p3-polish-benchmarks/` artifact files on disk (they only existed as input artifacts, not in the filesystem).
+
+**Decisions filed:** `.squad/decisions/inbox/leela-phase3-archive.md`
+
+## Learnings
+
+- **Tasks.md notes can be forward-looking lies.** When a task note says "✓ Added X", always verify X exists in the codebase before accepting it. Optimistic notes written by a previous session are not the same as completed work.
+- **Archiving with open gates is an honesty violation.** A pre-existing archive had `status: complete` but two open reviewer checkboxes. The archive process must check the actual task status, not just copy files. Removed the false archive.
+- **OpenSpec artifact files may not exist on disk even when listed as input artifacts.** The input artifact system passes file content as context; the actual filesystem files may be absent. Always check with PowerShell before trying to edit.
+- **False archive removal is the right call when reviewer gates are genuinely open.** The team gate system (Nibbler adversarial review, Scruffy reproducibility verification) has real engineering value. Archiving before those gates close removes accountability and prevents the review from happening.
+
+## Learnings — Phase 3 Final Reconcile (2026-04-17)
+
+- **Inbox decisions confirm gate closure; tasks.md must reflect it.** Nibbler and Scruffy filed inbox decisions that closed their gates. The tasks.md still had `[ ] 8.2` — inbox decisions don't self-propagate into task checklists. Always update tasks.md to reflect closed gates before archiving.
+- **Archive/active split is a binary state.** The correct resolution for "active copy untracked + archive deleted" is: update active tasks, restore archive from HEAD, overwrite with updated files, delete active. There is never a valid "both exist" state.
+- **PR body must be the last thing updated, not the first.** It reflects the final state of the branch. Updating docs, archiving, and committing first ensures the PR body accurately describes what is actually in the branch.
+- **The `.squad/decisions/inbox/` is gitignored by design.** Decision records there are local-only scratchpads; they don't need to be committed. This is correct — they serve the team's working session, not the permanent repo record.
+- **`git restore <dir>` correctly restores all deleted tracked files under that path.** Useful for recovering a previously-archived set of files that were deleted in the working tree.

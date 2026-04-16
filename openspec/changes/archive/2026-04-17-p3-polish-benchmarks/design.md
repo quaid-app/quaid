@@ -1,6 +1,6 @@
 ## Context
 
-`p3-polish-benchmarks` started life as a catch-all “finish everything left in Phase 3” proposal:
+`p3-polish-benchmarks` started life as a catch-all "finish everything left in Phase 3" proposal:
 skills finalization, benchmark harnesses, release tooling, and public polish. That scope is too wide for the work that is actually ready to land now.
 
 The current repo state shows a narrower, reviewable problem:
@@ -9,7 +9,7 @@ The current repo state shows a narrower, reviewable problem:
 - `.github/workflows/docs.yml` deploys the site from `website/`, but the public docs/release story is not yet organized around current status, install paths, and contribution entry points.
 - `.github/workflows/release.yml` already builds assets and checksums, but the public-facing contract around names, docs, and review sign-off is not explicit enough.
 
-This change therefore focuses on the release-facing surface the team can complete now: honest docs, free coverage on `main`, docs-site improvements, and GitHub Release polish. Broader benchmark and “new distribution channel” work remains real, but is explicitly deferred.
+This change therefore focuses on the release-facing surface the team can complete now: honest docs, free coverage on `main`, docs-site improvements, and GitHub Release polish. Broader benchmark and "new distribution channel" work remains real, but is explicitly deferred.
 
 ## Goals / Non-Goals
 
@@ -18,7 +18,7 @@ This change therefore focuses on the release-facing surface the team can complet
 - Make README, docs-site, and release workflow tell the same story about current product status and supported install paths.
 - Add a free, visible coverage path for pushes to `main` and PRs targeting `main`.
 - Give Fry, Amy, Hermes, and Zapp clear ownership boundaries and review hand-offs.
-- Keep npm global distribution and “simple installer” UX visible as future work without pretending they already ship.
+- Keep npm global distribution and "simple installer" UX visible as future work without pretending they already ship.
 
 **Non-Goals:**
 - Implement the remaining Phase 3 skills (`briefing`, `alerts`, `research`, `upgrade`, `enrich`) in this change.
@@ -28,11 +28,11 @@ This change therefore focuses on the release-facing surface the team can complet
 
 ## Decisions
 
-### 1. Split “ready now” release work from later benchmark/distribution work
+### 1. Split "ready now" release work from later benchmark/distribution work
 
 **Decision:** `p3-polish-benchmarks` becomes the release/docs/coverage/docs-site slice and is no longer the umbrella for every remaining Phase 3 idea.
 
-**Rationale:** The current blocker is not “benchmarks are unfinished”; it is that public release posture is fragmented. Narrowing the change makes `openspec apply` usable and keeps implementation reviewable.
+**Rationale:** The current blocker is not "benchmarks are unfinished"; it is that public release posture is fragmented. Narrowing the change makes `openspec apply` usable and keeps implementation reviewable.
 
 **Alternative considered:** Keep the original benchmark-heavy proposal and just append docs tasks. Rejected because the change would remain too large and would continue to mix ready-now work with not-yet-ready follow-ons.
 
@@ -48,11 +48,11 @@ This change therefore focuses on the release-facing surface the team can complet
 
 **Decision:** The coverage implementation should generate coverage on GitHub Actions for pushes to `main` and PRs to `main`, publish machine-readable output plus a human-readable surface through GitHub-native artifacts/job summaries, and treat any optional third-party upload as non-blocking.
 
-**Rationale:** The requirement is “free coverage on push to main,” not “buy or depend on a paid dashboard.” GitHub-hosted outputs guarantee the repo always has a visible coverage surface even if an external service is unavailable.
+**Rationale:** The requirement is "free coverage on push to main," not "buy or depend on a paid dashboard." GitHub-hosted outputs guarantee the repo always has a visible coverage surface even if an external service is unavailable.
 
 **Alternative considered:** Third-party-only coverage (for example, a hosted dashboard with no GitHub artifact fallback). Rejected because it creates an avoidable availability and policy dependency.
 
-### 4. Make public docs explicitly distinguish “supported now” vs “planned later”
+### 4. Make public docs explicitly distinguish "supported now" vs "planned later"
 
 **Decision:** README and docs-site content must present a three-way contract:
 1. supported now,
@@ -86,7 +86,7 @@ This change therefore focuses on the release-facing surface the team can complet
 - **[Coverage tool choice introduces CI churn]** → Mitigation: keep the spec on outputs and free availability; Fry can choose the exact Rust coverage tool as long as it satisfies the contract and runs in existing GitHub Actions.
 - **[Docs can drift again if README and website evolve separately]** → Mitigation: define a single public status/install matrix and require both surfaces to match it.
 - **[Docs workflow may deploy stale messaging if it only watches `website/**`]** → Mitigation: Hermes should either expand triggers/build inputs or document the source-of-truth sync path explicitly.
-- **[Release/docs polish may be mistaken for “all release work is done”]** → Mitigation: keep benchmark work and npm/installer work called out as explicit non-goals/follow-ons in docs and release notes.
+- **[Release/docs polish may be mistaken for "all release work is done"]** → Mitigation: keep benchmark work and npm/installer work called out as explicit non-goals/follow-ons in docs and release notes.
 - **[Scope narrowing could leave orphaned benchmark work]** → Mitigation: record the deferral in a decision note and in the proposal/design non-goals so later planning can pick it up cleanly.
 
 ## Migration Plan

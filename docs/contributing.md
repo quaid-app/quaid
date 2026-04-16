@@ -41,6 +41,7 @@ gigabrain/
 │   │   ├── import.rs, export.rs, ingest.rs
 │   │   ├── link.rs, graph.rs, timeline.rs
 │   │   ├── gaps.rs, check.rs
+│   │   ├── validate.rs, call.rs, pipe.rs, skills.rs
 │   │   ├── serve.rs, compact.rs, config.rs, version.rs
 │   │   └── tags.rs
 │   └── mcp/
@@ -91,7 +92,7 @@ cargo install cross
 cross build --release --target x86_64-unknown-linux-musl
 ```
 
-CI runs `cargo check` and `cargo test` on every pull request. Both must pass before a PR can merge.
+CI runs `cargo check` and `cargo test` on every pull request. Both must pass before a PR can merge. Phase 3 also runs offline benchmark tests (`corpus_reality`, `concurrency_stress`, `embedding_migration`) on every PR.
 
 ---
 
@@ -243,12 +244,13 @@ Each phase has designated reviewers before it can ship:
 
 | Reviewer | Responsibilities |
 | -------- | ---------------- |
-| Professor | Code review on `db.rs`, `search.rs`, `inference.rs`; graph BFS correctness, OCC conflict protocol |
-| Nibbler | Adversarial review on MCP server (OCC enforcement, injection safety); contradiction evasion |
+| Professor | Code review on `db.rs`, `search.rs`, `inference.rs`; graph BFS correctness, OCC conflict protocol; `validate.rs` SQL integrity checks |
+| Nibbler | Adversarial review on MCP server (OCC enforcement, injection safety); contradiction evasion; Phase 3: `brain_gap`, `brain_raw` input validation |
 | Bender | End-to-end round-trip validation sign-off; ingest conflicting sources → contradiction detected |
-| Scruffy | Unit test coverage on markdown parser and search merge logic |
+| Scruffy | Unit test coverage on markdown parser and search merge logic; Phase 3: benchmark reproducibility sign-off |
 | Mom | Temporal link edge cases, cyclic graph queries, zero-hop graph |
-| Kif | Palace wing filtering benchmark — wing-level filter reduces latency without precision drop |
+| Kif | Palace wing filtering benchmark — wing-level filter reduces latency without precision drop; Phase 3: BEIR, LongMemEval, LoCoMo, Ragas harnesses |
+| Leela | Phase 3: all 5 new SKILL.md files reviewed for completeness, clarity, and agent-executability |
 
 ---
 

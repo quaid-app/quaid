@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 2 is complete.** The intelligence layer — graph traversal, contradiction detection, progressive retrieval, novelty checking, and knowledge gaps — has shipped. Build from source to use all features now.
+> **Phase 3 is in progress.** Skills, benchmarks, and CLI polish are substantially complete on `phase3/p3-skills-benchmarks`. CI gates and final review are pending before `v1.0.0` ships.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -25,8 +25,8 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — Phase 1 complete |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v0.1.0 tag push |
+| Build from source (`cargo build --release`) | ✅ Available now — Phases 1–3 implementation complete |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v1.0.0 tag push |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
@@ -57,7 +57,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first brain
 
-> Phase 1 commands are implemented and available. Build from source to use them now; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use all features now; see [Status](#status) and [Install options](#install-options) above.
 
 ### 1. Initialize
 
@@ -156,7 +156,9 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Phase 2 tools (intelligence layer):** `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
 
-All 12 tools are live. See [spec.md](spec.md#mcp-server) for tool signatures.
+**Phase 3 tools (gaps, stats, raw data):** `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
+
+All 16 tools are live. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
@@ -164,8 +166,11 @@ All 12 tools are live. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 Skills are markdown files that tell agents _how_ to use GigaBrain. The binary embeds default skills and extracts them to `~/.gbrain/skills/` on first run. Drop a custom `SKILL.md` in your working directory to override any default.
 
+All 8 skills are production-ready as of Phase 3.
+
 ```bash
-gbrain skills doctor   # show active skills and resolution order
+gbrain skills list     # show all active skills with source paths
+gbrain skills doctor   # verify skill hashes and detect shadowing
 ```
 
 | Skill | Purpose |
@@ -273,6 +278,64 @@ Example output:
 ```
 
 Use the `skills/research/` skill to resolve gaps: the research workflow queries external sources, writes new pages, and calls `brain_gap` to mark each gap resolved.
+
+---
+
+## Phase 3: Validation, scripting, and skills
+
+> Phase 3 commands are implemented. Build from source to use them.
+
+### Database integrity validation
+
+Check the brain for broken links, duplicate assertions, or stale embeddings:
+
+```bash
+# Run all integrity checks
+gbrain validate --all
+
+# Targeted checks
+gbrain validate --links        # referential integrity and interval overlaps
+gbrain validate --assertions   # assertion dedup and supersession chains
+gbrain validate --embeddings   # embedding model consistency
+
+# JSON output for scripting
+gbrain validate --all --json
+```
+
+Example output:
+```
+[links] OK — 14 links checked, 0 violations
+[assertions] 1 violation: duplicate assertion subject=people/alice predicate=employer
+[embeddings] OK — 312 chunks checked, active model consistent
+1 violation(s) found.
+```
+Exit 0 means clean; exit 1 means violations were found.
+
+### Raw MCP tool invocation
+
+Call any MCP tool directly from the CLI without starting the server:
+
+```bash
+gbrain call brain_stats '{}'
+gbrain call brain_get '{"slug": "people/alice"}'
+gbrain call brain_gap '{"query": "who founded acme corp"}'
+```
+
+### JSONL pipeline mode
+
+Stream tool calls via stdin, one JSON object per line:
+
+```bash
+echo '{"tool":"brain_search","input":{"query":"machine learning"}}' | gbrain pipe
+cat queries.jsonl | gbrain pipe > results.jsonl
+```
+
+### Skill inspection
+
+```bash
+gbrain skills list     # list active skills with source resolution path
+gbrain skills doctor   # verify SHA-256 hashes, detect override shadowing
+```
 
 ---
 

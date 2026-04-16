@@ -18,7 +18,7 @@
 - [x] 2.1 Audit `README.md` and public docs for stale status language (`not started`, `planned API`, outdated release claims, unsupported install commands)
 - [x] 2.2 Rewrite README status/install/release sections so they separate supported-now channels from planned-later npm or installer work
 - [x] 2.3 Update docs pages that currently present speculative or stale copy so they match the same status/install matrix as README
-- [x] 2.4 Add explicit “deferred follow-on” wording for npm global distribution and simple installer UX without adding implementation commitments to this change
+- [x] 2.4 Add explicit "deferred follow-on" wording for npm global distribution and simple installer UX without adding implementation commitments to this change
 
 ## 3. Hermes — docs-site UX, build, and deploy polish
 
@@ -37,3 +37,7 @@
 - [x] 5.1 Kif reviews the final coverage/release plan for free availability, artifact stability, and drift against the release workflow
 - [x] 5.2 Scruffy verifies the coverage outputs and docs updates are inspectable from GitHub without relying on paid tooling
 - [x] 5.3 Leela confirms all four spec files are reflected in the final implementation plan and that deferred benchmark/npm work is not silently pulled back into scope
+
+## Ship Gate — PASSED ✅
+
+All tasks complete. Change archived 2026-04-17.

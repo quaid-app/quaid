@@ -54,7 +54,9 @@ pub enum GraphError {
 // ── Constants ────────────────────────────────────────────────
 
 /// Hard safety cap on traversal depth regardless of caller-supplied argument.
-const MAX_DEPTH: u32 = 10;
+pub const MAX_DEPTH: u32 = 10;
+const MAX_NODES: usize = 1000;
+const MAX_EDGES: usize = 1000;
 
 // ── Core BFS ─────────────────────────────────────────────────
 
@@ -127,7 +129,7 @@ pub fn neighborhood_graph(
 
     let mut seen_edges: HashSet<i64> = HashSet::new();
 
-    while let Some((page_id, current_depth)) = queue.pop_front() {
+    'bfs: while let Some((page_id, current_depth)) = queue.pop_front() {
         if current_depth >= effective_depth {
             continue;
         }
@@ -161,6 +163,9 @@ pub fn neighborhood_graph(
             }
 
             if seen_edges.insert(link_id) {
+                if edges.len() >= MAX_EDGES {
+                    break 'bfs;
+                }
                 edges.push(GraphEdge {
                     from: current_slug.clone(),
                     to: to_slug.clone(),
@@ -171,6 +176,9 @@ pub fn neighborhood_graph(
             }
 
             if visited.insert(target_id) {
+                if nodes.len() >= MAX_NODES {
+                    break 'bfs;
+                }
                 nodes.push(GraphNode {
                     slug: to_slug,
                     node_type: to_type,
@@ -404,6 +412,23 @@ mod tests {
         // Request depth 999 — should not panic, effectively capped at MAX_DEPTH
         let result = neighborhood_graph("root", 999, TemporalFilter::Active, &conn).unwrap();
         assert_eq!(result.nodes.len(), 1);
+    }
+
+    #[test]
+    fn graph_result_is_capped_for_high_degree_pages() {
+        let conn = open_test_db();
+        insert_page(&conn, "root", "concept", "Root");
+
+        for index in 0..1_100 {
+            let slug = format!("node-{index}");
+            insert_page(&conn, &slug, "concept", &slug);
+            insert_link(&conn, "root", &slug, "related", None, None);
+        }
+
+        let result = neighborhood_graph("root", 1, TemporalFilter::Active, &conn).unwrap();
+
+        assert_eq!(result.nodes.len(), MAX_NODES);
+        assert_eq!(result.edges.len(), MAX_EDGES);
     }
 
     // ── Temporal filter respects valid_from (future links not active) ──

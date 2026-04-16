@@ -100,6 +100,6 @@ OCC on `brain_put` is already complete — do not re-implement.
 - [x] 10.4  Manual smoke test: `gbrain graph people/alice --depth 2`, `gbrain check --all`, `gbrain gaps`, `gbrain query "test" --depth auto`.
 - [x] 10.5  Phase 1 round-trip tests (`tests/roundtrip_semantic.rs`, `tests/roundtrip_raw.rs`) still pass with no regressions.
 - [x] 10.6  Professor review: `src/core/graph.rs` BFS correctness, `src/core/progressive.rs` budget logic, OCC protocol unchanged.
-- [ ] 10.7  Nibbler review: MCP Phase 2 write surface adversarial check (link injection, graph depth abuse, contradiction table poisoning).
+- [x] 10.7  Nibbler review: MCP Phase 2 write surface adversarial check (link injection, graph depth abuse, contradiction table poisoning).
 - [x] 10.8  Mom review: temporal link edge cases (valid_from > valid_until rejected by schema CHECK, zero-hop graph, null valid_from).
 - [x] 10.9  Bender sign-off: ingest novelty-skip scenario, contradictions round-trip (ingest conflicting pages → `gbrain check` detects).

@@ -393,3 +393,9 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - 4 MCP tools remain unimplemented: brain_gap, brain_gaps, brain_stats, brain_raw (all Phase 3)
 - validate.rs uses modular checks (--links, --assertions, --embeddings, --all) for targeted integrity verification
 - Benchmark strategy: Rust for offline CI gates, Python for advisory API-dependent benchmarks (LongMemEval, LoCoMo, Ragas)
+- Phase 3 wave 1 (groups 2-4) completed: all 4 CLI stubs replaced with working implementations (validate, call, pipe, skills), 4 MCP tools added (brain_gap, brain_gaps, brain_stats, brain_raw), --json wired for validate/skills. 273 tests passing.
+- `call.rs` uses a central `dispatch_tool()` function that maps tool names to MCP handler methods — reused by `pipe.rs` for JSONL streaming
+- `#[tool(tool_box)]` macro doesn't make methods pub — had to add explicit `pub` to all 16 brain_* methods for call.rs dispatch
+- `skills.rs` resolves skills in 3 layers: embedded (./skills/) → user-global (~/.gbrain/skills/) → local working directory, with later layers shadowing earlier ones
+- validate tests that create dangling FK references must use `PRAGMA foreign_keys = OFF` to insert then delete, since FK enforcement prevents direct dangling inserts
+- `dirs` crate added as dependency for `skills.rs` home directory resolution

@@ -116,3 +116,35 @@
 **Outcome:** P3 Release gate 5.1 **COMPLETE & APPROVED**. Coverage/release plan parity verified, sign-off complete.
 
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — documents Kif's task 5.1 review, blocking issues, and re-review approval.
+
+## 2026-04-15 Phase 3 Groups 5+6 — Benchmark Foundation Implementation
+
+**Role:** Benchmark Expert implementing Groups 5 and 6
+
+**What was built:**
+
+**Group 5 — Offline CI gates (all complete):**
+- `benchmarks/datasets.lock`: TOML pin file for BEIR NQ/FiQA (URL + SHA-256), LongMemEval (git commit), LoCoMo (git commit)
+- `benchmarks/prep_datasets.sh`: download/verify script with `--verify-only`, `--compute-hashes`, subset flags
+- `tests/beir_eval.rs`: BEIR nDCG@10 harness — NQ/FiQA tests `#[ignore]`, nDCG math unit tests run in CI
+- `tests/corpus_reality.rs`: 7 corpus integration tests — all pass
+- `tests/concurrency_stress.rs`: parallel OCC, duplicate ingest, WAL compact, concurrent readers — all pass
+- `tests/embedding_migration.rs`: zero cross-model contamination — all pass
+- `benchmarks/baselines/beir.json`: Phase 1 proxy baseline (synthetic), NQ/FiQA pending real BEIR run
+
+**Group 6 — Advisory benchmarks (all complete):**
+- `benchmarks/requirements.txt`: pinned Python deps
+- `benchmarks/longmemeval_adapter.py`: R@5 adapter (target ≥85%)
+- `benchmarks/locomo_eval.py`: token-F1 hybrid vs FTS5 (target +30%)
+- `benchmarks/ragas_eval.py`: Ragas advisory with OpenAI/Ollama judge
+
+**Task 7.3:** `benchmarks/README.md` updated with Phase 3 advisory workflow, Ollama setup, BEIR gate docs.
+
+**Key blockers encountered and resolved:**
+1. `embedding_to_blob` was `pub(crate)` — promoted to `pub` for migration test access
+2. FTS5 chokes on "Co-" prefix as negation/column prefix — fixed by using plain query terms
+3. Round-trip test with CRLF fixture files — fixed by normalizing line endings before comparison
+4. Concurrent DB open during schema initialization causes "database is locked" — fixed by pre-opening connections before barrier in concurrency test
+5. `page_embeddings.chunk_index` NOT NULL constraint — fixed insertion query in migration test
+
+**Measurement note:** SHA-256 hashes in `datasets.lock` for BEIR archives are placeholders. Run `./benchmarks/prep_datasets.sh --compute-hashes` after first download to establish real hashes.

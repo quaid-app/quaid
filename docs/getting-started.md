@@ -1,6 +1,6 @@
 # Getting Started with GigaBrain
 
-> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. One static binary, zero runtime dependencies, no internet required.
+> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.1` ships two BGE-small channels: `airgapped` embedded and `online`.
 
 ## What it does
 
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete.** The current rollout focus is the `v0.9.0` simplified-install test release: shell installer first, with npm publication staged behind that validation cycle.
+> **Phase 3 is complete.** The current rollout focus is `v0.9.1`: dual BGE-small release channels, with `airgapped` and `online` assets shipped from the same release line.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -25,12 +25,12 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — Phases 1–3 implementation complete |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.0` test release |
-| `npm install -g gbrain` | 🚧 Staged — package and workflow are ready, public publish follows shell-installer testing |
-| One-command curl installer | ✅ Available — `curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \| sh` |
+| Build from source (`cargo build --release`) | ✅ Available now — online default |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.1` airgapped + online assets |
+| `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
+| One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for online |
 
-> **Shell-first rollout.** Use the shell installer or GitHub Releases for `v0.9.0` testing. The npm package is implemented, but public publication remains gated until the shell installer has soaked and `NPM_TOKEN` is configured for release automation.
+> **BGE-small only.** `v0.9.1` does not add small/base/large runtime selection. It ships two BGE-small release channels: `airgapped` embedded and `online`.
 
 ---
 
@@ -40,10 +40,13 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Binary at: target/release/gbrain (~90MB with embedded model weights)
+# Binary at: target/release/gbrain (online channel — default)
+
+# Airgapped channel (embeds BGE-small for offline use)
+cargo build --release --no-default-features --features bundled,embedded-model
 ```
 
-Requirements: Rust toolchain (stable). No other system dependencies — SQLite, sqlite-vec, and the embedding model are all bundled.
+Requirements: Rust toolchain (stable). SQLite and sqlite-vec are bundled. The default build is the online channel and downloads/caches BGE-small on first semantic use; the explicit `embedded-model` build produces the airgapped variant.
 
 ### Cross-compile for static Linux binary
 

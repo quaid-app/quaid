@@ -18,5 +18,6 @@ echo "failure, or CI environment). Install manually:" >&2
 echo "" >&2
 echo "  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh" >&2
 echo "" >&2
-echo "Or download from: https://github.com/macro88/gigabrain/releases" >&2
+echo "npm installs the online channel only. For an offline-safe build, download an" >&2
+echo "airgapped asset from: https://github.com/macro88/gigabrain/releases" >&2
 exit 1

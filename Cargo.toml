@@ -1,6 +1,6 @@
 [package]
 name = "gbrain"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 description = "Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One static binary."
 license = "MIT"
@@ -30,8 +30,8 @@ candle-transformers = "0.8"
 safetensors = "0.4"
 tokenizers = "0.20"
 
-# Model download from HuggingFace Hub (used in online-model mode)
-hf-hub = { version = "0.3", optional = true }
+# Model download for the online channel
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 
 # MCP server (stdio transport, JSON-RPC 2.0)
 rmcp = "0.1"
@@ -64,16 +64,20 @@ dirs = "6.0.0"
 [dev-dependencies]
 tempfile = "3"
 
+[build-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
 [features]
-default = ["bundled"]
+default = ["bundled", "embedded-model"]
 bundled = ["rusqlite/bundled"]
-# embed-model: include_bytes!() model weights into binary (~90MB, zero first-run download)
-embed-model = []
-# online-model: download weights from HuggingFace on first run (~10MB binary, requires internet once)
-online-model = ["hf-hub"]
+# embedded-model: include_bytes!() BGE-small assets into the binary for the airgapped release channel
+embedded-model = []
+# online-model: online release channel; download BGE-small assets on first semantic use
+online-model = ["dep:reqwest"]
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+

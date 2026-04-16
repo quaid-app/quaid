@@ -11,7 +11,7 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.channel }} ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -19,16 +19,44 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact: gbrain-darwin-arm64
+            channel: airgapped
+            features: bundled,embedded-model
+            artifact: gbrain-darwin-arm64-airgapped
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact: gbrain-darwin-x86_64
+            channel: airgapped
+            features: bundled,embedded-model
+            artifact: gbrain-darwin-x86_64-airgapped
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            artifact: gbrain-linux-x86_64
+            channel: airgapped
+            features: bundled,embedded-model
+            artifact: gbrain-linux-x86_64-airgapped
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            artifact: gbrain-linux-aarch64
+            channel: airgapped
+            features: bundled,embedded-model
+            artifact: gbrain-linux-aarch64-airgapped
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            channel: online
+            features: bundled,online-model
+            artifact: gbrain-darwin-arm64-online
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            channel: online
+            features: bundled,online-model
+            artifact: gbrain-darwin-x86_64-online
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            channel: online
+            features: bundled,online-model
+            artifact: gbrain-linux-x86_64-online
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            channel: online
+            features: bundled,online-model
+            artifact: gbrain-linux-aarch64-online
 
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +81,7 @@ jobs:
 
       - name: Build (macOS)
         if: matrix.os == 'macos-latest'
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --no-default-features --features ${{ matrix.features }} --target ${{ matrix.target }}
 
       - name: Build (Linux musl via cross)
         if: matrix.os == 'ubuntu-latest'
@@ -64,7 +92,7 @@ jobs:
             -Du_int32_t=uint32_t
             -Du_int64_t=uint64_t
             -Wno-incompatible-pointer-types
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --no-default-features --features ${{ matrix.features }} --target ${{ matrix.target }}
 
       - name: Rename binary
         run: |
@@ -103,17 +131,29 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Verify all release artifacts exist
+      - name: Stage install.sh asset
+        run: cp scripts/install.sh artifacts/install.sh
+
+      - name: Verify release manifest
         run: |
           expected=(
-            gbrain-darwin-arm64
-            gbrain-darwin-arm64.sha256
-            gbrain-darwin-x86_64
-            gbrain-darwin-x86_64.sha256
-            gbrain-linux-x86_64
-            gbrain-linux-x86_64.sha256
-            gbrain-linux-aarch64
-            gbrain-linux-aarch64.sha256
+            gbrain-darwin-arm64-airgapped
+            gbrain-darwin-arm64-airgapped.sha256
+            gbrain-darwin-arm64-online
+            gbrain-darwin-arm64-online.sha256
+            gbrain-darwin-x86_64-airgapped
+            gbrain-darwin-x86_64-airgapped.sha256
+            gbrain-darwin-x86_64-online
+            gbrain-darwin-x86_64-online.sha256
+            gbrain-linux-x86_64-airgapped
+            gbrain-linux-x86_64-airgapped.sha256
+            gbrain-linux-x86_64-online
+            gbrain-linux-x86_64-online.sha256
+            gbrain-linux-aarch64-airgapped
+            gbrain-linux-aarch64-airgapped.sha256
+            gbrain-linux-aarch64-online
+            gbrain-linux-aarch64-online.sha256
+            install.sh
           )
           missing=0
           for f in "${expected[@]}"; do
@@ -123,12 +163,24 @@ jobs:
             fi
           done
           if [ "$missing" -eq 1 ]; then exit 1; fi
-          echo "All 8 release artifacts present"
+          actual_count=$(find artifacts -maxdepth 1 -type f | wc -l | tr -d ' ')
+          expected_count=${#expected[@]}
+          if [ "$actual_count" -ne "$expected_count" ]; then
+            echo "::error::Expected ${expected_count} release files but found ${actual_count}"
+            find artifacts -maxdepth 1 -type f -printf '%f\n' | sort
+            exit 1
+          fi
+          echo "Verified ${expected_count} release files (8 binaries + 8 checksums + install.sh)"
 
       - name: Re-verify checksums after download
         run: |
           cd artifacts
-          for bin in gbrain-darwin-arm64 gbrain-darwin-x86_64 gbrain-linux-x86_64 gbrain-linux-aarch64; do
+          for bin in \
+            gbrain-darwin-arm64-airgapped gbrain-darwin-arm64-online \
+            gbrain-darwin-x86_64-airgapped gbrain-darwin-x86_64-online \
+            gbrain-linux-x86_64-airgapped gbrain-linux-x86_64-online \
+            gbrain-linux-aarch64-airgapped gbrain-linux-aarch64-online
+          do
             echo "Verifying $bin..."
             shasum -a 256 --check "$bin.sha256"
           done
@@ -142,27 +194,45 @@ jobs:
           body: |
             ## Install
 
-            One-command installer:
+            Default airgapped installer:
 
             ```bash
             curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/${{ github.ref_name }}/scripts/install.sh | sh
             ```
 
-            Download the pre-built binary for your platform from the assets below and verify the checksum:
+            Online installer override:
+
+            ```bash
+            GBRAIN_CHANNEL=online \
+              curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/${{ github.ref_name }}/scripts/install.sh | sh
+            ```
+
+            Manual downloads use the channel-suffixed assets:
 
             ```bash
             VERSION="${{ github.ref_name }}"
             PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
-            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
-            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
-            shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
-            sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
+
+            AIRGAPPED_ASSET="gbrain-${PLATFORM}-airgapped"
+            ONLINE_ASSET="gbrain-${PLATFORM}-online"
+
+            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${AIRGAPPED_ASSET}" -o "${AIRGAPPED_ASSET}"
+            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${AIRGAPPED_ASSET}.sha256" -o "${AIRGAPPED_ASSET}.sha256"
+            shasum -a 256 --check "${AIRGAPPED_ASSET}.sha256"
+
+            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ONLINE_ASSET}" -o "${ONLINE_ASSET}"
+            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ONLINE_ASSET}.sha256" -o "${ONLINE_ASSET}.sha256"
+            shasum -a 256 --check "${ONLINE_ASSET}.sha256"
             ```
 
-            Or build from source: `cargo build --release`
+            Or build from source:
 
-            **Supported channels:** shell installer, GitHub Releases, and build from source.
-            npm packaging is staged but public publication may be skipped when `NPM_TOKEN` is not configured.
+            ```bash
+            cargo build --release
+            cargo build --release --no-default-features --features bundled,online-model
+            ```
+
+            **Release v0.9.1 ships two BGE-small channels only:** `airgapped` embeds the model bundle, `online` stays slim and downloads/caches BGE-small on first semantic use. There is no base/large support and no runtime `--model` selector. npm installs the `online` channel; the shell installer defaults to `airgapped`.
 
             ---
           draft: false
@@ -170,7 +240,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload install script asset
-        run: gh release upload "${{ github.ref_name }}" scripts/install.sh#install.sh --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

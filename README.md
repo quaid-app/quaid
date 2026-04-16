@@ -1,8 +1,8 @@
 # GigaBrain
 
-> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
+> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Dual BGE-small release channels for airgapped and online installs.
 
-**Status:** `v0.9.0` test release in progress — Phase 3 is complete, and the simplified-install rollout is landing with the shell installer first. [See the roadmap →](#roadmap)
+**Status:** `v0.9.1` release lane — Phase 3 is complete, and the dual-release BGE-small rollout now ships `airgapped` + `online` install channels. [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,7 +17,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.0` test release) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.1` dual-release prep) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -48,7 +48,7 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Features
 
-- **Single static binary** — ~90MB including embedded BGE-small-en-v1.5 model weights. Zero runtime dependencies.
+- **Dual BGE-small release channels** — `airgapped` embeds the model bundle; `online` stays slimmer and downloads/caches BGE-small on first semantic use
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
 - **Local embeddings** — BGE-small-en-v1.5 via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key, no internet
 - **MCP server** — `gbrain serve` exposes all 16 tools over stdio JSON-RPC 2.0. Works with Claude Code, any MCP-compatible agent
@@ -74,40 +74,45 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> Phase 3 is complete. Build from source today, use GitHub Release binaries for `v0.9.0`, or try the shell installer during the current test-release cycle.
+> Phase 3 is complete. `v0.9.1` adds two BGE-small release channels: `airgapped` (embedded) and `online` (downloads/caches BGE-small on first use).
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.0` test release |
-| `npm install -g gbrain` | 🚧 Staged — package and workflow are ready, public publish follows shell-installer testing |
-| One-command curl installer | ✅ Available — `curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \| sh` |
+| Build from source (`cargo build --release`) | ✅ Available now — online default |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.1` airgapped + online assets |
+| `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
+| One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for the online asset |
 
-**Build from source** is available now. **GitHub Releases** and the **shell installer** are available for the `v0.9.0` test release. The npm package rollout is staged behind that shell-installer validation window.
+**Build from source** defaults to the online channel. **GitHub Releases** and the **shell installer** expose both BGE-small channels for `v0.9.1`. The npm package remains a single wrapper package and targets the `online` channel by default.
 
 Install with the shell script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+
+# Online channel instead of the default airgapped channel
+GBRAIN_CHANNEL=online \
+  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 ```
 
 Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.9.0"
+VERSION="v0.9.1"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
-shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
+ASSET="gbrain-${PLATFORM}-airgapped"   # or: gbrain-${PLATFORM}-online
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}.sha256" -o "${ASSET}.sha256"
+shasum -a 256 --check "${ASSET}.sha256"
 # Option A: install for the current user
 mkdir -p "${HOME}/.local/bin"
-mv "gbrain-${PLATFORM}" "${HOME}/.local/bin/gbrain"
+mv "${ASSET}" "${HOME}/.local/bin/gbrain"
 chmod +x "${HOME}/.local/bin/gbrain"
 
 # Option B: install system-wide (requires root)
-sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
+sudo install -m 755 "${ASSET}" /usr/local/bin/gbrain
 ```
 
 Or build from source:
@@ -116,10 +121,13 @@ Or build from source:
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Binary at target/release/gbrain
+# Online channel (default)
+
+cargo build --release --no-default-features --features bundled,embedded-model
+# Airgapped channel
 ```
 
-> **Shell-first rollout.** `v0.9.0` is the install-simplification test release: use the shell installer or GitHub Releases today. npm packaging is implemented, but public publication stays gated until the shell path is proven and `NPM_TOKEN` is configured for release automation.
+> **BGE-small only.** `v0.9.1` intentionally ships only two BGE-small channels: `airgapped` (embedded) and `online`. There is no base/large support and no runtime `--model` flag in this release.
 
 ---
 
@@ -243,7 +251,7 @@ The `original` type is for your own thinking — distinct from world knowledge. 
 
 ## Contributing
 
-GigaBrain is open for contributions. All three phases have shipped. Phase 3 (`v1.0.0`) is complete.
+GigaBrain is open for contributions. All three phases have shipped. Phase 3 is currently released through the `v0.9.1` dual-channel line.
 
 **How we work:**
 
@@ -269,8 +277,11 @@ GigaBrain is open for contributions. All three phases have shipped. Phase 3 (`v1
 # Debug
 cargo build
 
-# Release (optimised, ~90MB with embedded model weights)
+# Release (online default, downloads/caches BGE-small on first semantic use)
 cargo build --release
+
+# Airgapped release (embeds BGE-small-en-v1.5 for offline use)
+cargo build --release --no-default-features --features bundled,embedded-model
 
 # Cross-compile
 cargo install cross

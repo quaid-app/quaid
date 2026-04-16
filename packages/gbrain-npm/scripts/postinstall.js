@@ -7,27 +7,32 @@ const packageJson = require("../package.json");
 
 const version = packageJson.version;
 const tag = `v${version}`;
-const releaseTagUrl = `https://github.com/macro88/gigabrain/releases/tag/${tag}`;
+const repo = process.env.GBRAIN_REPO || "macro88/gigabrain";
+const releaseBaseUrl = process.env.GBRAIN_RELEASE_BASE_URL || `https://github.com/${repo}/releases/download`;
+const releaseTagUrl =
+  process.env.GBRAIN_RELEASE_TAG_URL || `https://github.com/${repo}/releases/tag/${tag}`;
 
 function platformToAsset() {
   if (process.platform === "darwin" && process.arch === "arm64") {
-    return "gbrain-darwin-arm64";
+    return "gbrain-darwin-arm64-online";
   }
   if (process.platform === "darwin" && process.arch === "x64") {
-    return "gbrain-darwin-x86_64";
+    return "gbrain-darwin-x86_64-online";
   }
   if (process.platform === "linux" && process.arch === "x64") {
-    return "gbrain-linux-x86_64";
+    return "gbrain-linux-x86_64-online";
   }
   if (process.platform === "linux" && process.arch === "arm64") {
-    return "gbrain-linux-aarch64";
+    return "gbrain-linux-aarch64-online";
   }
   return null;
 }
 
 function manualInstallMessage(reason) {
   console.warn(`[gbrain] ${reason}`);
+  console.warn("[gbrain] npm installs the online BGE-small channel only.");
   console.warn(`[gbrain] Install manually from ${releaseTagUrl}`);
+  console.warn("[gbrain] Need an offline-safe build? Download the airgapped release asset or use the shell installer.");
 }
 
 function gracefulSkip(reason) {
@@ -138,7 +143,7 @@ async function main() {
     return;
   }
 
-  const binaryUrl = `https://github.com/macro88/gigabrain/releases/download/${tag}/${assetName}`;
+  const binaryUrl = `${releaseBaseUrl}/${tag}/${assetName}`;
   const checksumUrl = `${binaryUrl}.sha256`;
   const binDir = path.join(__dirname, "..", "bin");
   const binaryPath = path.join(binDir, "gbrain.bin");
@@ -163,7 +168,7 @@ async function main() {
     await fs.promises.rename(tempBinaryPath, binaryPath);
     fs.chmodSync(binaryPath, 0o755);
 
-    console.log(`[gbrain] Installed ${assetName} from GitHub Releases.`);
+    console.log(`[gbrain] Installed ${assetName} (online channel) from GitHub Releases.`);
     printDbTip();
   } catch (error) {
     await fs.promises.rm(tempBinaryPath, { force: true }).catch(() => {});

@@ -3,7 +3,7 @@ title: Getting Started
 description: Build GigaBrain and create your first brain.db.
 ---
 
-> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. One static binary, zero runtime dependencies, no internet required.
+> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.1` ships `airgapped` and `online` BGE-small channels.
 
 GigaBrain stores your knowledge as structured pages in a single `brain.db` file. Each page follows the **compiled-truth / timeline** model:
 
@@ -16,7 +16,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 complete — `v1.0.0`.** All phases shipped. All 8 skills are production-ready, all 16 MCP tools are active, and the full benchmark suite is in CI.
+> **Phase 3 is complete.** `v0.9.1` focuses on dual BGE-small release channels: `airgapped` (embedded weights) and `online` (download/cache on first use).
 >
 > See the [Roadmap](/contributing/roadmap/) for the full delivery plan and ship gates.
 
@@ -26,12 +26,12 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v1.0.0` and later |
-| `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
-| One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
+| Build from source (`cargo build --release`) | ✅ Available now — online default |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.1` airgapped + online assets |
+| `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
+| One-command curl installer | ✅ Available — airgapped by default; `GBRAIN_CHANNEL=online` switches channels |
 
-> **Deferred distribution channels.** npm global installation and a one-command installer are planned follow-on work. They are not part of this release and will be proposed separately when ready.
+> **BGE-small only.** `v0.9.1` adds exactly two BGE-small release channels and does not introduce a runtime `--model` selector.
 
 ---
 
@@ -40,11 +40,16 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 ```bash
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
+
+# Online channel — default (downloads BGE-small weights on first semantic use)
 cargo build --release
-# Binary at: target/release/gbrain (~90MB with embedded model weights)
+# Binary at: target/release/gbrain
+
+# Airgapped channel — embeds BGE-small weights into the binary
+cargo build --release --no-default-features --features bundled,embedded-model
 ```
 
-Requirements: Rust toolchain (stable). No other system dependencies — SQLite, sqlite-vec, and the embedding model are all bundled.
+Requirements: Rust toolchain (stable). SQLite and sqlite-vec are bundled. The default build is the **online** channel (downloads/caches BGE-small on first semantic use); use `embedded-model` for the airgapped variant that embeds BGE-small at compile time.
 
 ### Cross-compile for static Linux binary
 

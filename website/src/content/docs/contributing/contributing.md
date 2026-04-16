@@ -9,7 +9,7 @@ Welcome. This guide covers everything a new contributor needs to navigate the co
 
 ## What GigaBrain is
 
-GigaBrain is a local-first personal knowledge brain: a single Rust binary (~90MB including embedded model weights) that wraps SQLite + FTS5 + local vector embeddings. It stores structured knowledge pages, searches them with hybrid keyword + semantic queries, and exposes an MCP server for any AI agent client.
+GigaBrain is a local-first personal knowledge brain with two BGE-small distribution channels: an `airgapped` embedded binary and a smaller `online` binary. Both wrap SQLite + FTS5 + local vector embeddings and expose the same CLI + MCP surface.
 
 Read [Getting Started](/guides/getting-started/) first if you haven't. Read the [Spec](/reference/spec/) for the full technical specification.
 
@@ -80,8 +80,11 @@ cargo check
 # Debug build
 cargo build
 
-# Release build (~90MB with embedded model weights)
+# Release build — online channel (default)
 cargo build --release
+
+# Airgapped release build (embeds BGE-small weights)
+cargo build --release --no-default-features --features bundled,embedded-model
 
 # Run tests
 cargo test

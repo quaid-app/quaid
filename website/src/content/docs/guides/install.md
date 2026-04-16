@@ -5,14 +5,14 @@ description: Current project status, supported install paths, and planned future
 
 ## Project Status
 
-GigaBrain has completed **Phase 3** — all skills, benchmarks, CLI polish, and the full MCP tool surface are shipped. The current rollout is the `v0.9.0` simplified-install test release.
+GigaBrain has completed **Phase 3** — all skills, benchmarks, CLI polish, and the full MCP tool surface are shipped. The current rollout is `v0.9.1`, which adds dual BGE-small release channels.
 
 | Phase | Status | What ships |
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, embeddings, hybrid search, MCP server — **v0.1.0** |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`, progressive retrieval, full MCP surface — **v0.2.0** |
-| **Phase 3** — Skills + benchmarks + polish | ✅ Complete | All 8 skills production-ready, 16 MCP tools, `validate`, `call`, `pipe`, `skills doctor`, benchmark harnesses — **v0.9.0 test release** |
+| **Phase 3** — Skills + benchmarks + polish | ✅ Complete | All 8 skills production-ready, 16 MCP tools, `validate`, `call`, `pipe`, `skills doctor`, benchmark harnesses — **v0.9.1 dual-release prep** |
 
 See the [Roadmap](/contributing/roadmap/) for ship gates and detailed scope.
 
@@ -24,13 +24,18 @@ See the [Roadmap](/contributing/roadmap/) for ship gates and detailed scope.
 
 The full Phase 3 binary compiles today. Build from source for all features.
 
-**Requirements:** Rust stable toolchain. No other system dependencies — SQLite and sqlite-vec are bundled. Embeddings are offline-first: the build uses cached BGE-small weights from the HuggingFace cache when present, can download them when built with the `online-model` feature, and otherwise falls back to a hash-based shim.
+**Requirements:** Rust stable toolchain. No other system dependencies — SQLite and sqlite-vec are bundled. The default source build is the **online** channel (downloads/caches BGE-small on first semantic use); build with `embedded-model` to produce the airgapped variant.
 
 ```bash
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
+
+# Online channel — default (downloads BGE-small weights on first semantic use)
 cargo build --release
 # Binary at: target/release/gbrain
+
+# Airgapped channel — embeds BGE-small weights into the binary
+cargo build --release --no-default-features --features bundled,embedded-model
 ```
 
 #### Cross-compile for a fully static Linux binary
@@ -47,46 +52,51 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64
 
 ## Install — GitHub Releases
 
-Pre-built binaries are available from GitHub Releases for the `v0.9.0` test release:
+Pre-built binaries are available from GitHub Releases for `v0.9.1` in two BGE-small channels:
 
 ```bash
-VERSION="v0.9.0"
+VERSION="v0.9.1"
 PLATFORM="linux-x86_64"   # linux-x86_64 | linux-aarch64 | darwin-arm64 | darwin-x86_64
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
-shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
+ASSET="gbrain-${PLATFORM}-airgapped"   # or: gbrain-${PLATFORM}-online
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}.sha256" -o "${ASSET}.sha256"
+shasum -a 256 --check "${ASSET}.sha256"
 # Option A: install for the current user
 mkdir -p "${HOME}/.local/bin"
-mv "gbrain-${PLATFORM}" "${HOME}/.local/bin/gbrain"
+mv "${ASSET}" "${HOME}/.local/bin/gbrain"
 chmod +x "${HOME}/.local/bin/gbrain"
 
 # Option B: install system-wide (requires root)
-sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
+sudo install -m 755 "${ASSET}" /usr/local/bin/gbrain
 ```
 
 ### One-command installer
 
-The `v0.9.0` test release makes the shell installer the simplest supported path:
+The airgapped channel remains the default shell-installer path:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 ```
 
-You can pin a version or change the install directory:
+You can pin a version, switch to the online channel, or change the install directory:
 
 ```bash
-GBRAIN_VERSION=v0.9.0 \
+GBRAIN_VERSION=v0.9.1 \
   curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 
-GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
+GBRAIN_VERSION=v0.9.1 GBRAIN_CHANNEL=online \
+  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+
+GBRAIN_VERSION=v0.9.1 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
   curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 ```
 
 > **Note:** The default install directory is `~/.local/bin`. System-wide paths like `/usr/local/bin`
 > require `sudo` — the installer does not escalate privileges automatically.
 
-The installer auto-detects your platform, downloads the matching GitHub Release binary, verifies
-the SHA-256 checksum, runs `gbrain version`, and prints a `GBRAIN_DB` shell-profile tip.
+The installer auto-detects your platform, chooses the airgapped or online release asset based on
+`GBRAIN_CHANNEL`, verifies the SHA-256 checksum, runs `gbrain version`, and prints a `GBRAIN_DB`
+shell-profile tip.
 
 ### npm global install (staged)
 
@@ -99,8 +109,9 @@ When that rollout opens, the install command will be:
 npm install -g gbrain
 ```
 
-The package downloads the platform binary from GitHub Releases during `postinstall` rather than
-bundling the 90MB binary into the npm tarball.
+The package downloads the **online** platform binary from GitHub Releases during `postinstall`
+rather than bundling a native binary into the npm tarball. If you need the larger offline-ready
+binary, use the default shell installer or download an `*-airgapped` asset from GitHub Releases.
 
 ---
 

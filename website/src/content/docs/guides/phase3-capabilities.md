@@ -1,9 +1,9 @@
 ---
 title: Phase 3 Capabilities
-description: Skills completion, CLI polish, new MCP tools, and benchmark harnesses — the full v1.0.0 feature set.
+description: Skills completion, CLI polish, new MCP tools, and benchmark harnesses — the Phase 3 feature set shipped through v0.9.1.
 sidebar:
   badge:
-    text: v1.0.0
+    text: v0.9.1
     variant: success
 ---
 

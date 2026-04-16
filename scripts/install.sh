@@ -3,8 +3,8 @@
 set -eu
 
 REPO="macro88/gigabrain"
-API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-RELEASE_BASE="https://github.com/${REPO}/releases/download"
+API_URL="${GBRAIN_RELEASE_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
+RELEASE_BASE="${GBRAIN_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download}"
 INSTALL_DIR="${GBRAIN_INSTALL_DIR:-$HOME/.local/bin}"
 
 tmp_dir=""
@@ -61,6 +61,14 @@ resolve_version() {
   [ -n "$VERSION" ] || fail "Failed to parse tag_name from GitHub API response"
 }
 
+resolve_channel() {
+  case "${GBRAIN_CHANNEL:-airgapped}" in
+    airgapped) CHANNEL="airgapped" ;;
+    online) CHANNEL="online" ;;
+    *) fail "Unsupported GBRAIN_CHANNEL: ${GBRAIN_CHANNEL}. Use airgapped or online." ;;
+  esac
+}
+
 verify_checksum() {
   checksum_file="$1"
   asset_name="$2"
@@ -105,7 +113,6 @@ print_gbrain_db_tip() {
 }
 
 need_cmd curl
-need_cmd mktemp
 need_cmd mkdir
 need_cmd chmod
 need_cmd mv
@@ -113,16 +120,22 @@ need_cmd mv
 trap cleanup EXIT INT HUP TERM
 
 resolve_platform
+resolve_channel
 resolve_version
 
-asset_name="gbrain-${PLATFORM}"
+case "$CHANNEL" in
+  airgapped|online) asset_name="gbrain-${PLATFORM}-${CHANNEL}" ;;
+esac
 checksum_name="${asset_name}.sha256"
 binary_url="${RELEASE_BASE}/${VERSION}/${asset_name}"
 checksum_url="${RELEASE_BASE}/${VERSION}/${checksum_name}"
 
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/gbrain-install.XXXXXX")"
+cache_root="${GBRAIN_TMP_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/gbrain-installer}"
+tmp_dir="${cache_root}/$$"
+rm -rf "$tmp_dir"
+mkdir -p "$tmp_dir" || fail "Cannot create temporary directory: ${tmp_dir}"
 
-printf '%s\n' "Installing gbrain ${VERSION} for ${PLATFORM}..."
+printf '%s\n' "Installing gbrain ${VERSION} for ${PLATFORM} (${CHANNEL})..."
 curl -fsSL "$binary_url" -o "$tmp_dir/$asset_name" || fail "Failed to download ${binary_url}"
 curl -fsSL "$checksum_url" -o "$tmp_dir/$checksum_name" || fail "Failed to download ${checksum_url}"
 

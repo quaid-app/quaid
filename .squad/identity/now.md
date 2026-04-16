@@ -1,25 +1,29 @@
-updated_at: 2026-04-18T00:00:00Z
-focus_area: simplified-install — v0.9.0 shell-first rollout
-active_issues: [D.2-npm-postinstall-needs-supported-platform]
-active_branch: simplified-install
+updated_at: 2026-04-19T00:00:00Z
+focus_area: bge-small-dual-release-channels — v0.9.1 dual-release lane
+active_issues: [D.1-validation-run, D.2-pr-open]
+active_branch: release/v0.9.1-dual-release
 ---
 
 # What We're Focused On
 
-**Active change:** `simplified-install` — shell-first `v0.9.0` installer rollout.
+**Active change:** `bge-small-dual-release-channels` — `v0.9.1` dual-release BGE-small channels (`airgapped` + `online`).
 
-Implementation is complete. One verification item remains environment-blocked.
+OpenSpec change: `openspec/changes/bge-small-dual-release-channels/` — fully populated and machine-readable.
 
-**Done:**
-- **A** ✅ — `scripts/install.sh` (POSIX, platform detect, SHA-256 verify, `GBRAIN_DB` tip)
-- **B** ✅ — `packages/gbrain-npm/` scaffolding + `postinstall.js` + `.github/workflows/publish-npm.yml`
-- **C** ✅ — README, `website/…/install.md`, `docs/getting-started.md` updated (shell-first, npm staged)
-- **D.1** ✅ — `install.sh` smoke-tested against `v0.9.0` release asset shape
-- **D.3** ✅ — `npm pack --dry-run` confirms binary not packed
-- **D.4** ✅ — error paths validated (bad version, bad checksum, no-internet postinstall exit-0)
-- **D.5** ✅ — `publish-npm.yml` token-guard verified via real CI execution against v0.9.0 tag (run 24516842061). Skip-notice printed, pack validated, publish skipped when token absent.
+**Done (A–C):**
+- **A.1** ✅ — OpenSpec artifacts complete and machine-parsable (corrected tasks.md)
+- **A.2** ✅ — `embedded-model` Cargo feature + `build.rs` model-bundle acquisition wired
+- **A.3** ✅ — `src/core/inference.rs` dual-channel feature gate with `compile_error!` guard
+- **B.1** ✅ — `release.yml` builds both channels for all 4 platforms with `.sha256` sidecars and manifest verification
+- **B.2** ✅ — `scripts/install.sh` defaults to `airgapped`, accepts `GBRAIN_CHANNEL=airgapped|online`
+- **B.3** ✅ — `postinstall.js` defaults to `online`, emits airgapped pointer, supports env override
+- **B.4** ✅ — version surfaces bumped to `v0.9.1`
+- **C.1** ✅ — README, `docs/getting-started.md`, `docs/contributing.md` updated
+- **C.2** ✅ — website install docs updated with dual-channel story
+- **C.3** ✅ — spec references updated to dual-channel contract
 
-**Blocked / needs supported platform:**
-- **D.2** ⚠️ — npm postinstall end-to-end test still needs a macOS/Linux machine with Node.js. The v0.9.0 release now exists with all assets, and asset-name alignment is verified — but nobody has run the actual download+verify cycle through postinstall.js yet.
+**Open:**
+- **D.1** ⬜ — Full validation run: `cargo fmt --all --check`, `cargo check`, `cargo test`, `npm pack --dry-run`, confirm no `slim` references remain.
+- **D.2** ⬜ — Push branch, open PR referencing `bge-small-dual-release-channels`, collect sign-off.
 
-**Next gate:** D.2 can close once a macOS/Linux runner with Node.js is available to exercise the postinstall cycle against the live v0.9.0 release.
+**Next gate:** D.1 and D.2. Once both close, `bge-small-dual-release-channels` is ready to archive.

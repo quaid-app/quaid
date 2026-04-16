@@ -12,6 +12,7 @@
 - Coverage depth is a first-class role in this squad.
 - Coverage review is not just artifact existence; README/docs must point to the same free GitHub coverage surface, and status wording must stay synchronized across repo docs.
 - Benchmark reproducibility review needs two layers: rerun offline gates twice for stable pass/fail behavior, then verify the pinned-data story is real (lockfile consumed, hashes finalized, baselines established).
+- For CI-gated benchmark reproducibility, compare pass/ignore counts across reruns and treat wall-clock durations as noise unless the harness explicitly gates latency.
 
 ## 2026-04-16 Phase 3 — Benchmark Reproducibility Review (Task 8.4)
 

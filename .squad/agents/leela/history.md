@@ -98,6 +98,27 @@
 **Patterns learned:**
 - `openspec status --change "<name>" --json` is the canonical check for artifact readiness
 - spec-driven schema requires: proposal → design → specs/**/*.md → tasks.md (in dependency order)
+
+## Phase 3 Archive and Final Reconciliation — 2026-04-17
+
+**What was done:**
+- Conducted two archive passes on `p3-skills-benchmarks` and `p3-polish-benchmarks`
+- First pass (leela-phase3-archive.md): Archived p3-polish-benchmarks; held p3-skills-benchmarks pending gates 8.2 and 8.4
+- Second pass (leela-phase3-final-reconcile.md): Both gates closed; finalized p3-skills-benchmarks archive
+- Updated all documentation (README, roadmap, roadmap.md on docs-site) to reflect "Phase 3 complete"
+- Updated PR #31 body with final truth: both proposals archived, both gates passed, ready to merge and tag v1.0.0
+- Cleaned up sprint-0 orphan active copy
+
+**Key decisions:**
+- Archive only when gates are genuinely closed (not before)
+- Docs must reflect honest project state ("pending" → "complete" only after gates pass)
+- Atomicity: both Phase 3 proposals archived in same commit with docs for revert consistency
+
+**Outcome:** Phase 3 engineering and documentation complete. Both OpenSpec proposals in archive. PR #31 ready for merge + v1.0.0 tagging.
+
+**Files filed:**
+- `.squad/decisions/inbox/leela-phase3-archive.md` (first pass — gate hold rationale)
+- `.squad/decisions/inbox/leela-phase3-final-reconcile.md` (final pass — both gates closed, archive finalized)
 - `openspec instructions <artifact-id> --change "<name>" --json` gives template + rules for each artifact
 - Tasks must use `- [ ] N.M description` format or apply won't track them
 - GitHub issues and OpenSpec both drive work intake.

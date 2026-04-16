@@ -2765,3 +2765,229 @@ The offline Rust test paths are stable, but the full reproducibility story for t
 **Scope caveat:** This is **not** closure of Nibbler issue #29. That issue is the broader Group 9 adversarial lane for the MCP write surface; this note approves only the graph slice tasks 1.1–2.5.
 
 **Why:** All blockers resolved; graph slice is ready for merge.
+
+---
+
+## 2026-04-17: Phase 3 Archive and Documentation Final Pass
+
+### 2026-04-17: Archive closure — p3-polish-benchmarks (Leela)
+
+**What:** Moved `openspec/changes/p3-polish-benchmarks` to `openspec/changes/archive/2026-04-17-p3-polish-benchmarks/`.
+
+**Why:** All tasks in tasks.md checked. All reviewer gates (5.1 Kif, 5.2 Scruffy, 5.3 Leela) complete. Deliverables (coverage CI job, README honesty, docs-site polish, release.yml hardening) in repo. Change is genuinely done.
+
+**Status:** Archived with status: shipped.
+
+---
+
+### 2026-04-17: Archive hold — p3-skills-benchmarks reviewer gates (Leela, First Pass)
+
+**What:** Held `openspec/changes/p3-skills-benchmarks` active pending two reviewer gates:
+- `[ ] 8.2` — Nibbler adversarial review of brain_gap/brain_gaps/brain_stats/brain_raw
+- `[ ] 8.4` — Scruffy benchmark reproducibility verification
+
+**Why:** These are genuine integration gates, not formalities. Nibbler's review protects against gap injection and information leakage in new MCP surface. Scruffy's rerun check verifies determinism in benchmark harnesses. Both must pass before archival is honest.
+
+**Status:** Gate hold in effect. Awaiting Nibbler and Scruffy.
+
+---
+
+### 2026-04-17: Sprint-0 orphan cleanup (Leela)
+
+**What:** Removed dangling active copy at `openspec/changes/sprint-0-repo-scaffold/`.
+
+**Why:** Archive copy already exists at `openspec/changes/archive/2026-04-15-sprint-0-repo-scaffold/proposal.md`. Active copy was orphaned — not deleted when archive was written. Cleanup ensures directory reflects true state.
+
+**Status:** Deleted.
+
+---
+
+### 2026-04-17: CI job verification — benchmarks lane in ci.yml (Fry)
+
+**Decision:** Verified and extended benchmarks job in `.github/workflows/ci.yml`:
+- Job runs `cargo test --test corpus_reality --test concurrency_stress --test embedding_migration`
+- Depends on `check` gate (fmt + clippy)
+- Explicit naming makes failures visible in PR checks UI
+
+**Rationale:** General `cargo test` already runs these tests; dedicated job labels the offline benchmark subset explicitly for operator clarity.
+
+**Status:** ✅ Implemented. Task 7.1 verified complete.
+
+---
+
+### 2026-04-17: Clippy violations fixed — two errors in tests/concurrency_stress.rs (Fry)
+
+**Decision:** Fixed two clippy violations that task 8.6 had marked complete but weren't:
+1. `doc-overindented-list-items` in module doc comment
+2. `let-and-return` in compact thread closure
+
+**Rationale:** Ship gate cannot be closed against falsified task list. Honesty requires fixing regressions before evaluating archive readiness.
+
+**Status:** ✅ Fixed. `cargo clippy --all-targets --all-features -- -D warnings` now exits 0.
+
+---
+
+### 2026-04-17: MCP tool count alignment (Amy)
+
+**Decision:** All "N tools available" statements updated from 12 to 16.
+
+**What:** Phase 3 adds `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` — confirmed implemented per tasks 3.1–3.5.
+
+**Impact:** README MCP section, getting-started.md MCP section.
+
+**Status:** ✅ Updated. Docs now reflect full Phase 3 MCP surface.
+
+---
+
+### 2026-04-17: Documentation status alignment (Amy)
+
+**Decision:** Phase 3 status language unified across all docs to "Complete" / "v1.0.0" / "Ready".
+
+**What:**
+- `docs/roadmap.md` Phase 3 block: ✅ Complete (changed from 🔄 In progress)
+- Version targets: all references v1.0.0 (not mixed v0.1.0)
+- README skill call-out: all 8 skills production-ready as of Phase 3
+- Benchmark CI caveat: noted wiring pending (tasks 7.1–7.2)
+- Two Phase 3 proposals explicitly named in roadmap
+
+**Why:** README was already "Phase 3 complete" by Hermes's commit. PR #31 titled "Phase 3 ... v1.0.0". Having roadmap say "In progress" was inconsistent and confusing. PR #31 is the ship event.
+
+**Status:** ✅ Updated. Docs now consistent.
+
+---
+
+### 2026-04-17: Docs-site Phase 3 capabilities guide (Hermes)
+
+**Decision:** Create `/guides/phase3-capabilities/` as dedicated guide rather than appending to Phase 2 Intelligence Layer guide.
+
+**Rationale:** Phase 3 adds qualitatively different capabilities (skills, validate, call, pipe, benchmarks) that deserve scannable entry point. Serves as canonical "what shipped in v1.0.0" reference for new users.
+
+**Status:** ✅ Created. Docs-site Phase 3-ready.
+
+---
+
+### 2026-04-17: MCP tools documentation expansion (Hermes)
+
+**Decision:** Expand MCP Server guide Phase 3 section from stub to full table + examples.
+
+**What:** Added descriptions and worked call examples for `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`.
+
+**Why:** Parity across phases. Phase 1 and 2 tools already had full examples; Phase 3 tools were undocumented stub.
+
+**Status:** ✅ Updated. Full tool documentation complete.
+
+---
+
+### 2026-04-17: CLI reference status update (Hermes)
+
+**Decision:** Remove "Planned API" notice from CLI reference.
+
+**What:** Replaced "Planned API. Some commands may not be implemented yet." with "All commands are implemented as of Phase 3 (v1.0.0)."
+
+**Why:** Notice was Phase 0 placeholder. Keeping it signals CLI is incomplete, which is now incorrect and hurts trust.
+
+**Status:** ✅ Updated. CLI reference now affirms completeness.
+
+---
+
+### 2026-04-17: README features section rename (Hermes)
+
+**Decision:** Rename README section from "Planned features" to "Features".
+
+**What:** Updated stale v0.1.0 shipping note and added Phase 3 additions (validate, call, pipe, skills doctor).
+
+**Why:** Section heading/callout were legacy Phase 0. At v1.0.0, features section should describe what product does today, not what it planned to do.
+
+**Status:** ✅ Updated. README now reflects v1.0.0 readiness.
+
+---
+
+### 2026-04-17: Archive atomicity — both proposals same commit (Hermes)
+
+**Decision:** Archive both `p3-polish-benchmarks` and `p3-skills-benchmarks` in same commit as docs update, with date 2026-04-17.
+
+**Rationale:** Atomicity keeps archive and docs-site in sync — if PR is reverted, both go back together. Clarity for future archaeologists.
+
+**Status:** ✅ Executed.
+
+---
+
+### 2026-04-17: Nibbler approval — Phase 3 MCP adversarial review (Nibbler, Gate 8.2)
+
+**Outcome:** ✅ APPROVED
+
+**Scope Reviewed:**
+- `openspec/changes/p3-skills-benchmarks/proposal.md`, design.md, tasks.md
+- `src/mcp/server.rs` (brain_gap, brain_gaps, brain_stats, brain_raw)
+- `src/core/gaps.rs` (gap lifecycle, context redaction)
+- `src/commands/call.rs`, `src/commands/pipe.rs`, `src/commands/validate.rs`
+- Related MCP/pipe tests
+
+**Blocking Findings:** None.
+
+**Approved:** 
+- `brain_raw` size-limited (1 MB cap), refuses duplicate writes unless overwrite=true, rejects non-object payloads
+- `brain_gap` context validated-then-discarded (agents should not expect retrieval)
+- `pipe` oversized-line rejection confirmed; continues processing later input
+
+**Low-priority follow-ups (non-blocking):**
+1. Document explicitly that `brain_gap.context` is validated then discarded
+2. Add length/charset validation for `brain_raw.source` if identifiers exposed
+3. If gap hashes cross trust boundary, replace SHA-256 with salted/keyed form
+
+**Status:** ✅ Gate 8.2 CLOSED. Filed 2026-04-16.
+
+---
+
+### 2026-04-17: Scruffy approval — Phase 3 benchmark reproducibility (Scruffy, Gate 8.4)
+
+**Outcome:** ✅ APPROVED
+
+**Scope Reviewed:**
+- `openspec/changes/p3-skills-benchmarks/tasks.md`
+- `tests/corpus_reality.rs`, `tests/concurrency_stress.rs`, `tests/embedding_migration.rs`, `tests/beir_eval.rs`
+- `.github/workflows/ci.yml`, `.github/workflows/beir-regression.yml`
+- `benchmarks/README.md`, `benchmarks/datasets.lock`, `benchmarks/prep_datasets.sh`
+
+**Verification:** Reproduced offline suite twice:
+- `concurrency_stress`: 4 passed, 0 failed, 0 ignored ✅ (both runs)
+- `corpus_reality`: 7 passed, 0 failed, 1 ignored ✅ (both runs)
+- `embedding_migration`: 3 passed, 0 failed, 0 ignored ✅ (both runs)
+- `beir_eval` always-runnable slice: 3 passed, 0 failed, 2 ignored ✅ (both runs)
+
+**Finding:** Run-to-run variance limited to elapsed time and log interleaving. Branch outcomes stable.
+
+**Status:** ✅ Gate 8.4 CLOSED. Filed 2026-04-17.
+
+---
+
+### 2026-04-17: Final Phase 3 reconciliation and archive (Leela, Final Pass)
+
+**What:** Both reviewer gates are closed. Archive `p3-skills-benchmarks` now.
+
+**Evidence:**
+- Nibbler: Approved 2026-04-16, no blocking findings
+- Scruffy: Approved 2026-04-17, determinism confirmed
+
+**Decisions Made:**
+1. Archived `openspec/changes/p3-skills-benchmarks/` to `openspec/changes/archive/2026-04-17-p3-skills-benchmarks/` with status: complete
+2. Updated tasks.md: task 8.2 `[ ]` → `[x]` (Nibbler approval), removed "Remaining blockers" section
+3. Updated all documentation (README, roadmap, roadmap.md on docs-site) to reflect "Phase 3 complete" (not pending)
+4. Updated PR #31 body: both proposals archived, both gates passed, no remaining blockers, ready to merge and tag v1.0.0
+
+**Why Now:** Previous Leela pass correctly held archive while gates were open. Now they are closed. Archiving with closed gates is honest and complete.
+
+**Status:** ✅ COMPLETE. Both proposals now in archive. Phase 3 engineering done. PR #31 ready for merge + v1.0.0 tag.
+
+---
+
+### 2026-04-17: Outstanding Phase 3 follow-ups (Nibbler-noted, non-blocking)
+
+**Items:**
+1. Document explicitly that `brain_gap.context` is validated then discarded (agents should not expect to retrieve it)
+2. Add length/charset validation for `brain_raw.source` if identifiers become more exposed
+3. If gap hashes ever cross a trust boundary, replace SHA-256 with a salted/keyed form
+
+**Priority:** Low. Do not block v1.0.0 release.
+
+**Status:** Captured in Nibbler review; deferred post-v1.0.0.

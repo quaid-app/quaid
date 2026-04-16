@@ -410,3 +410,18 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 **Decisions:** 4 decisions logged to .squad/decisions.md (call.rs dispatch, pub methods, dirs crate, INSERT OR REPLACE).
 
 **Status:** ✅ Ready for Phase 3 review cycle.
+
+## 2026-04-17 Phase 3 CI Integration Final
+
+**What was done:**
+- Verified and extended benchmarks job in `.github/workflows/ci.yml` (task 7.1 implementation)
+- Fixed two ship-gate regressions before archival:
+  1. Added missing `benchmarks` job to ci.yml (task 7.1 noted complete but job was absent)
+  2. Fixed 2 clippy violations in tests/concurrency_stress.rs (doc-overindented-list-items, let-and-return)
+- All 8 SKILL.md files verified production-ready (no stubs)
+- 16 MCP tools registered and tested
+- Ship gate 8 validated clean
+
+**Outcome:** Phase 3 implementation complete. All reviewer gates passed. Ready for v1.0.0 tagging.
+
+**Decision file:** `.squad/decisions/inbox/fry-phase3-final.md`

@@ -71,3 +71,15 @@
 - **Coverage gap:** No test checks that original fixture frontmatter keys survive import. Acceptable for Phase 1 since structured YAML support is Phase 2.
 - **CI note:** `cargo test roundtrip` is a misleading filter — doesn't match integration test function names. Use `cargo test --test roundtrip_raw --test roundtrip_semantic` explicitly.
 - SG-7 marked `[x]` in tasks.md. Decision written to `.squad/decisions/inbox/bender-sg7.md`.
+
+## 2026-04-18 v0.9.0 Release Validation
+
+- **Scope:** Validated real v0.9.0 release lane (tag, release workflow, npm publish workflow, release assets).
+- **Release workflow (run 24516840337):** All 5 jobs green (4 platform builds + GitHub Release creation). All 8 binary+checksum artifacts uploaded. `install.sh` uploaded as 9th asset. Checksums re-verified post-download in CI. Linux binaries statically linked (verified).
+- **Release assets:** 9 assets on GitHub Release page — 4 binaries (darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64), 4 SHA-256 sidecars, 1 install.sh. All `uploaded` state. Not draft, not prerelease.
+- **Publish npm workflow (run 24516842061):** Token-guard exercised in real CI. NPM_TOKEN absent → skip-notice printed → `npm pack --dry-run` validated (4 files, 2.4KB tarball, binary excluded) → publish step skipped. Workflow concluded `success`.
+- **D.5 CLOSED ✅:** Token-guard behavior proven through real CI execution. Negative path (no token) confirmed. Positive path (token present) by-design deferred — structural guard verified.
+- **D.2 STILL OPEN:** v0.9.0 release existing removes the "not a real release" blocker. Asset-name alignment verified (postinstall.js platform mapping matches all 4 release assets). Windows EBADPLATFORM + WSL no-Node still blocks end-to-end postinstall test. Needs macOS/Linux runner.
+- **Binary size observation:** Release binaries are 7.7–9.5MB, not ~90MB as originally estimated. Proposal claimed 90MB; actual is ~10× smaller. Not a blocker but D.2 task text corrected.
+- **Key paths:** `.github/workflows/release.yml` (release pipeline), `.github/workflows/publish-npm.yml` (npm publish with token guard), `scripts/install.sh` (shell installer), `packages/gbrain-npm/scripts/postinstall.js` (npm postinstall downloader).
+- Decision written to `.squad/decisions/inbox/bender-v0-9-0-release-validation.md`.

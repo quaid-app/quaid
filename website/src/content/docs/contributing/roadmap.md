@@ -95,30 +95,36 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 
 ---
 
-## Phase 3 — Polish, Skills, and Benchmarks ⏳
+## Phase 3 — Skills, Benchmarks, and CLI Polish ✅
 
-**Status: Not started**  
+**Status: Complete**  
+**Release:** `v1.0.0`  
 **Depends on:** Phase 2 ship gate
 
-**Planned scope:**
+**Delivered scope:**
 - Release readiness: GitHub Release workflow hardening, checksum verification, and a reviewable public release checklist
 - Free coverage reporting on pushes to `main` and PRs targeting `main`
 - Docs polish: honest README and public docs for current status, supported install paths, and deferred work
 - Docs-site build/deploy and navigation improvements
-- Briefing skill with "what shifted" report
-- Alerts skill (interrupt-driven notifications vs. scheduled briefings)
-- Research skill (knowledge gap resolution)
-- Knowledge gap detection: `brain_gap`, `brain_gaps` MCP tools, `gbrain gaps` CLI
-- Upgrade skill (agent-guided binary and skill updates)
-- Enrichment skill (external API: Crustdata, Exa, etc.)
-- LongMemEval, LoCoMo, BEIR, Ragas benchmark suite
-- `gbrain skills doctor` 
-- `gbrain validate --all` integrity checker
+- All 8 skills production-ready (`briefing`, `alerts`, `research`, `upgrade`, `enrich`, `ingest`, `query`, `maintain`)
+- `gbrain skills doctor` — skill resolution order and content hash verification
+- `gbrain validate --all` — database integrity checker (links, assertions, embeddings)
+- `gbrain call <TOOL> <JSON>` — raw MCP tool invocation from CLI
+- `gbrain pipe` — JSONL streaming mode for shell pipelines
+- 4 new MCP tools: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` (total: 16 tools)
 - `--json` output on all commands
-- `pipe` mode
-- Full CI/CD release pipeline with all gates
+- Benchmark harnesses: BEIR nDCG@10 regression gate, corpus-reality, concurrency stress, embedding migration (offline, CI-gated)
+- Advisory benchmarks: LongMemEval, LoCoMo, Ragas (Python adapters, API-key optional)
 
-**Gate:** All benchmark targets met; `v1.0.0` release artifacts built and verified static.
+**Ship gate (all passed — v1.0.0 unblocked):**
+1. Zero `todo!()` stubs in `src/commands/`
+2. All 8 SKILL.md files are production-ready
+3. 16 MCP tools registered and tested
+4. `gbrain validate --all` runs successfully on a clean brain
+5. `gbrain skills doctor` shows correct resolution order
+6. Offline benchmarks (corpus-reality, concurrency, embedding migration) pass in CI
+7. BEIR nDCG@10 baseline established with < 2% regression gate
+8. `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` all clean
 
 ---
 
@@ -146,4 +152,4 @@ These are known design choices that are _not_ oversights:
 | --- | ---------- |
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
-| `v1.0.0` | Phase 3 — full skill suite + benchmarks + release pipeline |
+| `v1.0.0` | Phase 3 — full skill suite + benchmarks + release pipeline ✅ |

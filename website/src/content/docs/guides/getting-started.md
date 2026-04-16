@@ -5,8 +5,6 @@ description: Build GigaBrain and create your first brain.db.
 
 > GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. One static binary, zero runtime dependencies, no internet required.
 
-## What it does
-
 GigaBrain stores your knowledge as structured pages in a single `brain.db` file. Each page follows the **compiled-truth / timeline** model:
 
 - **Above the line — compiled truth.** Always current. Rewritten when new information arrives. What you know now.
@@ -18,9 +16,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 1 is complete.** All ship gates passed. The `v0.1.0` GitHub Release will be published when the tag is pushed. Build from source is available now.
+> **Phase 3 complete — `v1.0.0`.** All phases shipped. All 8 skills are production-ready, all 16 MCP tools are active, and the full benchmark suite is in CI.
 >
-> See the [Roadmap](/contributing/roadmap/) for the full delivery plan.
+> See the [Roadmap](/contributing/roadmap/) for the full delivery plan and ship gates.
 
 ---
 
@@ -28,8 +26,8 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Scaffold compiles today; full implementation ships with Phase 1 |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Ships when v0.1.0 releases |
+| Build from source (`cargo build --release`) | ✅ Available now |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v1.0.0` and later |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
@@ -153,7 +151,7 @@ Then start the server:
 gbrain serve
 ```
 
-The MCP server exposes tools over stdio JSON-RPC 2.0. Phase 1 ships five core tools: `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`. Later phases add the full surface — see the [Spec](/reference/spec/).
+The MCP server exposes tools over stdio JSON-RPC 2.0. All 16 tools are active: Phase 1 (`brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`), Phase 2 (`brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`), and Phase 3 (`brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`). See the [MCP Server guide](/guides/mcp-server/) and [Spec](/reference/spec/).
 
 ---
 

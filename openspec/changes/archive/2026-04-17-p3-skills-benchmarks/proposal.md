@@ -1,7 +1,7 @@
 ---
 id: p3-skills-benchmarks
 title: "Phase 3: Skills Completion, Benchmark Harnesses, and CLI Polish"
-status: proposed
+status: complete
 type: feature
 phase: 3
 owner: fry

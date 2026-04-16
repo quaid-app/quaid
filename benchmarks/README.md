@@ -8,7 +8,7 @@ Benchmarks are split into two categories:
 
 ### Offline CI Gates (mandatory — block release)
 
-These run entirely locally with no API keys required.
+These run entirely locally with no API keys required. They are wired into CI to run on every PR (CI wiring pending tasks 7.1–7.2 — run manually in the interim).
 
 | Benchmark | Metric | Gate |
 |-----------|--------|------|
@@ -239,7 +239,7 @@ Expected runtime: ~5–30 minutes depending on LLM latency and query count.
 
 ## BEIR Regression Gate
 
-The BEIR gate runs on release branches via a dedicated CI job (see `.github/workflows/ci.yml`).
+The BEIR gate is designed to run on release branches via a dedicated CI job in `.github/workflows/ci.yml`. **Note:** CI wiring for the benchmark jobs (tasks 7.1–7.2) is pending — run manually until the workflow is updated.
 
 ```bash
 # Download pinned datasets first

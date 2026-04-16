@@ -108,31 +108,32 @@ Phase 2 adds cross-reference traversal, temporal reasoning, and memory-consolida
 
 ---
 
-## Phase 3 — Polish, Skills, and Benchmarks ⏳
+## Phase 3 — Polish, Skills, and Benchmarks 🔄
 
-**Status: Not started**  
-**OpenSpec:** [`openspec/changes/p3-polish-benchmarks/`](../openspec/changes/p3-polish-benchmarks/)  
+**Status: In progress**
+**Branch:** `phase3/p3-skills-benchmarks`
+**OpenSpec:** [`openspec/changes/p3-skills-benchmarks/`](../openspec/changes/p3-skills-benchmarks/)
 **Depends on:** Phase 2 ship gate
 
-**Planned scope:**
-- Release readiness: GitHub Release workflow hardening, checksum verification, and a reviewable public release checklist
-- Free coverage reporting on pushes to `main` and PRs targeting `main`
-- Docs polish: honest README and public docs for current status, supported install paths, and deferred work
-- Docs-site build/deploy and navigation improvements
-- Briefing skill with "what shifted" report
-- Alerts skill (interrupt-driven notifications vs. scheduled briefings)
-- Research skill (knowledge gap resolution)
-- Knowledge gap detection: `brain_gap`, `brain_gaps` MCP tools, `gbrain gaps` CLI
-- Upgrade skill (agent-guided binary and skill updates)
-- Enrichment skill (external API: Crustdata, Exa, etc.)
-- LongMemEval, LoCoMo, BEIR, Ragas benchmark suite
-- `gbrain skills doctor` 
-- `gbrain validate --all` integrity checker
-- `--json` output on all commands
-- `pipe` mode
-- Full CI/CD release pipeline with all gates
+Phase 3 is delivered in two OpenSpec slices:
 
-**Gate:** All benchmark targets met; `v1.0.0` release artifacts built and verified static.
+- **`p3-polish-benchmarks`** — release readiness, coverage CI, docs polish. **Already shipped** on this branch.
+- **`p3-skills-benchmarks`** — skills completion, benchmark harnesses, CLI polish, MCP Phase 3 tools. **This branch.**
+
+**Completed in this branch:**
+- 5 production-ready agent skills: `briefing`, `alerts`, `research`, `upgrade`, `enrich`
+- CLI stub completion: `validate --all/--links/--assertions/--embeddings`, `call`, `pipe`, `skills list`, `skills doctor`
+- MCP Phase 3 tools: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` (16 tools total)
+- `--json` flag coverage across all commands
+- Benchmark harnesses: BEIR (nDCG@10), corpus-reality, concurrency stress, embedding migration, LongMemEval, LoCoMo, Ragas
+
+**Pending before ship gate:**
+- CI benchmark gate wiring: offline benchmark jobs in `.github/workflows/ci.yml` (tasks 7.1–7.2)
+- Nibbler adversarial review: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
+- Scruffy benchmark reproducibility sign-off
+- `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` all clean
+
+**Gate:** All offline benchmark targets met; `v1.0.0` release artifacts built and verified static.
 
 ---
 

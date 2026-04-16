@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- Phase 3 review confirmed that raw-data and gap endpoints are only acceptable once payload shape checks, overwrite intent, and transport-size caps are all closed together; one missing seam keeps the whole surface soft.
 - Adversarial review begins at the proposal, not only at the code diff.
 - This project values hidden-risk discovery and reviewer lockout discipline.
 - Local-first systems still need security and misuse thinking.
@@ -38,3 +39,4 @@
 
 **Decision:** nibbler-phase3-core-review.md merged to decisions.md  
 **Task 8.2:** Not marked complete; different revision author required (reviewer lockout).
+

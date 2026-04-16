@@ -14,6 +14,9 @@
 - "Deferred follow-on" language for npm/installer must be explicit in both README and docs, not buried in a single footnote. A table showing supported-now vs. deferred reads faster than prose.
 - When README and docs roadmap disagree on phase status (e.g., "not started" vs. "in progress"), the roadmap docs are usually more current — resolve by reading both sources before writing.
 - Phase 3 gate in roadmap.md said `v0.1.0` when it should have been `v1.0.0` — easy to miss without cross-checking version targets table.
+- When a phase ships in two OpenSpec slices, name both explicitly in the roadmap — a single "Phase 3" label masks which proposal delivered what, and contributors need to know which to read.
+- Benchmark README can say "runs in CI" before the CI job is wired — always cross-check tasks.md for the CI wiring tasks before asserting that a gate is live.
+- MCP tool count must be audited in docs whenever a phase adds tools; it drifts silently when the count is buried in prose rather than derived from a single authoritative table.
 
 ## 2026-04-15 P2 Docs Audit
 
@@ -48,7 +51,21 @@
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — Amy's three-file decision (getting-started, roadmap, contributing split) + final doc fix decisions.
 
 
-## 2026-04-17 Phase 3 Skills Authoring
+## 2026-04-17 Phase 3 Docs Audit (final)
+
+**Role:** Phase 3 documentation owner — README, docs/, benchmarks/README.md
+
+**What happened:**
+- Updated README.md: status badge (Phase 3 in progress), roadmap table (🔄 In progress with actual scope), install table (v1.0.0 target, Phases 1–3 complete), usage section (added validate/call/pipe/skills commands), MCP tools (12 → 16, added Phase 3 tools), skills section (production-ready note, skills list + doctor commands), contributing section (Phase 3 is the active phase).
+- Updated docs/roadmap.md: Phase 3 block rewritten to name both OpenSpec slices, list completed items, and list pending ship-gate items.
+- Updated docs/getting-started.md: status section (Phase 3 in progress), install table (v1.0.0), first-brain note (all phases complete), MCP tools (16), skills (production-ready), added full Phase 3 commands section (validate, call, pipe, skills).
+- Updated docs/contributing.md: repository layout (added validate.rs, call.rs, pipe.rs, skills.rs), reviewer gates table (added Leela Phase 3 skills, Scruffy benchmark, Kif benchmark lanes), CI gate note (Phase 3 benchmark tests).
+- Updated benchmarks/README.md: added CI wiring caveat to both offline gates section and BEIR regression gate section (tasks 7.1–7.2 still pending).
+- Wrote 6 decisions to `.squad/decisions/inbox/amy-phase3-docs.md`.
+
+**Outcome:** Phase 3 docs pass COMPLETE. All prose docs outside website/ are now consistent with the current branch state.
+
+**Learnings (added above).**
 
 **Role:** Skills author for Phase 3 — tasks 1.1 through 1.5
 

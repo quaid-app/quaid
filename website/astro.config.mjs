@@ -40,7 +40,7 @@ export default defineConfig({
         { label: "MCP Server", items: ["guides/mcp-server"] },
         {
           label: "Guides",
-          items: ["guides/intelligence-layer"],
+          items: ["guides/intelligence-layer", "guides/phase3-capabilities"],
         },
         {
           label: "Architecture",

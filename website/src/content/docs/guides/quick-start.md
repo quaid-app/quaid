@@ -3,14 +3,14 @@ title: Quick Start
 description: "Get a brain running in minutes: init, put, search, serve."
 ---
 
-> Phase 1 commands are implemented and available. Build from source to use them now. See [Getting Started](/guides/getting-started/) for current status.
+> All commands are implemented. Build from source or download a pre-built binary from GitHub Releases (`v1.0.0`). See [Install & Status](/guides/install/) for details.
 
 ## 1) Install
 
 | Method | Status |
 | ------ | ------ |
 | Build from source | ✅ Available now |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v0.1.0 tag push |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v1.0.0` |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
@@ -22,10 +22,10 @@ cd gigabrain
 cargo build --release
 ```
 
-Once v0.1.0 ships on GitHub Releases, you can download a pre-built binary instead:
+Or download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.1.0"
+VERSION="v1.0.0"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"

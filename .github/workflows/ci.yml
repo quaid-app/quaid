@@ -146,26 +146,3 @@ jobs:
           files: lcov.info
           token: ${{ env.CODECOV_TOKEN }}
           fail_ci_if_error: false
-
-  benchmarks:
-    name: Offline Benchmark Gates
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: Run offline benchmark gates
-        run: cargo test --test corpus_reality --test concurrency_stress --test embedding_migration

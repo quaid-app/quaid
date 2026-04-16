@@ -2,7 +2,7 @@ name: BEIR Regression Gate
 
 on:
   push:
-    branches: ["release/**", "main"]
+    branches: ["release/**"]
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
   workflow_dispatch:

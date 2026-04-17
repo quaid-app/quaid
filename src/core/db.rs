@@ -284,7 +284,7 @@ pub fn read_brain_config(conn: &Connection) -> Result<Option<BrainConfig>, DbErr
     let schema_version = rows
         .remove("schema_version")
         .unwrap()
-        .parse::<u32>()
+        .parse::<i64>()
         .map_err(|_| DbError::Schema {
             message: "brain_config.schema_version must be an integer".to_owned(),
         })?;

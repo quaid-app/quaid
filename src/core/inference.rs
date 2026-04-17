@@ -16,9 +16,11 @@ use std::path::{Path, PathBuf};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+#[cfg(feature = "online-model")]
 use candle_transformers::models::xlm_roberta::{Config as XLMRobertaConfig, XLMRobertaModel};
 use rusqlite::types::ToSql;
 use rusqlite::Connection;
+#[cfg(feature = "online-model")]
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
@@ -505,12 +507,11 @@ fn embed_candle_xlm_roberta(
             message: format!("attention_mask tensor: {e}"),
         })?;
 
-    let output =
-        model
-            .forward(&input_ids, &attention_mask)
-            .map_err(|e| InferenceError::Internal {
-                message: format!("XLM-R forward: {e}"),
-            })?;
+    let output = model
+        .forward(&input_ids, &attention_mask, None, None, None, None)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("XLM-R forward: {e}"),
+        })?;
 
     mean_pool_and_normalize(output, attention_mask)
 }

@@ -1,0 +1,118 @@
+---
+interface Props {
+	code: string;
+	label?: string;
+	tone?: 'soft' | 'terminal';
+	note?: string;
+}
+
+const { code, label, tone = 'soft', note } = Astro.props;
+---
+
+<figure class:list={['gb-code-panel', `is-${tone}`]}>
+	{tone === 'terminal' ? (
+		<figcaption class="gb-code-panel__header">
+			<span class="gb-code-panel__lights" aria-hidden="true">
+				<i />
+				<i />
+				<i />
+			</span>
+			{label && <span class="gb-code-panel__label">{label}</span>}
+		</figcaption>
+	) : (
+		label && <figcaption class="gb-code-panel__caption">{label}</figcaption>
+	)}
+
+	<pre><code>{code}</code></pre>
+	{note && <p class="gb-code-panel__note">{note}</p>}
+</figure>
+
+<style>
+	.gb-code-panel {
+		margin: 0;
+		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+		border-radius: 1rem;
+		overflow: hidden;
+		background: color-mix(in srgb, var(--sl-color-white) 88%, var(--sl-color-gray-6));
+		box-shadow: 0 18px 32px -24px rgba(30, 20, 15, 0.35);
+	}
+
+	.gb-code-panel.is-terminal {
+		background: linear-gradient(180deg, #221714 0%, #18100e 100%);
+		border-color: color-mix(in srgb, var(--sl-color-orange-high) 18%, #221714);
+	}
+
+	.figcaption,
+	pre,
+	p {
+		margin: 0;
+	}
+
+	.gb-code-panel__caption,
+	.gb-code-panel__header {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.9rem 1rem 0;
+		color: var(--sl-color-gray-3);
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+	}
+
+	.gb-code-panel__header {
+		padding: 0.85rem 1rem;
+		background: rgba(255, 255, 255, 0.04);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+	}
+
+	.gb-code-panel__lights {
+		display: inline-flex;
+		gap: 0.42rem;
+	}
+
+	.gb-code-panel__lights i {
+		display: block;
+		width: 0.68rem;
+		height: 0.68rem;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.18);
+	}
+
+	.gb-code-panel__lights i:nth-child(1) {
+		background: #f08f6e;
+	}
+
+	.gb-code-panel__lights i:nth-child(2) {
+		background: #edc96a;
+	}
+
+	.gb-code-panel__lights i:nth-child(3) {
+		background: #7cc19e;
+	}
+
+	.gb-code-panel__label {
+		color: rgba(255, 255, 255, 0.72);
+	}
+
+	pre {
+		padding: 1rem 1.05rem 1.15rem;
+		overflow-x: auto;
+		font-family: var(--sl-font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace);
+		font-size: 0.94rem;
+		line-height: 1.65;
+		color: color-mix(in srgb, var(--sl-color-gray-2) 80%, white 20%);
+	}
+
+	.is-terminal pre {
+		color: rgba(255, 247, 242, 0.92);
+	}
+
+	.gb-code-panel__note {
+		padding: 0 1.05rem 1rem;
+		color: var(--sl-color-gray-3);
+		font-size: 0.92rem;
+		line-height: 1.55;
+	}
+</style>

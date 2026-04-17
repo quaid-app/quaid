@@ -1,0 +1,98 @@
+---
+title: Why GigaBrain
+description: "A local-first brain that scales past thousands of markdown files — no cloud, no API keys, no compromise."
+guide:
+  eyebrow: Core Philosophy
+  accentBar: true
+---
+
+import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
+import GuideFeatureCard from "../../../components/docs/GuideFeatureCard.astro";
+import GuideVisualPanel from "../../../components/docs/GuideVisualPanel.astro";
+
+## Principles
+
+<div class="gb-guide-grid gb-guide-grid--two">
+  <GuideFeatureCard
+    icon={"laptop"}
+    title={"Zero cloud, zero keys"}
+    variant={"line"}
+  >
+    <p>
+      No subscription gate, no inference API, no dependency on a service staying
+      alive somewhere else. The intelligence runs where the data lives.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard
+    icon={"approve-check-circle"}
+    title={"Radical privacy"}
+    variant={"line"}
+  >
+    <p>
+      Your notes are never transmitted, trained on, or indexed by a third party.
+      The machine doing the work is the machine you already own.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard
+    icon={"magnifier"}
+    title={"Instant retrieval"}
+    variant={"line"}
+  >
+    <p>
+      Hybrid local search keeps latency low enough to stay in the flow of
+      thought instead of waiting on a remote pipeline to wake up.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon={"open-book"} title={"Future proof"} variant={"line"}>
+    <p>
+      Markdown and SQLite are durable formats. Your knowledge stays readable and
+      queryable long after proprietary products come and go.
+    </p>
+  </GuideFeatureCard>
+</div>
+
+<GuideVisualPanel
+  variant={"studio"}
+  label={"The Digital Atelier"}
+  note={
+    "Built like a quiet studio for thought: warm materials, stable foundations, and zero dependence on the cloud."
+  }
+/>
+
+## The information sovereign
+
+<p class="gb-guide-section-intro">
+  The current landscape of knowledge management is fractured by dependency. We
+  rent our memory from services that can change policy, disappear, or decide
+  that semantic features now require yet another key and another bill.
+</p>
+
+<p>
+  <strong>GigaBrain</strong> flips that arrangement. It is an architectural
+  approach to software — built with the same philosophy as a physical library:
+  heavy, stable, inspectable, and entirely yours.
+</p>
+
+<blockquote class="gb-guide-quote">
+  Intelligence should not require a handshake with the cloud.
+</blockquote>
+
+<p>
+  It is also built for an agent-first world. The same single-file brain can
+  answer full-text searches, semantic queries, graph exploration, contradiction
+  checks, and MCP tool calls without handing custody of your data to anyone
+  else.
+</p>
+
+<GuideActionBanner
+  title={"Ready to own the stack end to end?"}
+  primaryHref={"/guides/install/"}
+  primaryText={"Install GigaBrain"}
+  secondaryHref={"https://github.com/macro88/gigabrain"}
+  secondaryText={"View GitHub"}
+>
+  <p>
+    Start with the install guide, then move into the quick-start flow and wire
+    the same local brain into the tools and agents you already use.
+  </p>
+</GuideActionBanner>

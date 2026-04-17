@@ -1,0 +1,31 @@
+---
+import { Icons } from '../../../node_modules/@astrojs/starlight/components-internals/Icons';
+
+interface Props {
+	name: keyof typeof Icons;
+	label?: string;
+	size?: string;
+	class?: string;
+}
+
+const { name, label, size = '1em' } = Astro.props;
+const a11yAttrs = label ? ({ 'aria-label': label } as const) : ({ 'aria-hidden': 'true' } as const);
+---
+
+<svg
+	{...a11yAttrs}
+	class={Astro.props.class}
+	width="16"
+	height="16"
+	viewBox="0 0 24 24"
+	fill="currentColor"
+	set:html={Icons[name]}
+/>
+
+<style define:vars={{ 'guide-icon-size': size }}>
+	svg {
+		width: var(--guide-icon-size);
+		height: var(--guide-icon-size);
+		flex-shrink: 0;
+	}
+</style>

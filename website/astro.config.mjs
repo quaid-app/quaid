@@ -18,6 +18,7 @@ export default defineConfig({
       customCss: ["./src/styles/custom.css"],
       components: {
         Header: "./src/components/Header.astro",
+        PageTitle: "./src/components/PageTitle.astro",
       },
       social: [
         {

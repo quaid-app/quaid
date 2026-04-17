@@ -717,3 +717,102 @@ button,
   text-align: center;
   margin-bottom: 1.5rem;
 }
+
+@layer starlight.custom {
+  .gb-guide-stack {
+    display: grid;
+    gap: clamp(1.5rem, 3vw, 2.5rem);
+  }
+
+  .gb-guide-stack--tight {
+    gap: 1.25rem;
+  }
+
+  .gb-guide-grid {
+    display: grid;
+    gap: 1.15rem;
+  }
+
+  .gb-guide-grid--two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .gb-guide-grid--dense {
+    gap: 0.9rem;
+  }
+
+  .gb-guide-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(18rem, 0.92fr);
+    gap: clamp(1.4rem, 4vw, 2.5rem);
+    align-items: start;
+  }
+
+  .gb-guide-split--compact {
+    align-items: center;
+  }
+
+  .gb-guide-surface {
+    padding: clamp(1.25rem, 3vw, 2rem);
+    border: 1px solid
+      color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+    border-radius: 1.25rem;
+    background: color-mix(
+      in srgb,
+      var(--sl-color-white) 90%,
+      var(--sl-color-gray-6)
+    );
+    box-shadow: 0 22px 34px -30px rgba(30, 20, 15, 0.45);
+  }
+
+  .gb-guide-section-intro {
+    margin: 0;
+    max-width: 46rem;
+    color: var(--sl-color-gray-3);
+    font-size: 1.02rem;
+    line-height: 1.72;
+    text-wrap: pretty;
+  }
+
+  .gb-guide-subtitle {
+    margin: 0 0 0.85rem;
+    color: var(--gb-on-surface);
+    font-size: clamp(1.3rem, 2vw, 1.75rem);
+    font-weight: 740;
+    letter-spacing: -0.025em;
+  }
+
+  .gb-guide-note {
+    margin: 0;
+    padding: 1rem 1.15rem;
+    border-left: 3px solid
+      color-mix(in srgb, var(--sl-color-orange) 72%, transparent);
+    border-radius: 0.95rem;
+    background: color-mix(in srgb, var(--sl-color-orange-low) 28%, transparent);
+    color: var(--sl-color-gray-2);
+  }
+
+  .gb-guide-note p {
+    margin: 0;
+    line-height: 1.65;
+  }
+
+  .gb-guide-quote {
+    margin: clamp(1.5rem, 4vw, 2.5rem) 0;
+    padding: 0.25rem 0 0.25rem 1.35rem;
+    border-left: 4px solid
+      color-mix(in srgb, var(--sl-color-orange) 72%, transparent);
+    color: var(--gb-on-surface);
+    font-size: clamp(1.25rem, 2.6vw, 1.7rem);
+    font-style: italic;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  @media (max-width: 60rem) {
+    .gb-guide-grid--two,
+    .gb-guide-split {
+      grid-template-columns: 1fr;
+    }
+  }
+}

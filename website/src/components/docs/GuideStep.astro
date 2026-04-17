@@ -1,0 +1,88 @@
+---
+import CodePanel from './CodePanel.astro';
+
+interface Props {
+	number: string;
+	title: string;
+	code?: string;
+	codeLabel?: string;
+	codeTone?: 'soft' | 'terminal';
+}
+
+const { number, title, code, codeLabel, codeTone = 'soft' } = Astro.props;
+---
+
+<section class="gb-guide-step">
+	<div class="gb-guide-step__index" aria-hidden="true">{number}</div>
+	<div class="gb-guide-step__content">
+		<h3>{title}</h3>
+		<div class="gb-guide-step__body">
+			<slot />
+		</div>
+		{code && <CodePanel code={code} label={codeLabel} tone={codeTone} />}
+	</div>
+</section>
+
+<style>
+	.gb-guide-step {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 1.2rem;
+		align-items: start;
+	}
+
+	.gb-guide-step__index {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 3rem;
+		height: 3rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--sl-color-orange) 14%, transparent);
+		color: var(--sl-color-orange-high);
+		font-family: var(--__sl-font);
+		font-size: 0.92rem;
+		font-weight: 800;
+		letter-spacing: 0.06em;
+	}
+
+	.gb-guide-step__content {
+		display: grid;
+		gap: 1rem;
+	}
+
+	.gb-guide-step h3 {
+		margin: 0;
+		color: var(--sl-color-white);
+		font-size: clamp(1.4rem, 2vw, 1.8rem);
+		font-weight: 750;
+		letter-spacing: -0.03em;
+	}
+
+	.gb-guide-step__body {
+		color: var(--sl-color-gray-3);
+		font-size: 1rem;
+		line-height: 1.7;
+	}
+
+	.gb-guide-step__body :global(p) {
+		margin: 0;
+	}
+
+	.gb-guide-step__body :global(code) {
+		font-family: var(--sl-font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace);
+		font-size: 0.92em;
+	}
+
+	@media (max-width: 40rem) {
+		.gb-guide-step {
+			grid-template-columns: 1fr;
+			gap: 0.8rem;
+		}
+
+		.gb-guide-step__index {
+			width: 2.7rem;
+			height: 2.7rem;
+		}
+	}
+</style>

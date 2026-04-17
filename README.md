@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
-**Status:** `v0.9.2` release lane — Phase 3 is complete, and the dual-release line now ships `airgapped` + `online` install channels with configurable BGE models in the online build. [See the roadmap →](#roadmap)
+**Status:** `v0.9.4` — Phase 3 complete, FTS5 search hardening, and assertion extraction tightening shipped. The dual-release line ships `airgapped` + `online` install channels with configurable BGE models in the online build. [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,7 +17,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.2` dual-release prep) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.4` — search hardening + assertion tightening) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -75,18 +75,18 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> Phase 3 is complete. `v0.9.2` ships two release channels: `airgapped` (embedded BGE-small) and `online` (downloads/caches the selected BGE model on first use).
+> Phase 3 is complete. `v0.9.4` ships FTS5 search hardening and assertion extraction tightening on top of the dual-release channels introduced in `v0.9.2`: `airgapped` (embedded BGE-small) and `online` (downloads/caches the selected BGE model on first use).
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.2` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.4` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for the online asset |
 
-**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.2`. The npm package remains a single wrapper package and targets the `online` channel by default.
+**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.4`. The npm package remains a single wrapper package and targets the `online` channel by default.
 
 Install with the shell script:
 
@@ -121,7 +121,7 @@ curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/inst
 Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.9.2"
+VERSION="v0.9.4"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 ASSET="gbrain-${PLATFORM}-airgapped"   # or: gbrain-${PLATFORM}-online
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
@@ -325,7 +325,7 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ## Contributing
 
-GigaBrain is open for contributions. All three phases have shipped. Phase 3 is currently released through the `v0.9.2` dual-channel line.
+GigaBrain is open for contributions. All three phases have shipped. The current release is `v0.9.4`, which adds FTS5 search hardening and assertion extraction tightening on top of the `v0.9.2` dual-channel line.
 
 **How we work:**
 

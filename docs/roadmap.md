@@ -128,7 +128,7 @@ Phase 3 was delivered in two OpenSpec slices:
 - Benchmark harnesses: BEIR (nDCG@10), corpus-reality, concurrency stress, embedding migration, LongMemEval, LoCoMo, Ragas
 - CI benchmark gate wiring in `.github/workflows/ci.yml`
 
-**Gate:** All offline benchmark targets met; `v0.9.2` dual-channel release artifacts built and verified.
+**Gate:** All offline benchmark targets met; `v0.9.2` dual-channel release artifacts built and verified. `v0.9.4` adds FTS5 search hardening and assertion extraction tightening (see Version targets below).
 
 ---
 
@@ -156,3 +156,4 @@ These are known design choices that are _not_ oversights:
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
 | `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
+| `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter; #55 remains a post-ship rerun gate) |

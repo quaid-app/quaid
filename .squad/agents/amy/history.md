@@ -86,9 +86,24 @@
 - The two-phase store-then-extract pattern (raw_data first, compiled_truth second) should be consistent across all enrichment sources. Establish this as a doc convention early so it doesn't drift per-source.
 - `brain_gap_approve` as a workflow dependency (vs. a real tool) is a subtle but important distinction that must be stated explicitly in the skill — agents will try to call it otherwise.
 
-## Learnings
+## 2026-04-19: v0.9.4 OpenSpec alignment — FTS robustness and assertion tightening
 
-- **Always verify the actual Cargo.toml `[features]` default before writing source-build docs.** The default channel can differ from what earlier proposals assumed. Docs claiming "airgapped default" when Cargo actually defaults to `online-model` are a silent correctness bug that real users hit on first build.
+**Role:** OpenSpec artifact owner for two v0.9.4 lanes
+
+**What happened:**
+- Completed `fts5-search-robustness/tasks.md`: added Phase E.3 (Kif's benchmark validation commands with `benchmark_issue_check.db`) and Phase E.4 (DAB rerun checkpoint requiring zero crash/parse-error failures before the lane closes). Phase D already covered all four character classes (`?`, `'`, `%`, dotted-version).
+- Aligned `assertion-extraction-tightening` to Kif's v0.9.4 triage: removed `#55` from `closes:` in proposal.md (now `related_issues: ["#55"]`); added Non-Goal bullet deferring the semantic-similarity gate pending rerun; replaced Design Decision 6 with a "deferred pending rerun" decision; rewrote tasks.md Phase C/E/F — removed the full Phase E semantic gate implementation (E.1–E.5), added C.5 (corpus-reality regression for the #38 case), and replaced Phase F with a lean Phase E verification that includes a #55 rerun gate (E.4) as a decision checkpoint, not an implementation task.
+- Noted `fts-search-hardening/` stub as redundant in `.squad/decisions/inbox/amy-fts-search-hardening-duplicate.md` with an archival action item. Did not delete it.
+
+**Outcome:** Both lanes are now apply-ready and aligned to Kif's benchmark triage. The assertion lane lands extraction tightening for #38; #55 is a rerun/decision hook, not a code task.
+
+**Learnings:**
+- When a triage decision says "rerun first, then decide," the right task form is a decision checkpoint (a checklist item that gates a future lane), not an implementation task. Tasks that implement something that might not be needed add cost and drift.
+- A "deferred decision" in design.md is more useful than a deleted decision — it records the reasoning and the trigger condition for the future lane, so whoever picks up #55 next has context.
+- Redundant OpenSpec stubs (empty .openspec.yaml only) should be noted in a decision inbox item rather than deleted, so archive cleanup can happen atomically when the superseding lane ships.
+
+
+The default channel can differ from what earlier proposals assumed. Docs claiming "airgapped default" when Cargo actually defaults to `online-model` are a silent correctness bug that real users hit on first build.
 - **"slim" is a former channel-name synonym, not just a size adjective.** Earlier proposals (dual-release-distribution) used "slim" as a channel name; the accepted contract (bge-small-dual-release-channels) uses "online". Any word that doubles as both an adjective and a historical channel name needs explicit audit whenever a rename lands — grep for the exact old term, not just the new one.
 - **Embedded code snippets in spec.md drift independently from source.** spec.md contains a Cargo.toml `[features]` block and a Build section that can diverge silently from the live Cargo.toml. Include these in the audit checklist for any release that changes Cargo features or default channels.
 - **The website and docs/ may drift in different directions after a crash.** In this pass the website was already correct while docs/ was stale. Future passes should always diff both surfaces against the approved design rather than assuming one is authoritative.

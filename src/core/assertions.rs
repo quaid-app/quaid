@@ -733,6 +733,7 @@ mod tests {
             assert_eq!(row_count, 0);
         }
 
+        #[test]
         fn duplicate_matches_in_content_insert_one_row() {
             let conn = open_test_db();
             insert_page(

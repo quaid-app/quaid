@@ -107,6 +107,25 @@ fn indented_assertions_example_does_not_trigger_extraction() {
     assert_eq!(row_count, 0);
 }
 
+#[test]
+fn fenced_assertions_example_does_not_trigger_extraction() {
+    let conn = open_test_db();
+    insert_page(
+        &conn,
+        "people/alice",
+        "Reference example:\n\n```md\n## Assertions\nAlice works at Acme Corp.\n```\n",
+    );
+
+    let page = get_page(&conn, "people/alice").unwrap();
+    let inserted = assertions::extract_assertions(&page, &conn).unwrap();
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
+        .unwrap();
+
+    assert_eq!(inserted, 0);
+    assert_eq!(row_count, 0);
+}
+
 // ── check CLI integration ────────────────────────────────────
 
 #[test]

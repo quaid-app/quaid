@@ -234,6 +234,41 @@ enum Commands {
     Version,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum EarlyCommand<'a> {
+    None,
+    Init(&'a str),
+    Version,
+}
+
+fn early_command<'a>(cli: &'a Cli) -> EarlyCommand<'a> {
+    match &cli.command {
+        Commands::Version => EarlyCommand::Version,
+        Commands::Init { path } => {
+            let db_path = cli.db.as_deref().unwrap_or("brain.db");
+            EarlyCommand::Init(path.as_deref().unwrap_or(db_path))
+        }
+        _ => EarlyCommand::None,
+    }
+}
+
+fn validate_flags_from_args(
+    all: bool,
+    links: bool,
+    assertions: bool,
+    embeddings: bool,
+) -> commands::validate::CheckFlags {
+    if all || (!links && !assertions && !embeddings) {
+        commands::validate::CheckFlags::all()
+    } else {
+        commands::validate::CheckFlags {
+            links,
+            assertions,
+            embeddings,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -241,14 +276,10 @@ async fn main() -> Result<()> {
         core::inference::coerce_model_for_build(&core::inference::resolve_model(&cli.model));
 
     // Commands that don't require a database connection
-    match &cli.command {
-        Commands::Version => return commands::version::run(),
-        Commands::Init { path } => {
-            let db_path = cli.db.as_deref().unwrap_or("brain.db");
-            let init_path = path.as_deref().unwrap_or(db_path);
-            return commands::init::run(init_path, &requested_model);
-        }
-        _ => {}
+    match early_command(&cli) {
+        EarlyCommand::Version => return commands::version::run(),
+        EarlyCommand::Init(path) => return commands::init::run(path, &requested_model),
+        EarlyCommand::None => {}
     }
 
     let db_path = cli.db.unwrap_or_else(|| "brain.db".to_owned());
@@ -335,15 +366,7 @@ async fn main() -> Result<()> {
             assertions,
             embeddings,
         } => {
-            let flags = if all || (!links && !assertions && !embeddings) {
-                commands::validate::CheckFlags::all()
-            } else {
-                commands::validate::CheckFlags {
-                    links,
-                    assertions,
-                    embeddings,
-                }
-            };
+            let flags = validate_flags_from_args(all, links, assertions, embeddings);
             commands::validate::run(&db, &flags, cli.json)
         }
         Commands::Serve => commands::serve::run(db).await,
@@ -351,5 +374,51 @@ async fn main() -> Result<()> {
         Commands::Skills { action } => commands::skills::run(action, cli.json),
         Commands::Call { tool, params } => commands::call::run(db, &tool, params),
         Commands::Pipe => commands::pipe::run(db),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn early_command_returns_version_for_version_subcommand() {
+        let cli = Cli::try_parse_from(["gbrain", "version"]).expect("parse version");
+
+        assert_eq!(early_command(&cli), EarlyCommand::Version);
+    }
+
+    #[test]
+    fn early_command_prefers_init_path_over_global_db_flag() {
+        let cli = Cli::try_parse_from(["gbrain", "--db", "global.db", "init", "custom.db"])
+            .expect("parse init");
+
+        assert_eq!(early_command(&cli), EarlyCommand::Init("custom.db"));
+    }
+
+    #[test]
+    fn early_command_uses_global_db_flag_when_init_path_is_omitted() {
+        let cli = Cli::try_parse_from(["gbrain", "--db", "global.db", "init"])
+            .expect("parse init without path");
+
+        assert_eq!(early_command(&cli), EarlyCommand::Init("global.db"));
+    }
+
+    #[test]
+    fn validate_flags_from_args_defaults_to_all_checks() {
+        let flags = validate_flags_from_args(false, false, false, false);
+
+        assert!(flags.links);
+        assert!(flags.assertions);
+        assert!(flags.embeddings);
+    }
+
+    #[test]
+    fn validate_flags_from_args_preserves_explicit_selection() {
+        let flags = validate_flags_from_args(false, true, false, true);
+
+        assert!(flags.links);
+        assert!(!flags.assertions);
+        assert!(flags.embeddings);
     }
 }

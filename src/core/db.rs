@@ -520,6 +520,50 @@ mod tests {
     }
 
     #[test]
+    fn brain_config_to_model_config_restores_pinned_hashes_for_standard_aliases() {
+        let config = BrainConfig {
+            model_id: "BAAI/bge-large-en-v1.5".to_owned(),
+            model_alias: "large".to_owned(),
+            embedding_dim: 1024,
+            schema_version: 4,
+        };
+
+        let model = config.to_model_config();
+
+        assert_eq!(model.alias, "large");
+        assert_eq!(model.model_id, "BAAI/bge-large-en-v1.5");
+        assert_eq!(model.embedding_dim, 1024);
+        assert!(model.sha256_hashes.is_some());
+    }
+
+    #[test]
+    fn brain_config_to_model_config_preserves_custom_model_values() {
+        let config = BrainConfig {
+            model_id: "org/custom-model".to_owned(),
+            model_alias: "custom".to_owned(),
+            embedding_dim: 1536,
+            schema_version: 4,
+        };
+
+        let model = config.to_model_config();
+
+        assert_eq!(model.alias, "custom");
+        assert_eq!(model.model_id, "org/custom-model");
+        assert_eq!(model.embedding_dim, 1536);
+        assert!(model.sha256_hashes.is_none());
+    }
+
+    #[test]
+    fn brain_config_from_model_copies_runtime_metadata() {
+        let config = BrainConfig::from_model(&resolve_model("large"));
+
+        assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
+        assert_eq!(config.model_alias, "large");
+        assert_eq!(config.embedding_dim, 1024);
+        assert_eq!(config.schema_version, 4);
+    }
+
+    #[test]
     fn brain_config_roundtrip_preserves_values() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_brain.db");
@@ -561,6 +605,54 @@ mod tests {
     }
 
     #[test]
+    fn read_brain_config_rejects_non_integer_embedding_dimensions() {
+        let conn = open_connection(":memory:").unwrap();
+        write_brain_config(
+            &conn,
+            &BrainConfig {
+                model_id: "BAAI/bge-small-en-v1.5".to_owned(),
+                model_alias: "small".to_owned(),
+                embedding_dim: 384,
+                schema_version: 4,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE brain_config SET value = 'not-a-number' WHERE key = 'embedding_dim'",
+            [],
+        )
+        .unwrap();
+
+        let err = read_brain_config(&conn).unwrap_err();
+
+        assert!(matches!(err, DbError::Schema { .. }));
+    }
+
+    #[test]
+    fn read_brain_config_rejects_non_integer_schema_versions() {
+        let conn = open_connection(":memory:").unwrap();
+        write_brain_config(
+            &conn,
+            &BrainConfig {
+                model_id: "BAAI/bge-small-en-v1.5".to_owned(),
+                model_alias: "small".to_owned(),
+                embedding_dim: 384,
+                schema_version: 4,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE brain_config SET value = 'not-a-number' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+
+        let err = read_brain_config(&conn).unwrap_err();
+
+        assert!(matches!(err, DbError::Schema { .. }));
+    }
+
+    #[test]
     fn missing_brain_config_is_treated_as_legacy_small_model() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_brain.db");
@@ -588,6 +680,35 @@ mod tests {
             unreachable!()
         };
         assert!(message.contains("rm /tmp/test/brain.db && gbrain init"));
+    }
+
+    #[test]
+    fn mismatch_detection_uses_custom_model_id_in_recovery_hint() {
+        let stored = BrainConfig {
+            model_id: "org/custom-model".to_owned(),
+            model_alias: "custom".to_owned(),
+            embedding_dim: 1536,
+            schema_version: 4,
+        };
+        let requested = resolve_model("large");
+        let message = format_model_mismatch(&stored, &requested, "brain.db");
+
+        assert!(message.contains("GBRAIN_MODEL=org/custom-model gbrain <command>"));
+    }
+
+    #[test]
+    fn upgrade_legacy_small_model_names_is_noop_without_legacy_rows() {
+        let conn = open_connection(":memory:").unwrap();
+
+        upgrade_legacy_small_model_names(&conn).unwrap();
+
+        let model_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM embedding_models", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(model_count, 0);
     }
 
     #[cfg(feature = "online-model")]

@@ -1261,6 +1261,57 @@ mod tests {
     }
 
     #[test]
+    fn model_config_helper_methods_reflect_aliases_and_dimensions() {
+        let small = default_model();
+        assert_eq!(small.vec_table(), "page_embeddings_vec_384");
+        assert_eq!(small.embedding_model_name(), "BAAI/bge-small-en-v1.5");
+        assert_eq!(small.model_hint(), "small");
+        assert!(small.is_small());
+        assert!(!small.needs_dimension_hydration());
+
+        let custom = resolve_model("org/custom-model");
+        assert_eq!(custom.model_hint(), "org/custom-model");
+        assert!(!custom.is_small());
+        assert!(custom.needs_dimension_hydration());
+    }
+
+    #[test]
+    fn resolve_requested_model_uses_default_model_when_none_is_provided() {
+        let model = resolve_requested_model(None);
+
+        assert_eq!(model, default_model());
+    }
+
+    #[cfg(feature = "embedded-model")]
+    #[test]
+    fn coerce_model_for_build_falls_back_to_small_on_embedded_builds() {
+        let coerced = coerce_model_for_build(&resolve_model("large"));
+
+        assert_eq!(coerced, default_model());
+    }
+
+    #[cfg(not(feature = "online-model"))]
+    #[test]
+    fn hydrate_model_config_rejects_custom_models_without_online_support() {
+        let err = hydrate_model_config(&resolve_model("org/custom-model")).unwrap_err();
+
+        assert!(err.contains("requires the online-model build"));
+    }
+
+    #[test]
+    fn embedding_model_debug_includes_hash_shim_metadata() {
+        let model = EmbeddingModel {
+            config: resolve_model("org/custom-model"),
+            backend: EmbeddingBackend::HashShim,
+        };
+
+        let debug = format!("{model:?}");
+
+        assert!(debug.contains("HashShim"));
+        assert!(debug.contains("org/custom-model"));
+    }
+
+    #[test]
     fn embed_returns_normalized_vector_of_expected_length() {
         // Force hash shim so this test never triggers a real HuggingFace
         // download in CI (download attempt would block for up to 300s).
@@ -1301,6 +1352,57 @@ mod tests {
             .expect("empty db search should succeed");
 
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn active_model_returns_error_when_no_active_row_exists() {
+        let conn = open_test_db();
+        conn.execute("UPDATE embedding_models SET active = 0", [])
+            .expect("clear active model");
+
+        let err = active_model(&conn).unwrap_err();
+
+        assert!(matches!(err, SearchError::Internal { .. }));
+    }
+
+    #[test]
+    fn search_vec_rejects_unsafe_vec_table_names() {
+        let conn = open_test_db();
+        let model_name: String = conn
+            .query_row(
+                "SELECT name FROM embedding_models WHERE active = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch active model");
+        conn.execute(
+            "UPDATE embedding_models SET vec_table = 'page-embeddings-vec-384' WHERE active = 1",
+            [],
+        )
+        .expect("set unsafe vec table");
+        conn.execute(
+            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES ('people/alice', 'person', 'Alice', 'Founder', '', '', '{}', 'people', '', 1)",
+            [],
+        )
+        .expect("insert page");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, ?2, 1, 'truth_section', 0, 'startup founder', 'hash', 2, 'State')",
+            rusqlite::params![page_id, model_name],
+        )
+        .expect("insert embedding metadata");
+
+        let err = search_vec("startup founder", 5, None, &conn).unwrap_err();
+
+        assert!(matches!(err, SearchError::Internal { .. }));
     }
 
     #[test]
@@ -1345,6 +1447,23 @@ mod tests {
             "unexpected score: {}",
             results[0].score
         );
+    }
+
+    #[test]
+    fn embedding_to_blob_writes_little_endian_f32_values() {
+        let blob = embedding_to_blob(&[1.0, -2.5]);
+
+        assert_eq!(blob.len(), 8);
+        assert_eq!(&blob[..4], &1.0_f32.to_le_bytes());
+        assert_eq!(&blob[4..], &(-2.5_f32).to_le_bytes());
+    }
+
+    #[test]
+    fn normalize_rejects_zero_vectors() {
+        let mut values = [0.0_f32, 0.0_f32];
+        let err = normalize(&mut values).unwrap_err();
+
+        assert!(matches!(err, InferenceError::Internal { .. }));
     }
 
     #[cfg(feature = "online-model")]

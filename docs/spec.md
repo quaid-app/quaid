@@ -246,7 +246,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS pages (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     slug            TEXT    NOT NULL UNIQUE,    -- e.g. "people/pedro-franceschi"
-    type            TEXT    NOT NULL,            -- person, company, deal, yc, civic, project, concept, original, source, media, decision, commitment, action_item
+    type            TEXT    NOT NULL,            -- person, company, deal, project, concept, original, source, media, decision, commitment, action_item, area, resource, archive, journal
     title           TEXT    NOT NULL,
     summary         TEXT    NOT NULL DEFAULT '', -- executive summary (blockquote at top of compiled_truth)
     compiled_truth  TEXT    NOT NULL DEFAULT '', -- markdown, above the line
@@ -1137,24 +1137,26 @@ Importing an existing markdown brain (7,471 files at `/data/brain/`):
 
 ### Type mapping
 
+`gbrain import` resolves page types in three tiers:
+
+1. **Frontmatter `type:` wins** when present and non-blank.
+2. **Top-level folder inference** applies when `type:` is absent, blank, or null.
+3. **Fallback to `concept`** if no folder rule matches.
+
+Supported folder inference rules:
+
 ```
-Directory prefix → page type:
-  people/      → person
-  companies/   → company
-  deals/       → deal
-  yc/          → yc
-  civic/       → civic
-  projects/    → project
-  concepts/    → concept
-  originals/   → original
-  sources/     → source
-  media/       → media
-  meetings/    → source
-  programs/    → source
-  decisions/   → decision
-  commitments/ → commitment
-  actions/     → action_item
+Top-level folder (case-insensitive; numeric prefixes like `1. ` stripped) → page type:
+  Projects / 1. Projects   → project
+  Areas / 2. Areas         → area
+  Resources / 3. Resources → resource
+  Archives / 4. Archives   → archive
+  Journal / Journals       → journal
+  People                   → person
+  Companies / Orgs         → company
 ```
+
+Any other top-level folder — or a file imported from the vault root — defaults to `concept`.
 
 ### Parse algorithm
 
@@ -2933,4 +2935,3 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 ---
 
 *This spec is designed to stand alone. Everything needed to build GigaBrain is above — no prior context required. It is explicitly inspired by Garry Tan's GBrain work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 GBrain skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
-

@@ -9,7 +9,7 @@ use crate::core::migrate::ImportStats;
 /// Format the human-readable import summary line from stats.
 pub fn format_import_summary(stats: &ImportStats) -> String {
     let total_skipped = stats.total_skipped();
-    if total_skipped == 0 {
+    let mut summary = if total_skipped == 0 {
         format!("Imported {} page(s)", stats.imported)
     } else {
         let mut reasons = Vec::new();
@@ -28,7 +28,16 @@ pub fn format_import_summary(stats: &ImportStats) -> String {
             total_skipped,
             reasons.join(", ")
         )
+    };
+
+    if stats.type_inferred > 0 {
+        summary.push_str(&format!(
+            " ({} types inferred from folder)",
+            stats.type_inferred
+        ));
     }
+
+    summary
 }
 
 pub fn run(db: &Connection, path: &str, validate_only: bool) -> Result<()> {
@@ -54,6 +63,7 @@ mod tests {
             imported: 42,
             skipped_already_ingested: 0,
             skipped_non_markdown: 0,
+            type_inferred: 0,
         };
         assert_eq!(format_import_summary(&stats), "Imported 42 page(s)");
     }
@@ -64,6 +74,7 @@ mod tests {
             imported: 10,
             skipped_already_ingested: 0,
             skipped_non_markdown: 3,
+            type_inferred: 0,
         };
         assert_eq!(
             format_import_summary(&stats),
@@ -77,6 +88,7 @@ mod tests {
             imported: 0,
             skipped_already_ingested: 5,
             skipped_non_markdown: 0,
+            type_inferred: 0,
         };
         assert_eq!(
             format_import_summary(&stats),
@@ -90,10 +102,25 @@ mod tests {
             imported: 440,
             skipped_already_ingested: 7,
             skipped_non_markdown: 1,
+            type_inferred: 0,
         };
         assert_eq!(
             format_import_summary(&stats),
             "Imported 440 page(s) (8 skipped: 7 already ingested, 1 non-markdown)"
+        );
+    }
+
+    #[test]
+    fn format_summary_includes_type_inferred() {
+        let stats = ImportStats {
+            imported: 3,
+            skipped_already_ingested: 0,
+            skipped_non_markdown: 0,
+            type_inferred: 2,
+        };
+        assert_eq!(
+            format_import_summary(&stats),
+            "Imported 3 page(s) (2 types inferred from folder)"
         );
     }
 }

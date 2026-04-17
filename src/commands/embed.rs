@@ -623,11 +623,11 @@ mod tests {
         .expect("seed stale slug metadata");
 
         std::fs::create_dir_all(dir.path().join("sub")).expect("create subdir");
-        std::fs::rename(&original_path, dir.path().join("sub/note.md")).expect("move file");
+        let moved_path = dir.path().join("sub").join("note.md");
+        std::fs::rename(&original_path, &moved_path).expect("move file");
 
         crate::core::migrate::import_dir(&conn, dir.path(), false).expect("reimport moved file");
 
-        let moved_path = dir.path().join("sub/note.md");
         assert_eq!(
             lookup_source_path(&conn, "note").as_deref(),
             moved_path.to_str()

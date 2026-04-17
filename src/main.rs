@@ -76,7 +76,7 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Import a markdown directory
+    /// Import a markdown directory (infers page types from PARA folder structure)
     Import {
         path: String,
         #[arg(long)]

@@ -265,9 +265,32 @@ gbrain skills doctor
 
 ## Page types
 
-`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`
+`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`, `area`, `resource`, `archive`, `journal`
 
-The `original` type is for your own thinking — distinct from world knowledge. Everything else is compiled external intelligence.
+The `original` type is for your own thinking — distinct from compiled external intelligence.
+
+### PARA folder inference
+
+When you run `gbrain import`, page types are resolved in three tiers:
+
+1. **Frontmatter `type:` field** — if your file includes `type: project` in YAML frontmatter, that wins. Blank or null values fall through to tier 2.
+2. **Top-level folder inference** — GigaBrain infers type from the first folder in the path, supporting PARA and common Obsidian vault layouts:
+
+| Folder name | Inferred type |
+|-------------|---------------|
+| `Projects` (or `1. Projects`) | `project` |
+| `Areas` (or `2. Areas`) | `area` |
+| `Resources` (or `3. Resources`) | `resource` |
+| `Archives` (or `4. Archives`) | `archive` |
+| `Journal` / `Journals` | `journal` |
+| `People` | `person` |
+| `Companies` / `Orgs` | `company` |
+
+Folder matching is case-insensitive and strips leading numeric prefixes (e.g. `1. `, `02. `).
+
+3. **Default** — falls back to `concept` if no folder match and no frontmatter type.
+
+To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ## Contributing
 

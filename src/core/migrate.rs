@@ -15,6 +15,7 @@ pub struct ImportStats {
     pub skipped_already_ingested: usize,
     /// Files skipped because they are not Markdown (`.md`).
     pub skipped_non_markdown: usize,
+    pub type_inferred: usize,
 }
 
 impl ImportStats {
@@ -36,6 +37,7 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
             imported: 0,
             skipped_already_ingested: 0,
             skipped_non_markdown: non_markdown_count,
+            type_inferred: 0,
         });
     }
 
@@ -59,16 +61,19 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
     }
 
     if validate_only {
+        let type_inferred = parsed.iter().filter(|(_, _, e)| e.type_inferred).count();
         return Ok(ImportStats {
             imported: parsed.len(),
             skipped_already_ingested: 0,
             skipped_non_markdown: non_markdown_count,
+            type_inferred,
         });
     }
 
     // Check which hashes are already ingested
     let mut imported = 0;
     let mut skipped_already_ingested = 0;
+    let mut type_inferred_count = 0;
 
     let tx = db.unchecked_transaction()?;
 
@@ -78,6 +83,14 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
             refresh_ingest_source(&tx, hash, &file_path.to_string_lossy(), entry)?;
             skipped_already_ingested += 1;
             continue;
+        }
+
+        if entry.type_inferred {
+            type_inferred_count += 1;
+            eprintln!(
+                "Imported {} (inferred type: {})",
+                entry.slug, entry.page_type
+            );
         }
 
         insert_page(&tx, entry)?;
@@ -100,6 +113,7 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
         imported,
         skipped_already_ingested,
         skipped_non_markdown: non_markdown_count,
+        type_inferred: type_inferred_count,
     })
 }
 
@@ -172,6 +186,7 @@ struct ParsedEntry {
     slug: String,
     title: String,
     page_type: String,
+    type_inferred: bool,
     summary: String,
     compiled_truth: String,
     timeline: String,
@@ -196,10 +211,25 @@ fn parse_file(raw: &str, file_path: &Path, root: &Path) -> Result<ParsedEntry> {
         .get("title")
         .cloned()
         .unwrap_or_else(|| slug.clone());
-    let page_type = frontmatter
+
+    // Three-tier type resolution:
+    // Tier 1: explicit frontmatter type: field (non-blank, non-null wins)
+    // Tier 2: infer from top-level PARA folder name
+    // Tier 3: fallback to "concept"
+    let frontmatter_type = frontmatter
         .get("type")
-        .cloned()
-        .unwrap_or_else(|| "concept".to_string());
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("null"))
+        .map(|t| t.to_string());
+
+    let (page_type, type_inferred) = if let Some(t) = frontmatter_type {
+        (t, false)
+    } else if let Some(t) = infer_type_from_path(file_path, root) {
+        (t, true)
+    } else {
+        ("concept".to_string(), false)
+    };
+
     let wing = frontmatter
         .get("wing")
         .cloned()
@@ -211,6 +241,7 @@ fn parse_file(raw: &str, file_path: &Path, root: &Path) -> Result<ParsedEntry> {
         slug,
         title,
         page_type,
+        type_inferred,
         summary,
         compiled_truth,
         timeline,
@@ -218,6 +249,54 @@ fn parse_file(raw: &str, file_path: &Path, root: &Path) -> Result<ParsedEntry> {
         wing,
         room,
     })
+}
+
+/// Infer page type from the top-level folder in a PARA-structured vault.
+///
+/// Strips leading numeric prefixes (e.g. `1. `, `02. `) that Obsidian users
+/// commonly use for sort order, then matches case-insensitively against known
+/// PARA folder names.
+fn infer_type_from_path(file_path: &Path, root: &Path) -> Option<String> {
+    let relative = file_path.strip_prefix(root).ok()?;
+    let first_component = relative.components().next()?;
+    let folder = first_component.as_os_str().to_string_lossy();
+
+    // Strip leading numeric prefix: "1. Projects" → "Projects", "02. Areas" → "Areas"
+    let stripped = strip_numeric_prefix(&folder);
+    let normalized = stripped.to_lowercase();
+
+    match normalized.as_str() {
+        "projects" => Some("project".to_string()),
+        "areas" => Some("area".to_string()),
+        "resources" => Some("resource".to_string()),
+        "archives" => Some("archive".to_string()),
+        "journal" | "journals" => Some("journal".to_string()),
+        "people" => Some("person".to_string()),
+        "companies" | "orgs" => Some("company".to_string()),
+        _ => None,
+    }
+}
+
+/// Strip a leading numeric prefix like "1. ", "02. ", "3.  " from a folder name.
+fn strip_numeric_prefix(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    let mut i = 0;
+
+    // Skip leading digits
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+
+    // If we consumed at least one digit and next char is '.', skip the dot and any spaces
+    if i > 0 && i < bytes.len() && bytes[i] == b'.' {
+        i += 1; // skip '.'
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1; // skip trailing whitespace
+        }
+        &name[i..]
+    } else {
+        name
+    }
 }
 
 fn derive_slug_from_path(file_path: &Path, root: &Path) -> String {
@@ -782,7 +861,8 @@ mod tests {
 
         // Move the file into a subdirectory.
         fs::create_dir_all(dir.path().join("sub")).unwrap();
-        fs::rename(dir.path().join("note.md"), dir.path().join("sub/note.md")).unwrap();
+        let moved_path = dir.path().join("sub").join("note.md");
+        fs::rename(dir.path().join("note.md"), &moved_path).unwrap();
 
         import_dir(&conn, dir.path(), false).unwrap();
 
@@ -797,8 +877,9 @@ mod tests {
             initial_ref, updated_ref,
             "source_ref must change when the file moves within the directory"
         );
+        let expected_suffix = Path::new("sub").join("note.md");
         assert!(
-            updated_ref.contains("sub/note.md"),
+            Path::new(&updated_ref).ends_with(&expected_suffix),
             "source_ref should reflect the new nested path, got: {updated_ref}"
         );
     }
@@ -842,5 +923,379 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pages_updated, "[\"note\"]");
+    }
+
+    // ── infer_type_from_path tests ───────────────────────────────
+
+    #[test]
+    fn infer_type_numbered_projects() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/1. Projects/foo/bar.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("project".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_numbered_areas() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/2. Areas/health.md");
+        assert_eq!(infer_type_from_path(file, root), Some("area".to_string()));
+    }
+
+    #[test]
+    fn infer_type_plain_resources() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/Resources/book.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("resource".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_archives() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/4. Archives/old.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("archive".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_journal() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/Journal/2024-01-01.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("journal".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_journals_plural() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/Journals/entry.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("journal".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_people() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/people/alice.md");
+        assert_eq!(infer_type_from_path(file, root), Some("person".to_string()));
+    }
+
+    #[test]
+    fn infer_type_companies() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/Companies/acme.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("company".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_orgs() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/Orgs/nonprofit.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("company".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_unknown_folder() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/random/note.md");
+        assert_eq!(infer_type_from_path(file, root), None);
+    }
+
+    #[test]
+    fn infer_type_case_insensitive() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/PROJECTS/task.md");
+        assert_eq!(
+            infer_type_from_path(file, root),
+            Some("project".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_type_file_at_root_no_folder() {
+        let root = Path::new("/vault");
+        let file = Path::new("/vault/readme.md");
+        // A file directly in root has its first component as the filename itself,
+        // which won't match any PARA folder name.
+        assert_eq!(infer_type_from_path(file, root), None);
+    }
+
+    // ── integration: PARA folder import ──────────────────────────
+
+    #[test]
+    fn import_para_vault_infers_types() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // Create a mini PARA vault with no type: frontmatter
+        let folders = &[
+            ("1. Projects", "project"),
+            ("2. Areas", "area"),
+            ("Resources", "resource"),
+            ("Journal", "journal"),
+            ("people", "person"),
+        ];
+
+        for (folder, expected_type) in folders {
+            let folder_path = dir.path().join(folder);
+            fs::create_dir_all(&folder_path).unwrap();
+            fs::write(
+                folder_path.join("note.md"),
+                format!("---\ntitle: Note\n---\nContent about {expected_type}.\n"),
+            )
+            .unwrap();
+        }
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 5);
+        assert_eq!(stats.type_inferred, 5);
+
+        // Verify each page has the correct inferred type
+        for (_, expected_type) in folders {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pages WHERE type = ?1",
+                    [expected_type],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                count >= 1,
+                "expected at least 1 page of type '{expected_type}', got {count}"
+            );
+        }
+    }
+
+    #[test]
+    fn frontmatter_type_overrides_folder_inference() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in Projects/ folder but with explicit type: concept
+        let proj_dir = dir.path().join("Projects");
+        fs::create_dir_all(&proj_dir).unwrap();
+        fs::write(
+            proj_dir.join("note.md"),
+            "---\ntitle: Override\ntype: concept\n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 0);
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'Override'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "concept");
+    }
+
+    #[test]
+    fn blank_type_in_frontmatter_falls_back_to_folder_inference() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in Projects/ with `type:` explicitly set to blank — should infer from folder.
+        let proj_dir = dir.path().join("Projects");
+        fs::create_dir_all(&proj_dir).unwrap();
+        fs::write(
+            proj_dir.join("note.md"),
+            "---\ntitle: BlankType\ntype: \n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(
+            stats.type_inferred, 1,
+            "blank type: should fall back to folder inference"
+        );
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'BlankType'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "project");
+    }
+
+    #[test]
+    fn null_type_in_frontmatter_falls_back_to_folder_inference() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in Areas/ with `type: null` — should infer from folder.
+        let area_dir = dir.path().join("Areas");
+        fs::create_dir_all(&area_dir).unwrap();
+        fs::write(
+            area_dir.join("note.md"),
+            "---\ntitle: NullType\ntype: null\n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(
+            stats.type_inferred, 1,
+            "null type: should fall back to folder inference"
+        );
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'NullType'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "area");
+    }
+
+    #[test]
+    fn string_null_type_in_frontmatter_falls_back_to_folder_inference() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in Areas/ with `type: "null"` — should infer from folder.
+        let area_dir = dir.path().join("Areas");
+        fs::create_dir_all(&area_dir).unwrap();
+        fs::write(
+            area_dir.join("note.md"),
+            "---\ntitle: StringNullType\ntype: \"null\"\n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(
+            stats.type_inferred, 1,
+            "string null type: should fall back to folder inference"
+        );
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'StringNullType'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "area");
+    }
+
+    #[test]
+    fn frontmatter_type_is_trimmed_before_persist() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in Areas/ with a padded type should store the trimmed value.
+        let area_dir = dir.path().join("Areas");
+        fs::create_dir_all(&area_dir).unwrap();
+        fs::write(
+            area_dir.join("note.md"),
+            "---\ntitle: TrimmedType\ntype: \"project \"\n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 0);
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'TrimmedType'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "project");
+    }
+
+    // ── strip_numeric_prefix tests ───────────────────────────────
+
+    #[test]
+    fn strip_numeric_prefix_basic() {
+        assert_eq!(strip_numeric_prefix("1. Projects"), "Projects");
+        assert_eq!(strip_numeric_prefix("02. Areas"), "Areas");
+        assert_eq!(strip_numeric_prefix("3.  Resources"), "Resources");
+        assert_eq!(strip_numeric_prefix("Projects"), "Projects");
+        assert_eq!(strip_numeric_prefix("10. Archives"), "Archives");
+    }
+
+    // ── fallback behavior tests ───────────────────────────────────
+
+    #[test]
+    fn unknown_folder_falls_back_to_concept() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in an unrecognised folder — should default to concept
+        let misc_dir = dir.path().join("Miscellaneous");
+        fs::create_dir_all(&misc_dir).unwrap();
+        fs::write(
+            misc_dir.join("note.md"),
+            "---\ntitle: UnknownFolder\n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 0);
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'UnknownFolder'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "concept");
+    }
+
+    #[test]
+    fn root_level_file_no_type_falls_back_to_concept() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File directly at vault root (no sub-folder) — first component is the filename
+        fs::write(
+            dir.path().join("readme.md"),
+            "---\ntitle: RootFile\n---\nRoot level content.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 0);
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'RootFile'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "concept");
     }
 }

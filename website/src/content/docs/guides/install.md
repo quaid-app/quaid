@@ -81,14 +81,14 @@ curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/inst
 You can pin a version, switch to the online channel, or change the install directory:
 
 ```bash
-GBRAIN_VERSION=v0.9.1 \
-  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_VERSION=v0.9.1 sh
 
-GBRAIN_VERSION=v0.9.1 GBRAIN_CHANNEL=online \
-  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_VERSION=v0.9.1 GBRAIN_CHANNEL=online sh
 
-GBRAIN_VERSION=v0.9.1 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
-  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_VERSION=v0.9.1 GBRAIN_INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 > **Note:** The default install directory is `~/.local/bin`. System-wide paths like `/usr/local/bin`

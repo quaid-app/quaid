@@ -93,8 +93,8 @@ Install with the shell script:
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 
 # Online channel instead of the default airgapped channel
-GBRAIN_CHANNEL=online \
-  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_CHANNEL=online sh
 ```
 
 > The installer automatically writes `PATH` and `GBRAIN_DB` exports to your shell profile

@@ -213,14 +213,14 @@ main() {
   if [ -d "$INSTALL_DIR" ] && [ ! -w "$INSTALL_DIR" ]; then
     fail "Install directory is not writable: ${INSTALL_DIR}
   Either use the default (~/.local/bin) or re-run with appropriate privileges:
-    GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" curl -fsSL ... | sh
+    curl -fsSL ... | GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" sh
     sudo sh -c 'GBRAIN_INSTALL_DIR=/usr/local/bin sh' < install.sh"
   fi
 
   if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
     fail "Cannot create install directory: ${INSTALL_DIR}
   Try a user-writable path or run with appropriate privileges:
-    GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" curl -fsSL ... | sh"
+    curl -fsSL ... | GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" sh"
   fi
 
   install_path="${INSTALL_DIR}/gbrain"

@@ -201,29 +201,12 @@ GBRAIN_NO_PROFILE=0
 # ---------------------------------------------------------------
 # detect_profile — branch coverage (T10–T13)
 # ---------------------------------------------------------------
-# Restore detect_profile to its installer-defined implementation.
-# Earlier tests (T8) override it; re-source the function so T10–T13
-# exercise the real branching logic, not a test stub.
-detect_profile() {
-  shell_name="$(basename "${SHELL:-/bin/sh}" 2>/dev/null || echo "sh")"
-  case "$shell_name" in
-    zsh)
-      PROFILE_FILE="$HOME/.zshrc"
-      ;;
-    bash)
-      case "$(uname -s 2>/dev/null || true)" in
-        Darwin) PROFILE_FILE="$HOME/.bash_profile" ;;
-        *)      PROFILE_FILE="$HOME/.bashrc" ;;
-      esac
-      ;;
-    *)
-      PROFILE_FILE="$HOME/.profile"
-      ;;
-  esac
-  if [ ! -f "$PROFILE_FILE" ]; then
-    touch "$PROFILE_FILE" 2>/dev/null || true
-  fi
-}
+# Restore detect_profile to the PRODUCTION implementation by re-sourcing
+# install.sh.  Earlier tests (T5-T8) override detect_profile with test
+# stubs; re-sourcing is the only reliable way to recover the real function
+# without copy-pasting its body (which would silently diverge if the
+# production code changed).
+. "$INSTALL_SH"
 
 # T10: zsh → ~/.zshrc (any OS)
 SHELL=/usr/bin/zsh detect_profile
@@ -336,6 +319,35 @@ if [ "$t16_result" = "1" ]; then
 else
   not_ok "T16: GBRAIN_NO_PROFILE=1 did not set NO_PROFILE=1 (got: '$t16_result')"
 fi
+
+# T17: main() with GBRAIN_NO_PROFILE=1 env var — full end-to-end opt-out
+# Exercises the real pipe-flow semantics: env var → top-level NO_PROFILE init → main() skip.
+# Re-source install.sh so the top-level NO_PROFILE="${GBRAIN_NO_PROFILE:-0}" re-executes
+# with GBRAIN_NO_PROFILE=1, then call main() and verify no profile write occurred.
+GBRAIN_NO_PROFILE=1
+. "$INSTALL_SH"
+# Re-apply function stubs (re-source replaced them with production versions)
+resolve_version()  { VERSION="v0.0.0-test"; }
+resolve_platform() { PLATFORM="linux-x86_64"; }
+resolve_channel()  { CHANNEL="airgapped"; }
+verify_checksum()  { return 0; }
+need_cmd()         { return 0; }
+PATH="$TEST_STUBS:$PATH"
+T17_PROFILE="$TEST_HOME/.t17_profile"
+printf '' > "$T17_PROFILE"
+detect_profile() { PROFILE_FILE="$T17_PROFILE"; }
+if main >/dev/null 2>&1; then
+  if [ ! -s "$T17_PROFILE" ]; then
+    ok "T17: main() with GBRAIN_NO_PROFILE=1 skips profile write end-to-end"
+  else
+    not_ok "T17: main() with GBRAIN_NO_PROFILE=1 wrote to profile (file non-empty)"
+  fi
+else
+  not_ok "T17: main() with GBRAIN_NO_PROFILE=1 exited non-zero"
+fi
+GBRAIN_NO_PROFILE=0
+tmp_dir=""
+PATH="$SAVED_PATH_STUBS"
 
 # ---------------------------------------------------------------
 # Summary

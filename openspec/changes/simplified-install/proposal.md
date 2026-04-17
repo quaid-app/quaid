@@ -57,8 +57,8 @@ curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/inst
 Or with version and directory overrides:
 
 ```sh
-GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
-  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 After installing, the script prints a tip suggesting the user set `GBRAIN_DB` in their

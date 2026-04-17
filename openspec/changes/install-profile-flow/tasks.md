@@ -14,17 +14,19 @@ Closes: #36, #41
   - fallback → `$HOME/.profile`
   Create the file if it does not exist.
 
-- [x] A.2 Add `write_profile_line` helper: takes `(profile, marker_pattern, line_to_append)`.
-  Greps `$profile` for `$marker_pattern`; appends `$line_to_append` only if not present.
-  Prints `  Added <line> to <profile>` when it appends; silently skips when already present.
+- [x] A.2 Add `write_profile_line` helper: takes `(profile, line_to_append)`.
+  Checks whether `$profile` already contains the exact `$line_to_append` (using
+  `grep -F` fixed-string match); appends it only if not present. Prints
+  `  Added <line> to <profile>` when it appends; returns non-zero when already present.
 
 - [x] A.3 Add `write_profile` function: calls `write_profile_line` twice:
-  - PATH: marker `$INSTALL_DIR`, line `export PATH="$INSTALL_DIR:$PATH"`
-  - GBRAIN_DB: marker `GBRAIN_DB`, line `export GBRAIN_DB="$HOME/brain.db"`
+  - PATH line: `export PATH="$INSTALL_DIR:$PATH"`
+  - GBRAIN_DB line: `export GBRAIN_DB="$HOME/brain.db"`
   Prints a final summary line: `Profile updated. Run: source <profile>`
 
-- [x] A.4 Add `--no-profile` flag parsing to the script's argument loop. Set
-  `GBRAIN_NO_PROFILE=1` when the flag is present. Respect existing `GBRAIN_NO_PROFILE` env var.
+- [x] A.4 Add `--no-profile` flag parsing to the script's argument loop. Treat the
+  flag as enabling no-profile mode for that run. Respect existing `GBRAIN_NO_PROFILE`
+  env var.
 
 - [x] A.5 Call `write_profile` (or skip if `GBRAIN_NO_PROFILE=1`) after the smoke test
   succeeds. Replace the existing `print_path_hint` and `print_gbrain_db_tip` calls: when

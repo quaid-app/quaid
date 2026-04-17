@@ -53,18 +53,16 @@ impl BrainConfig {
 }
 
 fn ensure_sqlite_vec() {
-    SQLITE_VEC_INIT.call_once(|| {
-        unsafe {
-            let init_fn = std::mem::transmute::<
-                *const (),
-                unsafe extern "C" fn(
-                    *mut rusqlite::ffi::sqlite3,
-                    *mut *const std::ffi::c_char,
-                    *const rusqlite::ffi::sqlite3_api_routines,
-                ) -> std::ffi::c_int,
-            >(sqlite_vec::sqlite3_vec_init as *const ());
-            rusqlite::ffi::sqlite3_auto_extension(Some(init_fn));
-        }
+    SQLITE_VEC_INIT.call_once(|| unsafe {
+        let init_fn = std::mem::transmute::<
+            *const (),
+            unsafe extern "C" fn(
+                *mut rusqlite::ffi::sqlite3,
+                *mut *const std::ffi::c_char,
+                *const rusqlite::ffi::sqlite3_api_routines,
+            ) -> std::ffi::c_int,
+        >(sqlite_vec::sqlite3_vec_init as *const ());
+        rusqlite::ffi::sqlite3_auto_extension(Some(init_fn));
     });
 }
 
@@ -78,8 +76,8 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
     let conn = open_connection(path)?;
 
     if !existed_before || path == ":memory:" {
-        let effective_model =
-            hydrate_model_config(&requested_model).map_err(|message| DbError::Schema { message })?;
+        let effective_model = hydrate_model_config(&requested_model)
+            .map_err(|message| DbError::Schema { message })?;
         ensure_embedding_model_registry(&conn, &effective_model)?;
         write_brain_config(&conn, &BrainConfig::from_model(&effective_model))?;
         sync_legacy_config(&conn, &effective_model)?;
@@ -173,7 +171,10 @@ fn ensure_embedding_model_registry(conn: &Connection, model: &ModelConfig) -> Re
         "CREATE VIRTUAL TABLE IF NOT EXISTS {vec_table} USING vec0(embedding float[{}]);",
         model.embedding_dim
     ))?;
-    conn.execute("UPDATE embedding_models SET active = 0 WHERE active != 0", [])?;
+    conn.execute(
+        "UPDATE embedding_models SET active = 0 WHERE active != 0",
+        [],
+    )?;
     conn.execute(
         "INSERT INTO embedding_models (name, dimensions, vec_table, active) \
          VALUES (?1, ?2, ?3, 1) \
@@ -565,7 +566,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("brain.db");
 
-        let init_opened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large")).unwrap();
+        let init_opened =
+            open_with_model(db_path.to_str().unwrap(), &resolve_model("large")).unwrap();
         drop(init_opened);
 
         let reopened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large")).unwrap();

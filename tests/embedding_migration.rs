@@ -168,7 +168,10 @@ fn embedding_migration_zero_cross_model_contamination() {
     embed::run(&conn, None, true, false).expect("embed with model A");
 
     let model_a = active_model_name(&conn);
-    assert_eq!(model_a, "BAAI/bge-small-en-v1.5", "model A should be default");
+    assert_eq!(
+        model_a, "BAAI/bge-small-en-v1.5",
+        "model A should be default"
+    );
 
     // Verify model A has embeddings
     let model_a_count: i64 = conn

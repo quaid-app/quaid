@@ -16,9 +16,7 @@ use std::path::{Path, PathBuf};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-use candle_transformers::models::xlm_roberta::{
-    Config as XLMRobertaConfig, XLMRobertaModel,
-};
+use candle_transformers::models::xlm_roberta::{Config as XLMRobertaConfig, XLMRobertaModel};
 use rusqlite::types::ToSql;
 use rusqlite::Connection;
 use serde_json::Value;
@@ -397,8 +395,8 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
 
     match model_type.as_str() {
         "bert" => {
-            let config: BertConfig =
-                serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+            let config: BertConfig = serde_json::from_str(&config_text)
+                .map_err(|e| format!("parse config.json: {e}"))?;
             let vb = unsafe {
                 VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
                     .map_err(|e| format!("load model weights: {e}"))?
@@ -413,8 +411,8 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
             })
         }
         "xlm-roberta" => {
-            let config: XLMRobertaConfig =
-                serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+            let config: XLMRobertaConfig = serde_json::from_str(&config_text)
+                .map_err(|e| format!("parse config.json: {e}"))?;
             let vb = unsafe {
                 VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
                     .map_err(|e| format!("load model weights: {e}"))?
@@ -507,11 +505,12 @@ fn embed_candle_xlm_roberta(
             message: format!("attention_mask tensor: {e}"),
         })?;
 
-    let output = model
-        .forward(&input_ids, &attention_mask)
-        .map_err(|e| InferenceError::Internal {
-            message: format!("XLM-R forward: {e}"),
-        })?;
+    let output =
+        model
+            .forward(&input_ids, &attention_mask)
+            .map_err(|e| InferenceError::Internal {
+                message: format!("XLM-R forward: {e}"),
+            })?;
 
     mean_pool_and_normalize(output, attention_mask)
 }
@@ -732,7 +731,11 @@ fn model_cache_dir(model: &ModelConfig) -> Result<PathBuf, String> {
     }
 
     dirs::home_dir()
-        .map(|home| home.join(".gbrain").join("models").join(cache_dir_name(model)))
+        .map(|home| {
+            home.join(".gbrain")
+                .join("models")
+                .join(cache_dir_name(model))
+        })
         .ok_or_else(|| "could not resolve home directory for model cache".to_owned())
 }
 
@@ -1060,10 +1063,7 @@ mod tests {
         std::env::set_var("GBRAIN_FORCE_HASH_SHIM", "1");
         configure_runtime_model(default_model());
         // Reset loaded model so the env var is respected.
-        model_runtime()
-            .lock()
-            .expect("lock")
-            .loaded = None;
+        model_runtime().lock().expect("lock").loaded = None;
         let embedding = embed("Alice works at Acme Corp").expect("embed text");
         std::env::remove_var("GBRAIN_FORCE_HASH_SHIM");
         let norm = embedding
@@ -1180,7 +1180,9 @@ mod tests {
         // Hold the env-mutation lock for the duration of the test so parallel
         // tests cannot observe our GBRAIN_HF_BASE_URL / GBRAIN_MODEL_CACHE_DIR
         // changes. Restore previous values (if any) on drop.
-        let _env_guard = env_mutation_lock().lock().expect("env mutation lock poisoned");
+        let _env_guard = env_mutation_lock()
+            .lock()
+            .expect("env mutation lock poisoned");
         let prev_base_url = std::env::var("GBRAIN_HF_BASE_URL").ok();
         let prev_cache_dir = std::env::var("GBRAIN_MODEL_CACHE_DIR").ok();
         std::env::set_var("GBRAIN_HF_BASE_URL", format!("http://{}", address));

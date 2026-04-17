@@ -237,9 +237,8 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let requested_model = core::inference::coerce_model_for_build(
-        &core::inference::resolve_model(&cli.model),
-    );
+    let requested_model =
+        core::inference::coerce_model_for_build(&core::inference::resolve_model(&cli.model));
 
     // Commands that don't require a database connection
     match &cli.command {

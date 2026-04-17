@@ -55,7 +55,10 @@ mod tests {
 
     #[test]
     fn init_rejects_nonexistent_parent_directory() {
-        let result = run("/nonexistent/dir/brain.db", &inference::resolve_model("small"));
+        let result = run(
+            "/nonexistent/dir/brain.db",
+            &inference::resolve_model("small"),
+        );
         assert!(result.is_err());
     }
 }

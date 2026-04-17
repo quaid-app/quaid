@@ -79,7 +79,7 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
         }
 
         insert_page(&tx, entry)?;
-        record_ingest(&tx, hash, &file_path.to_string_lossy())?;
+        record_ingest(&tx, hash, &file_path.to_string_lossy(), &entry.slug)?;
         imported += 1;
     }
 
@@ -268,11 +268,11 @@ fn is_already_ingested(db: &Connection, hash: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
-fn record_ingest(db: &Connection, hash: &str, path: &str) -> Result<()> {
+fn record_ingest(db: &Connection, hash: &str, path: &str, slug: &str) -> Result<()> {
     db.execute(
-        "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref) \
-         VALUES (?1, 'file', ?2)",
-        rusqlite::params![hash, path],
+        "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
+         VALUES (?1, 'file', ?2, json_array(?3))",
+        rusqlite::params![hash, path, slug],
     )?;
     Ok(())
 }
@@ -566,5 +566,42 @@ mod tests {
         assert_eq!(second.skipped_already_ingested, 2);
         assert_eq!(second.skipped_non_markdown, 1);
         assert_eq!(second.total_skipped(), 3);
+    }
+
+    /// When a file uses a frontmatter `slug:` that differs from the filename,
+    /// `record_ingest` must store the actual slug in `pages_updated` so that
+    /// `lookup_source_path` can find the real file path later.
+    #[test]
+    fn record_ingest_stores_frontmatter_slug_in_pages_updated() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // Filename is `2024-01-meeting.md` but the frontmatter slug overrides it.
+        let file_path = dir.path().join("2024-01-meeting.md");
+        fs::write(
+            &file_path,
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+        )
+        .unwrap();
+
+        import_dir(&conn, dir.path(), false).unwrap();
+
+        // The ingest_log row must record the frontmatter slug, not the filename stem.
+        let pages_updated: String = conn
+            .query_row(
+                "SELECT pages_updated FROM ingest_log WHERE source_type = 'file'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("ingest_log row should exist");
+
+        assert!(
+            pages_updated.contains("people/alice"),
+            "pages_updated should contain the frontmatter slug 'people/alice', got: {pages_updated}"
+        );
+        assert!(
+            !pages_updated.contains("2024-01-meeting"),
+            "pages_updated should not contain the filename stem, got: {pages_updated}"
+        );
     }
 }

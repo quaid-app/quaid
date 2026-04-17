@@ -154,11 +154,13 @@ fn page_needs_refresh(
 /// the ingest_log table. Returns `None` when the page was not ingested
 /// from a file (e.g. created via `brain_put`).
 fn lookup_source_path(db: &Connection, slug: &str) -> Option<String> {
-    let pattern = format!("%{}.md", slug);
     db.query_row(
-        "SELECT source_ref FROM ingest_log WHERE source_ref LIKE ?1 \
+        "SELECT source_ref FROM ingest_log \
+         WHERE EXISTS ( \
+             SELECT 1 FROM json_each(pages_updated) WHERE value = ?1 \
+         ) \
          ORDER BY completed_at DESC LIMIT 1",
-        [&pattern],
+        [slug],
         |row| row.get(0),
     )
     .ok()
@@ -491,6 +493,39 @@ mod tests {
         assert_eq!(
             msg,
             "warning: embedding skipped 'companies/acme' (source: /import/companies/acme.md): page not found: companies/acme"
+        );
+    }
+
+    /// When a page's frontmatter slug differs from its filename (e.g. file is
+    /// `notes/2024-01-meeting.md` but `slug: people/alice`), the LIKE-heuristic
+    /// would silently miss. This test verifies that `lookup_source_path` finds
+    /// the correct source_ref via the `pages_updated` JSON field.
+    #[test]
+    fn lookup_source_path_works_when_frontmatter_slug_differs_from_filename() {
+        let conn = open_test_db();
+
+        // Simulate what record_ingest now writes: slug stored in pages_updated.
+        conn.execute(
+            "INSERT INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
+             VALUES ('abc123', 'file', '/notes/2024-01-meeting.md', json_array('people/alice'))",
+            [],
+        )
+        .expect("insert ingest_log row");
+
+        // Slug does NOT match filename — heuristic would return None.
+        // Correct slug-based lookup must return the real path.
+        let result = lookup_source_path(&conn, "people/alice");
+        assert_eq!(
+            result.as_deref(),
+            Some("/notes/2024-01-meeting.md"),
+            "should find source_ref for frontmatter slug that differs from filename"
+        );
+
+        // Filename stem is not a valid slug in this DB — must return None.
+        let miss = lookup_source_path(&conn, "notes/2024-01-meeting");
+        assert_eq!(
+            miss, None,
+            "filename-derived slug should not match when only frontmatter slug is stored"
         );
     }
 }

@@ -9,19 +9,19 @@ Closes: #52, #53
 
 ## Phase A — src/commands/search.rs
 
-- [ ] A.1 Import `sanitize_fts_query` from `crate::core::fts` in `src/commands/search.rs`.
+- [x] A.1 Import `sanitize_fts_query` from `crate::core::fts` in `src/commands/search.rs`.
 
-- [ ] A.2 Add a `raw: bool` parameter to the `run` function signature (alongside existing
+- [x] A.2 Add a `raw: bool` parameter to the `run` function signature (alongside existing
   `query`, `wing`, `limit`, `json`).
 
-- [ ] A.3 In `run()`, before calling `search_fts`, apply the sanitizer unless `raw` is set:
+- [x] A.3 In `run()`, before calling `search_fts`, apply the sanitizer unless `raw` is set:
   ```rust
   let effective_query = if raw { query.to_owned() } else { sanitize_fts_query(query) };
   let results = search_fts(&effective_query, wing.as_deref(), db, limit as usize);
   ```
   Capture the `Result` (do not use `?` here).
 
-- [ ] A.4 Handle the result with JSON-aware error output:
+- [x] A.4 Handle the result with JSON-aware error output:
   ```rust
   let results = match results {
       Ok(r) => r,
@@ -36,7 +36,7 @@ Closes: #52, #53
   };
   ```
 
-- [ ] A.5 Wire up the `raw: bool` field in the clap argument struct for `gbrain search`
+- [x] A.5 Wire up the `raw: bool` field in the clap argument struct for `gbrain search`
   (in `src/main.rs` or wherever the `Search` subcommand args are defined):
   - Add `#[arg(long, default_value_t = false)]` `raw: bool` field.
   - Pass it through to `search::run(db, query, wing, limit, json, raw)`.
@@ -47,7 +47,7 @@ Closes: #52, #53
 
 ## Phase B — src/mcp/server.rs
 
-- [ ] B.1 In the `brain_search` tool handler, import `sanitize_fts_query` and apply it
+- [x] B.1 In the `brain_search` tool handler, import `sanitize_fts_query` and apply it
   to the incoming `query` parameter before calling `search_fts`:
   ```rust
   let safe_query = sanitize_fts_query(&query);
@@ -58,7 +58,7 @@ Closes: #52, #53
 
 ## Phase C — src/core/fts.rs
 
-- [ ] C.1 Update the `search_fts` doc comment to clarify that `src/commands/search.rs`
+- [x] C.1 Update the `search_fts` doc comment to clarify that `src/commands/search.rs`
   now sanitizes by default, and that the `--raw` flag bypasses sanitization. No logic
   changes to `search_fts` itself.
 
@@ -66,34 +66,34 @@ Closes: #52, #53
 
 ## Phase D — tests
 
-- [ ] D.1 Unit test in `src/commands/search.rs` (or `tests/`): call `run()` with
+- [x] D.1 Unit test in `src/commands/search.rs` (or `tests/`): call `run()` with
   `raw = false` and query `"what is CLARITY?"` — verify no FTS5 error is returned.
 
-- [ ] D.2 Unit test: call `run()` with `raw = false` and query `"it's a stablecoin"` —
+- [x] D.2 Unit test: call `run()` with `raw = false` and query `"it's a stablecoin"` —
   verify no error.
 
-- [ ] D.3 Unit test: call `run()` with `raw = false` and query `"gpt-5.4 codex model"` —
+- [x] D.3 Unit test: call `run()` with `raw = false` and query `"gpt-5.4 codex model"` —
   verify no error.
 
-- [ ] D.4 Integration test: `gbrain search --json "50% fee reduction"` — verify stdout is
+- [x] D.4 Integration test: `gbrain search --json "50% fee reduction"` — verify stdout is
   valid JSON (array or empty array, not an error message).
 
-- [ ] D.5 Integration test: `gbrain search --raw --json "?invalid"` — verify stdout is
+- [x] D.5 Integration test: `gbrain search --raw --json "?invalid"` — verify stdout is
   valid JSON `{"error": "..."}` and process exits cleanly (not a panic).
 
-- [ ] D.6 Add a `brain_search` MCP integration test: send a natural-language query with
+- [x] D.6 Add a `brain_search` MCP integration test: send a natural-language query with
   `?` character — verify the tool returns a valid JSON-RPC response (not an error response).
 
 ---
 
 ## Phase E — verification
 
-- [ ] E.1 All tests in Phase D pass. Full `cargo test` suite green.
+- [x] E.1 All tests in Phase D pass. Full `cargo test` suite green.
 
-- [ ] E.2 Manually verify `gbrain search "what is CLARITY?"` returns results or empty list
+- [x] E.2 Manually verify `gbrain search "what is CLARITY?"` returns results or empty list
   without crashing. Close issues #52 and #53.
 
-- [ ] E.3 Run the following benchmark validation commands (from Kif's v0.9.4 triage) and
+- [x] E.3 Run the following benchmark validation commands (from Kif's v0.9.4 triage) and
   confirm all exit 0 with valid output:
   ```bash
   cargo run --quiet -- init benchmark_issue_check.db

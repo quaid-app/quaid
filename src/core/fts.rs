@@ -72,9 +72,12 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
 /// **Explicit FTS5 semantics are preserved.** Quoted phrases, boolean operators
 /// (`AND`, `OR`, `NOT`), and prefix wildcards (`*`) all work as documented by
 /// SQLite FTS5.  Invalid syntax is propagated as `Err` — this is intentional for
-/// the `gbrain search` / `brain_search` expert interface.  Natural-language
-/// callers (e.g. `hybrid_search`) are responsible for sanitizing input before
-/// calling this function.
+/// expert callers using `gbrain search --raw`.
+///
+/// Default callers are sanitized upstream:
+/// - `src/commands/search.rs` applies `sanitize_fts_query` unless `--raw` is set.
+/// - `src/mcp/server.rs` (`brain_search`) always sanitizes.
+/// - `hybrid_search` in `src/core/search.rs` sanitizes before calling this function.
 pub fn search_fts(
     query: &str,
     wing_filter: Option<&str>,

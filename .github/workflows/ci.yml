@@ -69,6 +69,8 @@ jobs:
 
       - name: Run tests (online channel)
         run: cargo test --verbose --no-default-features --features bundled,online-model
+        env:
+          GBRAIN_FORCE_HASH_SHIM: "1"
 
       - name: Run installer profile tests
         run: sh tests/install_profile.sh

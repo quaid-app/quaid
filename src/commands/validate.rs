@@ -507,7 +507,7 @@ mod tests {
         conn.execute(
             "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, \
              chunk_text, content_hash, token_count, heading_path) \
-             VALUES (?1, 'bge-small-en-v1.5', 42, 'truth_section', 0, 'hello', 'hash', 1, '')",
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 42, 'truth_section', 0, 'hello', 'hash', 1, '')",
             [page_id],
         )
         .unwrap();

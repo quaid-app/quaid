@@ -51,7 +51,7 @@ cargo build
 # Release (airgapped default — embeds BGE-small-en-v1.5 for offline use)
 cargo build --release
 
-# Online release (downloads/caches BGE-small on first semantic use)
+# Online release (downloads/caches the selected BGE model on first semantic use)
 cargo build --release --no-default-features --features bundled,online-model
 
 # Cross-compile
@@ -71,10 +71,20 @@ cargo test
 
 ## Embedding model
 
-BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.1` ships two
-compile-time channels:
-- default `embedded-model` build — airgapped channel, embeds the model bundle (no network required)
-- `online-model` build — online channel; downloads/caches BGE-small on first semantic use
+GigaBrain defaults to `BAAI/bge-small-en-v1.5` (384 dimensions), but the `online-model`
+build now accepts runtime model selection via `GBRAIN_MODEL` or `--model`.
+
+- `small` → `BAAI/bge-small-en-v1.5` (384d, default)
+- `base` → `BAAI/bge-base-en-v1.5` (768d)
+- `large` → `BAAI/bge-large-en-v1.5` (1024d)
+- `m3` → `BAAI/bge-m3` (1024d, multilingual)
+- any other value is treated as a full Hugging Face model ID
+
+Compile-time channels:
+- default `embedded-model` build — airgapped channel, always uses embedded BGE-small and warns if another model is requested
+- `online-model` build — downloads/caches the selected model on first semantic use
+
+Model metadata is persisted in the `brain_config` table at `gbrain init` and validated on every subsequent open. If the requested model differs from the initialized model, the command errors before touching embeddings.
 
 ## Skills
 
@@ -87,7 +97,8 @@ Drop a custom `SKILL.md` in your working directory to override any default.
 See `src/schema.sql` for the full v4 DDL. Key tables:
 - `pages` — core content (compiled_truth + timeline markdown)
 - `page_fts` — FTS5 virtual table (content-rowid, porter tokenizer)
-- `page_embeddings_vec_384` — vec0 virtual table for BGE-small (created at init)
+- `brain_config` — persisted `model_id`, `model_alias`, `embedding_dim`, `schema_version`
+- `page_embeddings_vec_384` — vec0 virtual table for the default small model (additional vec tables are created for larger dimensions as needed)
 - `page_embeddings` — chunk metadata + vec rowid join table
 - `links` — typed temporal cross-references
 - `assertions` — heuristic contradiction detection

@@ -1,8 +1,8 @@
 # GigaBrain
 
-> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Dual BGE-small release channels for airgapped and online installs.
+> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
-**Status:** `v0.9.1` release lane — Phase 3 is complete, and the dual-release BGE-small rollout now ships `airgapped` + `online` install channels. [See the roadmap →](#roadmap)
+**Status:** `v0.9.1` release lane — Phase 3 is complete, and the dual-release line now ships `airgapped` + `online` install channels with configurable BGE models in the online build. [See the roadmap →](#roadmap)
 
 ---
 
@@ -48,9 +48,10 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Features
 
-- **Dual BGE-small release channels** — `airgapped` embeds the model bundle; `online` stays slimmer and downloads/caches BGE-small on first semantic use
+- **Configurable BGE models** — `GBRAIN_MODEL` / `--model` select `small` (default), `base`, `large`, `m3`, or a full Hugging Face model ID in the `online-model` build
+- **Dual release channels** — `airgapped` embeds BGE-small for offline use; `online` stays slimmer and downloads/caches the selected model on first semantic use
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
-- **Local embeddings** — BGE-small-en-v1.5 via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key, no internet
+- **Local embeddings** — BAAI BGE family via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key; online builds only need internet for the initial model download
 - **MCP server** — `gbrain serve` exposes all 16 tools over stdio JSON-RPC 2.0. Works with Claude Code, any MCP-compatible agent
 - **Hybrid search** — FTS5 keyword + vector semantic search with set-union merge, exact-match short-circuit, and optional palace-style hierarchical filtering
 - **Progressive retrieval** — token-budget-gated content expansion (summary → section → full page)
@@ -68,13 +69,13 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 | Database | SQLite via `rusqlite` (bundled) |
 | Full-text search | FTS5 (built into SQLite) |
 | Vector search | `sqlite-vec` (statically linked) |
-| Embeddings | `candle` + BGE-small-en-v1.5 (pure Rust, local) |
+| Embeddings | `candle` + BGE-small/base/large/m3 (pure Rust, local) |
 | CLI | `clap` |
 | MCP server | `rmcp` (stdio transport) |
 
 ## Quick start
 
-> Phase 3 is complete. `v0.9.1` adds two BGE-small release channels: `airgapped` (embedded) and `online` (downloads/caches BGE-small on first use).
+> Phase 3 is complete. `v0.9.1` ships two release channels: `airgapped` (embedded BGE-small) and `online` (downloads/caches the selected BGE model on first use).
 
 ### Install options
 
@@ -85,7 +86,7 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for the online asset |
 
-**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both BGE-small channels for `v0.9.1`. The npm package remains a single wrapper package and targets the `online` channel by default.
+**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.1`. The npm package remains a single wrapper package and targets the `online` channel by default.
 
 Install with the shell script:
 
@@ -144,10 +145,40 @@ cargo build --release
 # Airgapped channel (default) — embeds BGE-small-en-v1.5 for offline use
 
 cargo build --release --no-default-features --features bundled,online-model
-# Online channel — downloads/caches BGE-small on first semantic use
+# Online channel — downloads/caches the selected model on first semantic use
 ```
 
-> **BGE-small only.** `v0.9.1` intentionally ships only two BGE-small channels: `airgapped` (embedded) and `online`. There is no base/large support and no runtime `--model` flag in this release.
+### Embedding model selection
+
+```bash
+# Default remains BGE-small-en-v1.5
+gbrain query "stablecoin regulation"
+
+# Environment variable
+GBRAIN_MODEL=large gbrain query "stablecoin regulation"
+
+# CLI flag overrides the environment variable
+GBRAIN_MODEL=base gbrain --model m3 query "stablecoin regulation"
+```
+
+`GBRAIN_MODEL` and `--model` are supported in the `online-model` build. In the default airgapped build they are a warning-only no-op and GigaBrain continues with embedded `small`.
+
+| Alias | Model ID | Dimensions | Approx size | Use case |
+| ----- | -------- | ---------- | ----------- | -------- |
+| `small` | `BAAI/bge-small-en-v1.5` | 384 | 130 MB | Default, fastest, lowest memory |
+| `base` | `BAAI/bge-base-en-v1.5` | 768 | 438 MB | Better recall on larger corpora |
+| `large` | `BAAI/bge-large-en-v1.5` | 1024 | 1.34 GB | Highest English recall, slower |
+| `m3` | `BAAI/bge-m3` | 1024 | 2.27 GB | Multilingual retrieval |
+
+If you initialize a DB with one model and later open it with another, GigaBrain errors before any command proceeds. Switching models requires a new DB initialization.
+
+### Environment variables
+
+| Variable | Purpose |
+| -------- | ------- |
+| `GBRAIN_DB` | Default database path for all commands |
+| `GBRAIN_MODEL` | Embedding model alias or full Hugging Face model ID for the online build |
+| `GBRAIN_CHANNEL` | Installer channel selection (`airgapped` or `online`) |
 
 ---
 
@@ -323,7 +354,7 @@ cargo build
 # Release (airgapped default — embeds BGE-small-en-v1.5 for offline use)
 cargo build --release
 
-# Online release (downloads/caches BGE-small on first semantic use)
+# Online release (downloads/caches the selected BGE model on first semantic use)
 cargo build --release --no-default-features --features bundled,online-model
 
 # Cross-compile

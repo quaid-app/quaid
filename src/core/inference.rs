@@ -11,6 +11,10 @@
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "online-model")]
+use std::fs::OpenOptions;
+#[cfg(feature = "online-model")]
+use std::io::ErrorKind;
+#[cfg(feature = "online-model")]
 use std::path::{Path, PathBuf};
 
 use candle_core::{DType, Device, Tensor};
@@ -24,6 +28,8 @@ use rusqlite::Connection;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
+#[cfg(feature = "online-model")]
+use uuid::Uuid;
 
 use super::types::{InferenceError, SearchError, SearchResult};
 
@@ -656,6 +662,31 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
 }
 
 #[cfg(feature = "online-model")]
+fn create_temp_download_file(
+    cache_dir: &Path,
+    file_name: &str,
+) -> Result<(PathBuf, std::fs::File), String> {
+    for _ in 0..10 {
+        let temp_path = cache_dir.join(format!("{file_name}.download-{}", Uuid::new_v4()));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(format!("create {}: {err}", temp_path.display()));
+            }
+        }
+    }
+    Err(format!(
+        "unable to create temp download file for {file_name} in {}",
+        cache_dir.display()
+    ))
+}
+
+#[cfg(feature = "online-model")]
 fn download_model_file(
     client: &reqwest::blocking::Client,
     model: &ModelConfig,
@@ -664,7 +695,7 @@ fn download_model_file(
 ) -> Result<(), String> {
     let validated_model_id = validate_model_id(&model.model_id)?;
     let destination = cache_dir.join(file_name);
-    let temp_destination = cache_dir.join(format!("{file_name}.download"));
+    let (temp_destination, mut file) = create_temp_download_file(cache_dir, file_name)?;
     let base_url = huggingface_base_url();
     // Use pinned revision for standard aliases; fall back to `main` only for
     // custom/unpinned models so upstream changes never silently break SHA checks.
@@ -686,8 +717,6 @@ fn download_model_file(
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|e| format!("download {url}: {e}"))?;
 
-    let mut file = std::fs::File::create(&temp_destination)
-        .map_err(|e| format!("create {}: {e}", temp_destination.display()))?;
     std::io::copy(&mut response, &mut file)
         .map_err(|e| format!("write {}: {e}", temp_destination.display()))?;
 
@@ -695,8 +724,16 @@ fn download_model_file(
         verify_file_sha256(&temp_destination, expected_hash)?;
     }
 
-    std::fs::rename(&temp_destination, &destination)
-        .map_err(|e| format!("rename {}: {e}", destination.display()))?;
+    if let Err(err) = std::fs::rename(&temp_destination, &destination) {
+        let _ = std::fs::remove_file(&temp_destination);
+        if destination.exists() {
+            if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
+                verify_file_sha256(&destination, expected_hash)?;
+            }
+            return Ok(());
+        }
+        return Err(format!("rename {}: {err}", destination.display()));
+    }
 
     Ok(())
 }

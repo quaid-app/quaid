@@ -185,23 +185,25 @@ fn ensure_embedding_model_registry(conn: &Connection, model: &ModelConfig) -> Re
         "CREATE VIRTUAL TABLE IF NOT EXISTS {vec_table} USING vec0(embedding float[{}]);",
         model.embedding_dim
     ))?;
-    conn.execute(
-        "UPDATE embedding_models SET active = 0 WHERE active != 0",
-        [],
-    )?;
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO embedding_models (name, dimensions, vec_table, active) \
          VALUES (?1, ?2, ?3, 1) \
-         ON CONFLICT(name) DO UPDATE SET \
-            dimensions = excluded.dimensions, \
-            vec_table = excluded.vec_table, \
-            active = excluded.active",
+          ON CONFLICT(name) DO UPDATE SET \
+             dimensions = excluded.dimensions, \
+             vec_table = excluded.vec_table, \
+             active = excluded.active",
         params![
             model.embedding_model_name(),
             model.embedding_dim as i64,
             vec_table,
         ],
     )?;
+    tx.execute(
+        "UPDATE embedding_models SET active = 0 WHERE name != ?1 AND active != 0",
+        [model.embedding_model_name()],
+    )?;
+    tx.commit()?;
 
     Ok(())
 }

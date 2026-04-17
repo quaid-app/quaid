@@ -85,8 +85,9 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
 
     tx.commit()?;
 
-    // Embed stale pages after commit. embed::run emits per-page warnings on
-    // failure so any infrastructure-level error here is a genuine batch fault.
+    // Embed pages after commit. In batch mode embed::run warns per-page on
+    // failure and returns Ok — only setup-level errors (e.g. missing active
+    // model) propagate here.
     if imported > 0 {
         if let Err(e) = crate::commands::embed::run(db, None, true, false) {
             eprintln!("warning: embedding failed after import: {e}");

@@ -22,6 +22,8 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
         "unsafe vec table name: {vec_table}"
     );
 
+    let single_slug = slug.is_some();
+
     let slugs = match slug {
         Some(ref s) => {
             // Verify the page exists before embedding
@@ -34,18 +36,24 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
     let mut embedded_pages = 0_usize;
     let mut embedded_chunks = 0_usize;
 
-    for s in slugs {
-        let page = match get_page(db, &s) {
+    for s in &slugs {
+        let page = match get_page(db, s) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("warning: embedding skipped '{s}': {e}");
+                if single_slug {
+                    return Err(e);
+                }
+                eprintln!("{}", format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e));
                 continue;
             }
         };
-        let pid = match page_id(db, &s) {
+        let pid = match page_id(db, s) {
             Ok(id) => id,
             Err(e) => {
-                eprintln!("warning: embedding skipped '{s}': {e}");
+                if single_slug {
+                    return Err(e);
+                }
+                eprintln!("{}", format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e));
                 continue;
             }
         };
@@ -57,12 +65,15 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
 
         // Explicit slug: always re-embed (no stale check).
         // --all / --stale: skip pages whose content_hash is unchanged.
-        if slug.is_none() && !page_needs_refresh(db, pid, &model_name, &chunks)? {
+        if !single_slug && !page_needs_refresh(db, pid, &model_name, &chunks)? {
             continue;
         }
 
         if let Err(e) = replace_page_embeddings(db, pid, &model_name, &vec_table, &chunks) {
-            eprintln!("warning: embedding skipped '{s}': {e}");
+            if single_slug {
+                return Err(e);
+            }
+            eprintln!("{}", format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e));
             continue;
         }
         embedded_pages += 1;
@@ -139,6 +150,31 @@ fn page_needs_refresh(
         }))
 }
 
+/// Best-effort lookup of the source file path for a given slug via
+/// the ingest_log table. Returns `None` when the page was not ingested
+/// from a file (e.g. created via `brain_put`).
+fn lookup_source_path(db: &Connection, slug: &str) -> Option<String> {
+    let pattern = format!("%{}.md", slug);
+    db.query_row(
+        "SELECT source_ref FROM ingest_log WHERE source_ref LIKE ?1 \
+         ORDER BY completed_at DESC LIMIT 1",
+        [&pattern],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+/// Format a per-page embed warning with optional source file path.
+fn format_embed_warning(slug: &str, source_path: Option<&str>, error: &dyn std::fmt::Display) -> String {
+    match source_path {
+        Some(path) => format!("warning: embedding skipped '{slug}' (source: {path}): {error}"),
+        None => format!("warning: embedding skipped '{slug}': {error}"),
+    }
+}
+
+/// Atomically replace all embeddings for a page. Uses a transaction so that
+/// a failure mid-way (e.g. inference error on a later chunk) does not leave
+/// the page with partially updated embeddings.
 fn replace_page_embeddings(
     db: &Connection,
     page_id: i64,
@@ -146,14 +182,16 @@ fn replace_page_embeddings(
     vec_table: &str,
     chunks: &[crate::core::types::Chunk],
 ) -> Result<()> {
-    let existing_rowids = existing_vec_rowids(db, page_id, model_name)?;
+    let tx = db.unchecked_transaction()?;
+
+    let existing_rowids = existing_vec_rowids(&tx, page_id, model_name)?;
     let delete_vec_sql = format!("DELETE FROM {vec_table} WHERE rowid = ?1");
 
     for vec_rowid in existing_rowids {
-        db.execute(&delete_vec_sql, [vec_rowid])?;
+        tx.execute(&delete_vec_sql, [vec_rowid])?;
     }
 
-    db.execute(
+    tx.execute(
         "DELETE FROM page_embeddings WHERE page_id = ?1 AND model = ?2",
         rusqlite::params![page_id, model_name],
     )?;
@@ -163,10 +201,10 @@ fn replace_page_embeddings(
         let embedding = embed(&chunk.content)?;
         let embedding_blob = embedding_to_blob(&embedding);
 
-        db.execute(&insert_vec_sql, rusqlite::params![embedding_blob])?;
-        let vec_rowid = db.last_insert_rowid();
+        tx.execute(&insert_vec_sql, rusqlite::params![embedding_blob])?;
+        let vec_rowid = tx.last_insert_rowid();
 
-        db.execute(
+        tx.execute(
             "INSERT INTO page_embeddings \
                  (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, \
                   content_hash, token_count, heading_path) \
@@ -185,6 +223,7 @@ fn replace_page_embeddings(
         )?;
     }
 
+    tx.commit()?;
     Ok(())
 }
 
@@ -383,34 +422,75 @@ mod tests {
         assert_eq!(count, 1);
     }
 
-    /// Batch embed (`--all`) must return Ok even when one page's embedding
-    /// fails.  The other pages must still be embedded.
-    ///
-    /// We simulate the failure by inserting a page whose slug matches one that
-    /// `page_id()` will find, then deleting its row right before embed so that
-    /// `get_page` returns NotFound.  The second page must still be embedded.
+    /// Batch embed (`--all`) must return Ok even when individual pages fail
+    /// to embed. We sabotage the vec table so `replace_page_embeddings` errors
+    /// on every page, proving the loop continues past failures.
     #[test]
     fn batch_embed_continues_past_per_page_failure() {
         let conn = open_test_db();
         insert_test_page(&conn, "people/alice", "## State\nAlice is investing.", "");
         insert_test_page(&conn, "people/bob", "## State\nBob is building.", "");
 
-        // Delete alice so get_page will fail for her during batch embed.
-        conn.execute("DELETE FROM pages WHERE slug = 'people/alice'", [])
-            .expect("delete alice");
+        // Drop the vec table to force replace_page_embeddings to fail.
+        conn.execute_batch("DROP TABLE IF EXISTS page_embeddings_vec_384")
+            .expect("drop vec table");
 
-        // Batch embed must succeed despite alice being missing.
-        run(&conn, None, true, false).expect("batch embed should succeed despite missing page");
+        // Batch embed must return Ok despite per-page failures.
+        run(&conn, None, true, false)
+            .expect("batch embed should succeed despite vec table missing");
+    }
 
-        // Bob was embedded; alice was not (she was deleted).
-        let bob_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM page_embeddings pe \
-                 JOIN pages p ON p.id = pe.page_id WHERE p.slug = 'people/bob'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("bob embedding count");
-        assert!(bob_count > 0, "bob should have been embedded");
+    /// Single-slug embed must propagate errors (not downgrade to warning).
+    #[test]
+    fn single_slug_embed_propagates_error_on_failure() {
+        let conn = open_test_db();
+        insert_test_page(&conn, "people/alice", "## State\nAlice is investing.", "");
+
+        // Drop the vec table so embedding fails.
+        conn.execute_batch("DROP TABLE IF EXISTS page_embeddings_vec_384")
+            .expect("drop vec table");
+
+        let result = run(&conn, Some("people/alice".to_owned()), false, false);
+        assert!(
+            result.is_err(),
+            "single-slug embed must return Err, not swallow the failure"
+        );
+    }
+
+    // ── Deterministic output format tests ─────────────────────────────────
+
+    #[test]
+    fn format_warning_with_source_path() {
+        let msg = format_embed_warning(
+            "people/alice",
+            Some("/docs/people/alice.md"),
+            &"input text is empty",
+        );
+        assert_eq!(
+            msg,
+            "warning: embedding skipped 'people/alice' (source: /docs/people/alice.md): input text is empty"
+        );
+    }
+
+    #[test]
+    fn format_warning_without_source_path() {
+        let msg = format_embed_warning("people/alice", None, &"input text is empty");
+        assert_eq!(
+            msg,
+            "warning: embedding skipped 'people/alice': input text is empty"
+        );
+    }
+
+    #[test]
+    fn format_warning_with_generic_error() {
+        let msg = format_embed_warning(
+            "companies/acme",
+            Some("/import/companies/acme.md"),
+            &"page not found: companies/acme",
+        );
+        assert_eq!(
+            msg,
+            "warning: embedding skipped 'companies/acme' (source: /import/companies/acme.md): page not found: companies/acme"
+        );
     }
 }

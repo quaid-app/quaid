@@ -25,8 +25,16 @@ fn insert_page(conn: &Connection, slug: &str, compiled_truth: &str) {
 #[test]
 fn extract_and_check_round_trip_detects_cross_page_conflict() {
     let conn = open_test_db();
-    insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-    insert_page(&conn, "sources/meeting", "Alice works at Beta Corp.");
+    insert_page(
+        &conn,
+        "people/alice",
+        "## Assertions\nAlice works at Acme Corp.\n",
+    );
+    insert_page(
+        &conn,
+        "sources/meeting",
+        "## Assertions\nAlice works at Beta Corp.\n",
+    );
 
     let page_a = get_page(&conn, "people/alice").unwrap();
     let page_b = get_page(&conn, "sources/meeting").unwrap();
@@ -43,7 +51,11 @@ fn extract_and_check_round_trip_detects_cross_page_conflict() {
 #[test]
 fn check_on_clean_page_returns_no_contradictions() {
     let conn = open_test_db();
-    insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
+    insert_page(
+        &conn,
+        "people/alice",
+        "## Assertions\nAlice works at Acme Corp.\n",
+    );
 
     let page = get_page(&conn, "people/alice").unwrap();
     assertions::extract_assertions(&page, &conn).unwrap();
@@ -60,7 +72,7 @@ fn extract_on_missing_page_returns_page_not_found() {
         page_type: "person".to_string(),
         title: "Ghost".to_string(),
         summary: String::new(),
-        compiled_truth: "Alice works at Acme.".to_string(),
+        compiled_truth: "## Assertions\nAlice works at Acme.\n".to_string(),
         timeline: String::new(),
         frontmatter: Default::default(),
         wing: String::new(),
@@ -76,6 +88,25 @@ fn extract_on_missing_page_returns_page_not_found() {
     assert!(matches!(result, Err(AssertionError::PageNotFound { .. })));
 }
 
+#[test]
+fn indented_assertions_example_does_not_trigger_extraction() {
+    let conn = open_test_db();
+    insert_page(
+        &conn,
+        "people/alice",
+        "Reference example:\n\n    ## Assertions\n    Alice works at Acme Corp.\n",
+    );
+
+    let page = get_page(&conn, "people/alice").unwrap();
+    let inserted = assertions::extract_assertions(&page, &conn).unwrap();
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
+        .unwrap();
+
+    assert_eq!(inserted, 0);
+    assert_eq!(row_count, 0);
+}
+
 // ── check CLI integration ────────────────────────────────────
 
 #[test]
@@ -84,7 +115,7 @@ fn check_single_slug_finds_contradiction() {
     insert_page(
         &conn,
         "people/alice",
-        "Alice works at Acme Corp.\nAlice works at Beta Corp.",
+        "## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
     );
 
     // Call the check command directly — it should succeed
@@ -95,8 +126,16 @@ fn check_single_slug_finds_contradiction() {
 #[test]
 fn check_all_mode_processes_multiple_pages() {
     let conn = open_test_db();
-    insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-    insert_page(&conn, "sources/meeting", "Alice works at Beta Corp.");
+    insert_page(
+        &conn,
+        "people/alice",
+        "## Assertions\nAlice works at Acme Corp.\n",
+    );
+    insert_page(
+        &conn,
+        "sources/meeting",
+        "## Assertions\nAlice works at Beta Corp.\n",
+    );
 
     let result = check::run(&conn, None, true, None, false);
     assert!(result.is_ok());
@@ -105,8 +144,16 @@ fn check_all_mode_processes_multiple_pages() {
 #[test]
 fn check_json_output_is_valid_json() {
     let conn = open_test_db();
-    insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-    insert_page(&conn, "sources/meeting", "Alice works at Beta Corp.");
+    insert_page(
+        &conn,
+        "people/alice",
+        "## Assertions\nAlice works at Acme Corp.\n",
+    );
+    insert_page(
+        &conn,
+        "sources/meeting",
+        "## Assertions\nAlice works at Beta Corp.\n",
+    );
 
     // JSON mode should not error
     let result = check::run(&conn, None, true, None, true);

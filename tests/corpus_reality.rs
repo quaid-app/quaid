@@ -14,6 +14,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
+use gbrain::commands::check;
 use gbrain::commands::embed;
 use gbrain::core::assertions;
 use gbrain::core::db;
@@ -179,7 +180,8 @@ fn conflicting_ingest_contradiction_is_detected() {
         "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
          VALUES ('people/alice', 'person', 'Alice', '', \
-                 'Alice works at Acme Corp.', \
+                 '## Assertions
+Alice works at Acme Corp.', \
                  '', '{}', 'people', '', 1)",
         [],
     )
@@ -189,7 +191,8 @@ fn conflicting_ingest_contradiction_is_detected() {
         "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
          VALUES ('sources/update', 'concept', 'Update', '', \
-                 'Alice works at Beta Corp.', \
+                 '## Assertions
+Alice works at Beta Corp.', \
                  '', '{}', 'sources', '', 1)",
         [],
     )
@@ -218,6 +221,45 @@ fn conflicting_ingest_contradiction_is_detected() {
     assert!(
         all_desc.contains("Acme Corp") || all_desc.contains("Beta Corp"),
         "contradiction description should name the conflicting companies: {all_desc}"
+    );
+}
+
+#[test]
+fn prose_only_pages_do_not_create_false_contradictions() {
+    let conn = open_test_db();
+
+    conn.execute(
+        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+                            frontmatter, wing, room, version) \
+         VALUES ('notes/research-a', 'concept', 'Research A', '', \
+                 'Alice works at Acme Corp. This paragraph is just narrative analysis.', \
+                 '', '{}', 'notes', '', 1)",
+        [],
+    )
+    .expect("insert prose page 1");
+
+    conn.execute(
+        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+                            frontmatter, wing, room, version) \
+         VALUES ('notes/research-b', 'concept', 'Research B', '', \
+                 'Alice works at Beta Corp. This paragraph is also general prose.', \
+                 '', '{}', 'notes', '', 1)",
+        [],
+    )
+    .expect("insert prose page 2");
+
+    check::execute_check(&conn, None, true, None).expect("run check --all");
+
+    let contradiction_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM contradictions WHERE resolved_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count contradictions");
+    assert_eq!(
+        contradiction_count, 0,
+        "prose-only pages should not generate contradictions"
     );
 }
 

@@ -20,7 +20,10 @@ mod tests {
     fn run_sanitized_question_mark_query_returns_ok() {
         let (_dir, conn) = open_test_db();
         let result = run(&conn, "what is CLARITY?", None, 10, false, false);
-        assert!(result.is_ok(), "sanitized '?' query must not error: {result:?}");
+        assert!(
+            result.is_ok(),
+            "sanitized '?' query must not error: {result:?}"
+        );
     }
 
     // D.2 — natural-language query with apostrophe does not error
@@ -28,7 +31,10 @@ mod tests {
     fn run_sanitized_apostrophe_query_returns_ok() {
         let (_dir, conn) = open_test_db();
         let result = run(&conn, "it's a stablecoin", None, 10, false, false);
-        assert!(result.is_ok(), "sanitized apostrophe query must not error: {result:?}");
+        assert!(
+            result.is_ok(),
+            "sanitized apostrophe query must not error: {result:?}"
+        );
     }
 
     // D.3 — natural-language query with hyphens and dots does not error
@@ -36,7 +42,10 @@ mod tests {
     fn run_sanitized_hyphen_dot_query_returns_ok() {
         let (_dir, conn) = open_test_db();
         let result = run(&conn, "gpt-5.4 codex model", None, 10, false, false);
-        assert!(result.is_ok(), "sanitized hyphen/dot query must not error: {result:?}");
+        assert!(
+            result.is_ok(),
+            "sanitized hyphen/dot query must not error: {result:?}"
+        );
     }
 
     // D.4 — --json with sanitized query always produces valid JSON (exits Ok)
@@ -45,7 +54,10 @@ mod tests {
         let (_dir, conn) = open_test_db();
         // '50% fee reduction' contains '%' — sanitized to '50 fee reduction'
         let result = run(&conn, "50% fee reduction", None, 10, true, false);
-        assert!(result.is_ok(), "--json sanitized query must return Ok: {result:?}");
+        assert!(
+            result.is_ok(),
+            "--json sanitized query must return Ok: {result:?}"
+        );
     }
 
     // D.5 — --raw --json with invalid FTS5 syntax returns Ok (error JSON written to stdout)

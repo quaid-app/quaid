@@ -596,8 +596,8 @@ impl GigaBrainServer {
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         let safe_query = sanitize_fts_query(&input.query);
-        let results = search_fts(&safe_query, input.wing.as_deref(), &db, limit)
-            .map_err(map_search_error)?;
+        let results =
+            search_fts(&safe_query, input.wing.as_deref(), &db, limit).map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
@@ -1516,9 +1516,12 @@ mod tests {
         );
         // The response content must parse as a JSON array (empty or populated).
         let text = extract_text(&result.unwrap());
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .expect("brain_search response must be valid JSON");
-        assert!(parsed.is_array(), "brain_search response must be a JSON array");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).expect("brain_search response must be valid JSON");
+        assert!(
+            parsed.is_array(),
+            "brain_search response must be a JSON array"
+        );
     }
 
     #[test]
@@ -2153,7 +2156,7 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
 
         let result = server
@@ -2174,12 +2177,12 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
         create_page(
             &server,
             "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
         );
 
         server
@@ -2209,12 +2212,12 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
         create_page(
             &server,
             "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
         );
 
         let result = server.brain_check(BrainCheckInput { slug: None }).unwrap();

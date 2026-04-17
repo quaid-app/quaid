@@ -1047,6 +1047,38 @@ Response includes expansion metadata:
 
 ## Ingest Pipeline
 
+### Structured Assertions
+
+Heuristic contradiction detection now extracts agent assertions from **structured zones only**:
+
+- A dedicated `## Assertions` section inside `compiled_truth`. Regex extraction runs only on the
+  lines between that heading and the next `##` heading (or end of page).
+- Structured frontmatter fields: `is_a`, `works_at`, and `founded`.
+
+General body prose is **not** scanned for contradictions. If a page has neither one of the
+supported frontmatter fields nor a `## Assertions` section, `gbrain check` extracts zero agent
+assertions for that page.
+
+Objects shorter than 6 characters are discarded to avoid noise like `is_a: it`.
+
+Example:
+
+```md
+---
+title: Alice
+type: person
+is_a: researcher
+works_at: Acme Corp
+---
+
+# Alice
+
+Operational notes and general prose live here. They do not participate in assertion extraction.
+
+## Assertions
+Alice founded Brain Co.
+```
+
 ```
 Source document (meeting notes, article, transcript)
             │

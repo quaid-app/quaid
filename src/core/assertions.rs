@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -11,6 +11,8 @@ use crate::core::types::Page;
 const CONTRADICTION_TYPE: &str = "assertion_conflict";
 const OPEN_RANGE_START: &str = "";
 const OPEN_RANGE_END: &str = "9999-12-31T23:59:59Z";
+const MIN_OBJECT_LEN: usize = 6;
+const SUPPORTED_FRONTMATTER_PREDICATES: [&str; 3] = ["is_a", "works_at", "founded"];
 
 /// A heuristic subject-predicate-object triple extracted from page content.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -60,7 +62,18 @@ struct AssertionRow {
 /// Replace heuristic assertions for a page and return the number of inserted triples.
 pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, AssertionError> {
     let page_id = resolve_page_id(conn, &page.slug)?;
-    let extracted = extract_from_content(&page.compiled_truth);
+    let subject = assertion_subject(page);
+    let mut extracted = extract_from_frontmatter(subject, &page.frontmatter);
+    let mut seen: HashSet<Triple> = extracted
+        .iter()
+        .map(|assertion| assertion.triple.clone())
+        .collect();
+
+    for assertion in extract_from_content(&page.compiled_truth) {
+        if seen.insert(assertion.triple.clone()) {
+            extracted.push(assertion);
+        }
+    }
 
     conn.execute(
         "DELETE FROM assertions WHERE page_id = ?1 AND asserted_by = 'agent'",
@@ -84,6 +97,15 @@ pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, Asser
     }
 
     Ok(extracted.len())
+}
+
+fn assertion_subject(page: &Page) -> &str {
+    let title = page.title.trim();
+    if title.is_empty() {
+        &page.slug
+    } else {
+        title
+    }
 }
 
 /// Detect contradictions for the requested page and insert any newly discovered rows.
@@ -250,23 +272,144 @@ fn load_contradiction(
     .map_err(AssertionError::from)
 }
 
+fn extract_assertions_section(content: &str) -> &str {
+    let mut offset = 0;
+    let mut section_start = None;
+    let mut in_fenced_code = false;
+
+    for line in content.split_inclusive('\n') {
+        let raw_line = line.trim_end_matches(['\r', '\n']);
+
+        if is_fenced_code_boundary(raw_line) {
+            in_fenced_code = !in_fenced_code;
+            offset += line.len();
+            continue;
+        }
+
+        if in_fenced_code {
+            offset += line.len();
+            continue;
+        }
+
+        if let Some(start) = section_start {
+            if is_level_two_heading(raw_line) {
+                return &content[start..offset];
+            }
+        } else if is_assertions_heading(raw_line) {
+            section_start = Some(offset + line.len());
+        }
+
+        offset += line.len();
+    }
+
+    match section_start {
+        Some(start) => &content[start..],
+        None => "",
+    }
+}
+
+fn is_assertions_heading(line: &str) -> bool {
+    let Some(line) = markdown_heading_candidate(line) else {
+        return false;
+    };
+
+    matches!(
+        line.strip_prefix("##"),
+        Some(rest)
+            if !rest.starts_with('#')
+                && normalize_heading_text(rest).eq_ignore_ascii_case("assertions")
+    )
+}
+
+fn is_level_two_heading(line: &str) -> bool {
+    let Some(line) = markdown_heading_candidate(line) else {
+        return false;
+    };
+
+    matches!(line.strip_prefix("##"), Some(rest) if !rest.starts_with('#'))
+}
+
+fn is_fenced_code_boundary(line: &str) -> bool {
+    let Some(line) = markdown_heading_candidate(line) else {
+        return false;
+    };
+    let trimmed = line.trim_end();
+
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+fn markdown_heading_candidate(line: &str) -> Option<&str> {
+    let mut leading_spaces = 0;
+
+    for (idx, ch) in line.char_indices() {
+        match ch {
+            ' ' if leading_spaces < 3 => leading_spaces += 1,
+            ' ' | '\t' => return None,
+            _ => return Some(&line[idx..]),
+        }
+    }
+
+    Some("")
+}
+
+fn normalize_heading_text(line: &str) -> &str {
+    line.trim().trim_end_matches('#').trim_end()
+}
+
+fn extract_from_frontmatter(
+    subject: &str,
+    frontmatter: &HashMap<String, String>,
+) -> Vec<ExtractedAssertion> {
+    let subject = normalize_evidence(subject);
+
+    SUPPORTED_FRONTMATTER_PREDICATES
+        .iter()
+        .filter_map(|predicate| {
+            let object = normalize_evidence(frontmatter.get(*predicate)?);
+            if !is_valid_object(&object) {
+                return None;
+            }
+
+            Some(ExtractedAssertion {
+                triple: Triple {
+                    subject: subject.clone(),
+                    predicate: (*predicate).to_string(),
+                    object,
+                },
+                evidence_text: "frontmatter".to_string(),
+            })
+        })
+        .collect()
+}
+
 fn extract_from_content(content: &str) -> Vec<ExtractedAssertion> {
+    let scoped_content = extract_assertions_section(content);
+    if scoped_content.trim().is_empty() {
+        return Vec::new();
+    }
+
     let mut extracted = Vec::new();
     let mut seen = HashSet::new();
 
     // Pattern 1: "Alice works at Acme Corp" -> (Alice, works_at, Acme Corp)
     collect_pattern_matches(
-        content,
+        scoped_content,
         works_at_regex(),
         "works_at",
         &mut seen,
         &mut extracted,
     );
     // Pattern 2: "Alice is a founder" -> (Alice, is_a, founder)
-    collect_pattern_matches(content, is_a_regex(), "is_a", &mut seen, &mut extracted);
+    collect_pattern_matches(
+        scoped_content,
+        is_a_regex(),
+        "is_a",
+        &mut seen,
+        &mut extracted,
+    );
     // Pattern 3: "Alice founded Brain Co" -> (Alice, founded, Brain Co)
     collect_pattern_matches(
-        content,
+        scoped_content,
         founded_regex(),
         "founded",
         &mut seen,
@@ -289,6 +432,10 @@ fn collect_pattern_matches(
             predicate: predicate.to_string(),
             object: normalize_capture(captures.name("object")),
         };
+
+        if !is_valid_object(&triple.object) {
+            continue;
+        }
 
         if seen.insert(triple.clone()) {
             extracted.push(ExtractedAssertion {
@@ -313,6 +460,10 @@ fn normalize_evidence(value: &str) -> String {
         .trim_end_matches(['.', '!', '?', ';', ':'])
         .trim()
         .to_string()
+}
+
+fn is_valid_object(object: &str) -> bool {
+    object.trim().len() >= MIN_OBJECT_LEN
 }
 
 fn validity_windows_overlap(left: &AssertionRow, right: &AssertionRow) -> bool {
@@ -399,11 +550,21 @@ mod tests {
     }
 
     fn insert_page(conn: &Connection, slug: &str, truth: &str) {
+        insert_page_with_frontmatter(conn, slug, slug, truth, "{}");
+    }
+
+    fn insert_page_with_frontmatter(
+        conn: &Connection,
+        slug: &str,
+        title: &str,
+        truth: &str,
+        frontmatter: &str,
+    ) {
         conn.execute(
             "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                                frontmatter, wing, room, version) \
-             VALUES (?1, 'person', ?2, '', ?3, '', '{}', 'people', '', 1)",
-            rusqlite::params![slug, slug, truth],
+                                 frontmatter, wing, room, version) \
+             VALUES (?1, 'person', ?2, '', ?3, '', ?4, 'people', '', 1)",
+            rusqlite::params![slug, title, truth, frontmatter],
         )
         .unwrap();
     }
@@ -466,7 +627,7 @@ mod tests {
             insert_page(
                 &conn,
                 "people/alice",
-                "Alice works at Acme Corp. Alice is a founder. Alice founded Brain Co.",
+                "Alice biography.\n\n## Assertions\nAlice works at Acme Corp.\nAlice is a founder.\nAlice founded Brain Co.\n",
             );
             let page = get_page(&conn, "people/alice").unwrap();
 
@@ -525,11 +686,19 @@ mod tests {
         #[test]
         fn reindexing_replaces_prior_agent_triples() {
             let conn = open_test_db();
-            insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
+            insert_page(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice works at Acme Corp.\n",
+            );
             let first_page = get_page(&conn, "people/alice").unwrap();
             extract_assertions(&first_page, &conn).unwrap();
 
-            update_page_truth(&conn, "people/alice", "Alice founded Brain Co.");
+            update_page_truth(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice founded Brain Co.\n",
+            );
             let second_page = get_page(&conn, "people/alice").unwrap();
 
             let inserted = extract_assertions(&second_page, &conn).unwrap();
@@ -551,7 +720,7 @@ mod tests {
             insert_page(
                 &conn,
                 "people/alice",
-                "This page is narrative prose without any deterministic triples.",
+                "Alice works at Acme Corp. This is general prose outside a structured section.",
             );
             let page = get_page(&conn, "people/alice").unwrap();
 
@@ -564,13 +733,12 @@ mod tests {
             assert_eq!(row_count, 0);
         }
 
-        #[test]
         fn duplicate_matches_in_content_insert_one_row() {
             let conn = open_test_db();
             insert_page(
                 &conn,
                 "people/alice",
-                "Alice works at Acme Corp. Alice works at Acme Corp.",
+                "## Assertions\nAlice works at Acme Corp.\nAlice works at Acme Corp.\n",
             );
             let page = get_page(&conn, "people/alice").unwrap();
 
@@ -582,7 +750,11 @@ mod tests {
         #[test]
         fn reindexing_preserves_manual_assertions() {
             let conn = open_test_db();
-            insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
+            insert_page(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice works at Acme Corp.\n",
+            );
             let page = get_page(&conn, "people/alice").unwrap();
             extract_assertions(&page, &conn).unwrap();
             insert_assertion(
@@ -597,7 +769,11 @@ mod tests {
                 "manual",
             );
 
-            update_page_truth(&conn, "people/alice", "Alice founded Brain Co.");
+            update_page_truth(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice founded Brain Co.\n",
+            );
             let updated_page = get_page(&conn, "people/alice").unwrap();
             extract_assertions(&updated_page, &conn).unwrap();
 
@@ -623,6 +799,73 @@ mod tests {
                         "manual".to_string(),
                     ),
                 ]
+            );
+        }
+
+        #[test]
+        fn extracts_frontmatter_assertions() {
+            let conn = open_test_db();
+            insert_page_with_frontmatter(
+                &conn,
+                "people/alice",
+                "Alice",
+                "Alice biography.",
+                r#"{"is_a":"researcher"}"#,
+            );
+            let page = get_page(&conn, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+            let rows: Vec<(String, String, String, String)> = conn
+                .prepare(
+                    "SELECT subject, predicate, object, evidence_text
+                     FROM assertions
+                     ORDER BY predicate, object",
+                )
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(inserted, 1);
+            assert_eq!(
+                rows,
+                vec![(
+                    "Alice".to_string(),
+                    "is_a".to_string(),
+                    "researcher".to_string(),
+                    "frontmatter".to_string(),
+                )]
+            );
+        }
+
+        #[test]
+        fn short_frontmatter_object_is_discarded() {
+            let conn = open_test_db();
+            insert_page_with_frontmatter(
+                &conn,
+                "people/alice",
+                "Alice",
+                "## Assertions\nAlice works at Acme Corp.\n",
+                r#"{"is_a":"it"}"#,
+            );
+            let page = get_page(&conn, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+            let rows: Vec<(String, String)> = conn
+                .prepare("SELECT predicate, object FROM assertions ORDER BY predicate, object")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(inserted, 1);
+            assert_eq!(
+                rows,
+                vec![("works_at".to_string(), "Acme Corp".to_string())]
             );
         }
     }
@@ -671,8 +914,16 @@ mod tests {
         #[test]
         fn detects_cross_page_conflict() {
             let conn = open_test_db();
-            insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-            insert_page(&conn, "sources/alice-profile", "Alice works at Beta Corp.");
+            insert_page(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice works at Acme Corp.\n",
+            );
+            insert_page(
+                &conn,
+                "sources/alice-profile",
+                "## Assertions\nAlice works at Beta Corp.\n",
+            );
             let first_page = get_page(&conn, "people/alice").unwrap();
             let second_page = get_page(&conn, "sources/alice-profile").unwrap();
             extract_assertions(&first_page, &conn).unwrap();
@@ -805,7 +1056,11 @@ mod tests {
         #[test]
         fn clean_page_returns_no_contradictions() {
             let conn = open_test_db();
-            insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
+            insert_page(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice works at Acme Corp.\n",
+            );
             let page = get_page(&conn, "people/alice").unwrap();
             extract_assertions(&page, &conn).unwrap();
 

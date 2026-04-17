@@ -618,6 +618,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(test)]
     mod extract_assertions {
         use super::*;
 

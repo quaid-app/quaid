@@ -95,8 +95,29 @@ GBRAIN_VERSION=v0.9.1 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
 > require `sudo` — the installer does not escalate privileges automatically.
 
 The installer auto-detects your platform, chooses the airgapped or online release asset based on
-`GBRAIN_CHANNEL`, verifies the SHA-256 checksum, runs `gbrain version`, and prints a `GBRAIN_DB`
-shell-profile tip.
+`GBRAIN_CHANNEL`, verifies the SHA-256 checksum, runs `gbrain version`, and automatically writes
+`PATH` and `GBRAIN_DB` to your shell profile (`~/.zshrc`, `~/.bashrc`, or `~/.profile`).
+
+To skip automatic profile writes (e.g. in CI or agent environments that manage `$PATH` externally):
+
+```bash
+GBRAIN_NO_PROFILE=1 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+# or with the two-step method:
+sh gbrain-install.sh --no-profile
+```
+
+#### Sandboxed / agent environments
+
+If your security sandbox blocks piping remote scripts directly to `sh`, download first, then run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  -o gbrain-install.sh && sh gbrain-install.sh
+```
+
+This two-step pattern works in restricted shells and agent environments (e.g. OpenClaw) where
+the one-liner `curl | sh` is blocked. The installer's profile-write behavior is identical in
+both modes — `GBRAIN_NO_PROFILE=1` or `--no-profile` opts out.
 
 ### npm global install (staged)
 

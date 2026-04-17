@@ -132,8 +132,11 @@ async function sha256(filePath) {
 function printDbTip() {
   console.log("");
   console.log("Tip: Set GBRAIN_DB in your shell profile to avoid passing --db on every command:");
-  console.log("  echo 'export GBRAIN_DB=\"$HOME/brain.db\"' >> ~/.zshrc");
-  console.log("  echo 'export GBRAIN_DB=\"$HOME/brain.db\"' >> ~/.bashrc");
+  console.log('  export GBRAIN_DB="$HOME/brain.db"');
+  console.log("");
+  console.log("The shell installer (scripts/install.sh) writes PATH and GBRAIN_DB to your");
+  console.log("shell profile automatically. If you installed via npm, add the line above to");
+  console.log("your ~/.zshrc, ~/.bashrc, or ~/.profile manually.");
 }
 
 async function main() {

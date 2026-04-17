@@ -6,6 +6,7 @@ REPO="macro88/gigabrain"
 API_URL="${GBRAIN_RELEASE_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
 RELEASE_BASE="${GBRAIN_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download}"
 INSTALL_DIR="${GBRAIN_INSTALL_DIR:-$HOME/.local/bin}"
+NO_PROFILE="${GBRAIN_NO_PROFILE:-0}"
 
 tmp_dir=""
 
@@ -94,29 +95,107 @@ verify_checksum() {
   [ -f "$tmp_dir/$asset_name" ] || fail "Checksum verification did not preserve downloaded binary"
 }
 
-print_path_hint() {
+# --- Profile detection and writing (A.1–A.3) ---
+
+detect_profile() {
+  shell_name="$(basename "${SHELL:-/bin/sh}" 2>/dev/null || echo "sh")"
+  case "$shell_name" in
+    zsh)
+      PROFILE_FILE="$HOME/.zshrc"
+      ;;
+    bash)
+      case "$(uname -s 2>/dev/null || true)" in
+        Darwin) PROFILE_FILE="$HOME/.bash_profile" ;;
+        *)      PROFILE_FILE="$HOME/.bashrc" ;;
+      esac
+      ;;
+    *)
+      PROFILE_FILE="$HOME/.profile"
+      ;;
+  esac
+
+  # Create the profile file if it does not exist
+  if [ ! -f "$PROFILE_FILE" ]; then
+    touch "$PROFILE_FILE" 2>/dev/null || true
+  fi
+}
+
+write_profile_line() {
+  profile="$1"
+  marker_pattern="$2"
+  line_to_append="$3"
+
+  if [ ! -f "$profile" ]; then
+    return
+  fi
+
+  if grep -q "$marker_pattern" "$profile" 2>/dev/null; then
+    return
+  fi
+
+  printf '\n%s\n' "$line_to_append" >> "$profile"
+  printf '  Added: %s → %s\n' "$line_to_append" "$profile"
+}
+
+write_profile() {
+  detect_profile
+
+  path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
+  db_line="export GBRAIN_DB=\"\$HOME/brain.db\""
+
+  wrote_something=0
+
+  # Only write PATH if install dir is not already in PATH
   case ":${PATH:-}:" in
     *:"$INSTALL_DIR":*) ;;
     *)
-      printf '%s\n' ""
-      printf '%s\n' "Add this directory to your PATH to run gbrain from anywhere:"
+      write_profile_line "$PROFILE_FILE" "$INSTALL_DIR" "$path_line"
+      wrote_something=1
+      ;;
+  esac
+
+  write_profile_line "$PROFILE_FILE" "GBRAIN_DB" "$db_line"
+  wrote_something=1
+
+  if [ "$wrote_something" = "1" ]; then
+    printf '\n  Profile updated: %s\n' "$PROFILE_FILE"
+    printf '  Run: source %s\n' "$PROFILE_FILE"
+  fi
+}
+
+print_manual_hints() {
+  printf '%s\n' ""
+  printf '%s\n' "Complete setup by adding these to your shell profile:"
+  case ":${PATH:-}:" in
+    *:"$INSTALL_DIR":*) ;;
+    *)
       printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
       ;;
   esac
+  printf '  export GBRAIN_DB="$HOME/brain.db"\n'
 }
 
-print_gbrain_db_tip() {
+print_sandboxed_hint() {
   printf '%s\n' ""
-  printf '%s\n' "Tip: Set GBRAIN_DB in your shell profile to avoid passing --db on every command:"
-  printf '%s\n' "  echo 'export GBRAIN_DB=\"\$HOME/brain.db\"' >> ~/.zshrc"
-  printf '%s\n' "  echo 'export GBRAIN_DB=\"\$HOME/brain.db\"' >> ~/.bashrc"
+  printf '%s\n' "For sandboxed/agent environments: download first, then run:"
+  printf '  curl -fsSL https://raw.githubusercontent.com/%s/main/scripts/install.sh \\\n' "$REPO"
+  printf '    -o gbrain-install.sh && sh gbrain-install.sh\n'
 }
+
+# --- Argument parsing ---
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-profile) NO_PROFILE=1 ;;
+  esac
+done
 
 need_cmd curl
 need_cmd mkdir
 need_cmd chmod
 need_cmd mv
 need_cmd mktemp
+need_cmd grep
 
 trap cleanup EXIT INT HUP TERM
 
@@ -165,5 +244,11 @@ fi
 
 printf '%s\n' ""
 printf 'Installed gbrain to %s\n' "$install_path"
-print_path_hint
-print_gbrain_db_tip
+
+if [ "$NO_PROFILE" = "1" ]; then
+  print_manual_hints
+else
+  write_profile
+fi
+
+print_sandboxed_hint

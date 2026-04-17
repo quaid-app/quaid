@@ -97,6 +97,18 @@ GBRAIN_CHANNEL=online \
   curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 ```
 
+> The installer automatically writes `PATH` and `GBRAIN_DB` exports to your shell profile
+> (`~/.zshrc`, `~/.bashrc`, or `~/.profile`) so gbrain works immediately in new sessions.
+> To skip profile writes (e.g. in CI), set `GBRAIN_NO_PROFILE=1` or pass `--no-profile`.
+
+**Sandboxed / agent environments** — if your security sandbox blocks piping remote scripts
+directly to `sh`, download first, then run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  -o gbrain-install.sh && sh gbrain-install.sh
+```
+
 Download a pre-built binary from GitHub Releases:
 
 ```bash

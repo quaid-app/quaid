@@ -62,6 +62,13 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 > **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use all features now; see [Status](#status) and [Install options](#install-options) above.
 
+> **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `GBRAIN_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
+> ```bash
+> export PATH="$HOME/.local/bin:$PATH"
+> export GBRAIN_DB="$HOME/brain.db"
+> ```
+> For CI/agent environments that manage PATH externally, skip profile writes with `GBRAIN_NO_PROFILE=1`.
+
 ### 1. Initialize
 
 ```bash
@@ -202,6 +209,7 @@ The `original` type is for your own thinking — distinct from compiled external
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
 | `GBRAIN_DB` | `./brain.db` | Path to the active brain database |
+| `GBRAIN_NO_PROFILE` | `0` | Set to `1` to skip shell profile writes during install |
 
 ---
 

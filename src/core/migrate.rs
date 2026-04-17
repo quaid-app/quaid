@@ -75,7 +75,7 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
     for (file_path, hash, entry) in &parsed {
         if is_already_ingested(&tx, hash)? {
             // Content unchanged — refresh the source path in case the file moved.
-            refresh_ingest_source(&tx, hash, &file_path.to_string_lossy())?;
+            refresh_ingest_source(&tx, hash, &file_path.to_string_lossy(), entry)?;
             skipped_already_ingested += 1;
             continue;
         }
@@ -272,8 +272,12 @@ fn is_already_ingested(db: &Connection, hash: &str) -> Result<bool> {
 
 fn record_ingest(db: &Connection, hash: &str, path: &str, slug: &str) -> Result<()> {
     db.execute(
-        "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
-         VALUES (?1, 'file', ?2, json_array(?3))",
+        "INSERT INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
+         VALUES (?1, 'file', ?2, json_array(?3)) \
+         ON CONFLICT(ingest_key) DO UPDATE SET \
+             source_ref = excluded.source_ref, \
+             pages_updated = excluded.pages_updated, \
+             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
         rusqlite::params![hash, path, slug],
     )?;
     Ok(())
@@ -282,14 +286,91 @@ fn record_ingest(db: &Connection, hash: &str, path: &str, slug: &str) -> Result<
 /// Update the source path for an existing ingest_log row. Called when a
 /// directory re-import encounters a file whose SHA-256 already exists but
 /// whose path may have changed (e.g. the user moved or renamed the file).
-fn refresh_ingest_source(db: &Connection, hash: &str, path: &str) -> Result<()> {
+fn refresh_ingest_source(
+    db: &Connection,
+    hash: &str,
+    path: &str,
+    entry: &ParsedEntry,
+) -> Result<()> {
+    let pages_updated = refreshed_pages_updated(db, hash, entry)?;
     db.execute(
         "UPDATE ingest_log SET source_ref = ?2, \
+             pages_updated = ?3, \
              completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
          WHERE ingest_key = ?1",
-        rusqlite::params![hash, path],
+        rusqlite::params![hash, path, pages_updated],
     )?;
     Ok(())
+}
+
+fn refreshed_pages_updated(db: &Connection, hash: &str, entry: &ParsedEntry) -> Result<String> {
+    let mut slugs = existing_valid_pages_updated(db, hash)?;
+    if slugs.is_empty() {
+        slugs = matching_page_slugs(db, entry)?;
+    }
+    if slugs.is_empty() && page_exists(db, &entry.slug)? {
+        slugs.push(entry.slug.clone());
+    }
+    slugs.sort();
+    slugs.dedup();
+    Ok(serde_json::to_string(&slugs)?)
+}
+
+fn existing_valid_pages_updated(db: &Connection, hash: &str) -> Result<Vec<String>> {
+    let mut stmt = db.prepare(
+        "SELECT je.value \
+         FROM ingest_log il, json_each(il.pages_updated) je \
+         WHERE il.ingest_key = ?1",
+    )?;
+    let rows = stmt.query_map([hash], |row| row.get::<_, String>(0))?;
+
+    let mut slugs = Vec::new();
+    for row in rows {
+        let slug = row?;
+        if page_exists(db, &slug)? {
+            slugs.push(slug);
+        }
+    }
+    Ok(slugs)
+}
+
+fn matching_page_slugs(db: &Connection, entry: &ParsedEntry) -> Result<Vec<String>> {
+    let expected_frontmatter: HashMap<String, String> =
+        serde_json::from_str(&entry.frontmatter_json).unwrap_or_default();
+    let mut stmt = db.prepare(
+        "SELECT slug, frontmatter FROM pages \
+         WHERE compiled_truth = ?1 AND timeline = ?2 \
+         ORDER BY slug",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![entry.compiled_truth, entry.timeline],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+
+    let mut slugs = Vec::new();
+    for row in rows {
+        let (slug, frontmatter_json) = row?;
+        let frontmatter: HashMap<String, String> =
+            serde_json::from_str(&frontmatter_json).unwrap_or_default();
+        if frontmatter == expected_frontmatter {
+            slugs.push(slug);
+        }
+    }
+
+    Ok(match slugs.as_slice() {
+        [only] => vec![only.clone()],
+        _ if slugs.iter().any(|slug| slug == &entry.slug) => vec![entry.slug.clone()],
+        _ => Vec::new(),
+    })
+}
+
+fn page_exists(db: &Connection, slug: &str) -> Result<bool> {
+    let exists: i64 = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pages WHERE slug = ?1)",
+        [slug],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
 }
 
 /// Returns `(md_files, non_markdown_count)`.
@@ -720,5 +801,46 @@ mod tests {
             updated_ref.contains("sub/note.md"),
             "source_ref should reflect the new nested path, got: {updated_ref}"
         );
+    }
+
+    #[test]
+    fn reimport_backfills_empty_pages_updated_with_existing_slug() {
+        let conn = open_test_db();
+
+        let dir_a = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir_a.path().join("note.md"),
+            "---\ntitle: Note\ntype: concept\n---\nStable content.\n",
+        )
+        .unwrap();
+        import_dir(&conn, dir_a.path(), false).unwrap();
+
+        conn.execute(
+            "UPDATE ingest_log \
+             SET source_ref = 'old/path.md', pages_updated = '[]' \
+             WHERE source_type = 'file'",
+            [],
+        )
+        .unwrap();
+
+        let dir_b = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir_b.path().join("note.md"),
+            "---\ntitle: Note\ntype: concept\n---\nStable content.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir_b.path(), false).unwrap();
+        assert_eq!(stats.imported, 0);
+        assert_eq!(stats.skipped_already_ingested, 1);
+
+        let pages_updated: String = conn
+            .query_row(
+                "SELECT pages_updated FROM ingest_log WHERE source_type = 'file'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pages_updated, "[\"note\"]");
     }
 }

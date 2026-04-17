@@ -160,15 +160,15 @@ fn page_needs_refresh(
 }
 
 /// Best-effort lookup of the source file path for a given slug via
-/// the ingest_log table. Returns `None` when the page was not ingested
-/// from a file (e.g. created via `brain_put`).
+/// the ingest_log table. Returns `None` when no matching ingest row can
+/// be found, including pages created outside file ingest flows.
 fn lookup_source_path(db: &Connection, slug: &str) -> Option<String> {
     db.query_row(
         "SELECT source_ref FROM ingest_log \
          WHERE EXISTS ( \
-             SELECT 1 FROM json_each(pages_updated) WHERE value = ?1 \
-         ) \
-         ORDER BY completed_at DESC LIMIT 1",
+              SELECT 1 FROM json_each(pages_updated) WHERE value = ?1 \
+          ) \
+         ORDER BY completed_at DESC, rowid DESC LIMIT 1",
         [slug],
         |row| row.get(0),
     )
@@ -561,6 +561,81 @@ mod tests {
             result.as_deref(),
             file_path.to_str(),
             "single-file ingest should preserve slug→source mapping for later warnings"
+        );
+    }
+
+    #[test]
+    fn lookup_source_path_recovers_after_reimport_backfills_empty_pages_updated() {
+        let conn = open_test_db();
+
+        let first_dir = tempfile::TempDir::new().expect("create first dir");
+        let first_path = first_dir.path().join("note.md");
+        std::fs::write(
+            &first_path,
+            "---\ntitle: Note\ntype: concept\n---\nStable content.\n",
+        )
+        .expect("write first fixture");
+
+        crate::core::migrate::import_dir(&conn, first_dir.path(), false).expect("first import");
+        conn.execute(
+            "UPDATE ingest_log \
+             SET source_ref = 'old/path.md', pages_updated = '[]' \
+             WHERE source_type = 'file'",
+            [],
+        )
+        .expect("seed legacy ingest row");
+
+        let second_dir = tempfile::TempDir::new().expect("create second dir");
+        let second_path = second_dir.path().join("note.md");
+        std::fs::write(
+            &second_path,
+            "---\ntitle: Note\ntype: concept\n---\nStable content.\n",
+        )
+        .expect("write second fixture");
+
+        crate::core::migrate::import_dir(&conn, second_dir.path(), false).expect("second import");
+
+        assert_eq!(
+            lookup_source_path(&conn, "note").as_deref(),
+            second_path.to_str()
+        );
+    }
+
+    #[test]
+    fn lookup_source_path_recovers_after_reimport_repairs_stale_slug_metadata() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+
+        let original_path = dir.path().join("note.md");
+        std::fs::write(
+            &original_path,
+            "---\ntitle: Note\ntype: concept\n---\nStable content.\n",
+        )
+        .expect("write original fixture");
+
+        crate::core::migrate::import_dir(&conn, dir.path(), false).expect("initial import");
+        conn.execute(
+            "UPDATE ingest_log \
+             SET pages_updated = json_array('sub/note') \
+             WHERE source_type = 'file'",
+            [],
+        )
+        .expect("seed stale slug metadata");
+
+        std::fs::create_dir_all(dir.path().join("sub")).expect("create subdir");
+        std::fs::rename(&original_path, dir.path().join("sub/note.md")).expect("move file");
+
+        crate::core::migrate::import_dir(&conn, dir.path(), false).expect("reimport moved file");
+
+        let moved_path = dir.path().join("sub/note.md");
+        assert_eq!(
+            lookup_source_path(&conn, "note").as_deref(),
+            moved_path.to_str()
+        );
+        assert_eq!(
+            lookup_source_path(&conn, "sub/note"),
+            None,
+            "path-derived slug drift must not replace the existing page mapping"
         );
     }
 }

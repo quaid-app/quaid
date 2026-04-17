@@ -1,19 +1,14 @@
-//! Inference — text embedding and vector search via BGE-small-en-v1.5.
+//! Inference — text embedding and vector search via configurable BGE models.
 //!
-//! Uses Candle (pure Rust ML) to run the BAAI/bge-small-en-v1.5 BERT model on
-//! CPU. Two compile-time channels are supported:
+//! Two compile-time channels are supported:
 //!
-//! - `embedded-model` — airgapped build with embedded model assets
+//! - `embedded-model` — airgapped build with embedded BGE-small assets
 //! - `online-model` — online build with first-use download + cache
 //!
-//! If the model cannot be loaded (no network, no cache, missing feature flag),
-//! the system falls back to a SHA-256 hash-based shim that satisfies the API
-//! contract (384-dim, L2-normalised) but produces non-semantic vectors.
-//!
-//! The public API (`embed`, `search_vec`, `ensure_model`, `embedding_to_blob`)
-//! is stable regardless of which backend is active.
+//! The public API (`embed`, `search_vec`, `configure_runtime_model`,
+//! `resolve_model`, `embedding_to_blob`) is stable regardless of backend.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "online-model")]
 use std::path::{Path, PathBuf};
@@ -21,8 +16,12 @@ use std::path::{Path, PathBuf};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+use candle_transformers::models::xlm_roberta::{
+    Config as XLMRobertaConfig, XLMRobertaModel,
+};
 use rusqlite::types::ToSql;
 use rusqlite::Connection;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokenizers::Tokenizer;
 
@@ -31,114 +30,326 @@ use super::types::{InferenceError, SearchError, SearchResult};
 #[cfg(all(feature = "embedded-model", feature = "online-model"))]
 compile_error!("Enable only one model channel: `embedded-model` or `online-model`.");
 
-const EMBEDDING_DIMENSIONS: usize = 384;
-const HASH_CHUNK_COUNT: usize = EMBEDDING_DIMENSIONS / 32;
-#[cfg(feature = "online-model")]
-const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
-/// Pinned Hugging Face revision for reproducible online downloads.
-#[cfg(feature = "online-model")]
-const MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
+const DEFAULT_MODEL_ALIAS: &str = "small";
+const DEFAULT_EMBEDDING_DIMENSIONS: usize = 384;
 
-/// Expected SHA-256 digests for online-channel integrity verification.
-#[cfg(feature = "online-model")]
-const MODEL_FILE_HASHES: [(&str, &str); 3] = [
-    (
-        "config.json",
-        "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
-    ),
-    (
-        "tokenizer.json",
-        "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
-    ),
-    (
-        "model.safetensors",
-        "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad",
-    ),
-];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelFileHashes {
+    pub config_json: &'static str,
+    pub tokenizer_json: &'static str,
+    pub model_safetensors: &'static str,
+}
 
-static MODEL: OnceLock<EmbeddingModel> = OnceLock::new();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelConfig {
+    pub alias: String,
+    pub model_id: String,
+    pub embedding_dim: usize,
+    pub sha256_hashes: Option<ModelFileHashes>,
+}
 
-/// BGE-small-en-v1.5 embedding model backed by Candle, with SHA-256 fallback.
+impl ModelConfig {
+    pub fn vec_table(&self) -> String {
+        format!("page_embeddings_vec_{}", self.embedding_dim)
+    }
+
+    pub fn embedding_model_name(&self) -> &str {
+        &self.model_id
+    }
+
+    pub fn model_hint(&self) -> &str {
+        if self.alias == "custom" {
+            &self.model_id
+        } else {
+            &self.alias
+        }
+    }
+
+    pub fn is_small(&self) -> bool {
+        self.alias == "small" || self.model_id == "BAAI/bge-small-en-v1.5"
+    }
+
+    pub fn needs_dimension_hydration(&self) -> bool {
+        self.embedding_dim == 0
+    }
+}
+
+const SMALL_HASHES: ModelFileHashes = ModelFileHashes {
+    config_json: "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
+    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    model_safetensors: "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad",
+};
+
+const BASE_HASHES: ModelFileHashes = ModelFileHashes {
+    config_json: "bc00af31a4a31b74040d73370aa83b62da34c90b75eb77bfa7db039d90abd591",
+    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    model_safetensors: "c7c1988aae201f80cf91a5dbbd5866409503b89dcaba877ca6dba7dd0a5167d7",
+};
+
+const LARGE_HASHES: ModelFileHashes = ModelFileHashes {
+    config_json: "446712fac367857b4b1302762fe1cd7bfa8b3c4b77b4dc5d77c4025407660896",
+    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    model_safetensors: "45e1954914e29bd74080e6c1510165274ff5279421c89f76c418878732f64ae7",
+};
+
+const M3_HASHES: ModelFileHashes = ModelFileHashes {
+    config_json: "26159e7ad065073448460117eb24b7a4572f6f4e78eadff65dc0a11c052449fa",
+    tokenizer_json: "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08",
+    model_safetensors: "993b2248881724788dcab8c644a91dfd63584b6e5604ff2037cb5541e1e38e7e",
+};
+
+pub fn default_model() -> ModelConfig {
+    resolve_model(DEFAULT_MODEL_ALIAS)
+}
+
+pub fn resolve_model(input: &str) -> ModelConfig {
+    let trimmed = input.trim();
+    let normalized = trimmed.to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "" | DEFAULT_MODEL_ALIAS => ModelConfig {
+            alias: "small".to_owned(),
+            model_id: "BAAI/bge-small-en-v1.5".to_owned(),
+            embedding_dim: 384,
+            sha256_hashes: Some(SMALL_HASHES),
+        },
+        "base" => ModelConfig {
+            alias: "base".to_owned(),
+            model_id: "BAAI/bge-base-en-v1.5".to_owned(),
+            embedding_dim: 768,
+            sha256_hashes: Some(BASE_HASHES),
+        },
+        "large" => ModelConfig {
+            alias: "large".to_owned(),
+            model_id: "BAAI/bge-large-en-v1.5".to_owned(),
+            embedding_dim: 1024,
+            sha256_hashes: Some(LARGE_HASHES),
+        },
+        "m3" => ModelConfig {
+            alias: "m3".to_owned(),
+            model_id: "BAAI/bge-m3".to_owned(),
+            embedding_dim: 1024,
+            sha256_hashes: Some(M3_HASHES),
+        },
+        "baai/bge-small-en-v1.5" => ModelConfig {
+            alias: "small".to_owned(),
+            model_id: "BAAI/bge-small-en-v1.5".to_owned(),
+            embedding_dim: 384,
+            sha256_hashes: Some(SMALL_HASHES),
+        },
+        "baai/bge-base-en-v1.5" => ModelConfig {
+            alias: "base".to_owned(),
+            model_id: "BAAI/bge-base-en-v1.5".to_owned(),
+            embedding_dim: 768,
+            sha256_hashes: Some(BASE_HASHES),
+        },
+        "baai/bge-large-en-v1.5" => ModelConfig {
+            alias: "large".to_owned(),
+            model_id: "BAAI/bge-large-en-v1.5".to_owned(),
+            embedding_dim: 1024,
+            sha256_hashes: Some(LARGE_HASHES),
+        },
+        "baai/bge-m3" => ModelConfig {
+            alias: "m3".to_owned(),
+            model_id: "BAAI/bge-m3".to_owned(),
+            embedding_dim: 1024,
+            sha256_hashes: Some(M3_HASHES),
+        },
+        _ => {
+            eprintln!(
+                "Warning: unpinned custom embedding model `{trimmed}`; skipping SHA-256 verification."
+            );
+            ModelConfig {
+                alias: "custom".to_owned(),
+                model_id: trimmed.to_owned(),
+                embedding_dim: 0,
+                sha256_hashes: None,
+            }
+        }
+    }
+}
+
+pub fn resolve_requested_model(input: Option<&str>) -> ModelConfig {
+    let requested = resolve_model(input.unwrap_or(DEFAULT_MODEL_ALIAS));
+    coerce_model_for_build(&requested)
+}
+
+pub fn coerce_model_for_build(requested: &ModelConfig) -> ModelConfig {
+    #[cfg(feature = "embedded-model")]
+    {
+        if !requested.is_small() {
+            eprintln!(
+                "Warning: --model / GBRAIN_MODEL is only configurable in the online-model build; continuing with BAAI/bge-small-en-v1.5."
+            );
+            return default_model();
+        }
+    }
+
+    requested.clone()
+}
+
+pub fn hydrate_model_config(model: &ModelConfig) -> Result<ModelConfig, String> {
+    if !model.needs_dimension_hydration() {
+        return Ok(model.clone());
+    }
+
+    #[cfg(feature = "online-model")]
+    {
+        let (config_path, _, _) = download_model_files(model)?;
+        let embedding_dim = read_embedding_dim_from_config(&config_path)?;
+        let mut hydrated = model.clone();
+        hydrated.embedding_dim = embedding_dim;
+        return Ok(hydrated);
+    }
+
+    #[cfg(not(feature = "online-model"))]
+    {
+        Err(format!(
+            "custom model {} requires the online-model build to resolve dimensions",
+            model.model_id
+        ))
+    }
+}
+
+struct ModelRuntime {
+    configured: ModelConfig,
+    loaded: Option<EmbeddingModel>,
+}
+
+impl Default for ModelRuntime {
+    fn default() -> Self {
+        Self {
+            configured: default_model(),
+            loaded: None,
+        }
+    }
+}
+
+static MODEL_RUNTIME: OnceLock<Mutex<ModelRuntime>> = OnceLock::new();
+
+fn model_runtime() -> &'static Mutex<ModelRuntime> {
+    MODEL_RUNTIME.get_or_init(|| Mutex::new(ModelRuntime::default()))
+}
+
+pub fn configure_runtime_model(model: ModelConfig) {
+    let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    if runtime.configured != model {
+        runtime.configured = model;
+        runtime.loaded = None;
+    }
+}
+
+pub fn set_model_config(model: ModelConfig) {
+    configure_runtime_model(model);
+}
+
+fn runtime_model_config() -> ModelConfig {
+    model_runtime()
+        .lock()
+        .expect("model runtime lock poisoned")
+        .configured
+        .clone()
+}
+
 pub struct EmbeddingModel {
+    config: ModelConfig,
     backend: EmbeddingBackend,
 }
 
 enum EmbeddingBackend {
-    /// Real BGE-small-en-v1.5 BERT model via Candle.
-    Candle {
+    CandleBert {
         model: Box<BertModel>,
         tokenizer: Box<Tokenizer>,
         device: Device,
     },
-    /// SHA-256 hash-based fallback (non-semantic, deterministic).
+    CandleXlmRoberta {
+        model: Box<XLMRobertaModel>,
+        tokenizer: Box<Tokenizer>,
+        device: Device,
+    },
     HashShim,
 }
 
 impl std::fmt::Debug for EmbeddingModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.backend {
-            EmbeddingBackend::Candle { .. } => f
+            EmbeddingBackend::CandleBert { .. } | EmbeddingBackend::CandleXlmRoberta { .. } => f
                 .debug_struct("EmbeddingModel")
-                .field("backend", &"Candle(BGE-small-en-v1.5)")
+                .field("backend", &format!("Candle({})", self.config.model_id))
                 .finish(),
             EmbeddingBackend::HashShim => f
                 .debug_struct("EmbeddingModel")
                 .field("backend", &"HashShim")
+                .field("model_id", &self.config.model_id)
+                .field("embedding_dim", &self.config.embedding_dim)
                 .finish(),
         }
     }
 }
 
 impl EmbeddingModel {
-    fn new() -> Self {
-        match Self::try_load_candle() {
-            Ok(backend) => Self { backend },
+    fn new(config: ModelConfig) -> Self {
+        let hydrated = hydrate_model_config(&config).unwrap_or(config);
+
+        match Self::try_load_candle(&hydrated) {
+            Ok(backend) => Self {
+                config: hydrated,
+                backend,
+            },
             Err(err) => {
                 eprintln!(
-                    "Warning: BGE-small model not available ({err}), \
-                     using hash-based embeddings. Build the default airgapped channel with \
-                     `cargo build --release` or use the online channel with \
-                     `cargo build --release --no-default-features --features bundled,online-model`, \
-                     then run `gbrain embed --all`."
+                    "Warning: embedding model {} not available ({err}), using hash-based embeddings. Rebuild the airgapped channel with `cargo build --release` or the online channel with `cargo build --release --no-default-features --features bundled,online-model`, then run `gbrain embed --all`.",
+                    hydrated.model_id
                 );
                 Self {
+                    config: hydrated,
                     backend: EmbeddingBackend::HashShim,
                 }
             }
         }
     }
 
-    fn try_load_candle() -> Result<EmbeddingBackend, String> {
+    fn try_load_candle(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
         #[cfg(feature = "embedded-model")]
         {
-            load_embedded_backend()
+            return load_embedded_backend(config);
         }
 
         #[cfg(feature = "online-model")]
         {
-            load_online_backend()
+            return load_online_backend(config);
         }
 
-        #[cfg(not(any(feature = "embedded-model", feature = "online-model")))]
-        {
-            Err("no model channel enabled".to_owned())
-        }
+        #[allow(unreachable_code)]
+        Err("no model channel enabled".to_owned())
     }
 
     fn embed(&self, text: &str) -> Result<Vec<f32>, InferenceError> {
         match &self.backend {
-            EmbeddingBackend::Candle {
+            EmbeddingBackend::CandleBert {
                 model,
                 tokenizer,
                 device,
             } => embed_candle(text, model, tokenizer, device),
-            EmbeddingBackend::HashShim => embed_hash_shim(text),
+            EmbeddingBackend::CandleXlmRoberta {
+                model,
+                tokenizer,
+                device,
+            } => embed_candle_xlm_roberta(text, model, tokenizer, device),
+            EmbeddingBackend::HashShim => embed_hash_shim(text, self.config.embedding_dim),
         }
     }
 }
 
 #[cfg(feature = "embedded-model")]
-fn load_embedded_backend() -> Result<EmbeddingBackend, String> {
+fn load_embedded_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
+    if !config.is_small() {
+        return Err(format!(
+            "embedded-model build only includes BAAI/bge-small-en-v1.5, requested {}",
+            config.model_id
+        ));
+    }
+
     let config: BertConfig =
         serde_json::from_slice(include_bytes!(env!("GBRAIN_EMBEDDED_CONFIG_PATH")))
             .map_err(|e| format!("parse embedded config.json: {e}"))?;
@@ -153,7 +364,7 @@ fn load_embedded_backend() -> Result<EmbeddingBackend, String> {
     .map_err(|e| format!("load embedded model weights: {e}"))?;
     let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
 
-    Ok(EmbeddingBackend::Candle {
+    Ok(EmbeddingBackend::CandleBert {
         model: Box::new(model),
         tokenizer: Box::new(tokenizer),
         device,
@@ -161,31 +372,54 @@ fn load_embedded_backend() -> Result<EmbeddingBackend, String> {
 }
 
 #[cfg(feature = "online-model")]
-fn load_online_backend() -> Result<EmbeddingBackend, String> {
-    let (config_path, tokenizer_path, model_path) =
-        download_model_files().map_err(|e| format!("model download: {e}"))?;
-
+fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
+    let (config_path, tokenizer_path, model_path) = download_model_files(config)?;
+    let model_type = read_model_type_from_config(&config_path)?;
     let config_text =
         std::fs::read_to_string(&config_path).map_err(|e| format!("read config.json: {e}"))?;
-    let config: BertConfig =
-        serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
     let tokenizer =
         Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("load tokenizer: {e}"))?;
     let device = Device::Cpu;
-    let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
-            .map_err(|e| format!("load model weights: {e}"))?
-    };
-    let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
 
-    Ok(EmbeddingBackend::Candle {
-        model: Box::new(model),
-        tokenizer: Box::new(tokenizer),
-        device,
-    })
+    match model_type.as_str() {
+        "bert" => {
+            let config: BertConfig =
+                serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+            let vb = unsafe {
+                VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
+                    .map_err(|e| format!("load model weights: {e}"))?
+            };
+            let model =
+                BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
+
+            Ok(EmbeddingBackend::CandleBert {
+                model: Box::new(model),
+                tokenizer: Box::new(tokenizer),
+                device,
+            })
+        }
+        "xlm-roberta" => {
+            let config: XLMRobertaConfig =
+                serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+            let vb = unsafe {
+                VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
+                    .map_err(|e| format!("load model weights: {e}"))?
+            };
+            let model = XLMRobertaModel::load(vb, &config)
+                .map_err(|e| format!("build XLM-R model: {e}"))?;
+
+            Ok(EmbeddingBackend::CandleXlmRoberta {
+                model: Box::new(model),
+                tokenizer: Box::new(tokenizer),
+                device,
+            })
+        }
+        _ => Err(format!(
+            "model architecture {model_type} is not supported by the current Candle loader"
+        )),
+    }
 }
 
-/// Run the BERT forward pass and mean-pool + L2-normalize the output.
 fn embed_candle(
     text: &str,
     model: &BertModel,
@@ -198,7 +432,6 @@ fn embed_candle(
             message: format!("tokenizer: {e}"),
         })?;
 
-    // BGE-small-en-v1.5 max_position_embeddings = 512; truncate to avoid OOB.
     let max_len = 512;
     let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(max_len)];
     let mask: &[u32] =
@@ -228,7 +461,51 @@ fn embed_candle(
             message: format!("BERT forward: {e}"),
         })?;
 
-    // Mean pooling over token dimension, masked by attention_mask
+    mean_pool_and_normalize(output, attention_mask)
+}
+
+fn embed_candle_xlm_roberta(
+    text: &str,
+    model: &XLMRobertaModel,
+    tokenizer: &Tokenizer,
+    device: &Device,
+) -> Result<Vec<f32>, InferenceError> {
+    let encoding = tokenizer
+        .encode(text, true)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("tokenizer: {e}"),
+        })?;
+
+    let max_len = 8192;
+    let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(max_len)];
+    let mask: &[u32] =
+        &encoding.get_attention_mask()[..encoding.get_attention_mask().len().min(max_len)];
+
+    let input_ids = Tensor::new(ids, device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("input_ids tensor: {e}"),
+        })?;
+
+    let attention_mask = Tensor::new(mask, device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("attention_mask tensor: {e}"),
+        })?;
+
+    let output = model
+        .forward(&input_ids, &attention_mask)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("XLM-R forward: {e}"),
+        })?;
+
+    mean_pool_and_normalize(output, attention_mask)
+}
+
+fn mean_pool_and_normalize(
+    output: Tensor,
+    attention_mask: Tensor,
+) -> Result<Vec<f32>, InferenceError> {
     let mask_f32 = attention_mask
         .unsqueeze(2)
         .and_then(|t| t.to_dtype(DType::F32))
@@ -270,7 +547,6 @@ fn embed_candle(
             message: format!("mean: {e}"),
         })?;
 
-    // L2 normalize
     let norm = mean
         .sqr()
         .and_then(|t| t.sum_keepdim(1))
@@ -291,24 +567,20 @@ fn embed_candle(
             message: format!("normalize: {e}"),
         })?;
 
-    let embedding = normalized
+    normalized
         .squeeze(0)
         .and_then(|t| t.to_vec1::<f32>())
         .map_err(|e| InferenceError::Internal {
             message: format!("to_vec: {e}"),
-        })?;
-
-    Ok(embedding)
+        })
 }
 
-/// Download BGE-small-en-v1.5 model files into the local GigaBrain cache.
 #[cfg(feature = "online-model")]
-fn download_model_files(
-) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
-    let cache_dir = model_cache_dir()?;
+fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let cache_dir = model_cache_dir(model)?;
 
     if let Some(paths) = existing_model_paths(&cache_dir) {
-        verify_cached_model_integrity(&cache_dir)?;
+        verify_cached_model_integrity(model, &cache_dir)?;
         return Ok(paths);
     }
 
@@ -321,13 +593,20 @@ fn download_model_files(
         .build()
         .map_err(|e| format!("build download client: {e}"))?;
 
-    for (file_name, expected_hash) in MODEL_FILE_HASHES {
-        download_model_file(&client, file_name, expected_hash, &cache_dir)?;
+    if model.sha256_hashes.is_none() {
+        eprintln!(
+            "Warning: custom model {} has no pinned SHA-256 hashes; skipping integrity verification.",
+            model.model_id
+        );
+    }
+
+    for file_name in ["config.json", "tokenizer.json", "model.safetensors"] {
+        download_model_file(&client, model, file_name, &cache_dir)?;
     }
 
     existing_model_paths(&cache_dir).ok_or_else(|| {
         format!(
-            "BGE-small model files missing after download in {}",
+            "model files missing after download in {}",
             cache_dir.display()
         )
     })
@@ -336,13 +615,19 @@ fn download_model_files(
 #[cfg(feature = "online-model")]
 fn download_model_file(
     client: &reqwest::blocking::Client,
+    model: &ModelConfig,
     file_name: &str,
-    expected_hash: &str,
     cache_dir: &Path,
 ) -> Result<(), String> {
     let destination = cache_dir.join(file_name);
     let temp_destination = cache_dir.join(format!("{file_name}.download"));
-    let url = format!("https://huggingface.co/{MODEL_ID}/resolve/{MODEL_REVISION}/{file_name}");
+    let base_url = huggingface_base_url();
+    let url = format!(
+        "{}/{}/resolve/main/{}",
+        base_url.trim_end_matches('/'),
+        model.model_id,
+        file_name
+    );
 
     let mut response = client
         .get(&url)
@@ -355,12 +640,25 @@ fn download_model_file(
     std::io::copy(&mut response, &mut file)
         .map_err(|e| format!("write {}: {e}", temp_destination.display()))?;
 
-    verify_file_sha256(&temp_destination, expected_hash)?;
+    if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
+        verify_file_sha256(&temp_destination, expected_hash)?;
+    }
 
     std::fs::rename(&temp_destination, &destination)
         .map_err(|e| format!("rename {}: {e}", destination.display()))?;
 
     Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn expected_hash_for_file(model: &ModelConfig, file_name: &str) -> Option<&'static str> {
+    let hashes = model.sha256_hashes?;
+    match file_name {
+        "config.json" => Some(hashes.config_json),
+        "tokenizer.json" => Some(hashes.tokenizer_json),
+        "model.safetensors" => Some(hashes.model_safetensors),
+        _ => None,
+    }
 }
 
 #[cfg(feature = "online-model")]
@@ -382,28 +680,53 @@ fn verify_file_sha256(path: &Path, expected: &str) -> Result<(), String> {
 }
 
 #[cfg(feature = "online-model")]
-fn verify_cached_model_integrity(cache_dir: &Path) -> Result<(), String> {
-    for (file_name, expected_hash) in MODEL_FILE_HASHES {
-        let path = cache_dir.join(file_name);
-        verify_file_sha256(&path, expected_hash).map_err(|e| {
-            format!(
-                "cached model integrity check failed — delete {} and retry: {e}",
-                cache_dir.display()
-            )
-        })?;
+fn verify_cached_model_integrity(model: &ModelConfig, cache_dir: &Path) -> Result<(), String> {
+    if let Some(hashes) = model.sha256_hashes {
+        for (file_name, expected_hash) in [
+            ("config.json", hashes.config_json),
+            ("tokenizer.json", hashes.tokenizer_json),
+            ("model.safetensors", hashes.model_safetensors),
+        ] {
+            let path = cache_dir.join(file_name);
+            verify_file_sha256(&path, expected_hash).map_err(|e| {
+                format!(
+                    "cached model integrity check failed — delete {} and retry: {e}",
+                    cache_dir.display()
+                )
+            })?;
+        }
     }
     Ok(())
 }
 
 #[cfg(feature = "online-model")]
-fn model_cache_dir() -> Result<PathBuf, String> {
+fn huggingface_base_url() -> String {
+    std::env::var("GBRAIN_HF_BASE_URL").unwrap_or_else(|_| "https://huggingface.co".to_owned())
+}
+
+#[cfg(feature = "online-model")]
+fn model_cache_dir(model: &ModelConfig) -> Result<PathBuf, String> {
+    if let Ok(cache_root) = std::env::var("GBRAIN_MODEL_CACHE_DIR") {
+        return Ok(PathBuf::from(cache_root).join(cache_dir_name(model)));
+    }
+
     dirs::home_dir()
-        .map(|home| {
-            home.join(".gbrain")
-                .join("models")
-                .join("bge-small-en-v1.5")
-        })
+        .map(|home| home.join(".gbrain").join("models").join(cache_dir_name(model)))
         .ok_or_else(|| "could not resolve home directory for model cache".to_owned())
+}
+
+#[cfg(feature = "online-model")]
+fn cache_dir_name(model: &ModelConfig) -> String {
+    if model.alias == "custom" {
+        model.model_id.replace('/', "--")
+    } else {
+        model
+            .model_id
+            .rsplit('/')
+            .next()
+            .unwrap_or(&model.model_id)
+            .to_owned()
+    }
 }
 
 #[cfg(feature = "online-model")]
@@ -416,9 +739,39 @@ fn existing_model_paths(cache_dir: &Path) -> Option<(PathBuf, PathBuf, PathBuf)>
         .then_some((config, tokenizer, model))
 }
 
-/// SHA-256 hash-based fallback for when the real model is unavailable.
-fn embed_hash_shim(text: &str) -> Result<Vec<f32>, InferenceError> {
-    let mut embedding = vec![0.0; EMBEDDING_DIMENSIONS];
+#[cfg(feature = "online-model")]
+fn read_embedding_dim_from_config(path: &Path) -> Result<usize, String> {
+    let config_text =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let config_json: Value =
+        serde_json::from_str(&config_text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+
+    config_json["hidden_size"]
+        .as_u64()
+        .map(|value| value as usize)
+        .ok_or_else(|| format!("hidden_size missing in {}", path.display()))
+}
+
+#[cfg(feature = "online-model")]
+fn read_model_type_from_config(path: &Path) -> Result<String, String> {
+    let config_text =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let config_json: Value =
+        serde_json::from_str(&config_text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+
+    config_json["model_type"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("model_type missing in {}", path.display()))
+}
+
+fn embed_hash_shim(text: &str, embedding_dim: usize) -> Result<Vec<f32>, InferenceError> {
+    let embedding_dim = if embedding_dim == 0 {
+        DEFAULT_EMBEDDING_DIMENSIONS
+    } else {
+        embedding_dim
+    };
+    let mut embedding = vec![0.0; embedding_dim];
 
     for (token_index, token) in text.split_whitespace().enumerate() {
         accumulate_token_hash(token, token_index, &mut embedding);
@@ -433,7 +786,8 @@ fn embed_hash_shim(text: &str) -> Result<Vec<f32>, InferenceError> {
 }
 
 fn accumulate_token_hash(token: &str, token_index: usize, embedding: &mut [f32]) {
-    for chunk_index in 0..HASH_CHUNK_COUNT {
+    let chunk_count = embedding.len().div_ceil(32);
+    for chunk_index in 0..chunk_count {
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
         hasher.update((token_index as u64).to_le_bytes());
@@ -442,31 +796,47 @@ fn accumulate_token_hash(token: &str, token_index: usize, embedding: &mut [f32])
         let start = chunk_index * 32;
 
         for (offset, byte) in digest.iter().enumerate() {
+            let target = start + offset;
+            if target >= embedding.len() {
+                break;
+            }
+
             let centered = (*byte as f32 / 127.5) - 1.0;
-            embedding[start + offset] += centered;
+            embedding[target] += centered;
         }
     }
 }
 
-/// Lazily initialises the process-global embedding model.
-pub fn ensure_model() -> &'static EmbeddingModel {
-    MODEL.get_or_init(EmbeddingModel::new)
+pub fn ensure_model() {
+    let configured = runtime_model_config();
+    let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
+
+    let needs_reload = runtime
+        .loaded
+        .as_ref()
+        .map(|loaded| loaded.config != configured)
+        .unwrap_or(true);
+
+    if needs_reload {
+        runtime.loaded = Some(EmbeddingModel::new(configured));
+    }
 }
 
-/// Returns an L2-normalized 384-dimensional embedding vector.
-///
-/// When the BGE-small-en-v1.5 model is loaded, this produces a real semantic
-/// embedding. Otherwise falls back to a deterministic SHA-256 hash projection.
 pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err(InferenceError::EmptyInput);
     }
 
-    ensure_model().embed(trimmed)
+    ensure_model();
+    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    runtime
+        .loaded
+        .as_ref()
+        .expect("model should be loaded after ensure_model")
+        .embed(trimmed)
 }
 
-/// Searches the active vector table and returns page-ranked matches.
 pub fn search_vec(
     query: &str,
     k: usize,
@@ -587,6 +957,12 @@ fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {
 mod tests {
     use super::*;
     use crate::core::db;
+    #[cfg(feature = "online-model")]
+    use std::io::{Read, Write};
+    #[cfg(feature = "online-model")]
+    use std::net::TcpListener;
+    #[cfg(feature = "online-model")]
+    use std::thread;
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().expect("create temp dir");
@@ -597,7 +973,40 @@ mod tests {
     }
 
     #[test]
+    fn resolve_model_supports_standard_aliases() {
+        let cases = [
+            ("small", "BAAI/bge-small-en-v1.5", 384, "small"),
+            ("base", "BAAI/bge-base-en-v1.5", 768, "base"),
+            ("large", "BAAI/bge-large-en-v1.5", 1024, "large"),
+            ("m3", "BAAI/bge-m3", 1024, "m3"),
+        ];
+
+        for (input, expected_id, expected_dim, expected_alias) in cases {
+            let model = resolve_model(input);
+            assert_eq!(model.model_id, expected_id);
+            assert_eq!(model.embedding_dim, expected_dim);
+            assert_eq!(model.alias, expected_alias);
+            assert!(model.sha256_hashes.is_some());
+        }
+    }
+
+    #[test]
+    fn resolve_model_preserves_custom_huggingface_ids() {
+        let standard = resolve_model("BAAI/bge-large-en-v1.5");
+        assert_eq!(standard.alias, "large");
+        assert_eq!(standard.model_id, "BAAI/bge-large-en-v1.5");
+        assert_eq!(standard.embedding_dim, 1024);
+
+        let model = resolve_model("org/custom-embedder");
+        assert_eq!(model.alias, "custom");
+        assert_eq!(model.model_id, "org/custom-embedder");
+        assert_eq!(model.embedding_dim, 0);
+        assert!(model.sha256_hashes.is_none());
+    }
+
+    #[test]
     fn embed_returns_normalized_vector_of_expected_length() {
+        configure_runtime_model(default_model());
         let embedding = embed("Alice works at Acme Corp").expect("embed text");
         let norm = embedding
             .iter()
@@ -605,8 +1014,14 @@ mod tests {
             .sum::<f32>()
             .sqrt();
 
-        assert_eq!(embedding.len(), EMBEDDING_DIMENSIONS);
+        assert_eq!(embedding.len(), DEFAULT_EMBEDDING_DIMENSIONS);
         assert!((norm - 1.0).abs() < 1e-5, "unexpected norm: {norm}");
+    }
+
+    #[test]
+    fn embed_hash_shim_uses_runtime_dimension() {
+        let embedding = embed_hash_shim("test input", 1024).expect("hash shim");
+        assert_eq!(embedding.len(), 1024);
     }
 
     #[test]
@@ -651,7 +1066,7 @@ mod tests {
         .expect("insert vec row");
         conn.execute(
             "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
-             VALUES (?1, 'bge-small-en-v1.5', 1, 'truth_section', 0, 'startup founder', 'hash', 2, 'State')",
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 1, 'truth_section', 0, 'startup founder', 'hash', 2, 'State')",
             rusqlite::params![page_id],
         )
         .expect("insert embedding metadata");
@@ -666,5 +1081,54 @@ mod tests {
             "unexpected score: {}",
             results[0].score
         );
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn hydrate_model_config_can_use_mock_huggingface_downloads() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let address = listener.local_addr().expect("listener addr");
+        let server = thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().expect("accept connection");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("read request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .expect("request path");
+
+                let body = if path.ends_with("/config.json") {
+                    "{\n  \"hidden_size\": 1536,\n  \"model_type\": \"bert\"\n}\n".to_owned()
+                } else {
+                    "{}".to_owned()
+                };
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+            }
+        });
+
+        let cache_dir = tempfile::TempDir::new().expect("create cache dir");
+        std::env::set_var("GBRAIN_HF_BASE_URL", format!("http://{}", address));
+        std::env::set_var("GBRAIN_MODEL_CACHE_DIR", cache_dir.path());
+
+        let model = resolve_model("org/custom-model");
+        let hydrated = hydrate_model_config(&model).expect("hydrate custom model");
+
+        std::env::remove_var("GBRAIN_HF_BASE_URL");
+        std::env::remove_var("GBRAIN_MODEL_CACHE_DIR");
+        server.join().expect("join mock server");
+
+        assert_eq!(hydrated.model_id, "org/custom-model");
+        assert_eq!(hydrated.embedding_dim, 1536);
     }
 }

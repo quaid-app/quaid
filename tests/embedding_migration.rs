@@ -168,7 +168,7 @@ fn embedding_migration_zero_cross_model_contamination() {
     embed::run(&conn, None, true, false).expect("embed with model A");
 
     let model_a = active_model_name(&conn);
-    assert_eq!(model_a, "bge-small-en-v1.5", "model A should be default");
+    assert_eq!(model_a, "BAAI/bge-small-en-v1.5", "model A should be default");
 
     // Verify model A has embeddings
     let model_a_count: i64 = conn
@@ -319,8 +319,8 @@ fn only_one_model_is_active_at_a_time() {
     assert_eq!(active_model_name(&conn), "test-model");
 
     // Switch back
-    set_active_model(&conn, "bge-small-en-v1.5");
-    assert_eq!(active_model_name(&conn), "bge-small-en-v1.5");
+    set_active_model(&conn, "BAAI/bge-small-en-v1.5");
+    assert_eq!(active_model_name(&conn), "BAAI/bge-small-en-v1.5");
 
     let active_count_after: i64 = conn
         .query_row(

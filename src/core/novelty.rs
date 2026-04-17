@@ -174,7 +174,7 @@ mod tests {
         .expect("insert vec row");
         conn.execute(
             "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
-             VALUES (?1, 'bge-small-en-v1.5', ?2, 'truth_section', 0, ?3, 'hash', 1, 'State')",
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', ?2, 'truth_section', 0, ?3, 'hash', 1, 'State')",
             params![page_id, vec_rowid, chunk_text],
         )
         .expect("insert embedding metadata");

@@ -43,8 +43,10 @@ Direct slug lookup. Returns the full page content or JSON representation.
 1. **SMS (Exact-Match Short-Circuit)** — If the query matches a slug exactly or
    is wrapped in `[[slug]]`, return that page immediately. Skip all other layers.
 2. **FTS5 full-text** — BM25-ranked keyword search across `compiled_truth` + `timeline`.
-3. **Vector semantic** — Cosine similarity via BGE-small-en-v1.5 embeddings (384-dim).
-   Currently running as SHA-256 hash placeholder until Candle model is wired.
+3. **Vector semantic** — Cosine similarity via the brain's configured embedding model.
+   Default is BGE-small-en-v1.5 (384-dim); online builds may also use `base`, `large`,
+   `m3`, or another Hugging Face model ID selected via `GBRAIN_MODEL` / `--model`.
+   Currently falls back to a SHA-256 hash placeholder when Candle weights are unavailable.
 4. **Set-union merge** — Combine FTS5 and vector result sets. Pages in either set are
    returned, ranked by normalised combined score (configurable: `set_union` or `rrf`).
 

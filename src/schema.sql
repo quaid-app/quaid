@@ -6,6 +6,14 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 -- ============================================================
+-- brain_config: persisted embedding model metadata
+-- ============================================================
+CREATE TABLE IF NOT EXISTS brain_config (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+) STRICT;
+
+-- ============================================================
 -- pages: the core content table
 -- ============================================================
 CREATE TABLE IF NOT EXISTS pages (
@@ -81,7 +89,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_models_one_active
 
 -- Seed default model at init:
 --   INSERT INTO embedding_models (name, dimensions, vec_table, active)
---   VALUES ('bge-small-en-v1.5', 384, 'page_embeddings_vec_384', 1);
+--   VALUES ('BAAI/bge-small-en-v1.5', 384, 'page_embeddings_vec_384', 1);
 -- Vec table created dynamically in db.rs:
 --   CREATE VIRTUAL TABLE IF NOT EXISTS page_embeddings_vec_384 USING vec0(embedding float[384]);
 
@@ -91,7 +99,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_models_one_active
 CREATE TABLE IF NOT EXISTS page_embeddings (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-    model           TEXT    NOT NULL DEFAULT 'bge-small-en-v1.5'
+    model           TEXT    NOT NULL DEFAULT 'BAAI/bge-small-en-v1.5'
                             REFERENCES embedding_models(name),
     vec_rowid       INTEGER NOT NULL,
     chunk_type      TEXT    NOT NULL,   -- 'truth_section' | 'timeline_entry'
@@ -236,7 +244,7 @@ CREATE TABLE IF NOT EXISTS ingest_log (
 );
 
 -- ============================================================
--- config: brain-level settings
+-- config: mutable runtime defaults
 -- ============================================================
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -245,7 +253,7 @@ CREATE TABLE IF NOT EXISTS config (
 
 INSERT OR IGNORE INTO config (key, value) VALUES
     ('version',               '4'),
-    ('embedding_model',       'bge-small-en-v1.5'),
+    ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),
     ('search_merge_strategy', 'set-union'),

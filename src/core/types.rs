@@ -189,6 +189,9 @@ pub enum DbError {
 
     #[error("schema error: {message}")]
     Schema { message: String },
+
+    #[error("{message}")]
+    ModelMismatch { message: String },
 }
 
 #[cfg(test)]

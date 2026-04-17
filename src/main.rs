@@ -20,6 +20,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Embedding model alias or Hugging Face model ID
+    #[arg(long, env = "GBRAIN_MODEL", global = true, default_value = "small")]
+    model: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -233,6 +237,9 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let requested_model = core::inference::coerce_model_for_build(
+        &core::inference::resolve_model(&cli.model),
+    );
 
     // Commands that don't require a database connection
     match &cli.command {
@@ -240,13 +247,15 @@ async fn main() -> Result<()> {
         Commands::Init { path } => {
             let db_path = cli.db.as_deref().unwrap_or("brain.db");
             let init_path = path.as_deref().unwrap_or(db_path);
-            return commands::init::run(init_path);
+            return commands::init::run(init_path, &requested_model);
         }
         _ => {}
     }
 
     let db_path = cli.db.unwrap_or_else(|| "brain.db".to_owned());
-    let db = core::db::open(&db_path)?;
+    let opened = core::db::open_with_model(&db_path, &requested_model)?;
+    core::inference::set_model_config(opened.effective_model.clone());
+    let db = opened.conn;
 
     match cli.command {
         Commands::Init { .. } | Commands::Version => unreachable!(),

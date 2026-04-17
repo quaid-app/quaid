@@ -16,17 +16,21 @@ export default defineConfig({
       description:
         "The personal knowledge brain. SQLite + FTS5 + vector embeddings in one file.",
       customCss: ["./src/styles/custom.css"],
+      components: {
+        Header: "./src/components/Header.astro",
+        PageTitle: "./src/components/PageTitle.astro",
+      },
       social: [
-        { icon: "github", label: "GitHub", href: "https://github.com/macro88/gigabrain" },
+        {
+          icon: "github",
+          label: "GitHub",
+          href: "https://github.com/macro88/gigabrain",
+        },
       ],
       sidebar: [
         {
           label: "Overview",
-          items: [
-            "index",
-            "guides/why-gigabrain",
-            "guides/how-it-works",
-          ],
+          items: ["index", "guides/why-gigabrain", "guides/how-it-works"],
         },
         {
           label: "Getting Started",

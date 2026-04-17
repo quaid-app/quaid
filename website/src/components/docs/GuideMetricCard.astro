@@ -1,0 +1,48 @@
+---
+interface Props {
+	value: string;
+	label: string;
+	note?: string;
+}
+
+const { value, label, note } = Astro.props;
+---
+
+<div class="gb-guide-metric">
+	<div class="gb-guide-metric__value">{value}</div>
+	<div class="gb-guide-metric__label">{label}</div>
+	{note && <p class="gb-guide-metric__note">{note}</p>}
+</div>
+
+<style>
+	.gb-guide-metric {
+		display: grid;
+		gap: 0.35rem;
+		padding: 1.2rem;
+		border-radius: 1rem;
+		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+		background: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-gray-6));
+	}
+
+	.gb-guide-metric__value {
+		color: var(--sl-color-orange-high);
+		font-size: clamp(1.5rem, 2vw, 2rem);
+		font-weight: 800;
+		letter-spacing: -0.04em;
+	}
+
+	.gb-guide-metric__label {
+		color: var(--gb-on-surface);
+		font-size: 0.78rem;
+		font-weight: 800;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+	}
+
+	.gb-guide-metric__note {
+		margin: 0;
+		color: var(--sl-color-gray-3);
+		font-size: 0.92rem;
+		line-height: 1.55;
+	}
+</style>

@@ -1,0 +1,71 @@
+---
+import config from 'virtual:starlight/user-config';
+
+import LanguageSelect from '@astrojs/starlight/components/LanguageSelect.astro';
+import Search from '@astrojs/starlight/components/Search.astro';
+import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
+
+const shouldRenderSearch =
+	config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
+
+const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.replace(/\/$/, '');
+const currentPath = Astro.url.pathname.startsWith(base)
+	? Astro.url.pathname.slice(base.length) || '/'
+	: Astro.url.pathname;
+
+const withBase = (path: string) => `${base}${path}`;
+
+const isArchitecturePage = currentPath.startsWith('/reference/');
+const isInstallPage = currentPath.startsWith('/guides/install/');
+
+const navItems = [
+	{
+		label: 'Docs',
+		href: withBase('/'),
+		active: !isArchitecturePage && !isInstallPage,
+	},
+	{
+		label: 'Architecture',
+		href: withBase('/reference/architecture/'),
+		active: isArchitecturePage,
+	},
+	{
+		label: 'GitHub',
+		href: 'https://github.com/macro88/gigabrain',
+		active: false,
+	},
+	{
+		label: 'Install',
+		href: withBase('/guides/install/'),
+		active: isInstallPage,
+	},
+];
+---
+
+<div class="gb-header">
+	<div class="gb-header-left">
+		<SiteTitle />
+		<nav class="gb-header-nav" aria-label="Primary">
+			{
+				navItems.map(({ label, href, active }) => (
+					<a
+						href={href}
+						class:list={['gb-header-link', { 'is-active': active }]}
+						aria-current={active ? 'page' : undefined}
+					>
+						{label}
+					</a>
+				))
+			}
+		</nav>
+	</div>
+
+	<div class="gb-header-right print:hidden">
+		{shouldRenderSearch && <Search class="gb-search" />}
+		<div class="gb-header-meta">
+			<ThemeSelect />
+			<LanguageSelect />
+		</div>
+	</div>
+</div>

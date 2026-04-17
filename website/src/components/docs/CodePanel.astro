@@ -1,0 +1,98 @@
+---
+interface Props {
+	code: string;
+	label?: string;
+	tone?: 'soft' | 'terminal';
+	note?: string;
+	language?: string;
+}
+
+function inferLanguage(code: string, tone: 'soft' | 'terminal', label?: string) {
+	const trimmed = code.trim();
+	const lowerLabel = label?.toLowerCase() ?? '';
+
+	if (/(^|\b)(json|mcp json)(\b|$)/.test(lowerLabel) || /^[\[{]/.test(trimmed)) {
+		return 'json';
+	}
+
+	if (/(^|\b)(yaml)(\b|$)/.test(lowerLabel)) {
+		return 'yaml';
+	}
+
+	if (
+		/(^|\b)(markdown|timeline|compiled truth)(\b|$)/.test(lowerLabel) ||
+		/^---\n[\s\S]*\n---/.test(trimmed) ||
+		/^#\s/m.test(trimmed)
+	) {
+		return 'markdown';
+	}
+
+	if (/(^|\b)(rust)(\b|$)/.test(lowerLabel) || /\bfn\s+\w+\s*\(|::/.test(trimmed)) {
+		return 'rust';
+	}
+
+	if (
+		tone === 'terminal' ||
+		/\b(gbrain|cargo|curl|git|npm|pnpm|shasum|GBRAIN_|cat\s*<<|cd\s|export\s)/.test(trimmed)
+	) {
+		return 'bash';
+	}
+
+	return 'plaintext';
+}
+
+const { code, label, tone = 'soft', note, language } = Astro.props;
+const resolvedLanguage = language ?? inferLanguage(code, tone, label);
+---
+
+<div class="expressive-code gb-code-panel">
+	<figure class:list={['frame', 'not-content', { 'is-terminal': tone === 'terminal' }]}>
+		<figcaption class="header">
+			<span class="title">{label}</span>
+		</figcaption>
+		<pre data-language={resolvedLanguage}><code>{code}</code></pre>
+		{note && <p class="gb-code-panel__note">{note}</p>}
+	</figure>
+</div>
+
+<style>
+	.gb-code-panel {
+		margin: 0 !important;
+	}
+
+	figure {
+		margin: 0;
+	}
+
+	pre {
+		margin: 0;
+		overflow-x: auto;
+	}
+
+	code {
+		display: block;
+		min-width: max-content;
+		white-space: pre;
+	}
+
+	.title {
+		display: inline-block;
+		min-height: 1em;
+	}
+
+	.gb-code-panel__note {
+		margin: 0;
+		padding: 0.9rem 1.05rem 1rem;
+		border-top: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 76%, transparent);
+		background: color-mix(in srgb, var(--sl-color-white) 82%, var(--sl-color-gray-6));
+		color: var(--sl-color-gray-3);
+		font-size: 0.92rem;
+		line-height: 1.55;
+	}
+
+	.is-terminal .gb-code-panel__note {
+		border-top-color: rgba(255, 255, 255, 0.08);
+		background: rgba(255, 255, 255, 0.03);
+		color: rgba(255, 247, 242, 0.72);
+	}
+</style>

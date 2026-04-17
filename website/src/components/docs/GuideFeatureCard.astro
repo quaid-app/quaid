@@ -1,0 +1,147 @@
+---
+import Icon from './GuideIcon.astro';
+
+interface Props {
+	title: string;
+	icon?: string;
+	eyebrow?: string;
+	variant?: 'surface' | 'line' | 'accent';
+	href?: string;
+	linkText?: string;
+}
+
+const {
+	title,
+	icon,
+	eyebrow,
+	variant = 'surface',
+	href,
+	linkText,
+} = Astro.props;
+---
+
+<article class:list={['gb-guide-feature', `is-${variant}`]}>
+	{eyebrow && <p class="gb-guide-feature__eyebrow">{eyebrow}</p>}
+	<div class="gb-guide-feature__head">
+		{icon && (
+			<span class="gb-guide-feature__icon" aria-hidden="true">
+				<Icon name={icon as any} />
+			</span>
+		)}
+		<h3>{title}</h3>
+	</div>
+	<div class="gb-guide-feature__body">
+		<slot />
+	</div>
+	{
+		href && linkText && (
+			<a class="gb-guide-feature__link" href={href}>
+				<span>{linkText}</span>
+				<Icon name="right-arrow" size="1rem" />
+			</a>
+		)
+	}
+</article>
+
+<style>
+	.gb-guide-feature {
+		display: grid;
+		gap: 0.95rem;
+		padding: 1.35rem;
+		border-radius: 1rem;
+		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+		background: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-gray-6));
+		box-shadow: 0 18px 32px -28px rgba(30, 20, 15, 0.38);
+	}
+
+	.gb-guide-feature.is-line {
+		padding: 1rem 0 1rem 1.25rem;
+		border: 0;
+		border-left: 1px solid color-mix(in srgb, var(--sl-color-gray-4) 40%, transparent);
+		border-radius: 0;
+		background: transparent;
+		box-shadow: none;
+	}
+
+	.gb-guide-feature.is-accent {
+		border-color: color-mix(in srgb, var(--sl-color-orange-high) 30%, transparent);
+		background: linear-gradient(160deg, color-mix(in srgb, var(--sl-color-orange-high) 82%, #b45637) 0%, #5a2819 100%);
+	}
+
+	.gb-guide-feature__eyebrow {
+		margin: 0;
+		color: var(--sl-color-orange-high);
+		font-size: 0.74rem;
+		font-weight: 800;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+	}
+
+	.gb-guide-feature__head {
+		display: flex;
+		align-items: center;
+		gap: 0.85rem;
+	}
+
+	.gb-guide-feature__icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.35rem;
+		height: 2.35rem;
+		border-radius: 0.75rem;
+		background: color-mix(in srgb, var(--sl-color-orange-low) 82%, transparent);
+		color: var(--sl-color-orange-high);
+		flex-shrink: 0;
+	}
+
+	.is-accent .gb-guide-feature__icon {
+		background: rgba(255, 255, 255, 0.12);
+		color: white;
+	}
+
+	.gb-guide-feature h3 {
+		margin: 0;
+		color: var(--gb-on-surface);
+		font-size: 1.18rem;
+		font-weight: 700;
+		letter-spacing: -0.02em;
+	}
+
+	.gb-guide-feature__body {
+		color: var(--sl-color-gray-3);
+		font-size: 0.98rem;
+		line-height: 1.65;
+	}
+
+	.gb-guide-feature__body :global(p) {
+		margin: 0;
+	}
+
+	.is-accent .gb-guide-feature__body,
+	.is-accent .gb-guide-feature__eyebrow,
+	.is-accent .gb-guide-feature h3,
+	.is-accent .gb-guide-feature__link {
+		color: rgba(255, 248, 244, 0.96);
+	}
+
+	.gb-guide-feature__body :global(code) {
+		font-family: var(--sl-font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace);
+		font-size: 0.92em;
+	}
+
+	.gb-guide-feature__link {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		width: fit-content;
+		color: var(--sl-color-orange-high);
+		font-size: 0.92rem;
+		font-weight: 700;
+		text-decoration: none;
+	}
+
+	.gb-guide-feature__link:hover {
+		gap: 0.7rem;
+	}
+</style>

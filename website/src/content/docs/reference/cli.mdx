@@ -9,50 +9,50 @@ import { Tabs, TabItem } from "@astrojs/starlight/components";
 
 ## Global options
 
-| Option | Description |
-| --- | --- |
-| `--db <PATH>` | Path to `brain.db` (env: `GBRAIN_DB`, default: `./brain.db`) |
-| `--json` | JSON output instead of human-readable text |
-| `--version` | Print version |
-| `--tools-json` | Print MCP tool discovery JSON |
+| Option         | Description                                                  |
+| -------------- | ------------------------------------------------------------ |
+| `--db <PATH>`  | Path to `brain.db` (env: `GBRAIN_DB`, default: `./brain.db`) |
+| `--json`       | JSON output instead of human-readable text                   |
+| `--version`    | Print version                                                |
+| `--tools-json` | Print MCP tool discovery JSON                                |
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `init [PATH]` | Create a new `brain.db` |
-| `get <SLUG>` | Read a page by slug |
-| `put <SLUG> [FILE]` | Write/update a page (stdin or file) |
-| `search <QUERY>` | Full-text keyword search (FTS5) |
-| `query <QUESTION>` | Hybrid search (FTS5 + vectors) |
-| `ingest <FILE>` | Ingest a source document |
-| `import <DIR>` | Import a markdown directory |
-| `export [--dir <PATH>]` | Export a brain to a markdown directory |
-| `embed [<SLUG>]` | Generate/regenerate embeddings |
-| `link <FROM> <TO>` | Create a typed, temporal cross-reference |
-| `link-close <LINK_ID>` | Close a link interval by ID |
-| `links <SLUG>` | List outbound links (with IDs) |
-| `unlink <FROM> <TO>` | Remove a cross-reference |
-| `backlinks <SLUG>` | Show pages linking to a slug |
-| `graph <SLUG>` | N-hop neighborhood graph as JSON |
-| `timeline <SLUG>` | Show timeline entries |
-| `timeline-add <SLUG>` | Add a structured timeline entry |
-| `tags <SLUG>` | List tags for a page |
-| `tag <SLUG> <TAG>` | Add a tag |
-| `untag <SLUG> <TAG>` | Remove a tag |
-| `list` | List pages with filters |
-| `stats` | Brain statistics |
-| `check [SLUG]` | Run contradiction checks |
-| `gaps` | List unresolved knowledge gaps |
-| `validate` | Run integrity checks |
-| `compact` | Checkpoint WAL → single file |
-| `config get|set|list` | Read/write/list config |
-| `skills` | List active skills (embedded + external) |
-| `skills doctor` | Show skill resolution order + hashes |
-| `serve` | Start MCP server (stdio) |
-| `version` | Version info (and migration state) |
-| `call <TOOL> <JSON>` | Raw MCP tool call |
-| `pipe` | JSONL streaming mode |
+| Command                 | What it does                             |
+| ----------------------- | ---------------------------------------- |
+| `init [PATH]`           | Create a new `brain.db`                  |
+| `get <SLUG>`            | Read a page by slug                      |
+| `put <SLUG> [FILE]`     | Write/update a page (stdin or file)      |
+| `search <QUERY>`        | Full-text keyword search (FTS5)          |
+| `query <QUESTION>`      | Hybrid search (FTS5 + vectors)           |
+| `ingest <FILE>`         | Ingest a source document                 |
+| `import <DIR>`          | Import a markdown directory              |
+| `export [--dir <PATH>]` | Export a brain to a markdown directory   |
+| `embed [<SLUG>]`        | Generate/regenerate embeddings           |
+| `link <FROM> <TO>`      | Create a typed, temporal cross-reference |
+| `link-close <LINK_ID>`  | Close a link interval by ID              |
+| `links <SLUG>`          | List outbound links (with IDs)           |
+| `unlink <FROM> <TO>`    | Remove a cross-reference                 |
+| `backlinks <SLUG>`      | Show pages linking to a slug             |
+| `graph <SLUG>`          | N-hop neighborhood graph as JSON         |
+| `timeline <SLUG>`       | Show timeline entries                    |
+| `timeline-add <SLUG>`   | Add a structured timeline entry          |
+| `tags <SLUG>`           | List tags for a page                     |
+| `tag <SLUG> <TAG>`      | Add a tag                                |
+| `untag <SLUG> <TAG>`    | Remove a tag                             |
+| `list`                  | List pages with filters                  |
+| `stats`                 | Brain statistics                         |
+| `check [SLUG]`          | Run contradiction checks                 |
+| `gaps`                  | List unresolved knowledge gaps           |
+| `validate`              | Run integrity checks                     |
+| `compact`               | Checkpoint WAL → single file             |
+| `config get\|set\|list` | Read/write/list config                   |
+| `skills`                | List active skills (embedded + external) |
+| `skills doctor`         | Show skill resolution order + hashes     |
+| `serve`                 | Start MCP server (stdio)                 |
+| `version`               | Version info (and migration state)       |
+| `call <TOOL> <JSON>`    | Raw MCP tool call                        |
+| `pipe`                  | JSONL streaming mode                     |
 
 ---
 
@@ -107,11 +107,11 @@ gbrain query "people at Acme" --depth auto --json
 
 **Options:**
 
-| Option | Description |
-| --- | --- |
+| Option         | Description                               |
+| -------------- | ----------------------------------------- |
 | `--depth auto` | Enable token-budget progressive retrieval |
-| `--limit N` | Max results (default: 10) |
-| `--json` | Emit JSON result array |
+| `--limit N`    | Max results (default: 10)                 |
+| `--json`       | Emit JSON result array                    |
 
 ### `ingest`
 
@@ -204,14 +204,15 @@ gbrain graph people/alice --depth 2 --json
 
 **Options:**
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `--depth N` | `1` | Number of hops to traverse |
+| Option                   | Default  | Description                                              |
+| ------------------------ | -------- | -------------------------------------------------------- |
+| `--depth N`              | `1`      | Number of hops to traverse                               |
 | `--temporal active\|all` | `active` | `active` = only open links; `all` = include closed links |
-| `--json` | — | Emit JSON with `nodes` and `edges` arrays |
+| `--json`                 | —        | Emit JSON with `nodes` and `edges` arrays                |
 
 **Example JSON output:**
-```json
+
+````json
 {
   "nodes": [
     { "slug": "people/alice", "page_type": "person", "summary": "Engineer at Acme." },
@@ -234,7 +235,7 @@ Show timeline entries for a page.
 
 ```bash
 gbrain timeline people/pedro-franceschi
-```
+````
 
 ### `timeline-add`
 
@@ -287,13 +288,14 @@ gbrain check --all --json
 
 **Options:**
 
-| Option | Description |
-| --- | --- |
-| `--slug SLUG` | Check a single page |
-| `--all` | Check all pages in the brain |
-| `--json` | Emit a JSON array of contradiction records |
+| Option        | Description                                |
+| ------------- | ------------------------------------------ |
+| `--slug SLUG` | Check a single page                        |
+| `--all`       | Check all pages in the brain               |
+| `--json`      | Emit a JSON array of contradiction records |
 
 **Example JSON output:**
+
 ```json
 [
   {
@@ -326,13 +328,14 @@ gbrain gaps --json
 
 **Options:**
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `--limit N` | `20` | Max number of gaps to return |
-| `--resolved` | — | Include gaps that have been resolved |
-| `--json` | — | Emit a JSON array of gap records |
+| Option       | Default | Description                          |
+| ------------ | ------- | ------------------------------------ |
+| `--limit N`  | `20`    | Max number of gaps to return         |
+| `--resolved` | —       | Include gaps that have been resolved |
+| `--json`     | —       | Emit a JSON array of gap records     |
 
 **Example JSON output:**
+
 ```json
 [
   {

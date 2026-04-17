@@ -1,0 +1,308 @@
+---
+interface Props {
+	variant?: 'diagram' | 'circuit' | 'archive' | 'studio';
+	label?: string;
+	note?: string;
+}
+
+const { variant = 'diagram', label, note } = Astro.props;
+---
+
+<figure class:list={['gb-guide-visual', `is-${variant}`]}>
+	<div class="gb-guide-visual__canvas" aria-hidden="true">
+		{variant === 'diagram' && (
+			<>
+				<div class="gb-guide-visual__node">Markdown pages</div>
+				<div class="gb-guide-visual__rail" />
+				<div class="gb-guide-visual__node is-highlight">SQLite + vectors</div>
+				<div class="gb-guide-visual__rail" />
+				<div class="gb-guide-visual__node">Hybrid retrieval</div>
+			</>
+		)}
+		{variant === 'circuit' && (
+			<>
+				<div class="gb-guide-visual__orb" />
+				<div class="gb-guide-visual__chip">airgapped</div>
+				<div class="gb-guide-visual__chip is-secondary">online</div>
+				<div class="gb-guide-visual__card">
+					<span>release asset</span>
+					<strong>checksum verified</strong>
+				</div>
+				<div class="gb-guide-visual__card is-offset">
+					<span>platform matrix</span>
+					<strong>darwin + linux</strong>
+				</div>
+			</>
+		)}
+		{variant === 'archive' && (
+			<>
+				<div class="gb-guide-visual__sheet is-back" />
+				<div class="gb-guide-visual__sheet is-mid" />
+				<div class="gb-guide-visual__sheet is-front">
+					<div class="gb-guide-visual__line" />
+					<div class="gb-guide-visual__line is-short" />
+					<div class="gb-guide-visual__line" />
+					<div class="gb-guide-visual__tag">brain.db</div>
+				</div>
+			</>
+		)}
+		{variant === 'studio' && (
+			<>
+				<div class="gb-guide-visual__slab is-left" />
+				<div class="gb-guide-visual__slab is-center" />
+				<div class="gb-guide-visual__slab is-right" />
+				<div class="gb-guide-visual__halo" />
+			</>
+		)}
+	</div>
+	{(label || note) && (
+		<figcaption class="gb-guide-visual__caption">
+			{label && <strong>{label}</strong>}
+			{note && <span>{note}</span>}
+		</figcaption>
+	)}
+</figure>
+
+<style>
+	.gb-guide-visual {
+		margin: 0;
+		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+		border-radius: 1.25rem;
+		overflow: hidden;
+		background: color-mix(in srgb, var(--sl-color-white) 90%, var(--sl-color-gray-6));
+		box-shadow: 0 22px 38px -30px rgba(30, 20, 15, 0.45);
+	}
+
+	.gb-guide-visual__canvas {
+		position: relative;
+		isolation: isolate;
+		display: grid;
+		align-items: center;
+		justify-items: center;
+		gap: 1rem;
+		min-height: 18rem;
+		padding: 1.5rem;
+		background:
+			radial-gradient(circle at top left, rgba(240, 143, 110, 0.18), transparent 40%),
+			radial-gradient(circle at bottom right, rgba(255, 214, 190, 0.12), transparent 35%),
+			linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 65%);
+	}
+
+	.is-circuit .gb-guide-visual__canvas {
+		background:
+			radial-gradient(circle at 25% 20%, rgba(240, 143, 110, 0.28), transparent 22%),
+			repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0, rgba(255, 255, 255, 0.04) 1px, transparent 1px, transparent 42px),
+			repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0, rgba(255, 255, 255, 0.04) 1px, transparent 1px, transparent 42px),
+			linear-gradient(145deg, #231713 0%, #120d0c 100%);
+	}
+
+	.is-studio .gb-guide-visual__canvas {
+		background:
+			linear-gradient(180deg, rgba(255, 214, 190, 0.08), transparent 45%),
+			linear-gradient(135deg, #120d0c 0%, #2e1c17 42%, #8f523f 100%);
+	}
+
+	.gb-guide-visual__node,
+	.gb-guide-visual__chip,
+	.gb-guide-visual__card,
+	.gb-guide-visual__sheet,
+	.gb-guide-visual__tag {
+		position: relative;
+		z-index: 1;
+	}
+
+	.gb-guide-visual__node {
+		width: min(100%, 16rem);
+		padding: 0.95rem 1rem;
+		border-radius: 0.95rem;
+		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 70%, transparent);
+		background: rgba(255, 255, 255, 0.82);
+		color: #241916;
+		font-size: 0.95rem;
+		font-weight: 700;
+		text-align: center;
+		box-shadow: 0 16px 24px -24px rgba(0, 0, 0, 0.45);
+	}
+
+	.gb-guide-visual__node.is-highlight {
+		background: linear-gradient(135deg, rgba(240, 143, 110, 0.9), rgba(195, 92, 61, 0.92));
+		border-color: rgba(255, 210, 192, 0.4);
+		color: white;
+	}
+
+	.gb-guide-visual__rail {
+		width: 2px;
+		height: 1.2rem;
+		background: linear-gradient(180deg, rgba(240, 143, 110, 0.2), rgba(240, 143, 110, 0.8));
+	}
+
+	.gb-guide-visual__orb {
+		position: absolute;
+		inset: auto auto 2rem 2rem;
+		width: 7rem;
+		height: 7rem;
+		border-radius: 999px;
+		background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.8), rgba(240, 143, 110, 0.95) 35%, rgba(111, 46, 27, 0.5) 70%, transparent 72%);
+		filter: blur(0.1px);
+	}
+
+	.gb-guide-visual__chip {
+		position: absolute;
+		top: 1.5rem;
+		left: 1.5rem;
+		padding: 0.45rem 0.8rem;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.1);
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		color: rgba(255, 247, 242, 0.9);
+		font-size: 0.78rem;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.gb-guide-visual__chip.is-secondary {
+		left: auto;
+		right: 1.5rem;
+	}
+
+	.gb-guide-visual__card {
+		justify-self: start;
+		align-self: end;
+		padding: 1rem;
+		border-radius: 1rem;
+		background: rgba(255, 255, 255, 0.08);
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		backdrop-filter: blur(18px);
+		color: rgba(255, 247, 242, 0.94);
+		min-width: 12rem;
+	}
+
+	.gb-guide-visual__card.is-offset {
+		justify-self: end;
+		align-self: start;
+	}
+
+	.gb-guide-visual__card span {
+		display: block;
+		margin-bottom: 0.3rem;
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		opacity: 0.72;
+	}
+
+	.gb-guide-visual__card strong {
+		font-size: 1rem;
+		font-weight: 750;
+	}
+
+	.gb-guide-visual__sheet {
+		position: absolute;
+		width: min(70%, 18rem);
+		aspect-ratio: 3 / 4;
+		border-radius: 1rem;
+		background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(244, 239, 235, 0.88));
+		border: 1px solid rgba(255, 255, 255, 0.5);
+		box-shadow: 0 28px 38px -34px rgba(24, 16, 14, 0.55);
+	}
+
+	.gb-guide-visual__sheet.is-back {
+		transform: rotate(-9deg) translate(-2.6rem, 0.8rem);
+		opacity: 0.56;
+	}
+
+	.gb-guide-visual__sheet.is-mid {
+		transform: rotate(6deg) translate(2.8rem, 0.25rem);
+		opacity: 0.74;
+	}
+
+	.gb-guide-visual__sheet.is-front {
+		display: grid;
+		align-content: start;
+		gap: 0.75rem;
+		padding: 1.25rem;
+	}
+
+	.gb-guide-visual__line {
+		height: 0.68rem;
+		border-radius: 999px;
+		background: rgba(140, 93, 71, 0.18);
+	}
+
+	.gb-guide-visual__line.is-short {
+		width: 62%;
+	}
+
+	.gb-guide-visual__tag {
+		margin-top: auto;
+		width: fit-content;
+		padding: 0.42rem 0.72rem;
+		border-radius: 999px;
+		background: rgba(240, 143, 110, 0.14);
+		color: #84432a;
+		font-size: 0.78rem;
+		font-weight: 800;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.gb-guide-visual__slab,
+	.gb-guide-visual__halo {
+		position: absolute;
+	}
+
+	.gb-guide-visual__slab {
+		bottom: 0;
+		width: 26%;
+		border-radius: 1.1rem 1.1rem 0 0;
+		background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		backdrop-filter: blur(18px);
+	}
+
+	.gb-guide-visual__slab.is-left {
+		left: 10%;
+		height: 62%;
+	}
+
+	.gb-guide-visual__slab.is-center {
+		left: 37%;
+		height: 78%;
+	}
+
+	.gb-guide-visual__slab.is-right {
+		right: 10%;
+		height: 52%;
+	}
+
+	.gb-guide-visual__halo {
+		top: 2rem;
+		right: 12%;
+		width: 10rem;
+		height: 10rem;
+		border-radius: 999px;
+		background: radial-gradient(circle, rgba(255, 205, 181, 0.55), rgba(255, 205, 181, 0.08) 55%, transparent 70%);
+	}
+
+	.gb-guide-visual__caption {
+		display: grid;
+		gap: 0.2rem;
+		padding: 1rem 1.2rem 1.15rem;
+		border-top: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+		background: rgba(255, 255, 255, 0.02);
+	}
+
+	.gb-guide-visual__caption strong {
+		color: var(--gb-on-surface);
+		font-size: 0.95rem;
+		font-weight: 700;
+	}
+
+	.gb-guide-visual__caption span {
+		color: var(--sl-color-gray-3);
+		font-size: 0.92rem;
+		line-height: 1.55;
+	}
+</style>

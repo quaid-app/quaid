@@ -1,73 +1,52 @@
 ---
 title: GigaBrain
-description: The personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. No API keys. No internet. One static binary.
+description: Your brain, persisted. Zero cloud, zero keys. SQLite + FTS5 + vector embeddings in one static binary.
 template: splash
 hero:
-  tagline: Your brain, persisted. Zero cloud, zero keys.
-  image:
-    html: <div style="font-size:4rem;text-align:center;line-height:1">🧠</div>
+  title: "Your brain, persisted. <br><span class='text-primary'>Zero cloud, zero keys.</span>"
+  tagline: A high-performance local knowledge engine that turns your files into a searchable, intelligent second brain without ever leaving your machine.
   actions:
-    - text: Install & Status
-      link: /guides/install/
+    - text: Get Started
+      link: /guides/quick-start/
       icon: right-arrow
       variant: primary
-    - text: Quick Start
-      link: /guides/quick-start/
-      icon: rocket
-      variant: secondary
-    - text: View on GitHub
+    - text: View Source
       link: https://github.com/macro88/gigabrain
       icon: github
-      variant: minimal
+      variant: secondary
 ---
 
 import { CardGrid, Card } from "@astrojs/starlight/components";
 
-## Current Status
-
-> **Phase 3 complete.** Skills, benchmarks, CLI polish, and the full MCP tool surface are shipped. All 16 MCP tools active. All 8 skills production-ready. Benchmark harnesses in CI. `v0.9.1` now ships dual BGE-small release channels.
-
-**[Install & Status →](/guides/install/)** — supported-now vs planned channels  
-**[Roadmap →](/contributing/roadmap/)** — phased delivery plan and ship gates  
-**[Contributing →](/contributing/contributing/)** — how to propose and land a change
-
----
-
-## How it works
+## Architecture for Privacy
 
 <CardGrid>
-  <Card title="1. Put" icon="pencil">
-    Write structured knowledge pages in markdown. Compiled truth above the line, append-only timeline below it.
+  <Card title="SQLite Everything" icon="seti:db">
+    No complex setup. Your entire knowledge graph is stored in a highly
+    optimized SQLite database on your local disk. Lightweight, portable, and
+    permanent.
   </Card>
-  <Card title="2. Search" icon="magnifier">
-    Hybrid FTS5 keyword + semantic vector search. Finds what you mean, not just what you typed.
+  <Card title="Local Embeddings" icon="star">
+    Run state-of-the-art vector embeddings locally. Your private data never
+    touches an API. Privacy-first AI that works completely offline.
   </Card>
-  <Card title="3. Serve" icon="rocket">
-    `gbrain serve` exposes all tools via MCP over stdio. Any AI agent connects instantly — no config beyond a JSON block.
+  <Card title="Hybrid Search" icon="magnifier">
+    Combine the precision of keyword search with the context of semantic search.
+    Find exactly what you need across millions of documents in milliseconds.
   </Card>
 </CardGrid>
 
 ---
 
-## Why GigaBrain?
+## Get running in seconds
 
-<CardGrid stagger>
-  <Card title="Single Binary" icon="seti:binary">
-    Choose the `airgapped` embedded binary or the slimmer `online` binary. Same CLI, same 384-dim BGE-small contract.
-  </Card>
-  <Card title="SQLite Everything" icon="seti:db">
-    FTS5 full-text search + `sqlite-vec` vector similarity + typed link graph. One `brain.db` file you own completely.
-  </Card>
-  <Card title="Local Embeddings" icon="star">
-    BGE-small-en-v1.5 runs fully offline via pure-Rust candle. No OpenAI key, no API calls, no data leaves your machine.
-  </Card>
-  <Card title="MCP-Ready" icon="puzzle">
-    `gbrain serve` exposes all tools over stdio JSON-RPC 2.0. Drop it into Claude Code, Cursor, or any MCP-compatible agent.
-  </Card>
-  <Card title="Hybrid Search" icon="magnifier">
-    FTS5 keyword + vector semantic search with set-union merge. Exact-match short-circuit. Finds what you mean, not just what you typed.
-  </Card>
-  <Card title="Fat Skills" icon="document">
-    Agent workflows live in plain markdown SKILL.md files. Swap or extend without rebuilding. The intelligence is yours.
-  </Card>
-</CardGrid>
+Simple CLI tools for complex information management.
+
+```bash
+$ gbrain init ~/brain.db
+Initializing local SQLite brain... Done.
+
+$ gbrain serve
+Indexing 4.2k local markdown files...
+Server active at http://localhost:8080
+```

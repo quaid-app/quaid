@@ -1,0 +1,174 @@
+---
+title: Getting Started
+description: "Build GigaBrain, choose a release channel, and create your first portable brain.db."
+guide:
+  eyebrow: Onboarding Guide
+---
+
+import CodePanel from "../../../components/docs/CodePanel.astro";
+import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
+import GuideFeatureCard from "../../../components/docs/GuideFeatureCard.astro";
+import GuideStep from "../../../components/docs/GuideStep.astro";
+import GuideVisualPanel from "../../../components/docs/GuideVisualPanel.astro";
+
+## The model
+
+<div class="gb-guide-split gb-guide-split--compact">
+  <div class="gb-guide-grid gb-guide-grid--two">
+    <GuideFeatureCard
+      icon={"approve-check-circle"}
+      title={"Above the line — compiled truth"}
+    >
+      <p>
+        Always current. Rewrite this section when new information arrives so it
+        reflects what you believe now.
+      </p>
+    </GuideFeatureCard>
+    <GuideFeatureCard icon={"list-format"} title={"Below the line — timeline"}>
+      <p>
+        Append-only evidence. Keep dated events, sources, and changes here so
+        the historical trail never disappears.
+      </p>
+    </GuideFeatureCard>
+  </div>
+  <GuideVisualPanel
+    variant={"archive"}
+    label={"One portable database"}
+    note={
+      "GigaBrain keeps relational metadata, FTS5, vectors, links, and skills orbiting the same brain.db file."
+    }
+  />
+</div>
+
+<div class="gb-guide-note">
+  <p>
+    Everything runs locally: SQLite for structure, FTS5 for keywords, BGE-small
+    embeddings for semantic retrieval, and an MCP server over stdio.
+  </p>
+</div>
+
+## Choose a release channel
+
+<div class="gb-guide-grid gb-guide-grid--two">
+  <GuideFeatureCard icon={"download"} title={"Airgapped channel"}>
+    <p>
+      The default build. BGE-small weights are embedded into the binary so the
+      whole stack works without any runtime network access.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon={"random"} title={"Online channel"}>
+    <p>
+      Smaller binary, same local behavior after first use. The model downloads
+      once, caches locally, and stays private thereafter.
+    </p>
+  </GuideFeatureCard>
+</div>
+
+<CodePanel
+  tone={'terminal'}
+  label={'Source build'}
+  code={`git clone https://github.com/macro88/gigabrain
+cd gigabrain
+
+# Airgapped channel
+
+cargo build --release
+
+# Online channel
+
+cargo build --release --no-default-features --features bundled,online-model`}
+/>
+
+## Build your first brain
+
+<div class="gb-guide-stack">
+  <GuideStep
+    number={'01'}
+    title={'Initialize the database'}
+    code={`gbrain init ~/brain.db`}
+    codeLabel={'brain.db'}
+    codeTone={'terminal'}
+  >
+    <p>This creates the full v4 schema: pages, embeddings, assertions, typed links, and the knowledge-gaps table.</p>
+  </GuideStep>
+
+<GuideStep
+  number={"02"}
+  title={"Import existing notes"}
+  code={`gbrain import /path/to/notes/ --db ~/brain.db`}
+  codeLabel={"Idempotent ingest"}
+>
+  <p>
+    Import existing markdown safely. GigaBrain parses frontmatter, splits
+    compiled truth from timeline, generates embeddings, and refreshes the
+    database in place.
+  </p>
+</GuideStep>
+
+  <GuideStep
+    number={'03'}
+    title={'Query, graph, and inspect'}
+    code={`gbrain query 'who has worked with Jensen Huang?'
+gbrain graph people/pedro-franceschi --depth 2
+gbrain stats`}
+    codeLabel={'Operate the brain'}
+  >
+    <p>Once content is loaded, you can move between semantic queries, graph exploration, and operational health checks without leaving the CLI.</p>
+  </GuideStep>
+</div>
+
+## Connect an AI agent
+
+<p class="gb-guide-section-intro">
+  Any MCP-compatible client can connect over stdio. Start the server locally,
+  point your client at <code>gbrain serve</code>, and keep the database path in{" "}
+  <code>GBRAIN_DB</code>.
+</p>
+
+<CodePanel
+  tone={"terminal"}
+  label={"Serve locally"}
+  code={`GBRAIN_DB=~/brain.db gbrain serve`}
+/>
+
+## Default skills
+
+<div class="gb-guide-grid gb-guide-grid--two">
+  <GuideFeatureCard icon={"document"} title={"Ingest + maintain"}>
+    <p>
+      Meeting transcripts, documents, contradiction detection, orphan pages, and
+      day-to-day upkeep workflows are baked into the default skill set.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon={"magnifier"} title={"Query + research"}>
+    <p>
+      Use the built-in skills to search deeply, synthesize results, resolve
+      gaps, and assemble daily briefings on top of the same brain.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon={"setting"} title={"Doctor the stack"}>
+    <p>
+      Run <code>gbrain skills doctor</code> to inspect the active skill set,
+      resolution order, and any local overrides in your working directory.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon={"rocket"} title={"Agent-first from day one"}>
+    <p>
+      The CLI stays thin on purpose. The higher-level workflows live in markdown{" "}
+      <code>SKILL.md</code> files and in the MCP surface that agents call.
+    </p>
+  </GuideFeatureCard>
+</div>
+
+<GuideActionBanner
+  title={"Need the full tool surface and client wiring?"}
+  primaryHref={"/guides/mcp-server/"}
+  primaryText={"Open MCP Server Guide"}
+  secondaryHref={"/reference/spec/"}
+  secondaryText={"Read the Spec"}
+>
+  <p>
+    The MCP guide walks through client setup while the spec documents the full
+    JSON-RPC surface and the sixteen production tools behind it.
+  </p>
+</GuideActionBanner>

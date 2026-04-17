@@ -1,0 +1,83 @@
+---
+import DefaultPageTitle from '@astrojs/starlight/components/PageTitle.astro';
+
+const { entry } = Astro.locals.starlightRoute;
+const guide = entry.data.guide;
+const title = guide?.displayTitle ?? entry.data.title;
+const description = entry.data.description;
+---
+
+{
+	guide ? (
+		<header class:list={['gb-guide-title', { 'has-accent': guide.accentBar }]}>
+			{guide.eyebrow && <p class="gb-guide-title__eyebrow">{guide.eyebrow}</p>}
+			<h1 id="_top">{title}</h1>
+			{guide.accentBar && <div class="gb-guide-title__rule" aria-hidden="true" />}
+			{description && <p class="gb-guide-title__lead">{description}</p>}
+		</header>
+	) : (
+		<DefaultPageTitle />
+	)
+}
+
+<style>
+	@layer starlight.components {
+		.gb-guide-title {
+			display: grid;
+			gap: 1rem;
+			margin: 1rem 0 clamp(2.25rem, 4vw, 3.5rem);
+			max-width: min(56rem, 100%);
+		}
+
+		.gb-guide-title__eyebrow {
+			margin: 0;
+			color: var(--sl-color-orange-high);
+			font-family: var(--__sl-font);
+			font-size: 0.78rem;
+			font-weight: 700;
+			letter-spacing: 0.18em;
+			text-transform: uppercase;
+		}
+
+		.gb-guide-title h1 {
+			margin: 0;
+			color: var(--gb-on-surface);
+			font-size: clamp(3rem, 5vw, 4.9rem);
+			font-weight: 800;
+			letter-spacing: -0.05em;
+			line-height: 0.98;
+			text-wrap: balance;
+		}
+
+		.gb-guide-title__rule {
+			height: 0.25rem;
+			width: clamp(4.5rem, 9vw, 7rem);
+			border-radius: 999px;
+			background: linear-gradient(90deg, var(--sl-color-orange), var(--sl-color-orange-high));
+		}
+
+		.gb-guide-title__lead {
+			margin: 0;
+			max-width: 44rem;
+			color: color-mix(in srgb, var(--sl-color-gray-2) 78%, white 22%);
+			font-size: clamp(1.1rem, 2vw, 1.45rem);
+			line-height: 1.65;
+			text-wrap: pretty;
+		}
+
+		@media (max-width: 50rem) {
+			.gb-guide-title {
+				gap: 0.875rem;
+				margin-bottom: 2rem;
+			}
+
+			.gb-guide-title h1 {
+				font-size: clamp(2.4rem, 12vw, 3.4rem);
+			}
+
+			.gb-guide-title__lead {
+				font-size: 1.04rem;
+			}
+		}
+	}
+</style>

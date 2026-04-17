@@ -88,7 +88,7 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
         ],
     )?;
 
-    record_ingest(db, &hash, path)?;
+    record_ingest(db, &hash, path, &slug)?;
     println!("Ingested {slug}");
 
     Ok(())
@@ -103,11 +103,11 @@ fn is_already_ingested(db: &Connection, hash: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
-fn record_ingest(db: &Connection, hash: &str, path: &str) -> Result<()> {
+fn record_ingest(db: &Connection, hash: &str, path: &str, slug: &str) -> Result<()> {
     db.execute(
-        "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref) \
-         VALUES (?1, 'file', ?2)",
-        rusqlite::params![hash, path],
+        "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
+         VALUES (?1, 'file', ?2, json_array(?3))",
+        rusqlite::params![hash, path, slug],
     )?;
     Ok(())
 }
@@ -304,5 +304,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn ingest_records_resolved_frontmatter_slug_in_pages_updated() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("2024-01-meeting.md");
+        fs::write(
+            &file_path,
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+        )
+        .unwrap();
+
+        run(&conn, file_path.to_str().unwrap(), false).unwrap();
+
+        let pages_updated: String = conn
+            .query_row(
+                "SELECT pages_updated FROM ingest_log WHERE source_ref = ?1",
+                [file_path.to_str().unwrap()],
+                |row| row.get(0),
+            )
+            .expect("ingest_log row should exist");
+
+        assert!(
+            pages_updated.contains("people/alice"),
+            "pages_updated should contain the resolved slug, got: {pages_updated}"
+        );
+        assert!(
+            !pages_updated.contains("2024-01-meeting"),
+            "pages_updated should not contain the filename stem, got: {pages_updated}"
+        );
     }
 }

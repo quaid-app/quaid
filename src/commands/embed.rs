@@ -43,7 +43,10 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
                 if single_slug {
                     return Err(e);
                 }
-                eprintln!("{}", format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e));
+                eprintln!(
+                    "{}",
+                    format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e)
+                );
                 continue;
             }
         };
@@ -53,7 +56,10 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
                 if single_slug {
                     return Err(e);
                 }
-                eprintln!("{}", format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e));
+                eprintln!(
+                    "{}",
+                    format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e)
+                );
                 continue;
             }
         };
@@ -73,7 +79,10 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
             if single_slug {
                 return Err(e);
             }
-            eprintln!("{}", format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e));
+            eprintln!(
+                "{}",
+                format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e)
+            );
             continue;
         }
         embedded_pages += 1;
@@ -167,7 +176,11 @@ fn lookup_source_path(db: &Connection, slug: &str) -> Option<String> {
 }
 
 /// Format a per-page embed warning with optional source file path.
-fn format_embed_warning(slug: &str, source_path: Option<&str>, error: &dyn std::fmt::Display) -> String {
+fn format_embed_warning(
+    slug: &str,
+    source_path: Option<&str>,
+    error: &dyn std::fmt::Display,
+) -> String {
     match source_path {
         Some(path) => format!("warning: embedding skipped '{slug}' (source: {path}): {error}"),
         None => format!("warning: embedding skipped '{slug}': {error}"),
@@ -526,6 +539,28 @@ mod tests {
         assert_eq!(
             miss, None,
             "filename-derived slug should not match when only frontmatter slug is stored"
+        );
+    }
+
+    #[test]
+    fn lookup_source_path_works_after_single_file_ingest_with_frontmatter_slug_override() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let file_path = dir.path().join("2024-01-meeting.md");
+        std::fs::write(
+            &file_path,
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+        )
+        .expect("write markdown fixture");
+
+        crate::commands::ingest::run(&conn, file_path.to_str().expect("utf8 path"), false)
+            .expect("ingest file");
+
+        let result = lookup_source_path(&conn, "people/alice");
+        assert_eq!(
+            result.as_deref(),
+            file_path.to_str(),
+            "single-file ingest should preserve slug→source mapping for later warnings"
         );
     }
 }

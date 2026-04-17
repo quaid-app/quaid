@@ -2,26 +2,42 @@ use rusqlite::Connection;
 
 use super::types::{SearchError, SearchResult};
 
-/// Strip characters that FTS5 interprets as query-syntax operators so that
-/// natural-language input (e.g. "what do I know about X?") never triggers a
-/// syntax error.  The result is a plain list of words safe for FTS5 MATCH.
+/// Sanitize a natural-language query string for safe use as an FTS5 `MATCH`
+/// expression.  Returns a plain list of words that the FTS5 query parser will
+/// accept without a syntax error.
 ///
-/// Removed characters: `" * ? + - ^ ~ : ( ) { } [ ]`
-/// FTS5 boolean keywords (`AND`, `OR`, `NOT`, `NEAR`) are quoted rather than
-/// removed — stripping them would silently drop legitimate search terms, and
-/// leaving them bare as standalone tokens would produce FTS5 syntax errors
-/// (e.g. `AND?` → stripped to `AND` → invalid). Quoting forces literal
-/// interpretation while preserving the words in the search.
+/// **Strategy:** the FTS5 query parser (with the `porter unicode61` tokenizer)
+/// rejects *any* character that is not alphanumeric, whitespace, or a
+/// recognised query-syntax operator.  This includes the obvious operators
+/// (`?`, `*`, `+`, `"`, `(`, `)`, …) but also everyday punctuation such as
+/// commas, periods, apostrophes, slashes, semicolons, `=`, `@`, `#`, and
+/// dozens of others.  Maintaining an explicit allowlist of "bad" characters is
+/// fragile — every undiscovered character is a latent crash.
+///
+/// Instead, this function keeps *only* Unicode alphanumeric characters and
+/// whitespace; everything else is replaced with a space.  The replacement
+/// happens at the Unicode character level, so international content
+/// (accented letters, CJK, etc.) passes through unmodified.
+///
+/// FTS5 boolean keywords (`AND`, `OR`, `NOT`, `NEAR`) are then quoted so they
+/// are treated as literal search terms rather than query operators.  Only the
+/// uppercase variants are operators; lowercase `and`/`or`/`not` are safe and
+/// left unquoted.  This handles inputs like `AND?` → stripped `AND` → quoted
+/// `"AND"`.
+///
+/// The explicit FTS5 query interface (`search_fts`) is intentionally *not*
+/// touched — it preserves full FTS5 syntax for expert callers.
 pub fn sanitize_fts_query(raw: &str) -> String {
     const FTS5_KEYWORDS: &[&str] = &["AND", "OR", "NOT", "NEAR"];
 
+    // Replace every character that is not alphanumeric (Unicode) or whitespace
+    // with a space.  This is intentionally broad: the FTS5 query parser
+    // rejects all punctuation except its own recognised operators, so stripping
+    // everything non-alphanumeric is the only way to guarantee safety without
+    // maintaining a fragile per-character blocklist.
     let cleaned: String = raw
         .chars()
-        .map(|c| match c {
-            '"' | '*' | '?' | '!' | '+' | '-' | '^' | '~' | ':' | '(' | ')' | '{' | '}' | '['
-            | ']' => ' ',
-            _ => c,
-        })
+        .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c } else { ' ' })
         .collect();
 
     // Collapse whitespace, then quote any bare FTS5 boolean keyword so it is
@@ -270,7 +286,6 @@ mod tests {
     #[test]
     fn search_results_are_ranked_by_relevance() {
         let conn = open_test_db();
-        // Page with term appearing many times should rank higher
         insert_page(
             &conn,
             "concepts/ai-deep",
@@ -292,7 +307,6 @@ mod tests {
 
         let results = search_fts("intelligence", None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 2);
-        // Higher score should come first
         assert!(results[0].score >= results[1].score);
     }
 
@@ -366,6 +380,55 @@ mod tests {
     fn sanitize_preserves_lowercase_and_or_not_as_plain_words() {
         // Lowercase and/or/not are not FTS5 operators — leave them unquoted.
         assert_eq!(sanitize_fts_query("cats and dogs"), "cats and dogs");
+    }
+
+    // ── regressions: punctuation beyond '?' (review blocker) ────────────────
+
+    #[test]
+    fn sanitize_strips_comma() {
+        assert_eq!(sanitize_fts_query("hello, world"), "hello world");
+    }
+
+    #[test]
+    fn sanitize_strips_period() {
+        assert_eq!(sanitize_fts_query("hello. world"), "hello world");
+    }
+
+    #[test]
+    fn sanitize_strips_apostrophe() {
+        assert_eq!(sanitize_fts_query("what's up"), "what s up");
+    }
+
+    #[test]
+    fn sanitize_strips_slash() {
+        assert_eq!(sanitize_fts_query("path/to/thing"), "path to thing");
+    }
+
+    #[test]
+    fn sanitize_strips_semicolon() {
+        assert_eq!(sanitize_fts_query("key; value"), "key value");
+    }
+
+    #[test]
+    fn sanitize_strips_equals() {
+        assert_eq!(sanitize_fts_query("key=value"), "key value");
+    }
+
+    #[test]
+    fn sanitize_strips_at_sign() {
+        assert_eq!(sanitize_fts_query("user@host"), "user host");
+    }
+
+    #[test]
+    fn sanitize_natural_language_sentence_with_mixed_punctuation() {
+        // Full natural-language sentences must survive sanitization without crashing.
+        let input = "What do I know about Alice's work on GigaBrain, specifically the FTS5 fix?";
+        let result = sanitize_fts_query(input);
+        assert!(!result.contains(','));
+        assert!(!result.contains('\''));
+        assert!(!result.contains('?'));
+        assert!(result.contains("Alice"));
+        assert!(result.contains("GigaBrain"));
     }
 
     // ── explicit FTS5 semantics (search_fts is the expert interface) ─────────

@@ -408,4 +408,71 @@ mod tests {
         let result = hybrid_search("AND?", None, &conn, 1000);
         assert!(result.is_ok(), "hybrid_search must not propagate FTS5 errors for natural-language input");
     }
+
+    /// Regression: review blocker — commas, periods, apostrophes, slashes,
+    /// semicolons, and `=` all trigger FTS5 syntax errors when passed raw.
+    /// hybrid_search must sanitize all of them on the natural-language path.
+    #[test]
+    fn hybrid_search_accepts_comma_and_period_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("hello, world.", None, &conn, 1000).is_ok());
+    }
+
+    #[test]
+    fn hybrid_search_accepts_apostrophe_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("what's rust's type system?", None, &conn, 1000).is_ok());
+    }
+
+    #[test]
+    fn hybrid_search_accepts_slash_and_equals_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("path/to/thing key=value", None, &conn, 1000).is_ok());
+    }
+
+    #[test]
+    fn hybrid_search_accepts_semicolon_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("memory; safety", None, &conn, 1000).is_ok());
+    }
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use super::fts::search_fts;
+use super::fts::{sanitize_fts_query, search_fts};
 use super::inference::search_vec;
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
@@ -27,7 +27,12 @@ pub fn hybrid_search(
         }
     }
 
-    let fts_results = search_fts(trimmed, wing, conn, limit)?;
+    let fts_safe = sanitize_fts_query(trimmed);
+    if !has_natural_language_terms(&fts_safe) {
+        return Ok(Vec::new());
+    }
+
+    let fts_results = search_fts(&fts_safe, wing, conn, limit)?;
     let vec_results = search_vec(trimmed, 10, wing, conn)?;
 
     let mut merged = match read_merge_strategy(conn)? {
@@ -36,6 +41,14 @@ pub fn hybrid_search(
     };
     merged.truncate(limit);
     Ok(merged)
+}
+
+fn has_natural_language_terms(fts_safe: &str) -> bool {
+    const QUOTED_FTS5_KEYWORDS: &[&str] = &["\"AND\"", "\"OR\"", "\"NOT\"", "\"NEAR\""];
+
+    fts_safe
+        .split_whitespace()
+        .any(|token| !QUOTED_FTS5_KEYWORDS.contains(&token))
 }
 
 /// Reads the configured hybrid-search merge strategy.
@@ -363,5 +376,129 @@ mod tests {
         let strategy = read_merge_strategy(&conn).expect("merge strategy");
 
         assert_eq!(strategy, SearchMergeStrategy::SetUnion);
+    }
+
+    /// Regression: issue #37 — question marks in natural-language queries must
+    /// not trigger FTS5 syntax errors in the hybrid search path.
+    #[test]
+    fn hybrid_search_accepts_question_mark_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        let results =
+            hybrid_search("what is rust?", None, &conn, 1000).expect("hybrid search with ?");
+        assert!(!results.is_empty());
+    }
+
+    /// Regression: issue #37 — "AND?" must be safe on the natural-language path
+    /// but still yield no results because no content-bearing terms survive.
+    #[test]
+    fn hybrid_search_returns_empty_for_operator_only_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        let results = hybrid_search("AND?", None, &conn, 1000).expect("hybrid search with AND?");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn hybrid_search_returns_empty_for_punctuation_only_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        let results = hybrid_search("???***", None, &conn, 1000)
+            .expect("hybrid search with punctuation only");
+        assert!(results.is_empty());
+    }
+
+    /// Regression: review blocker — commas, periods, apostrophes, slashes,
+    /// semicolons, and `=` all trigger FTS5 syntax errors when passed raw.
+    /// hybrid_search must sanitize all of them on the natural-language path.
+    #[test]
+    fn hybrid_search_accepts_comma_and_period_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("hello, world.", None, &conn, 1000).is_ok());
+    }
+
+    #[test]
+    fn hybrid_search_accepts_apostrophe_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("what's rust's type system?", None, &conn, 1000).is_ok());
+    }
+
+    #[test]
+    fn hybrid_search_accepts_slash_and_equals_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("path/to/thing key=value", None, &conn, 1000).is_ok());
+    }
+
+    #[test]
+    fn hybrid_search_accepts_semicolon_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        assert!(hybrid_search("memory; safety", None, &conn, 1000).is_ok());
     }
 }

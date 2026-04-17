@@ -101,7 +101,7 @@ CI runs `cargo check` and `cargo test` on every pull request. Both must pass bef
 
 ## Release process secrets
 
-The shell installer and GitHub Release assets ship from the main release workflow. `v0.9.1`
+The shell installer and GitHub Release assets ship from the main release workflow. `v0.9.2`
 publishes two BGE-small asset families per platform: `gbrain-<platform>-airgapped` and
 `gbrain-<platform>-online`. npm publication uses `.github/workflows/publish-npm.yml` and requires an
 `NPM_TOKEN` repository secret before the first public publish.

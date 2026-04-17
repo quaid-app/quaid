@@ -2253,7 +2253,7 @@ cargo test
 
 ## Embedding model
 
-BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.1` ships two
+BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.2` ships two
 compile-time channels:
 
 - `embedded-model` — airgapped channel (default): `include_bytes!()` model assets embedded at build time

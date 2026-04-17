@@ -128,7 +128,7 @@ Phase 3 was delivered in two OpenSpec slices:
 - Benchmark harnesses: BEIR (nDCG@10), corpus-reality, concurrency stress, embedding migration, LongMemEval, LoCoMo, Ragas
 - CI benchmark gate wiring in `.github/workflows/ci.yml`
 
-**Gate:** All offline benchmark targets met; `v0.9.1` dual-channel release artifacts built and verified.
+**Gate:** All offline benchmark targets met; `v0.9.2` dual-channel release artifacts built and verified.
 
 ---
 
@@ -155,4 +155,4 @@ These are known design choices that are _not_ oversights:
 | --- | ---------- |
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
-| `v0.9.1` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
+| `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |

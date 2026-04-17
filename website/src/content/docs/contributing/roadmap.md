@@ -98,7 +98,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 ## Phase 3 — Skills, Benchmarks, and CLI Polish ✅
 
 **Status: Complete**  
-**Release:** `v0.9.1`  
+**Release:** `v0.9.2`  
 **Depends on:** Phase 2 ship gate
 
 **Delivered scope:**
@@ -153,4 +153,4 @@ These are known design choices that are _not_ oversights:
 | --- | ---------- |
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
-| `v0.9.1` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
+| `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |

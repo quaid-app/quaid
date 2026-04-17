@@ -232,7 +232,7 @@ jobs:
             cargo build --release --no-default-features --features bundled,online-model
             ```
 
-            **Release v0.9.1 ships two BGE-small channels only:** `airgapped` embeds the model bundle, `online` stays slim and downloads/caches BGE-small on first semantic use. There is no base/large support and no runtime `--model` selector. npm installs the `online` channel; the shell installer defaults to `airgapped`.
+            **Release v0.9.2 ships two BGE-small channels only:** `airgapped` embeds the model bundle, `online` stays slim and downloads/caches BGE-small on first semantic use. There is no base/large support and no runtime `--model` selector. npm installs the `online` channel; the shell installer defaults to `airgapped`.
 
             ---
           draft: false

@@ -84,7 +84,7 @@ fn copy_model_files(model_dir: &Path, out_dir: &Path) -> Result<(), String> {
 fn download_model_files(out_dir: &Path) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(300))
-        .user_agent("gigabrain-build/0.9.1")
+        .user_agent("gigabrain-build/0.9.2")
         .build()
         .map_err(|error| format!("build download client: {error}"))?;
 

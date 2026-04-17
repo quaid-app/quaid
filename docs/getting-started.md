@@ -1,6 +1,6 @@
 # Getting Started with GigaBrain
 
-> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.1` ships two BGE-small channels: `airgapped` embedded and `online`.
+> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.2` ships two BGE-small channels: `airgapped` embedded and `online`.
 
 ## What it does
 
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete.** The current rollout focus is `v0.9.1`: dual BGE-small release channels, with `airgapped` and `online` assets shipped from the same release line.
+> **Phase 3 is complete.** The current rollout focus is `v0.9.2`: dual BGE-small release channels, with `airgapped` and `online` assets shipped from the same release line.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -26,11 +26,11 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.1` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.2` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for online |
 
-> **BGE-small only.** `v0.9.1` does not add small/base/large runtime selection. It ships two BGE-small release channels: `airgapped` embedded and `online`.
+> **BGE-small only.** `v0.9.2` does not add small/base/large runtime selection. It ships two BGE-small release channels: `airgapped` embedded and `online`.
 
 ---
 

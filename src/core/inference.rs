@@ -638,7 +638,7 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
-        .user_agent("gigabrain-runtime/0.9.1")
+        .user_agent("gigabrain-runtime/0.9.2")
         .build()
         .map_err(|e| format!("build download client: {e}"))?;
 

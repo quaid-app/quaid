@@ -2242,7 +2242,7 @@ cargo test
 
 ## Embedding model
 
-BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.1` ships two
+BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.2` ships two
 compile-time channels:
 
 - `embedded-model` — airgapped binary with `include_bytes!()` model assets
@@ -2927,4 +2927,3 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 ---
 
 *This spec is designed to stand alone. Everything needed to build GigaBrain is above — no prior context required. It is explicitly inspired by Garry Tan's GBrain work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 GBrain skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
-

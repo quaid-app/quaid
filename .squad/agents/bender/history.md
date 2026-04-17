@@ -95,3 +95,71 @@
   5. Task tracking — updated tasks/history with validation results
 - **Status:** ✅ COMPLETE. v0.9.0 release validated. Publish workflow confirmed working. Team decision log updated honestly.
 - **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`
+
+## 2026-04-19 v0.9.1 Dual-Release D.1 Validation
+
+- **Verdict:** REJECT — one high-severity defect blocks sign-off.
+- **Defect #1 (HIGH):** Cargo.toml `default = ["bundled", "embedded-model"]` (per approved task A.4) makes source-build default AIRGAPPED. But 9+ documentation files claim `cargo build --release` = "online channel (default)." Every "Build from source" instruction is wrong. Root cause: A.4 changed the default AFTER the Phase C doc sweep. No reconciliation pass followed. README Quick Start even shows two commands that both produce the same airgapped binary — the online channel is never shown.
+- **Defect #2 (LOW):** Task B.3 claims postinstall.js "handles `GBRAIN_CHANNEL=airgapped|online` overrides" but code has no GBRAIN_CHANNEL support. `now.md` also overclaims. Near-zero impact since design says npm = online only.
+- **Passing checks:** `cargo fmt --check` ✅, `cargo check` ✅, `cargo test` (285+ pass, 0 fail) ✅, `npm pack --dry-run` (4 files, no binary) ✅, no `gbrain-slim-*` naming ✅, compile_error guard ✅, release manifest ✅, installer defaults ✅, version bump ✅, no base/large promises ✅.
+- **Revision owners:** Defect #1 → Hermes (doc sweep). Defect #2 → Fry (implementation or task text fix).
+- **Decision written:** `.squad/decisions/inbox/bender-dual-release-verdict.md`
+
+## 2026-04-19 v0.9.1 Dual-Release D.1 Rereview
+
+- **Verdict:** APPROVE ✅
+- **Defect #1 (HIGH — docs claimed `cargo build --release` = online):** FIXED. Hermes swept all 14+ doc surfaces. Every "Build from source" block and install table now correctly identifies `cargo build --release` as the **airgapped** channel (default). Explicit online flag `--no-default-features --features bundled,online-model` shown in all code blocks. No surface claims online is the source-build default.
+- **Release contract verified coherent:**
+  - `Cargo.toml` default = `["bundled", "embedded-model"]` → source-build = airgapped ✅
+  - `scripts/install.sh` defaults to `GBRAIN_CHANNEL=airgapped` ✅
+  - `postinstall.js` hardcodes `*-online` assets → npm = online ✅
+  - `release.yml` matrix: 4 platforms × 2 channels = 8 binaries + 8 SHA-256 sidecars ✅
+  - Channel names `airgapped`/`online` only — no `gbrain-slim-*` references in code/scripts/docs ✅
+  - `compile_error!` guard present in inference.rs ✅
+  - Version surfaces at `0.9.1` ✅
+- **Non-blocking nits (not re-tested, carried from D.1 round 1):**
+  1. `website/reference/spec.md:2249` uses "slim binary" as descriptive English for online-model. D.0 explicitly exempts descriptive prose. Cosmetic only.
+  2. Defect #2 (LOW) — B.3 task text and `now.md` still claim `postinstall.js` supports `GBRAIN_CHANNEL` env override, but code doesn't implement it. Near-zero impact (npm = online only). Assigned to Fry; not in Hermes's revision scope.
+- **Outcome:** The rejected defect is fixed. Release contract is coherent. Cleared for D.2 (PR + ship).
+
+## Learnings
+
+- **Always validate the task execution ORDER against doc accuracy.** When a task changes a default (A.4) after docs have been normalized (Phase C), the docs become stale. The right check is: "does the doc claim match what `cargo build --release` actually produces?" Not: "did someone mark the doc task done?"
+- **Grep the actual `Cargo.toml` `[features] default` line and compare it to every doc that says 'default' near a channel name.** This single check would have caught this defect at the C.1 review stage.
+- **postinstall.js env-var overrides should be explicitly tested or explicitly removed from the task spec.** A claimed-but-missing override is worse than no override — it makes the task look done when it isn't.
+- **Rereviews should be scoped tightly.** When you rejected for one defect, the rereview checks that defect first, then a quick pass on overall coherence. Don't re-litigate low-severity findings that were assigned elsewhere.
+
+## Session Completion: Dual Release v0.9.1 (2026-04-19)
+
+**Status:** ✅ Session logged and decisions merged.
+
+This dual-release cycle validated the full team workflow:
+- OpenSpec proposal as source of truth ✓
+- Implementation phase with clear gate criteria ✓
+- Docs validation identifying defects early ✓
+- Revision cycle to fix defects ✓
+- Second validation round confirming all fixes ✓
+- PR opened ready for merge ✓
+
+**Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."
+
+## 2026-04-19 PR #47 Blocker Review
+
+- **Verdict:** BLOCKED — three high-severity blockers remain unfixed.
+- **Context:** Validated PR #47 (feat: configurable embedding model) against Professor and Nibbler review findings. Fry has addressed many review comments (`83a7c67`, `71666d7`, `d75bc0b` fixes), but the three core concurrency/integrity blockers are NOT YET RESOLVED.
+- **Blocker 1 (UNFIXED):** Active-model registry transition uses two autocommit statements (`src/core/db.rs:188-204`), creating a zero-active-row gap visible to concurrent readers. **Fix:** wrap in transaction like `write_brain_config`.
+- **Blocker 2 (UNFIXED):** Online downloads use fixed temp file names (`config.json.download`, etc.) in shared cache dir (`src/core/inference.rs:667`), causing clobber risk on concurrent first-load. **Fix:** unique temp names or per-model download lock.
+- **Blocker 3 (UNFIXED):** CI online-model test job (`.github/workflows/ci.yml:71`) does not set `GBRAIN_FORCE_HASH_SHIM=1`, allowing flaky network-dependent tests. **Fix:** add env var to CI job.
+- **Key files examined:** `src/core/db.rs` (registry flip), `src/core/inference.rs` (download + ensure_model), `.github/workflows/ci.yml` (test jobs).
+- **Evidence:** `write_brain_config` was correctly fixed with a transaction (lines 229-250), confirming Fry knows the pattern. Registry flip and download paths were not updated.
+- **Decision written:** `.squad/decisions/inbox/bender-pr47-validation.md` — includes validation plan for post-fix execution.
+- **Recommendation to Fry:** Fix all three blockers in order (atomic registry → hermetic CI → download safety), then ping for re-validation.
+
+## Learnings
+
+- **Review bot comments vs. human review decisions:** PR #47 had 19 bot review threads, but only 3 were called out as merge-blocking by Professor and Nibbler. Always read the explicit human review decisions (`.squad/decisions/inbox/*-pr*-review.md`) to know what actually blocks merge vs. what's noise/nice-to-have.
+- **Atomic DB state transitions require explicit transactions.** Even when one function (`write_brain_config`) uses a transaction correctly, a related function (`ensure_embedding_model_registry`) may still use autocommit. Both must be checked independently.
+- **Concurrent download safety is subtle.** Fixed temp file names look safe in single-process use but fail under concurrent load. Validation must explicitly think "what if two threads call this at once?"
+- **CI hermetic testing requires global env vars, not per-test guards.** A test setting `GBRAIN_FORCE_HASH_SHIM=1` via `EnvVarGuard` does NOT make the entire CI job hermetic — the CI job itself must set the env var.
+- **Fix velocity ≠ fix correctness.** Fry produced 4+ fix commits in rapid succession, addressing many bot comments. But the three blockers (which require deeper concurrency reasoning) were not addressed. Volume of fixes is not the same as blocker closure.

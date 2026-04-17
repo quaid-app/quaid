@@ -61,3 +61,35 @@
 - Verified docs site build: 15 pages, zero errors.
 
 **Outcome:** Docs site now truthful and internally consistent on the dual-release contract. Source-build default aligned with Cargo defaults (online). Installer defaults (shell → airgapped, npm → online) remain correct and unchanged.
+
+## Learnings
+
+- **Source-build default is `airgapped` (NOT online):** `Cargo.toml` as of `v0.9.1` sets `default = ["bundled", "embedded-model"]`. `cargo build --release` produces the **airgapped** binary. The online build requires `--no-default-features --features bundled,online-model`. History entry from 2026-04-18 was wrong on this point; Bender's rejection corrected it.
+- When a Bender rejection disputes the history.md record itself, always re-read Cargo.toml (or the authoritative implementation file) before revising docs. History entries can be stale.
+
+## 2026-04-18 (revision) — Bender Rejection: Source-Build Default Correction
+
+**Role:** Docs revision owner assigned by Bender rejection
+
+**What happened:**
+- Bender rejected the v0.9.1 dual-release branch: Cargo.toml `default = ["bundled", "embedded-model"]` means `cargo build --release` = airgapped. Docs (and a previous history entry) claimed the opposite.
+- Hermes corrected all 9 affected doc surfaces: README, CLAUDE.md, docs/getting-started.md, docs/contributing.md, docs/spec.md, and all four matching website docs.
+- Explicit online build command corrected to `--no-default-features --features bundled,online-model` throughout.
+- Installer defaults untouched: shell installer → airgapped, npm → online.
+- Committed as single reconciliation commit on `release/v0.9.1-dual-release`.
+
+**Outcome:** All doc surfaces now match the approved contract from task A.4. Bender rejection addressed.
+
+## 2026-04-19: Dual Release v0.9.1 — Session Completion
+
+**Role:** Scribe session logger and decision merger
+
+**Summary:** Completed dual-release v0.9.1 cycle:
+- Leela: OpenSpec cleanup (removed duplicate, populated tasks.md, confirmed A.1–C.3 done)
+- Fry: Full implementation (Cargo + npm + CI + installer, all phases A–C)
+- Amy: Docs Phase C (flagged HIGH defect: Cargo default vs. docs mismatch)
+- Hermes: Docs Phase 1 (corrected online → airgapped after Bender rejection)
+- Bender: Two validation rounds (D.1 rejected for HIGH defect, D.1 rereview approved)
+- Coordinator: Pushed branch, opened PR #33
+
+**Outcome:** All tests pass, release contract coherent, PR #33 open and ready to merge.

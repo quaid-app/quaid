@@ -447,3 +447,18 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - `compile_error!` macro in inference.rs prevents both `embedded-model` and `online-model` features being enabled simultaneously — enforces the mutual exclusivity at compile time.
 - Release workflow uses `--no-default-features --features ${{ matrix.features }}` so it doesn't depend on Cargo.toml defaults. The default features only affect `cargo build` developer experience.
 - stale OpenSpec directories (superseded by a renamed/re-scoped change) should be deleted or archived to prevent naming drift from old contract terms leaking into implementation work.
+
+## 2026-04-18: Dual Release v0.9.1 Full Implementation
+
+**Scope:** Implement all three platform surfaces (source-build, shell installer, npm package) for dual-release v0.9.1.
+
+**Work:**
+- Phase A: Cargo defaults + naming — `default = ["bundled", "embedded-model"]` (airgapped)
+- Phase B: npm surface — postinstall.js + bin/gbrain wrapper + correct asset names
+- Phase C: CI + installer — release.yml 8-binary matrix + scripts/install.sh GBRAIN_CHANNEL support
+- Version bump: 0.9.1 across all surfaces
+
+**Learning:**
+- The mutual exclusion pattern (`compile_error!` when both `embedded-model` and `online-model` are active) is a solid safety gate but relies on developers running `cargo check` with all feature combinations. CI should test this explicitly.
+- Release workflows should never depend on `Cargo.toml` defaults for feature flags — always use explicit `--no-default-features --features X` so CI is isolated from developer-ergonomic defaults.
+- Post-install scripts that write binaries should write to a separate path (`bin/gbrain.bin`) not overwriting a committed wrapper. This lets npm's bin-linking succeed at pack time.

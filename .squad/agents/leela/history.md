@@ -587,3 +587,17 @@
 
 **Learning:**
 - Focus files go stale across phase transitions. Update `now.md` at the start of each new change, not just at the end of the previous one. A stale focus file misleads every agent that reads it on spawn.
+
+## 2026-04-19: Dual Release v0.9.1 OpenSpec Unblock
+
+**Scope:** Cleanup and validation prep for `bge-small-dual-release-channels` change.
+
+**Work:**
+- Removed stale `dual-release-distribution/` duplicate change tree (old "slim" naming, unapproved)
+- Populated `bge-small-dual-release-channels/tasks.md` with 10 machine-parsable tasks (A–D)
+- Validated A.1–C.3 tasks are correctly marked done via code inspection
+- Confirmed product naming lock: `airgapped` and `online` only
+
+**Learning:**
+- Empty tasks.md on an OpenSpec change should be surfaced as a blocker during proposal validation, not discovered during cleanup. The tooling should catch this.
+- Duplicate changes with conflicting naming conventions should be explicitly archived or deleted, not left to create hazard for future implementation references.

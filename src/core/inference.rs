@@ -35,6 +35,26 @@ const EMBEDDING_DIMENSIONS: usize = 384;
 const HASH_CHUNK_COUNT: usize = EMBEDDING_DIMENSIONS / 32;
 #[cfg(feature = "online-model")]
 const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
+/// Pinned Hugging Face revision for reproducible online downloads.
+#[cfg(feature = "online-model")]
+const MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
+
+/// Expected SHA-256 digests for online-channel integrity verification.
+#[cfg(feature = "online-model")]
+const MODEL_FILE_HASHES: [(&str, &str); 3] = [
+    (
+        "config.json",
+        "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
+    ),
+    (
+        "tokenizer.json",
+        "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    ),
+    (
+        "model.safetensors",
+        "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad",
+    ),
+];
 
 static MODEL: OnceLock<EmbeddingModel> = OnceLock::new();
 
@@ -288,6 +308,7 @@ fn download_model_files(
     let cache_dir = model_cache_dir()?;
 
     if let Some(paths) = existing_model_paths(&cache_dir) {
+        verify_cached_model_integrity(&cache_dir)?;
         return Ok(paths);
     }
 
@@ -300,8 +321,8 @@ fn download_model_files(
         .build()
         .map_err(|e| format!("build download client: {e}"))?;
 
-    for file_name in ["config.json", "tokenizer.json", "model.safetensors"] {
-        download_model_file(&client, file_name, &cache_dir)?;
+    for (file_name, expected_hash) in MODEL_FILE_HASHES {
+        download_model_file(&client, file_name, expected_hash, &cache_dir)?;
     }
 
     existing_model_paths(&cache_dir).ok_or_else(|| {
@@ -316,11 +337,12 @@ fn download_model_files(
 fn download_model_file(
     client: &reqwest::blocking::Client,
     file_name: &str,
+    expected_hash: &str,
     cache_dir: &Path,
 ) -> Result<(), String> {
     let destination = cache_dir.join(file_name);
     let temp_destination = cache_dir.join(format!("{file_name}.download"));
-    let url = format!("https://huggingface.co/{MODEL_ID}/resolve/main/{file_name}");
+    let url = format!("https://huggingface.co/{MODEL_ID}/resolve/{MODEL_REVISION}/{file_name}");
 
     let mut response = client
         .get(&url)
@@ -332,9 +354,44 @@ fn download_model_file(
         .map_err(|e| format!("create {}: {e}", temp_destination.display()))?;
     std::io::copy(&mut response, &mut file)
         .map_err(|e| format!("write {}: {e}", temp_destination.display()))?;
+
+    verify_file_sha256(&temp_destination, expected_hash)?;
+
     std::fs::rename(&temp_destination, &destination)
         .map_err(|e| format!("rename {}: {e}", destination.display()))?;
 
+    Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn verify_file_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("open {} for hash: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|e| format!("read {} for hash: {e}", path.display()))?;
+    let actual = format!("{:x}", hasher.finalize());
+
+    if actual != expected {
+        return Err(format!(
+            "SHA-256 mismatch for {}: expected {expected}, got {actual}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn verify_cached_model_integrity(cache_dir: &Path) -> Result<(), String> {
+    for (file_name, expected_hash) in MODEL_FILE_HASHES {
+        let path = cache_dir.join(file_name);
+        verify_file_sha256(&path, expected_hash).map_err(|e| {
+            format!(
+                "cached model integrity check failed — delete {} and retry: {e}",
+                cache_dir.display()
+            )
+        })?;
+    }
     Ok(())
 }
 

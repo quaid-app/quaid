@@ -116,6 +116,7 @@ need_cmd curl
 need_cmd mkdir
 need_cmd chmod
 need_cmd mv
+need_cmd mktemp
 
 trap cleanup EXIT INT HUP TERM
 

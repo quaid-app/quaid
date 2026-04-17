@@ -66,6 +66,7 @@ tempfile = "3"
 
 [build-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sha2 = "0.10"
 
 [features]
 default = ["bundled", "embedded-model"]

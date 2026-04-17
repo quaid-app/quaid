@@ -601,3 +601,36 @@
 **Learning:**
 - Empty tasks.md on an OpenSpec change should be surfaced as a blocker during proposal validation, not discovered during cleanup. The tooling should catch this.
 - Duplicate changes with conflicting naming conventions should be explicitly archived or deleted, not left to create hazard for future implementation references.
+
+---
+
+## 2026-04-19: Beta Feedback Triage — Three OpenSpec Lanes
+
+**Session:** leela-beta-openspec  
+**Branch:** squad/beta-feedback-openspec
+
+**What happened:**
+- Triaged four GitHub issues (#36, #38, #40, #41) from beta tester doug-aillm.
+- Determined #41 is a duplicate of #36 (same root cause; #41 adds the two-step sandbox install note only).
+- Created three separate OpenSpec lanes — separate is correct because ownership, risk level, and code areas are distinct.
+
+**Lanes created:**
+
+| Lane | Closes | Owner | Risk |
+|------|--------|-------|------|
+| `install-profile-flow` | #36, #41 | fry | Low — shell scripting + docs only |
+| `assertion-extraction-tightening` | #38 | professor | High — changes runtime behavior for all vaults; Nibbler review gated |
+| `import-type-inference` | #40 | fry | Low — 1-function change in migrate.rs + docs |
+
+**Key file paths:**
+- `openspec/changes/install-profile-flow/` — proposal, design, tasks
+- `openspec/changes/assertion-extraction-tightening/` — proposal, design, tasks
+- `openspec/changes/import-type-inference/` — proposal, design, tasks
+- `.squad/decisions/inbox/leela-beta-openspec.md` — routing decision
+
+## Learnings
+
+- **Issue #41 as duplicate pattern:** When two issues share a root cause, the right call is to close one as duplicate and capture the additive notes (two-step sandbox install) in the surviving lane's tasks, not create two proposals.
+- **Assertion false positives are a trust problem, not just a bug:** The fix scope should be narrow (scoped extraction) to avoid introducing new false negatives. The structural choice — `## Assertions` section as opt-in contract — makes the behavior teachable and predictable.
+- **PARA is the dominant Obsidian structure:** Any import tooling that ignores top-level folder names will fail this user base on first run. The folder-to-type mapping is a first-class feature, not a nice-to-have.
+- **High-risk core changes should be explicitly gated on Nibbler adversarial review in the proposal.** Putting Nibbler in `reviewers:` in the frontmatter is insufficient; the tasks.md should have an explicit Nibbler phase gate (Phase D.1 pattern from p3-skills-benchmarks).

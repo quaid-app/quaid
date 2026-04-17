@@ -430,6 +430,26 @@
 
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — Phase 2 Kickoff section documents all 6 leela decisions (D1–D6), full planning artifacts per agent, blocker findings from Professor and Nibbler, and guardrails for ship gate.
 
+## Learnings — v0.9.1 Dual Release OpenSpec Cleanup (2026-04-19)
+
+**Task:** Audit and normalize OpenSpec artifacts for the `bge-small-dual-release-channels` change after a session crash left the approved change with an empty tasks.md and a duplicate/obsolete change tree at `dual-release-distribution/`.
+
+**What was done:**
+- Audited both `bge-small-dual-release-channels/` (approved, has `.openspec.yaml`) and `dual-release-distribution/` (unapproved duplicate using old `slim` naming).
+- Confirmed implementation is already on `release/v0.9.1-dual-release` (at main HEAD) using correct `airgapped`/`online` naming throughout: `install.sh`, `postinstall.js`, `release.yml` all verified.
+- Wrote complete machine-parsable `tasks.md` for `bge-small-dual-release-channels/` with Phases A–D. A.1–C.3 marked done; D.1 (validation run) and D.2 (push + PR) remain open.
+- Removed `openspec/changes/dual-release-distribution/` in full — it was unapproved, used stale `slim` naming, and had no `.openspec.yaml`.
+- Updated `.squad/identity/now.md` to reflect v0.9.1 dual-release focus.
+- Wrote decision record to `.squad/decisions/inbox/leela-dual-release-openspec.md`.
+
+**Key lessons:**
+- An empty tasks.md is indistinguishable from "no tasks" to the OpenSpec tooling. Always populate tasks.md before closing the artifact-creation step, even if implementation is proceeding in parallel.
+- When two change trees exist for the same feature, confirm which has `.openspec.yaml` registration — that is the authoritative one. The other should be removed, not left to confuse future agents.
+- Before marking implementation tasks done, check the actual code. In this case, the implementation correctly used approved `airgapped`/`online` naming — not the `slim` naming in the obsolete duplicate.
+- Archive readiness requires only D.1 + D.2 to close; no additional OpenSpec artifact changes are needed.
+
+**Archive gate note:** `bge-small-dual-release-channels` is ready to archive once D.1 (validation) and D.2 (PR) close. No proposal/design/spec changes needed.
+
 ## Learnings — v0.2.0 Release (2026-04-16)
 
 **Task:** Create v0.2.0 GitHub release for Phase 2 — Intelligence Layer (PR #22 merged).
@@ -567,3 +587,17 @@
 
 **Learning:**
 - Focus files go stale across phase transitions. Update `now.md` at the start of each new change, not just at the end of the previous one. A stale focus file misleads every agent that reads it on spawn.
+
+## 2026-04-19: Dual Release v0.9.1 OpenSpec Unblock
+
+**Scope:** Cleanup and validation prep for `bge-small-dual-release-channels` change.
+
+**Work:**
+- Removed stale `dual-release-distribution/` duplicate change tree (old "slim" naming, unapproved)
+- Populated `bge-small-dual-release-channels/tasks.md` with 10 machine-parsable tasks (A–D)
+- Validated A.1–C.3 tasks are correctly marked done via code inspection
+- Confirmed product naming lock: `airgapped` and `online` only
+
+**Learning:**
+- Empty tasks.md on an OpenSpec change should be surfaced as a blocker during proposal validation, not discovered during cleanup. The tooling should catch this.
+- Duplicate changes with conflicting naming conventions should be explicitly archived or deleted, not left to create hazard for future implementation references.

@@ -98,7 +98,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 ## Phase 3 — Skills, Benchmarks, and CLI Polish ✅
 
 **Status: Complete**  
-**Release:** `v1.0.0`  
+**Release:** `v0.9.1`  
 **Depends on:** Phase 2 ship gate
 
 **Delivered scope:**
@@ -136,9 +136,8 @@ These are known design choices that are _not_ oversights:
 
 | Deferral | Reasoning |
 | -------- | --------- |
-| npm global install (`npm install -g gbrain`) | Planned follow-on. npm packaging requires its own approved scope and release contract before it can ship. Not in this release. |
+| Public npm publication | Packaging and postinstall are implemented, but public publication still depends on registry ownership and `NPM_TOKEN` release automation. |
 | Homebrew tap, winget, or other package managers | Same dependency as npm. Tracked as future distribution work. Not in this release. |
-| `curl \| sh` one-command installer | Requires a stable hosted script and a hardened install contract. Tracked as future work. Not in this release. |
 | First-class `chunks` table | `page_embeddings` columns are sufficient for v1. Promote if progressive retrieval lifecycle becomes painful. |
 | Room-level palace filtering | Deferred until benchmarks on a real corpus prove it helps. Wing-only in v1. |
 | LLM-assisted contradiction detection | The binary stays dumb. Cross-page reasoning lives in the maintain skill. |
@@ -154,4 +153,4 @@ These are known design choices that are _not_ oversights:
 | --- | ---------- |
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
-| `v1.0.0` | Phase 3 — full skill suite + benchmarks + release pipeline |
+| `v0.9.1` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |

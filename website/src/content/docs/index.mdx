@@ -25,7 +25,7 @@ import { CardGrid, Card } from "@astrojs/starlight/components";
 
 ## Current Status
 
-> **Phase 3 complete.** Skills, benchmarks, CLI polish, and the full MCP tool surface are shipped. All 16 MCP tools active. All 8 skills production-ready. Benchmark harnesses in CI. `v1.0.0` release pipeline ready.
+> **Phase 3 complete.** Skills, benchmarks, CLI polish, and the full MCP tool surface are shipped. All 16 MCP tools active. All 8 skills production-ready. Benchmark harnesses in CI. `v0.9.1` now ships dual BGE-small release channels.
 
 **[Install & Status →](/guides/install/)** — supported-now vs planned channels  
 **[Roadmap →](/contributing/roadmap/)** — phased delivery plan and ship gates  
@@ -53,7 +53,7 @@ import { CardGrid, Card } from "@astrojs/starlight/components";
 
 <CardGrid stagger>
   <Card title="Single Binary" icon="seti:binary">
-    ~90MB static binary. Drop it anywhere — macOS, Linux, ARM. Zero runtime dependencies, no Docker, no Node, no Python.
+    Choose the `airgapped` embedded binary or the slimmer `online` binary. Same CLI, same 384-dim BGE-small contract.
   </Card>
   <Card title="SQLite Everything" icon="seti:db">
     FTS5 full-text search + `sqlite-vec` vector similarity + typed link graph. One `brain.db` file you own completely.

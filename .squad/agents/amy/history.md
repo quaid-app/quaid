@@ -85,3 +85,45 @@
 - When spec and task description give different numbers for the same threshold (30 days vs 90 days), pick the one from the spec scenario and flag the discrepancy for the implementer — don't silently pick one.
 - The two-phase store-then-extract pattern (raw_data first, compiled_truth second) should be consistent across all enrichment sources. Establish this as a doc convention early so it doesn't drift per-source.
 - `brain_gap_approve` as a workflow dependency (vs. a real tool) is a subtle but important distinction that must be stated explicitly in the skill — agents will try to call it otherwise.
+
+## Learnings
+
+- **Always verify the actual Cargo.toml `[features]` default before writing source-build docs.** The default channel can differ from what earlier proposals assumed. Docs claiming "airgapped default" when Cargo actually defaults to `online-model` are a silent correctness bug that real users hit on first build.
+- **"slim" is a former channel-name synonym, not just a size adjective.** Earlier proposals (dual-release-distribution) used "slim" as a channel name; the accepted contract (bge-small-dual-release-channels) uses "online". Any word that doubles as both an adjective and a historical channel name needs explicit audit whenever a rename lands — grep for the exact old term, not just the new one.
+- **Embedded code snippets in spec.md drift independently from source.** spec.md contains a Cargo.toml `[features]` block and a Build section that can diverge silently from the live Cargo.toml. Include these in the audit checklist for any release that changes Cargo features or default channels.
+- **The website and docs/ may drift in different directions after a crash.** In this pass the website was already correct while docs/ was stale. Future passes should always diff both surfaces against the approved design rather than assuming one is authoritative.
+- **List the default channel first in two-bullet channel lists.** Readers internalize the first item as the default. Ordering airgapped first when online is the default would be misleading even if both are clearly labelled.
+
+## 2026-04-17 Phase 3 / v0.9.1 Dual Release Docs Pass
+
+**Role:** Phase 3 / v0.9.1 dual-release documentation correctness
+
+**What happened:**
+- Audited all input artifacts (README.md, CLAUDE.md, docs/getting-started.md, docs/contributing.md, docs/spec.md, packages/gbrain-npm/README.md) against the approved bge-small-dual-release-channels design.
+- Found two classes of drift: (1) "slim" appearing as a channel-name synonym; (2) source-build docs claiming `cargo build --release` produces airgapped when Cargo.toml `default = ["bundled", "online-model"]` makes online the actual default.
+- Fixed all six source-build instances: README.md (Quick start + Build sections), CLAUDE.md (Build section + Embedding model section), docs/getting-started.md (lede, install table, build commands, requirements prose), docs/contributing.md (build commands), docs/spec.md (Solution prose, embedded CLAUDE.md block, Cargo features snippet, Build commands, Embedding model section).
+- Removed all channel-name uses of "slim" (leaving "slimmer" as a size adjective where natural).
+- packages/gbrain-npm/README.md: already correct, no changes.
+- website/src/content/docs/guides/getting-started.md: already correct, flagged for Hermes as an observation.
+- Shell installer "airgapped by default" retained as correct per design spec Decision 3.
+- Wrote 6 decisions to `.squad/decisions/inbox/amy-dual-release-docs.md`.
+
+**Outcome:** v0.9.1 dual-release docs pass COMPLETE. All input artifacts now match the approved channel contract: online is the Cargo default; airgapped requires explicit feature flag; no "slim" channel names remain in user-facing docs.
+
+## 2026-04-17: Dual Release v0.9.1 Documentation Phase 1
+
+**Role:** Phase C documentation normalization for dual-release v0.9.1
+
+**What happened:**
+- Audited all repository prose documentation against the approved bge-small-dual-release-channels contract
+- Aligned channel nomenclature: removed "slim" terminology; standardized to `airgapped`/`online` exclusively
+- Preserved "airgapped by default" for shell installer (intentional per design spec Decision 3)
+- Flagged embedded Cargo.toml snippet in docs/spec.md as potentially stale (needs verification after A.4 implementation task)
+- Identified HIGH-severity defect: source-build documentation claims `cargo build --release` produces online channel, but Fry's A.4 implementation sets default to `embedded-model` (airgapped) — docs will need reconciliation after implementation is merged
+
+**Outcome:** Phase C docs pass COMPLETE. Ready for implementation merge + post-merge reconciliation if A.4 changes the default.
+
+**Learnings:**
+- When implementation tasks change fundamental defaults (like A.4 flipping Cargo defaults), documentation changes that completed before that implementation task must be re-validated. There is no automatic triggering mechanism; this must be manually surfaced at review time.
+- Descriptive English ("slimmer binary") is acceptable; contract terms ("slim channel") are not. The distinction needs explicit enforcement at review time.
+- Source-build docs and shell installer docs describe different defaults (online vs. airgapped) which is correct per the design. Users must be aware both paths are legitimate but different.

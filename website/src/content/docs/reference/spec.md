@@ -86,7 +86,7 @@ Additionally: every existing knowledge-base tool (Obsidian, Notion, RAG framewor
 
 ## The Solution
 
-A single Rust binary (~90MB including embedded model weights) wrapping:
+A single Rust CLI distributed in two BGE-small channels — airgapped (~180MB, embedded weights) or online (~90MB, downloads on first use) — wrapping:
 
 - **SQLite** with WAL mode - single logical database (`brain.db` + WAL sidecars while live; `gbrain compact` checkpoints to true single file for transport/backup)
 - **FTS5** - full-text search, built into SQLite
@@ -2225,7 +2225,7 @@ Skills (skills/) are fat markdown files - all intelligence lives there.
 
 ```bash
 cargo build --release
-# Output: target/release/gbrain (~90MB with embedded model weights)
+# Output: target/release/gbrain (airgapped channel, default)
 
 # Cross-compile
 cargo install cross
@@ -2242,9 +2242,11 @@ cargo test
 
 ## Embedding model
 
-BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. Model weights embedded
-into binary by default via include_bytes!(). Truly zero-dependency, no network
-required. For smaller binary with on-demand download: `--features online-model`.
+BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.1` ships two
+compile-time channels:
+
+- `embedded-model` — airgapped binary with `include_bytes!()` model assets
+- `online-model` — slim binary that downloads BGE-small on first semantic use
 
 ## Skills
 
@@ -2306,10 +2308,10 @@ anyhow = "1"
 thiserror = "1"
 
 [features]
-default = ["bundled", "embed-model"]
+default = ["bundled", "embedded-model"]
 bundled = ["rusqlite/bundled"]
-embed-model = []                         # include_bytes!() model weights into binary (default)
-online-model = []                        # download weights on first run instead
+embedded-model = []                      # airgapped channel (default): include_bytes!() model weights into binary
+online-model = ["dep:reqwest"]             # online channel; download weights on first run
 ```
 
 ### Build commands
@@ -2318,11 +2320,11 @@ online-model = []                        # download weights on first run instead
 # Development
 cargo build
 
-# Release (optimized)
+# Release — airgapped channel (default; embeds BGE-small weights into the binary)
 cargo build --release
 
-# Release with embedded model weights (~90MB binary, zero first-run download) — default
-cargo build --release
+# Release — online channel (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Run tests
 cargo test
@@ -2925,3 +2927,4 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 ---
 
 *This spec is designed to stand alone. Everything needed to build GigaBrain is above — no prior context required. It is explicitly inspired by Garry Tan's GBrain work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 GBrain skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
+

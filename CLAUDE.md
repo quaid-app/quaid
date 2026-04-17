@@ -48,8 +48,11 @@ brain.db                   — SQLite: pages + FTS5 + vec0 + links + assertions
 # Debug
 cargo build
 
-# Release (~90MB with embedded BGE-small-en-v1.5 model weights)
+# Release (airgapped default — embeds BGE-small-en-v1.5 for offline use)
 cargo build --release
+
+# Online release (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Cross-compile
 cargo install cross
@@ -68,9 +71,10 @@ cargo test
 
 ## Embedding model
 
-BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. Model weights embedded
-via `include_bytes!()`. Zero dependencies, zero network required at runtime.
-Build with `--features online-model` for a smaller binary that downloads on first run.
+BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.1` ships two
+compile-time channels:
+- default `embedded-model` build — airgapped channel, embeds the model bundle (no network required)
+- `online-model` build — online channel; downloads/caches BGE-small on first semantic use
 
 ## Skills
 

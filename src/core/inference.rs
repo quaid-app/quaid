@@ -1,9 +1,10 @@
 //! Inference — text embedding and vector search via BGE-small-en-v1.5.
 //!
 //! Uses Candle (pure Rust ML) to run the BAAI/bge-small-en-v1.5 BERT model on
-//! CPU. Model weights are downloaded from HuggingFace Hub on first use (when
-//! built with `--features online-model`) and cached in the HuggingFace Hub
-//! cache directory (`~/.cache/huggingface/hub/`).
+//! CPU. Two compile-time channels are supported:
+//!
+//! - `embedded-model` — airgapped build with embedded model assets
+//! - `online-model` — online build with first-use download + cache
 //!
 //! If the model cannot be loaded (no network, no cache, missing feature flag),
 //! the system falls back to a SHA-256 hash-based shim that satisfies the API
@@ -13,6 +14,9 @@
 //! is stable regardless of which backend is active.
 
 use std::sync::OnceLock;
+
+#[cfg(feature = "online-model")]
+use std::path::{Path, PathBuf};
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -24,10 +28,33 @@ use tokenizers::Tokenizer;
 
 use super::types::{InferenceError, SearchError, SearchResult};
 
+#[cfg(all(feature = "embedded-model", feature = "online-model"))]
+compile_error!("Enable only one model channel: `embedded-model` or `online-model`.");
+
 const EMBEDDING_DIMENSIONS: usize = 384;
 const HASH_CHUNK_COUNT: usize = EMBEDDING_DIMENSIONS / 32;
 #[cfg(feature = "online-model")]
 const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
+/// Pinned Hugging Face revision for reproducible online downloads.
+#[cfg(feature = "online-model")]
+const MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
+
+/// Expected SHA-256 digests for online-channel integrity verification.
+#[cfg(feature = "online-model")]
+const MODEL_FILE_HASHES: [(&str, &str); 3] = [
+    (
+        "config.json",
+        "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
+    ),
+    (
+        "tokenizer.json",
+        "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    ),
+    (
+        "model.safetensors",
+        "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad",
+    ),
+];
 
 static MODEL: OnceLock<EmbeddingModel> = OnceLock::new();
 
@@ -69,8 +96,10 @@ impl EmbeddingModel {
             Err(err) => {
                 eprintln!(
                     "Warning: BGE-small model not available ({err}), \
-                     using hash-based embeddings. Build with --features online-model \
-                     and run `gbrain embed --all` to initialize semantic embeddings."
+                     using hash-based embeddings. Build the default airgapped channel with \
+                     `cargo build --release` or use the online channel with \
+                     `cargo build --release --no-default-features --features bundled,online-model`, \
+                     then run `gbrain embed --all`."
                 );
                 Self {
                     backend: EmbeddingBackend::HashShim,
@@ -80,29 +109,20 @@ impl EmbeddingModel {
     }
 
     fn try_load_candle() -> Result<EmbeddingBackend, String> {
-        let (config_path, tokenizer_path, model_path) =
-            download_model_files().map_err(|e| format!("model download: {e}"))?;
+        #[cfg(feature = "embedded-model")]
+        {
+            load_embedded_backend()
+        }
 
-        let config_text =
-            std::fs::read_to_string(&config_path).map_err(|e| format!("read config.json: {e}"))?;
-        let config: BertConfig =
-            serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+        #[cfg(feature = "online-model")]
+        {
+            load_online_backend()
+        }
 
-        let tokenizer =
-            Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("load tokenizer: {e}"))?;
-
-        let device = Device::Cpu;
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
-                .map_err(|e| format!("load model weights: {e}"))?
-        };
-        let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
-
-        Ok(EmbeddingBackend::Candle {
-            model: Box::new(model),
-            tokenizer: Box::new(tokenizer),
-            device,
-        })
+        #[cfg(not(any(feature = "embedded-model", feature = "online-model")))]
+        {
+            Err("no model channel enabled".to_owned())
+        }
     }
 
     fn embed(&self, text: &str) -> Result<Vec<f32>, InferenceError> {
@@ -115,6 +135,54 @@ impl EmbeddingModel {
             EmbeddingBackend::HashShim => embed_hash_shim(text),
         }
     }
+}
+
+#[cfg(feature = "embedded-model")]
+fn load_embedded_backend() -> Result<EmbeddingBackend, String> {
+    let config: BertConfig =
+        serde_json::from_slice(include_bytes!(env!("GBRAIN_EMBEDDED_CONFIG_PATH")))
+            .map_err(|e| format!("parse embedded config.json: {e}"))?;
+    let tokenizer = Tokenizer::from_bytes(include_bytes!(env!("GBRAIN_EMBEDDED_TOKENIZER_PATH")))
+        .map_err(|e| format!("load embedded tokenizer: {e}"))?;
+    let device = Device::Cpu;
+    let vb = VarBuilder::from_slice_safetensors(
+        include_bytes!(env!("GBRAIN_EMBEDDED_MODEL_PATH")),
+        DType::F32,
+        &device,
+    )
+    .map_err(|e| format!("load embedded model weights: {e}"))?;
+    let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
+
+    Ok(EmbeddingBackend::Candle {
+        model: Box::new(model),
+        tokenizer: Box::new(tokenizer),
+        device,
+    })
+}
+
+#[cfg(feature = "online-model")]
+fn load_online_backend() -> Result<EmbeddingBackend, String> {
+    let (config_path, tokenizer_path, model_path) =
+        download_model_files().map_err(|e| format!("model download: {e}"))?;
+
+    let config_text =
+        std::fs::read_to_string(&config_path).map_err(|e| format!("read config.json: {e}"))?;
+    let config: BertConfig =
+        serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+    let tokenizer =
+        Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("load tokenizer: {e}"))?;
+    let device = Device::Cpu;
+    let vb = unsafe {
+        VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
+            .map_err(|e| format!("load model weights: {e}"))?
+    };
+    let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
+
+    Ok(EmbeddingBackend::Candle {
+        model: Box::new(model),
+        tokenizer: Box::new(tokenizer),
+        device,
+    })
 }
 
 /// Run the BERT forward pass and mean-pool + L2-normalize the output.
@@ -130,8 +198,11 @@ fn embed_candle(
             message: format!("tokenizer: {e}"),
         })?;
 
-    let ids = encoding.get_ids();
-    let mask = encoding.get_attention_mask();
+    // BGE-small-en-v1.5 max_position_embeddings = 512; truncate to avoid OOB.
+    let max_len = 512;
+    let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(max_len)];
+    let mask: &[u32] =
+        &encoding.get_attention_mask()[..encoding.get_attention_mask().len().min(max_len)];
 
     let input_ids = Tensor::new(ids, device)
         .and_then(|t| t.unsqueeze(0))
@@ -230,88 +301,119 @@ fn embed_candle(
     Ok(embedding)
 }
 
-/// Download BGE-small-en-v1.5 model files using hf-hub.
+/// Download BGE-small-en-v1.5 model files into the local GigaBrain cache.
 #[cfg(feature = "online-model")]
 fn download_model_files(
 ) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
-    use hf_hub::api::sync::Api;
+    let cache_dir = model_cache_dir()?;
 
-    let api = Api::new().map_err(|e| format!("HuggingFace API init: {e}"))?;
-    let repo = api.model(MODEL_ID.to_string());
-
-    let config_path = repo
-        .get("config.json")
-        .map_err(|e| format!("download config.json: {e}"))?;
-    let tokenizer_path = repo
-        .get("tokenizer.json")
-        .map_err(|e| format!("download tokenizer.json: {e}"))?;
-    let model_path = repo
-        .get("model.safetensors")
-        .map_err(|e| format!("download model.safetensors: {e}"))?;
-
-    Ok((config_path, tokenizer_path, model_path))
-}
-
-/// Without `online-model`, look for model files in the HuggingFace cache.
-#[cfg(not(feature = "online-model"))]
-fn download_model_files(
-) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
-    // Check HuggingFace Hub cache (standard location)
-    let cache_dir = dirs_for_model();
-
-    for dir in &cache_dir {
-        let config = dir.join("config.json");
-        let tokenizer = dir.join("tokenizer.json");
-        let model = dir.join("model.safetensors");
-        if config.exists() && tokenizer.exists() && model.exists() {
-            return Ok((config, tokenizer, model));
-        }
+    if let Some(paths) = existing_model_paths(&cache_dir) {
+        verify_cached_model_integrity(&cache_dir)?;
+        return Ok(paths);
     }
 
-    Err(format!(
-        "BGE-small model files not found. Build with --features online-model \
-         to download automatically, or place model files in one of: {:?}",
-        cache_dir
-    ))
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("create model cache {}: {e}", cache_dir.display()))?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .user_agent("gigabrain-runtime/0.9.1")
+        .build()
+        .map_err(|e| format!("build download client: {e}"))?;
+
+    for (file_name, expected_hash) in MODEL_FILE_HASHES {
+        download_model_file(&client, file_name, expected_hash, &cache_dir)?;
+    }
+
+    existing_model_paths(&cache_dir).ok_or_else(|| {
+        format!(
+            "BGE-small model files missing after download in {}",
+            cache_dir.display()
+        )
+    })
 }
 
-/// Return candidate directories where model files might be cached.
-#[cfg(not(feature = "online-model"))]
-fn dirs_for_model() -> Vec<std::path::PathBuf> {
-    let mut dirs = Vec::new();
+#[cfg(feature = "online-model")]
+fn download_model_file(
+    client: &reqwest::blocking::Client,
+    file_name: &str,
+    expected_hash: &str,
+    cache_dir: &Path,
+) -> Result<(), String> {
+    let destination = cache_dir.join(file_name);
+    let temp_destination = cache_dir.join(format!("{file_name}.download"));
+    let url = format!("https://huggingface.co/{MODEL_ID}/resolve/{MODEL_REVISION}/{file_name}");
 
-    // ~/.gbrain/models/bge-small-en-v1.5/
-    if let Some(home) = home_dir() {
-        dirs.push(
+    let mut response = client
+        .get(&url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|e| format!("download {url}: {e}"))?;
+
+    let mut file = std::fs::File::create(&temp_destination)
+        .map_err(|e| format!("create {}: {e}", temp_destination.display()))?;
+    std::io::copy(&mut response, &mut file)
+        .map_err(|e| format!("write {}: {e}", temp_destination.display()))?;
+
+    verify_file_sha256(&temp_destination, expected_hash)?;
+
+    std::fs::rename(&temp_destination, &destination)
+        .map_err(|e| format!("rename {}: {e}", destination.display()))?;
+
+    Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn verify_file_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("open {} for hash: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|e| format!("read {} for hash: {e}", path.display()))?;
+    let actual = format!("{:x}", hasher.finalize());
+
+    if actual != expected {
+        return Err(format!(
+            "SHA-256 mismatch for {}: expected {expected}, got {actual}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn verify_cached_model_integrity(cache_dir: &Path) -> Result<(), String> {
+    for (file_name, expected_hash) in MODEL_FILE_HASHES {
+        let path = cache_dir.join(file_name);
+        verify_file_sha256(&path, expected_hash).map_err(|e| {
+            format!(
+                "cached model integrity check failed — delete {} and retry: {e}",
+                cache_dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn model_cache_dir() -> Result<PathBuf, String> {
+    dirs::home_dir()
+        .map(|home| {
             home.join(".gbrain")
                 .join("models")
-                .join("bge-small-en-v1.5"),
-        );
-    }
-
-    // HuggingFace Hub cache — look for snapshot dirs
-    if let Some(home) = home_dir() {
-        let hub_model = home
-            .join(".cache")
-            .join("huggingface")
-            .join("hub")
-            .join("models--BAAI--bge-small-en-v1.5")
-            .join("snapshots");
-        if let Ok(entries) = std::fs::read_dir(&hub_model) {
-            for entry in entries.flatten() {
-                dirs.push(entry.path());
-            }
-        }
-    }
-
-    dirs
+                .join("bge-small-en-v1.5")
+        })
+        .ok_or_else(|| "could not resolve home directory for model cache".to_owned())
 }
 
-#[cfg(not(feature = "online-model"))]
-fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
+#[cfg(feature = "online-model")]
+fn existing_model_paths(cache_dir: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
+    let config = cache_dir.join("config.json");
+    let tokenizer = cache_dir.join("tokenizer.json");
+    let model = cache_dir.join("model.safetensors");
+
+    (config.is_file() && tokenizer.is_file() && model.is_file())
+        .then_some((config, tokenizer, model))
 }
 
 /// SHA-256 hash-based fallback for when the real model is unavailable.

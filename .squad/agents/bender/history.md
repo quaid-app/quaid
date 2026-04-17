@@ -95,3 +95,50 @@
   5. Task tracking — updated tasks/history with validation results
 - **Status:** ✅ COMPLETE. v0.9.0 release validated. Publish workflow confirmed working. Team decision log updated honestly.
 - **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`
+
+## 2026-04-19 v0.9.1 Dual-Release D.1 Validation
+
+- **Verdict:** REJECT — one high-severity defect blocks sign-off.
+- **Defect #1 (HIGH):** Cargo.toml `default = ["bundled", "embedded-model"]` (per approved task A.4) makes source-build default AIRGAPPED. But 9+ documentation files claim `cargo build --release` = "online channel (default)." Every "Build from source" instruction is wrong. Root cause: A.4 changed the default AFTER the Phase C doc sweep. No reconciliation pass followed. README Quick Start even shows two commands that both produce the same airgapped binary — the online channel is never shown.
+- **Defect #2 (LOW):** Task B.3 claims postinstall.js "handles `GBRAIN_CHANNEL=airgapped|online` overrides" but code has no GBRAIN_CHANNEL support. `now.md` also overclaims. Near-zero impact since design says npm = online only.
+- **Passing checks:** `cargo fmt --check` ✅, `cargo check` ✅, `cargo test` (285+ pass, 0 fail) ✅, `npm pack --dry-run` (4 files, no binary) ✅, no `gbrain-slim-*` naming ✅, compile_error guard ✅, release manifest ✅, installer defaults ✅, version bump ✅, no base/large promises ✅.
+- **Revision owners:** Defect #1 → Hermes (doc sweep). Defect #2 → Fry (implementation or task text fix).
+- **Decision written:** `.squad/decisions/inbox/bender-dual-release-verdict.md`
+
+## 2026-04-19 v0.9.1 Dual-Release D.1 Rereview
+
+- **Verdict:** APPROVE ✅
+- **Defect #1 (HIGH — docs claimed `cargo build --release` = online):** FIXED. Hermes swept all 14+ doc surfaces. Every "Build from source" block and install table now correctly identifies `cargo build --release` as the **airgapped** channel (default). Explicit online flag `--no-default-features --features bundled,online-model` shown in all code blocks. No surface claims online is the source-build default.
+- **Release contract verified coherent:**
+  - `Cargo.toml` default = `["bundled", "embedded-model"]` → source-build = airgapped ✅
+  - `scripts/install.sh` defaults to `GBRAIN_CHANNEL=airgapped` ✅
+  - `postinstall.js` hardcodes `*-online` assets → npm = online ✅
+  - `release.yml` matrix: 4 platforms × 2 channels = 8 binaries + 8 SHA-256 sidecars ✅
+  - Channel names `airgapped`/`online` only — no `gbrain-slim-*` references in code/scripts/docs ✅
+  - `compile_error!` guard present in inference.rs ✅
+  - Version surfaces at `0.9.1` ✅
+- **Non-blocking nits (not re-tested, carried from D.1 round 1):**
+  1. `website/reference/spec.md:2249` uses "slim binary" as descriptive English for online-model. D.0 explicitly exempts descriptive prose. Cosmetic only.
+  2. Defect #2 (LOW) — B.3 task text and `now.md` still claim `postinstall.js` supports `GBRAIN_CHANNEL` env override, but code doesn't implement it. Near-zero impact (npm = online only). Assigned to Fry; not in Hermes's revision scope.
+- **Outcome:** The rejected defect is fixed. Release contract is coherent. Cleared for D.2 (PR + ship).
+
+## Learnings
+
+- **Always validate the task execution ORDER against doc accuracy.** When a task changes a default (A.4) after docs have been normalized (Phase C), the docs become stale. The right check is: "does the doc claim match what `cargo build --release` actually produces?" Not: "did someone mark the doc task done?"
+- **Grep the actual `Cargo.toml` `[features] default` line and compare it to every doc that says 'default' near a channel name.** This single check would have caught this defect at the C.1 review stage.
+- **postinstall.js env-var overrides should be explicitly tested or explicitly removed from the task spec.** A claimed-but-missing override is worse than no override — it makes the task look done when it isn't.
+- **Rereviews should be scoped tightly.** When you rejected for one defect, the rereview checks that defect first, then a quick pass on overall coherence. Don't re-litigate low-severity findings that were assigned elsewhere.
+
+## Session Completion: Dual Release v0.9.1 (2026-04-19)
+
+**Status:** ✅ Session logged and decisions merged.
+
+This dual-release cycle validated the full team workflow:
+- OpenSpec proposal as source of truth ✓
+- Implementation phase with clear gate criteria ✓
+- Docs validation identifying defects early ✓
+- Revision cycle to fix defects ✓
+- Second validation round confirming all fixes ✓
+- PR opened ready for merge ✓
+
+**Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."

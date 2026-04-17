@@ -6,7 +6,7 @@ Welcome. This guide covers everything a new contributor needs to navigate the co
 
 ## What GigaBrain is
 
-GigaBrain is a local-first personal knowledge brain: a single Rust binary (~90MB including embedded model weights) that wraps SQLite + FTS5 + local vector embeddings. It stores structured knowledge pages, searches them with hybrid keyword + semantic queries, and exposes an MCP server for any AI agent client.
+GigaBrain is a local-first personal knowledge brain with two BGE-small distribution channels: an `airgapped` embedded binary and a smaller `online` binary. Both wrap SQLite + FTS5 + local vector embeddings and expose the same CLI + MCP surface.
 
 Read [getting-started.md](getting-started.md) first if you haven't. Read [spec.md](spec.md) for the full technical specification.
 
@@ -81,8 +81,11 @@ cargo check
 # Debug build
 cargo build
 
-# Release build (~90MB with embedded model weights)
+# Release build (airgapped default — embeds BGE-small-en-v1.5)
 cargo build --release
+
+# Online release build (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Run tests
 cargo test
@@ -98,13 +101,14 @@ CI runs `cargo check` and `cargo test` on every pull request. Both must pass bef
 
 ## Release process secrets
 
-The shell installer and GitHub Release assets ship from the main release workflow. npm publication
-uses `.github/workflows/publish-npm.yml` and requires an `NPM_TOKEN` repository secret before the
-first public publish.
+The shell installer and GitHub Release assets ship from the main release workflow. `v0.9.1`
+publishes two BGE-small asset families per platform: `gbrain-<platform>-airgapped` and
+`gbrain-<platform>-online`. npm publication uses `.github/workflows/publish-npm.yml` and requires an
+`NPM_TOKEN` repository secret before the first public publish.
 
 If `NPM_TOKEN` is not configured, the npm publish workflow emits a notice and succeeds rather
-than failing the tag build. This keeps shell-first test releases such as `v0.9.0` green while npm
-publication remains intentionally staged. The workflow validates package structure via `npm pack
+than failing the tag build. This keeps release automation green while npm publication remains
+intentionally staged. The workflow validates package structure via `npm pack
 --dry-run` unconditionally, so packaging regressions are caught even without a token.
 
 > **Note:** The `gbrain` package name on npm has existing published versions. Before the first

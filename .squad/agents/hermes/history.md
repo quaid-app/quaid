@@ -14,6 +14,8 @@
 - Starlight/Astro handles the repository-relative base path automatically when `GITHUB_ACTIONS=true` and `GITHUB_REPOSITORY` are set — all asset/link URLs pick up `/gigabrain/` without per-page changes.
 - An "Install & Status" page is the clearest single anchor for surfacing supported-now vs planned-later distribution channels. It belongs first in the Getting Started nav group.
 - Roadmap and README must agree on Phase status. When they diverge, README wins as the more actively-maintained source of truth.
+- **Dual-release channel naming:** `airgapped` and `online` are the canonical channel names. "slim" may appear as an informal size descriptor but must not be used as a channel name/label anywhere in public docs.
+- **Source-build default is `online`**: `Cargo.toml` sets `default = ["bundled", "online-model"]`. All docs showing `cargo build --release` should label it as the online (default) channel. Airgapped requires explicit `--no-default-features --features bundled,embedded-model`. Installer defaults (shell → airgapped, npm → online) are separate from the source-build default and are correct as documented.
 
 ## 2026-04-15 P3 Release — Docs-Site Polish & Completion
 
@@ -46,3 +48,48 @@
 **Outcome:** Phase 3 docs-site component **COMPLETE**. v1.0.0 status accurate across all public surfaces. All Phase 3 proposals archived. PR ready for Professor + Nibbler review.
 
 **Decision notes:** `.squad/decisions/inbox/hermes-phase3-site.md` — five decisions: Phase 3 guide as standalone page, simultaneous archival, "Planned API" removal, Phase 3 MCP tool promotion, README section rename.
+
+## 2026-04-18 v0.9.1 Dual-Release Lane — Docs-Site Consistency Pass
+
+**Role:** Docs-site engineer, dual-release channel alignment
+
+**What happened:**
+- Identified that `Cargo.toml` default features are `["bundled", "online-model"]` — source-build default is the **online** channel, not airgapped. All docs were previously inverted on this point.
+- Corrected `install.md`, `getting-started.md`, `contributing.md`: source-build default now correctly stated as **online**; airgapped now shows correct explicit feature flags (`--no-default-features --features bundled,embedded-model`).
+- Fixed `spec.md` embedded Cargo.toml snippet (`default = ["bundled", "online-model"]`) and both build command blocks to match actual Cargo defaults.
+- Normalized "slim online" compound label and "online slim" variants to clean approved channel names (`airgapped` / `online`). Retained "slimmer" as an acceptable informal size descriptor where it appeared as an adjective, not a channel name.
+- Verified docs site build: 15 pages, zero errors.
+
+**Outcome:** Docs site now truthful and internally consistent on the dual-release contract. Source-build default aligned with Cargo defaults (online). Installer defaults (shell → airgapped, npm → online) remain correct and unchanged.
+
+## Learnings
+
+- **Source-build default is `airgapped` (NOT online):** `Cargo.toml` as of `v0.9.1` sets `default = ["bundled", "embedded-model"]`. `cargo build --release` produces the **airgapped** binary. The online build requires `--no-default-features --features bundled,online-model`. History entry from 2026-04-18 was wrong on this point; Bender's rejection corrected it.
+- When a Bender rejection disputes the history.md record itself, always re-read Cargo.toml (or the authoritative implementation file) before revising docs. History entries can be stale.
+
+## 2026-04-18 (revision) — Bender Rejection: Source-Build Default Correction
+
+**Role:** Docs revision owner assigned by Bender rejection
+
+**What happened:**
+- Bender rejected the v0.9.1 dual-release branch: Cargo.toml `default = ["bundled", "embedded-model"]` means `cargo build --release` = airgapped. Docs (and a previous history entry) claimed the opposite.
+- Hermes corrected all 9 affected doc surfaces: README, CLAUDE.md, docs/getting-started.md, docs/contributing.md, docs/spec.md, and all four matching website docs.
+- Explicit online build command corrected to `--no-default-features --features bundled,online-model` throughout.
+- Installer defaults untouched: shell installer → airgapped, npm → online.
+- Committed as single reconciliation commit on `release/v0.9.1-dual-release`.
+
+**Outcome:** All doc surfaces now match the approved contract from task A.4. Bender rejection addressed.
+
+## 2026-04-19: Dual Release v0.9.1 — Session Completion
+
+**Role:** Scribe session logger and decision merger
+
+**Summary:** Completed dual-release v0.9.1 cycle:
+- Leela: OpenSpec cleanup (removed duplicate, populated tasks.md, confirmed A.1–C.3 done)
+- Fry: Full implementation (Cargo + npm + CI + installer, all phases A–C)
+- Amy: Docs Phase C (flagged HIGH defect: Cargo default vs. docs mismatch)
+- Hermes: Docs Phase 1 (corrected online → airgapped after Bender rejection)
+- Bender: Two validation rounds (D.1 rejected for HIGH defect, D.1 rereview approved)
+- Coordinator: Pushed branch, opened PR #33
+
+**Outcome:** All tests pass, release contract coherent, PR #33 open and ready to merge.

@@ -128,7 +128,7 @@ Phase 3 was delivered in two OpenSpec slices:
 - Benchmark harnesses: BEIR (nDCG@10), corpus-reality, concurrency stress, embedding migration, LongMemEval, LoCoMo, Ragas
 - CI benchmark gate wiring in `.github/workflows/ci.yml`
 
-**Gate:** All offline benchmark targets met; `v1.0.0` release artifacts built and verified static.
+**Gate:** All offline benchmark targets met; `v0.9.1` dual-channel release artifacts built and verified.
 
 ---
 
@@ -138,8 +138,8 @@ These are known design choices that are _not_ oversights:
 
 | Deferral | Reasoning |
 | -------- | --------- |
-| npm global installation (`npm install -g gbrain`) | Requires npm packaging, registry account, and publish pipeline. Deferred until core release contract is fully polished. Will be proposed as a separate change. |
-| One-command curl installer | Adds operational surface area, signing concerns, and support burden. Deferred follow-on — not part of the v0.1.0 or v1.0.0 release scope. |
+| Public npm publication | Packaging and postinstall are implemented, but public publication still depends on registry ownership and `NPM_TOKEN` release automation. |
+| Homebrew tap, winget, or other package managers | Same dependency as npm. Tracked as future distribution work. |
 | First-class `chunks` table | `page_embeddings` columns are sufficient for v1. Promote if progressive retrieval lifecycle becomes painful. |
 | Room-level palace filtering | Deferred until benchmarks on a real corpus prove it helps. Wing-only in v1. |
 | LLM-assisted contradiction detection | The binary stays dumb. Cross-page reasoning lives in the maintain skill. |
@@ -155,4 +155,4 @@ These are known design choices that are _not_ oversights:
 | --- | ---------- |
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
-| `v1.0.0` | Phase 3 — full skill suite + benchmarks + release pipeline |
+| `v0.9.1` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |

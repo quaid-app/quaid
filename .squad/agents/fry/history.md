@@ -8,6 +8,7 @@
 ## Learnings
 
 - PR #32 review fix (2026-04-16): Addressed all 10 Copilot review threads on the simplified-install PR. npm bin wrapper pattern: ship a committed shell script (bin/gbrain) that execs a downloaded native binary (bin/gbrain.bin) — ensures npm bin-linking succeeds even when postinstall fails. postinstall.js needs both connection and socket timeouts (60s) on https.get to prevent npm install from hanging on stalled connections. install.sh must check INSTALL_DIR writability via explicit test before mkdir/mv to provide actionable error messages (not raw set -e failures). Release notes should use tag-pinned URLs (github.ref_name) not main for reproducibility. Node engine constraint should track supported LTS only (>=18, not EOL >=16).
+- PR #33 CI + review fix (2026-04-17): Fixed 2 CI failures + 5 review threads. (1) `--all-features` in clippy/coverage trips `compile_error!` since embedded-model and online-model are mutually exclusive — replaced with per-channel clippy runs and default-features-only coverage. (2) BEIR regression crash from BERT max_position_embeddings=512 — added tokenizer truncation to 512 tokens in `embed_candle()`. Review fixes: spec.md feature dep `hf-hub`→`dep:reqwest`, tasks.md B.3 overclaim removed (npm has no GBRAIN_CHANNEL override), deprecated "slim" wording removed from spec files, `install.sh` restored to `mktemp -d` for secure temp dirs.
 - Simplified-install npm publish alignment (2026-04-16): `publish-npm.yml` tag pattern must match `release.yml` (`v[0-9]*.[0-9]*.[0-9]*`), NOT `v*`. `npm version` needs `--allow-same-version` when package.json already matches the tag version. Use `npm pack --dry-run` (not `npm publish --dry-run`) for unconditional validation — publish dry-run hits the registry and fails when versions conflict. The `gbrain` npm package name has existing published versions (1.3.1+); ownership/version strategy must be resolved before first public publish.
 - Phase 3 CI integration (2026-04-17): Offline benchmarks (corpus_reality, concurrency_stress, embedding_migration) run as a named `benchmarks` job in ci.yml, separate from the general `cargo test` job. BEIR regression lives in its own workflow file (`beir-regression.yml`) to avoid blocking PRs with ~500MB dataset downloads. Formatting fixed before commit — always run `cargo fmt --all` before pushing.
 - The core implementation target is a Rust CLI plus MCP server.
@@ -439,3 +440,26 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
   4. Install surfaces documentation updated
 - **Status:** ✅ COMPLETE. Publish workflow now succeeds for v0.9.0 tag. CI confirmed.
 - **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-fry.md`
+
+## Learnings
+
+- v0.9.1 dual-release implementation (2026-04-18): Resumed after crash. Key fix: Cargo.toml default features were `["bundled", "online-model"]` but all docs/CLAUDE.md/release notes said `cargo build --release` produces the airgapped binary. Changed default to `["bundled", "embedded-model"]`. Normalized "slim" → "online" in all contract positions (Cargo comments, inference.rs doc comments, tasks.md scope). Descriptive "slim"/"slimmer" in prose (release notes, docs) is acceptable English, not a contract violation.
+- The `build.rs` build-time model download is 3-file (~90MB total): config.json, tokenizer.json, model.safetensors from HuggingFace. `GBRAIN_EMBEDDED_MODEL_DIR` env var allows CI to pre-stage the model files and skip the download.
+- `compile_error!` macro in inference.rs prevents both `embedded-model` and `online-model` features being enabled simultaneously — enforces the mutual exclusivity at compile time.
+- Release workflow uses `--no-default-features --features ${{ matrix.features }}` so it doesn't depend on Cargo.toml defaults. The default features only affect `cargo build` developer experience.
+- stale OpenSpec directories (superseded by a renamed/re-scoped change) should be deleted or archived to prevent naming drift from old contract terms leaking into implementation work.
+
+## 2026-04-18: Dual Release v0.9.1 Full Implementation
+
+**Scope:** Implement all three platform surfaces (source-build, shell installer, npm package) for dual-release v0.9.1.
+
+**Work:**
+- Phase A: Cargo defaults + naming — `default = ["bundled", "embedded-model"]` (airgapped)
+- Phase B: npm surface — postinstall.js + bin/gbrain wrapper + correct asset names
+- Phase C: CI + installer — release.yml 8-binary matrix + scripts/install.sh GBRAIN_CHANNEL support
+- Version bump: 0.9.1 across all surfaces
+
+**Learning:**
+- The mutual exclusion pattern (`compile_error!` when both `embedded-model` and `online-model` are active) is a solid safety gate but relies on developers running `cargo check` with all feature combinations. CI should test this explicitly.
+- Release workflows should never depend on `Cargo.toml` defaults for feature flags — always use explicit `--no-default-features --features X` so CI is isolated from developer-ergonomic defaults.
+- Post-install scripts that write binaries should write to a separate path (`bin/gbrain.bin`) not overwriting a committed wrapper. This lets npm's bin-linking succeed at pack time.

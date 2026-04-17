@@ -27,7 +27,7 @@ use super::types::{SearchError, SearchResult};
 ///
 /// The explicit FTS5 query interface (`search_fts`) is intentionally *not*
 /// touched — it preserves full FTS5 syntax for expert callers.
-pub fn sanitize_fts_query(raw: &str) -> String {
+pub(crate) fn sanitize_fts_query(raw: &str) -> String {
     const FTS5_KEYWORDS: &[&str] = &["AND", "OR", "NOT", "NEAR"];
 
     // Replace every character that is not alphanumeric (Unicode) or whitespace
@@ -37,7 +37,13 @@ pub fn sanitize_fts_query(raw: &str) -> String {
     // maintaining a fragile per-character blocklist.
     let cleaned: String = raw
         .chars()
-        .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
 
     // Collapse whitespace, then quote any bare FTS5 boolean keyword so it is
@@ -485,6 +491,9 @@ mod tests {
 
         // A bare `?` is not valid FTS5 syntax — Err is the contract.
         let result = search_fts("rust?", None, &conn, 1000);
-        assert!(result.is_err(), "search_fts must propagate FTS5 syntax errors");
+        assert!(
+            result.is_err(),
+            "search_fts must propagate FTS5 syntax errors"
+        );
     }
 }

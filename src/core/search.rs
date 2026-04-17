@@ -28,11 +28,11 @@ pub fn hybrid_search(
     }
 
     let fts_safe = sanitize_fts_query(trimmed);
-    let fts_results = if fts_safe.is_empty() {
-        Vec::new()
-    } else {
-        search_fts(&fts_safe, wing, conn, limit)?
-    };
+    if !has_natural_language_terms(&fts_safe) {
+        return Ok(Vec::new());
+    }
+
+    let fts_results = search_fts(&fts_safe, wing, conn, limit)?;
     let vec_results = search_vec(trimmed, 10, wing, conn)?;
 
     let mut merged = match read_merge_strategy(conn)? {
@@ -41,6 +41,14 @@ pub fn hybrid_search(
     };
     merged.truncate(limit);
     Ok(merged)
+}
+
+fn has_natural_language_terms(fts_safe: &str) -> bool {
+    const QUOTED_FTS5_KEYWORDS: &[&str] = &["\"AND\"", "\"OR\"", "\"NOT\"", "\"NEAR\""];
+
+    fts_safe
+        .split_whitespace()
+        .any(|token| !QUOTED_FTS5_KEYWORDS.contains(&token))
 }
 
 /// Reads the configured hybrid-search merge strategy.
@@ -390,10 +398,10 @@ mod tests {
         assert!(!results.is_empty());
     }
 
-    /// Regression: issue #37 — "AND?" must be sanitized to "AND" before FTS5.
-    /// A bare `AND?` would crash FTS5 directly; hybrid_search must absorb it.
+    /// Regression: issue #37 — "AND?" must be safe on the natural-language path
+    /// but still yield no results because no content-bearing terms survive.
     #[test]
-    fn hybrid_search_accepts_and_question_mark_in_query() {
+    fn hybrid_search_returns_empty_for_operator_only_query() {
         let conn = open_test_db();
         insert_page(
             &conn,
@@ -405,8 +413,26 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let result = hybrid_search("AND?", None, &conn, 1000);
-        assert!(result.is_ok(), "hybrid_search must not propagate FTS5 errors for natural-language input");
+        let results = hybrid_search("AND?", None, &conn, 1000).expect("hybrid search with AND?");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn hybrid_search_returns_empty_for_punctuation_only_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        let results = hybrid_search("???***", None, &conn, 1000)
+            .expect("hybrid search with punctuation only");
+        assert!(results.is_empty());
     }
 
     /// Regression: review blocker — commas, periods, apostrophes, slashes,

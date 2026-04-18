@@ -16,7 +16,19 @@ hero:
       variant: secondary
 ---
 
-import { CardGrid, Card } from "@astrojs/starlight/components";
+import { Code, CardGrid, Card } from "@astrojs/starlight/components";
+
+## Install
+
+<Code code={`curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh`} lang="bash" title="Install GigaBrain (macOS / Linux)" />
+
+Then import your notes and connect to Claude Code:
+
+<Code code={`gbrain import ~/docs --db ~/brain.db\ngbrain serve --db ~/brain.db`} lang="bash" />
+
+**Three commands. No API keys. No cloud.** [Full install options →](/guides/install/)
+
+---
 
 ## Architecture for Privacy
 

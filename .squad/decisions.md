@@ -3362,3 +3362,105 @@ Re-executed D.1 validation after HIGH defect repair. All doc surfaces now correc
 - ✅ PR #33 open and ready for merge
 
 **Status:** Ready for merge and v0.9.1 release
+
+
+---
+
+## fry-pr66-review-fixes.md
+
+# PR #66 Review Fixes — Global JSON Flag & Alias Coverage
+
+**Date:** 2026-04-18  
+**Author:** Fry  
+**Status:** Implemented
+
+## Context
+
+Two review findings from PR #66 (model selection feature):
+
+1. **Global JSON flag ignored:** `gbrain --json model list` prints table instead of JSON because `early_command()` only reads the subcommand-level `json` flag, not the global `cli.json`.
+
+2. **Medium/max alias gap:** `BrainConfig::to_model_config()` only checks `"small" | "base" | "large" | "m3"` in the matches list. If a brain was initialized with `medium` or `max` (e.g., via manual edit), the method would treat them as custom models and set `embedding_dim = 0` instead of resolving via `resolve_model()`.
+
+## Decisions
+
+1. **main.rs line 266:** Combine global and subcommand flags: `EarlyCommand::Model(cli.json || *json)`. This ensures JSON output works at either flag position.
+
+2. **db.rs line 52:** Add `"medium"` and `"max"` to the alias matches: `if matches!(alias, "small" | "base" | "medium" | "large" | "max" | "m3")`. This ensures all standard aliases round-trip correctly through brain_config.
+
+## Validation
+
+- `cargo build --quiet`: ✅ clean
+- `cargo test --quiet`: ✅ all pass
+- `cargo clippy --quiet -- -D warnings`: ✅ clean
+
+## Commit
+
+```
+fix: address PR #66 review findings — json flag OR, medium/max alias coverage
+
+- main.rs: combine cli.json || *json so --json works at global flag position
+- db.rs: add medium/max to to_model_config() alias matches so brain_config
+  round-trip works correctly for these aliases
+```
+
+Pushed to `nothing-major` branch.
+
+
+---
+
+## professor-pr66-final-gate.md
+
+# PR #66 Final Gate — Flexible Model Resolution
+
+**Date:** 2026-04-19  
+**Reviewer:** Professor  
+**Verdict:** APPROVE ✅
+
+## Summary
+
+PR #66 (feat: flexible model resolution) is approved for merge after Fry addressed two review comments from the GitHub automated review.
+
+## Verified Fixes
+
+### Fix 1 — `src/main.rs:266`
+
+```rust
+// Before:
+ModelCommands::List { json } => EarlyCommand::Model(*json),
+
+// After:
+ModelCommands::List { json } => EarlyCommand::Model(cli.json || *json),
+```
+
+The global `--json` flag was being ignored when positioned before the subcommand (e.g., `gbrain --json model list`). Now both the global `cli.json` and the local `*json` are OR'd together correctly.
+
+### Fix 2 — `src/core/db.rs:52`
+
+```rust
+// Before:
+if matches!(alias, "small" | "base" | "large" | "m3") {
+
+// After:
+if matches!(alias, "small" | "base" | "medium" | "large" | "max" | "m3") {
+```
+
+If `brain_config.model_alias` stores `"medium"` or `"max"`, the function now correctly resolves through `resolve_model()` instead of falling through to the custom-model path (which would set `embedding_dim = 0`).
+
+### Fix 3 — `.squad/agents/bender/history.md`
+
+Duplicate lines removed:
+- Line 98: duplicate "Orchestration log" entry
+- Line 146: duplicate "Lesson learned" paragraph
+
+## Validation
+
+- `cargo clippy -- -D warnings` ✅
+- `cargo test medium_alias` ✅
+- `cargo test max_alias` ✅
+- No new lint warnings introduced
+
+## Decision
+
+APPROVE FOR MERGE.
+

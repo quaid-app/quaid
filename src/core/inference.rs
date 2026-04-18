@@ -1121,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_medium_alias_maps_to_base() {
+    fn medium_alias_resolves_to_base() {
         let model = resolve_model("medium");
         assert_eq!(model.alias, "base");
         assert_eq!(model.model_id, "BAAI/bge-base-en-v1.5");
@@ -1129,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_max_alias_maps_to_m3() {
+    fn max_alias_resolves_to_m3() {
         let model = resolve_model("max");
         assert_eq!(model.alias, "m3");
         assert_eq!(model.model_id, "BAAI/bge-m3");
@@ -1137,20 +1137,24 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_preserves_custom_huggingface_ids() {
-        let standard = resolve_model("BAAI/bge-large-en-v1.5");
-        assert_eq!(standard.alias, "large");
-        assert_eq!(standard.model_id, "BAAI/bge-large-en-v1.5");
-        assert_eq!(standard.embedding_dim, 1024);
+    fn full_hf_id_normalises_to_alias() {
+        let cases = [
+            ("BAAI/bge-small-en-v1.5", "small", 384),
+            ("BAAI/bge-base-en-v1.5", "base", 768),
+            ("BAAI/bge-large-en-v1.5", "large", 1024),
+            ("BAAI/bge-m3", "m3", 1024),
+        ];
 
-        let model = resolve_model("org/custom-embedder");
-        assert_eq!(model.alias, "custom");
-        assert_eq!(model.model_id, "org/custom-embedder");
-        assert_eq!(model.embedding_dim, 0);
+        for (input, expected_alias, expected_dim) in cases {
+            let model = resolve_model(input);
+            assert_eq!(model.alias, expected_alias);
+            assert_eq!(model.model_id, input);
+            assert_eq!(model.embedding_dim, expected_dim);
+        }
     }
 
     #[test]
-    fn resolve_model_accepts_arbitrary_hf_ids_without_error() {
+    fn custom_hf_id_accepted_without_panic() {
         let model = resolve_model("sentence-transformers/all-MiniLM-L6-v2");
         assert_eq!(model.alias, "custom");
         assert_eq!(

@@ -27,7 +27,7 @@
 
 ## 5. Tests
 
-- [ ] 5.1 Add unit tests in `src/core/inference.rs` for `medium` and `max` aliases
-- [ ] 5.2 Add unit test that full HF IDs normalise to alias equivalents
-- [ ] 5.3 Add unit test that arbitrary `owner/repo` strings are accepted without error
-- [ ] 5.4 Verify `cargo test` passes
+- [x] 5.1 Add unit tests in `src/core/inference.rs` for `medium` and `max` aliases
+- [x] 5.2 Add unit test that full HF IDs normalise to alias equivalents
+- [x] 5.3 Add unit test that arbitrary `owner/repo` strings are accepted without error
+- [x] 5.4 Verify `cargo test` passes

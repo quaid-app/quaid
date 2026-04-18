@@ -17,6 +17,7 @@
 - Cross-platform installer validation from Windows works best with repo-scoped `TMPDIR` paths in WSL plus PATH-injected fake tools for shell error branches, and small Node harnesses with platform overrides for `postinstall.js` network branches.
 - `packages/gbrain-npm/package.json` currently targets the unscoped public package name `gbrain`, but npm already serves `gbrain@1.3.1`, so `npm publish --dry-run` rejects `gbrain@0.9.0` before token handling.
 - `packages/gbrain-npm/scripts/postinstall.js` currently hardcodes `v${package.version}` as its release tag target; with no `v0.9.0` GitHub Release present in `macro88/gigabrain`, supported-platform installs would currently 404.
+- Model-resolution coverage should lock alias semantics directly in `src/core/inference.rs`: `medium` must collapse to `base`, `max` to `m3`, known full HF IDs must normalize to their canonical aliases, and arbitrary `owner/repo` IDs must remain accepted as `custom` with `embedding_dim = 0`.
 
 ## 2026-04-16 Phase 3 — Benchmark Reproducibility Review (Task 8.4)
 

@@ -422,8 +422,8 @@ mod tests {
 
     #[test]
     fn early_command_returns_model_with_json_flag() {
-        let cli =
-            Cli::try_parse_from(["gbrain", "model", "list", "--json"]).expect("parse model list --json");
+        let cli = Cli::try_parse_from(["gbrain", "model", "list", "--json"])
+            .expect("parse model list --json");
 
         assert_eq!(early_command(&cli), EarlyCommand::Model(true));
     }

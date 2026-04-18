@@ -1157,10 +1157,7 @@ mod tests {
     fn custom_hf_id_accepted_without_panic() {
         let model = resolve_model("sentence-transformers/all-MiniLM-L6-v2");
         assert_eq!(model.alias, "custom");
-        assert_eq!(
-            model.model_id,
-            "sentence-transformers/all-MiniLM-L6-v2"
-        );
+        assert_eq!(model.model_id, "sentence-transformers/all-MiniLM-L6-v2");
         assert_eq!(model.embedding_dim, 0);
     }
 

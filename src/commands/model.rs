@@ -63,8 +63,8 @@ pub fn run(json: bool) -> Result<()> {
 
 fn print_table() -> Result<()> {
     println!(
-        "{:<10} {:<25} {:>5} {:>8}  {}",
-        "ALIAS", "MODEL_ID", "DIM", "SIZE_MB", "NOTES"
+        "{:<10} {:<25} {:>5} {:>8}  NOTES",
+        "ALIAS", "MODEL_ID", "DIM", "SIZE_MB"
     );
     for m in KNOWN_MODELS {
         println!(

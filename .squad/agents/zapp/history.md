@@ -82,3 +82,9 @@
 - Annotated tags (`git tag -a`) are preferable to lightweight tags for releases — they carry a tagger identity and timestamped message that shows in GitHub's release view.
 - The `softprops/action-gh-release@v2` + `gh release upload` two-step pattern is correct for adding the install.sh asset after the binary artifacts are attached.
 - npm token guard ("skip if absent, never fail") is the right CI posture for staged channels — zero friction for maintainers who haven't configured npm yet.
+
+## Learnings
+
+- Issue #60 (flexible model resolution): hardcoded HF revision SHAs and hash tables are a maintenance trap — they go stale whenever upstream repos prune revisions. Resolution logic should use the latest revision dynamically or omit revision pinning entirely for model files.
+- `gbrain model list` is a discoverable entry point for users confused by `--model` options; linking help text to a subcommand is better UX than enumerating all aliases in the flag description.
+- When closing an issue tied to a bug-fix release slice (not a standalone release), the right roadmap move is to add a new version target row rather than editing an existing phase section.

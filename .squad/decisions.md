@@ -2096,6 +2096,129 @@ Leela's revision resolves the three blockers from the prior rejection:
 
 ## Scope caveat
 
+---
+
+## fry-flexible-model-resolution.md
+
+# Flexible Model Resolution — Implementation Decisions
+
+**Change:** `flexible-model-resolution` (Issue #60)
+**Author:** Fry
+**Date:** 2026-04-18
+
+## Decisions
+
+### 1. Complete removal of SHA infrastructure (not just emptying values)
+
+Removed `ModelFileHashes` struct, all four constants, and the `sha256_hashes` field from `ModelConfig` entirely — rather than setting them to `None`. This eliminates dead code and makes it clear the verification path is gone, not just disabled.
+
+### 2. Combined match arms for aliases
+
+`"base" | "medium"` and `"m3" | "max"` share single match arms rather than duplicating `ModelConfig` construction. This prevents drift if the underlying model IDs change.
+
+### 3. `Model` as EarlyCommand (no DB required)
+
+`gbrain model list` is dispatched via `EarlyCommand::Model` before database open. This means users can discover available models without having an initialized `brain.db`, which is important for first-time users choosing a model for `gbrain init`.
+
+### 4. Download path always uses `main` revision
+
+With SHA pinning removed, all HF downloads resolve to `resolve/main/{file}`. This is the simplest approach and matches how HF URLs work for the latest version.
+
+### 5. db.rs `to_model_config` unchanged in structure
+
+The `BrainConfig::to_model_config()` method still branches on `small|base|large|m3` to call `resolve_model()`. Since `resolve_model()` no longer sets `sha256_hashes`, the custom-model else branch now constructs the same shape of `ModelConfig` — just without the removed field. No functional change needed.
+
+---
+
+## leela-model-list-fix.md
+
+# Decision: `gbrain model list` subcommand wiring fix
+
+**Date:** 2026-04-18
+**Author:** Leela
+**Issue:** #60 (flexible-model-resolution)
+
+## What was wrong
+
+Fry's implementation of the `flexible-model-resolution` change wired the `model` command as a unit variant in the `Commands` enum:
+
+```rust
+/// List known embedding model aliases
+Model,
+```
+
+This made `gbrain model` work, but `gbrain model list` (the spec-required shape) returned an error.
+The `--json` flag was also wired as the global `cli.json` flag, so it only worked as
+`gbrain model --json`, not `gbrain model list --json`.
+
+## What was fixed
+
+Changed `Commands::Model` from a unit variant to a subcommand-bearing variant:
+
+```rust
+/// Manage embedding models
+Model {
+    #[command(subcommand)]
+    command: ModelCommands,
+},
+```
+
+Added a `ModelCommands` enum with a single `List { json: bool }` variant so the canonical CLI shape
+`gbrain model list [--json]` now parses correctly.
+
+Updated `EarlyCommand::Model` to carry the `json: bool` value extracted from the subcommand,
+so it no longer relies on the global `--json` flag.
+
+Updated the dispatch match arms and unreachable guard accordingly.
+
+Replaced the single old test (`gbrain model` → `EarlyCommand::Model`) with two tests that verify
+the corrected shapes: `gbrain model list` and `gbrain model list --json`.
+
+## Validation
+
+- `cargo check --quiet`: clean.
+- `cargo test --lib --quiet`: 389/389 passed.
+- `cargo test --test roundtrip_semantic --test roundtrip_raw`: passed.
+- `corpus_reality` test failure is pre-existing and unrelated (link-error on the test binary, not caused by this change).
+
+---
+
+## scruffy-model-resolution-tests.md
+
+# Scruffy — model resolution test coverage
+
+**Date:** 2026-04-18
+**Author:** Scruffy
+**Issue:** #60 (flexible-model-resolution)
+
+- Added focused unit coverage in `src/core/inference.rs` for the new alias mappings: `medium -> base` and `max -> m3`.
+- Added a normalization test covering known full Hugging Face IDs resolving to canonical aliases and dimensions.
+- Added a custom-model acceptance test asserting arbitrary `owner/repo` IDs stay `custom` with `embedding_dim = 0`.
+- Validation: `cargo test --quiet` passed after the test updates.
+
+---
+
+## professor-model-resolution-rereview.md
+
+# Re-review: flexible-model-resolution (Leela's fix)
+
+**Date:** 2026-04-18
+**Author:** Professor
+**Issue:** #60
+
+## Verdict
+
+**APPROVED** — all previous findings resolved.
+
+### Findings
+
+None — all prior blockers cleared by Leela's subcommand wiring fix (commit 7dc9c08) and Scruffy's test coverage (commit 20ffdd6).
+
+**Validation:**
+- All OpenSpec tasks 1–5 complete and verified.
+- `cargo test --quiet`: passed.
+- CLI shapes `gbrain model list` and `gbrain model list --json` working correctly.
+
 This approval is for the **graph slice only**. Issue #28 as a whole still includes the progressive-retrieval budget/OCC review lane, which is not re-opened or approved by this note.
 
 

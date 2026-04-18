@@ -39,23 +39,11 @@ compile_error!("Enable only one model channel: `embedded-model` or `online-model
 const DEFAULT_MODEL_ALIAS: &str = "small";
 const DEFAULT_EMBEDDING_DIMENSIONS: usize = 384;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModelFileHashes {
-    pub config_json: &'static str,
-    pub tokenizer_json: &'static str,
-    pub model_safetensors: &'static str,
-    /// Pinned HuggingFace revision (commit SHA) used when downloading.
-    /// Standard aliases always use a pinned revision for reproducibility.
-    /// Custom models use `None` and fall back to `main`.
-    pub revision: Option<&'static str>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelConfig {
     pub alias: String,
     pub model_id: String,
     pub embedding_dim: usize,
-    pub sha256_hashes: Option<ModelFileHashes>,
 }
 
 impl ModelConfig {
@@ -86,34 +74,6 @@ impl ModelConfig {
     }
 }
 
-const SMALL_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
-    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
-    model_safetensors: "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad",
-    revision: Some("5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"),
-};
-
-const BASE_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "bc00af31a4a31b74040d73370aa83b62da34c90b75eb77bfa7db039d90abd591",
-    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
-    model_safetensors: "c7c1988aae201f80cf91a5dbbd5866409503b89dcaba877ca6dba7dd0a5167d7",
-    revision: Some("a5beb1e3e68b9ab74eb54cfd186867f64f240e1a"),
-};
-
-const LARGE_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "446712fac367857b4b1302762fe1cd7bfa8b3c4b77b4dc5d77c4025407660896",
-    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
-    model_safetensors: "45e1954914e29bd74080e6c1510165274ff5279421c89f76c418878732f64ae7",
-    revision: Some("d9e9d73f56c5e5851e28a1bcbe3b1c36e3d28d4c"),
-};
-
-const M3_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "26159e7ad065073448460117eb24b7a4572f6f4e78eadff65dc0a11c052449fa",
-    tokenizer_json: "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08",
-    model_safetensors: "993b2248881724788dcab8c644a91dfd63584b6e5604ff2037cb5541e1e38e7e",
-    revision: Some("babcf60cae0a1f438d7ade582983571a6b46523f"),
-};
-
 pub fn default_model() -> ModelConfig {
     resolve_model(DEFAULT_MODEL_ALIAS)
 }
@@ -127,61 +87,47 @@ pub fn resolve_model(input: &str) -> ModelConfig {
             alias: "small".to_owned(),
             model_id: "BAAI/bge-small-en-v1.5".to_owned(),
             embedding_dim: 384,
-            sha256_hashes: Some(SMALL_HASHES),
         },
-        "base" => ModelConfig {
+        "base" | "medium" => ModelConfig {
             alias: "base".to_owned(),
             model_id: "BAAI/bge-base-en-v1.5".to_owned(),
             embedding_dim: 768,
-            sha256_hashes: Some(BASE_HASHES),
         },
         "large" => ModelConfig {
             alias: "large".to_owned(),
             model_id: "BAAI/bge-large-en-v1.5".to_owned(),
             embedding_dim: 1024,
-            sha256_hashes: Some(LARGE_HASHES),
         },
-        "m3" => ModelConfig {
+        "m3" | "max" => ModelConfig {
             alias: "m3".to_owned(),
             model_id: "BAAI/bge-m3".to_owned(),
             embedding_dim: 1024,
-            sha256_hashes: Some(M3_HASHES),
         },
         "baai/bge-small-en-v1.5" => ModelConfig {
             alias: "small".to_owned(),
             model_id: "BAAI/bge-small-en-v1.5".to_owned(),
             embedding_dim: 384,
-            sha256_hashes: Some(SMALL_HASHES),
         },
         "baai/bge-base-en-v1.5" => ModelConfig {
             alias: "base".to_owned(),
             model_id: "BAAI/bge-base-en-v1.5".to_owned(),
             embedding_dim: 768,
-            sha256_hashes: Some(BASE_HASHES),
         },
         "baai/bge-large-en-v1.5" => ModelConfig {
             alias: "large".to_owned(),
             model_id: "BAAI/bge-large-en-v1.5".to_owned(),
             embedding_dim: 1024,
-            sha256_hashes: Some(LARGE_HASHES),
         },
         "baai/bge-m3" => ModelConfig {
             alias: "m3".to_owned(),
             model_id: "BAAI/bge-m3".to_owned(),
             embedding_dim: 1024,
-            sha256_hashes: Some(M3_HASHES),
         },
-        _ => {
-            eprintln!(
-                "Warning: unpinned custom embedding model `{trimmed}`; skipping SHA-256 verification."
-            );
-            ModelConfig {
-                alias: "custom".to_owned(),
-                model_id: trimmed.to_owned(),
-                embedding_dim: 0,
-                sha256_hashes: None,
-            }
-        }
+        _ => ModelConfig {
+            alias: "custom".to_owned(),
+            model_id: trimmed.to_owned(),
+            embedding_dim: 0,
+        },
     }
 }
 
@@ -629,7 +575,6 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
     let cache_dir = model_cache_dir(model)?;
 
     if let Some(paths) = existing_model_paths(&cache_dir) {
-        verify_cached_model_integrity(model, &cache_dir)?;
         return Ok(paths);
     }
 
@@ -641,13 +586,6 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
         .user_agent("gigabrain-runtime/0.9.4")
         .build()
         .map_err(|e| format!("build download client: {e}"))?;
-
-    if model.sha256_hashes.is_none() {
-        eprintln!(
-            "Warning: custom model {} has no pinned SHA-256 hashes; skipping integrity verification.",
-            model.model_id
-        );
-    }
 
     for file_name in ["config.json", "tokenizer.json", "model.safetensors"] {
         download_model_file(&client, model, file_name, &cache_dir)?;
@@ -697,17 +635,10 @@ fn download_model_file(
     let destination = cache_dir.join(file_name);
     let (temp_destination, mut file) = create_temp_download_file(cache_dir, file_name)?;
     let base_url = huggingface_base_url();
-    // Use pinned revision for standard aliases; fall back to `main` only for
-    // custom/unpinned models so upstream changes never silently break SHA checks.
-    let revision = model
-        .sha256_hashes
-        .and_then(|h| h.revision)
-        .unwrap_or("main");
     let url = format!(
-        "{}/{}/resolve/{}/{}",
+        "{}/{}/resolve/main/{}",
         base_url.trim_end_matches('/'),
         validated_model_id,
-        revision,
         file_name
     );
 
@@ -720,70 +651,14 @@ fn download_model_file(
     std::io::copy(&mut response, &mut file)
         .map_err(|e| format!("write {}: {e}", temp_destination.display()))?;
 
-    if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
-        verify_file_sha256(&temp_destination, expected_hash)?;
-    }
-
     if let Err(err) = std::fs::rename(&temp_destination, &destination) {
         let _ = std::fs::remove_file(&temp_destination);
         if destination.exists() {
-            if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
-                verify_file_sha256(&destination, expected_hash)?;
-            }
             return Ok(());
         }
         return Err(format!("rename {}: {err}", destination.display()));
     }
 
-    Ok(())
-}
-
-#[cfg(feature = "online-model")]
-fn expected_hash_for_file(model: &ModelConfig, file_name: &str) -> Option<&'static str> {
-    let hashes = model.sha256_hashes?;
-    match file_name {
-        "config.json" => Some(hashes.config_json),
-        "tokenizer.json" => Some(hashes.tokenizer_json),
-        "model.safetensors" => Some(hashes.model_safetensors),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "online-model")]
-fn verify_file_sha256(path: &Path, expected: &str) -> Result<(), String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| format!("open {} for hash: {e}", path.display()))?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|e| format!("read {} for hash: {e}", path.display()))?;
-    let actual = format!("{:x}", hasher.finalize());
-
-    if actual != expected {
-        return Err(format!(
-            "SHA-256 mismatch for {}: expected {expected}, got {actual}",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "online-model")]
-fn verify_cached_model_integrity(model: &ModelConfig, cache_dir: &Path) -> Result<(), String> {
-    if let Some(hashes) = model.sha256_hashes {
-        for (file_name, expected_hash) in [
-            ("config.json", hashes.config_json),
-            ("tokenizer.json", hashes.tokenizer_json),
-            ("model.safetensors", hashes.model_safetensors),
-        ] {
-            let path = cache_dir.join(file_name);
-            verify_file_sha256(&path, expected_hash).map_err(|e| {
-                format!(
-                    "cached model integrity check failed — delete {} and retry: {e}",
-                    cache_dir.display()
-                )
-            })?;
-        }
-    }
     Ok(())
 }
 
@@ -1242,22 +1117,48 @@ mod tests {
             assert_eq!(model.model_id, expected_id);
             assert_eq!(model.embedding_dim, expected_dim);
             assert_eq!(model.alias, expected_alias);
-            assert!(model.sha256_hashes.is_some());
         }
     }
 
     #[test]
-    fn resolve_model_preserves_custom_huggingface_ids() {
-        let standard = resolve_model("BAAI/bge-large-en-v1.5");
-        assert_eq!(standard.alias, "large");
-        assert_eq!(standard.model_id, "BAAI/bge-large-en-v1.5");
-        assert_eq!(standard.embedding_dim, 1024);
+    fn medium_alias_resolves_to_base() {
+        let model = resolve_model("medium");
+        assert_eq!(model.alias, "base");
+        assert_eq!(model.model_id, "BAAI/bge-base-en-v1.5");
+        assert_eq!(model.embedding_dim, 768);
+    }
 
-        let model = resolve_model("org/custom-embedder");
+    #[test]
+    fn max_alias_resolves_to_m3() {
+        let model = resolve_model("max");
+        assert_eq!(model.alias, "m3");
+        assert_eq!(model.model_id, "BAAI/bge-m3");
+        assert_eq!(model.embedding_dim, 1024);
+    }
+
+    #[test]
+    fn full_hf_id_normalises_to_alias() {
+        let cases = [
+            ("BAAI/bge-small-en-v1.5", "small", 384),
+            ("BAAI/bge-base-en-v1.5", "base", 768),
+            ("BAAI/bge-large-en-v1.5", "large", 1024),
+            ("BAAI/bge-m3", "m3", 1024),
+        ];
+
+        for (input, expected_alias, expected_dim) in cases {
+            let model = resolve_model(input);
+            assert_eq!(model.alias, expected_alias);
+            assert_eq!(model.model_id, input);
+            assert_eq!(model.embedding_dim, expected_dim);
+        }
+    }
+
+    #[test]
+    fn custom_hf_id_accepted_without_panic() {
+        let model = resolve_model("sentence-transformers/all-MiniLM-L6-v2");
         assert_eq!(model.alias, "custom");
-        assert_eq!(model.model_id, "org/custom-embedder");
+        assert_eq!(model.model_id, "sentence-transformers/all-MiniLM-L6-v2");
         assert_eq!(model.embedding_dim, 0);
-        assert!(model.sha256_hashes.is_none());
     }
 
     #[test]

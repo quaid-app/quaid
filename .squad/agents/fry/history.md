@@ -463,3 +463,17 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - The mutual exclusion pattern (`compile_error!` when both `embedded-model` and `online-model` are active) is a solid safety gate but relies on developers running `cargo check` with all feature combinations. CI should test this explicitly.
 - Release workflows should never depend on `Cargo.toml` defaults for feature flags — always use explicit `--no-default-features --features X` so CI is isolated from developer-ergonomic defaults.
 - Post-install scripts that write binaries should write to a separate path (`bin/gbrain.bin`) not overwriting a committed wrapper. This lets npm's bin-linking succeed at pack time.
+
+## Flexible Model Resolution (Issue #60, Tasks 1–4)
+
+- Removed `ModelFileHashes` struct, all four `*_HASHES` constants, `sha256_hashes` field from `ModelConfig`, and all SHA verification in the download path (`verify_file_sha256`, `verify_cached_model_integrity`, `expected_hash_for_file`). Downloads now always resolve to `main` branch.
+- Added `"medium"` → base (768d) and `"max"` → m3 (1024d) aliases via combined match arms in `resolve_model()`.
+- Removed the `eprintln!` warning from the catch-all arm — arbitrary HF model IDs are now first-class.
+- Created `src/commands/model.rs` with `KNOWN_MODELS` const slice and `run(json)` for `gbrain model list` / `gbrain model list --json`.
+- Wired `Model` into `Commands` enum as an early command (no DB required), dispatched before `db::open()`.
+- Updated `--model` help text to reference `gbrain model list`, updated `CLAUDE.md` alias table.
+- All 828 tests pass (389 + 395 + 10 + 3 + 4 + 8 + 3 + 9 + 1 + 1 + 3 = across all test binaries).
+
+**Learning:**
+- Pinned HF revision SHAs are a maintenance treadmill — HuggingFace repo reorganizations cause 404s. For a single-user tool, the `model_id` string in `brain_config` is the meaningful reproducibility guarantee. HTTPS transport provides sufficient integrity.
+- When adding new CLI subcommands that don't need a database, use the `EarlyCommand` pattern to dispatch before `db::open()`. This avoids requiring `brain.db` to exist for informational commands.

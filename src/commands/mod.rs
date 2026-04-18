@@ -12,6 +12,7 @@ pub mod ingest;
 pub mod init;
 pub mod link;
 pub mod list;
+pub mod model;
 pub mod pipe;
 pub mod put;
 pub mod query;

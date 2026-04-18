@@ -45,12 +45,11 @@ impl BrainConfig {
     }
 
     fn to_model_config(&self) -> ModelConfig {
-        // For standard aliases (small/base/large/m3) resolve via alias to get
-        // the correct SHA-256 pins without emitting the "unpinned custom model"
-        // warning that resolve_model() would print for an unknown model_id.
-        // For custom models, construct directly from persisted values.
+        // For standard aliases resolve via the alias table to get the correct
+        // canonical model_id and embedding_dim.  For custom models, construct
+        // directly from the persisted values.
         let alias = self.model_alias.as_str();
-        if matches!(alias, "small" | "base" | "large" | "m3") {
+        if matches!(alias, "small" | "base" | "medium" | "large" | "max" | "m3") {
             let mut model = crate::core::inference::resolve_model(alias);
             model.embedding_dim = self.embedding_dim;
             model
@@ -59,7 +58,6 @@ impl BrainConfig {
                 alias: self.model_alias.clone(),
                 model_id: self.model_id.clone(),
                 embedding_dim: self.embedding_dim,
-                sha256_hashes: None,
             }
         }
     }
@@ -520,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn brain_config_to_model_config_restores_pinned_hashes_for_standard_aliases() {
+    fn brain_config_to_model_config_restores_standard_aliases() {
         let config = BrainConfig {
             model_id: "BAAI/bge-large-en-v1.5".to_owned(),
             model_alias: "large".to_owned(),
@@ -533,7 +531,6 @@ mod tests {
         assert_eq!(model.alias, "large");
         assert_eq!(model.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(model.embedding_dim, 1024);
-        assert!(model.sha256_hashes.is_some());
     }
 
     #[test]
@@ -550,7 +547,6 @@ mod tests {
         assert_eq!(model.alias, "custom");
         assert_eq!(model.model_id, "org/custom-model");
         assert_eq!(model.embedding_dim, 1536);
-        assert!(model.sha256_hashes.is_none());
     }
 
     #[test]

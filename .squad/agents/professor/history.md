@@ -11,6 +11,8 @@
 - This team expects explicit reviewer gating, not silent approval.
 - Maintainability and architectural coherence are key review criteria.
 - For CLI review, validate behavior from more than one working directory; path-dependent “embedded” resources can look correct at repo root while failing the shipped-binary contract.
+- For spec-backed CLI work, verify the exact command shape end-to-end; matching help text and docs is insufficient if the advertised subcommand path does not parse.
+- Re-reviewing a CLI wiring fix still requires both parser-path confirmation in source and live command execution; one without the other can miss dispatch regressions.
 
 ## 2026-04-14 Update
 

@@ -95,6 +95,7 @@
   5. Task tracking — updated tasks/history with validation results
 - **Status:** ✅ COMPLETE. v0.9.0 release validated. Publish workflow confirmed working. Team decision log updated honestly.
 - **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`
 
 ## 2026-04-19 v0.9.1 Dual-Release D.1 Validation
 
@@ -142,3 +143,24 @@ This dual-release cycle validated the full team workflow:
 - PR opened ready for merge ✓
 
 **Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."
+**Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."
+
+## 2026-04-19 PR #47 Blocker Review
+
+- **Verdict:** BLOCKED — three high-severity blockers remain unfixed.
+- **Context:** Validated PR #47 (feat: configurable embedding model) against Professor and Nibbler review findings. Fry has addressed many review comments (`83a7c67`, `71666d7`, `d75bc0b` fixes), but the three core concurrency/integrity blockers are NOT YET RESOLVED.
+- **Blocker 1 (UNFIXED):** Active-model registry transition uses two autocommit statements (`src/core/db.rs:188-204`), creating a zero-active-row gap visible to concurrent readers. **Fix:** wrap in transaction like `write_brain_config`.
+- **Blocker 2 (UNFIXED):** Online downloads use fixed temp file names (`config.json.download`, etc.) in shared cache dir (`src/core/inference.rs:667`), causing clobber risk on concurrent first-load. **Fix:** unique temp names or per-model download lock.
+- **Blocker 3 (UNFIXED):** CI online-model test job (`.github/workflows/ci.yml:71`) does not set `GBRAIN_FORCE_HASH_SHIM=1`, allowing flaky network-dependent tests. **Fix:** add env var to CI job.
+- **Key files examined:** `src/core/db.rs` (registry flip), `src/core/inference.rs` (download + ensure_model), `.github/workflows/ci.yml` (test jobs).
+- **Evidence:** `write_brain_config` was correctly fixed with a transaction (lines 229-250), confirming Fry knows the pattern. Registry flip and download paths were not updated.
+- **Decision written:** `.squad/decisions/inbox/bender-pr47-validation.md` — includes validation plan for post-fix execution.
+- **Recommendation to Fry:** Fix all three blockers in order (atomic registry → hermetic CI → download safety), then ping for re-validation.
+
+## Learnings
+
+- **Review bot comments vs. human review decisions:** PR #47 had 19 bot review threads, but only 3 were called out as merge-blocking by Professor and Nibbler. Always read the explicit human review decisions (`.squad/decisions/inbox/*-pr*-review.md`) to know what actually blocks merge vs. what's noise/nice-to-have.
+- **Atomic DB state transitions require explicit transactions.** Even when one function (`write_brain_config`) uses a transaction correctly, a related function (`ensure_embedding_model_registry`) may still use autocommit. Both must be checked independently.
+- **Concurrent download safety is subtle.** Fixed temp file names look safe in single-process use but fail under concurrent load. Validation must explicitly think "what if two threads call this at once?"
+- **CI hermetic testing requires global env vars, not per-test guards.** A test setting `GBRAIN_FORCE_HASH_SHIM=1` via `EnvVarGuard` does NOT make the entire CI job hermetic — the CI job itself must set the env var.
+- **Fix velocity ≠ fix correctness.** Fry produced 4+ fix commits in rapid succession, addressing many bot comments. But the three blockers (which require deeper concurrency reasoning) were not addressed. Volume of fixes is not the same as blocker closure.

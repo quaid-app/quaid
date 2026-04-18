@@ -157,3 +157,4 @@ These are known design choices that are _not_ oversights:
 | `v0.2.0` | Phase 2 — intelligence layer |
 | `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
 | `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter; #55 remains a post-ship rerun gate) |
+| `v0.9.5` | Flexible model resolution (#60) — hardcoded HF revision SHAs removed; `medium` (bge-base, 768d) and `max` (bge-m3, 1024d) aliases added; arbitrary HF model IDs accepted without warning; new `gbrain model list` command |

@@ -76,9 +76,13 @@ build now accepts runtime model selection via `GBRAIN_MODEL` or `--model`.
 
 - `small` → `BAAI/bge-small-en-v1.5` (384d, default)
 - `base` → `BAAI/bge-base-en-v1.5` (768d)
+- `medium` → `BAAI/bge-base-en-v1.5` (768d, alias for base)
 - `large` → `BAAI/bge-large-en-v1.5` (1024d)
 - `m3` → `BAAI/bge-m3` (1024d, multilingual)
+- `max` → `BAAI/bge-m3` (1024d, alias for m3)
 - any other value is treated as a full Hugging Face model ID
+
+Run `gbrain model list` (or `gbrain model list --json`) to see all known aliases.
 
 Compile-time channels:
 - default `embedded-model` build — airgapped channel, always uses embedded BGE-small and warns if another model is requested

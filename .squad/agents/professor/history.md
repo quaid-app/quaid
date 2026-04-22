@@ -18,6 +18,20 @@
 - A batch can be truthful about partial implementation and still be rejectable if a public scaffold on a safety-critical path returns benign success values instead of making deferral explicit.
 - For vault-sync work, stubbed reconciler entry points should fail loudly or stay clearly unwired; returning empty stats or `false` for DB-only-state checks is too easy to mistake for real behavior.
 
+
+## Core Context
+
+**Historical Summary (2026-04-13 to 2026-04-21):**
+- Phase 1 review leadership: Set review bar for truthfulness, maintainability, coherence
+- T14–T19 rejection: Exposed inference shim semantic contract drift, embed CLI mixed-mode, build breakage
+- Phase 2 graph re-review: Approved after directionality/output/coverage blockers cleared
+- Vault-sync foundation third-pass: Identified legacy-open safety gap (v5 DDL before version check), schema compatibility shims, quarantine filtering consistency
+
+**Review Standards Established:**
+- Artifact truthfulness: Proposal/design must match implementation exactly
+- Safety-first architecture: Preflight checks before mutations; explicit error semantics for safety-critical paths
+- Coverage depth: 90%+ required; foundation slices need direct unit tests, not just e2e validation
+- Multi-dimensional review: Truthfulness + performance + coverage; don't conflate test-pass with gate-pass
 ## 2026-04-14 Update
 
 - Fry completed rust-best-practices skill adoption recommendation. Skill recommended for all Rust implementation and review work. Key alignment: error handling split matches our practice, CLI discipline aligns with CI gates, performance constraints match single-binary target.
@@ -186,3 +200,4 @@
 - Decisions inbox cleared; Scribe orchestration/session logs written
 
 **Batch B status:** ✅ Gate clean, ready for Batch C implementation planning. Professor can now sign off on Group 3 (ignore_patterns), Group 4 (file_state), and Group 5.1 scaffold landing.
+

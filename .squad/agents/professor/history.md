@@ -23,6 +23,7 @@
 - A technically solid vault-sync slice is still rejectable when `tasks.md` mixes stale repair notes with current-state claims; the ledger must describe today's behavior, not preserve contradicted historical status inline.
 - A narrow re-gate can clear a prior task-ledger blocker when the current-state note explicitly supersedes the historical repair note and each repaired claim is directly traceable to real code paths and tests.
 - A UUID-identity slice is landable when `Page.uuid` becomes mandatory in typed read paths, UUID generation/adoption stays explicit and read-only by default, and task notes clearly defer frontmatter write-back and watcher-native production work.
+- A reconciliation apply slice is landable when raw-import rotation is shared across every in-scope writer, DB-only-state is re-checked inside the apply transaction, and later restore/full-hash seams stay explicitly deferred instead of being papered over.
 
 
 ## Core Context
@@ -276,3 +277,27 @@
 - Batch F apply pipeline must preserve quarantine classifications
 - Batch F full_hash_reconcile must use identity from Batch E
 - Later: Batch F raw_imports rotation and GC
+
+## 2026-04-23 Vault-Sync Batch F Gate Review
+
+**Gate verdict:** APPROVE
+
+**Why it clears:**
+
+1. **Atomic raw-import rotation is real on the in-scope paths.**
+   - `core::raw_imports::rotate_active_raw_import()` is now the shared rotation seam.
+   - `commands::ingest`, `core::migrate::import_dir`, and reconciler apply-time reingest all invoke it inside the same SQLite transaction as their page/file-state writes.
+   - The reconciler also enqueues `embedding_jobs` in that same transaction, matching the Batch F contract.
+
+2. **Active-row invariants now fail loudly where Batch F actually writes.**
+   - Rotation refuses any page that already has raw-import history but zero active rows, surfacing `InvariantViolationError` instead of silently healing corruption.
+   - Post-rotation assertions keep every exercised write path at exactly one active row.
+   - The remaining restore / `full_hash_reconcile` caller hookup is still explicitly deferred rather than misrepresented as done.
+
+3. **Delete vs quarantine is re-evaluated at apply time.**
+   - `apply_delete_or_quarantine()` re-checks all five DB-only-state branches inside the transaction that mutates the page/file_state rows.
+   - Tests cover both the stale-classification seam and each preservation branch, so the reconciler no longer trusts an earlier snapshot.
+
+4. **Batching and task truthfulness are acceptable for landing.**
+   - Apply work is staged into explicit 500-action transactions with a regression test proving the first chunk commits even if a later chunk fails.
+   - `tasks.md` clearly marks Batch F complete items versus deferred restore/full-hash/write-through work, which keeps the review boundary honest.

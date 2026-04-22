@@ -4170,3 +4170,107 @@ Repair closed the large-frontmatter/tiny-body exploit: missing/new-side signific
 
 UUID/gbrain_id wiring truthful. Page.uuid non-optional, loud on NULL. Default ingest read-only. Rename classification conservative and correctly staged for Batch E. tasks.md honest. Coverage sufficient. Ready to land as narrow identity/reconciliation slice.
 
+---
+
+## 2026-04-22: Vault Sync Batch F Approval
+
+**Session:** 2026-04-22T181541Z-vault-sync-batch-f-approval  
+**Status:** Completed and merged
+
+### Fry Decision Note — Vault Sync Batch F
+
+**Decision**
+
+Batch F uses a shared `core::raw_imports` rotation helper as the atomic content-write primitive for the paths implemented in this slice: single-file ingest, directory import, and reconciler apply. The helper runs raw_import rotation and inline inactive-row GC inside the same SQLite transaction as the owning page/file_state mutation, and write-paths now fail fast with `InvariantViolationError` if they encounter historical raw_import state with zero active rows.
+
+**Why**
+
+This keeps the invariant enforceable without pretending later write surfaces are done. `brain_put`, UUID self-write, restore, and `full_hash_reconcile` still need their own caller hookups, but Batch F now establishes the shared contract the later slices should reuse rather than re-implementing rotation logic ad hoc.
+
+**Follow-on**
+
+- Reuse `core::raw_imports` in the deferred `brain_put` / UUID write-back paths.
+- Wire the same invariant check into restore / `full_hash_reconcile` once those paths are implemented.
+- Keep delete-vs-quarantine decisions at apply time; do not trust stale pre-apply classification snapshots.
+
+### Scruffy — Vault Sync Batch F Coverage Seam Decision
+
+**Decision**
+
+Lock raw_imports/apply invariants as ignored direct-seam tests until the write/apply pipeline lands, while keeping live coverage on the currently implemented idempotency and DB-only-state re-check seams.
+
+**Why**
+
+The repo now has working tests for second-pass zero-change behavior on `import_dir`/`ingest`, stale-OCC refusal immutability on `put`, and classifier freshness when DB-only state appears after an earlier clear read. But tasks 5.4d/5.4g/5.4h/5.5 are still not fully implemented on the write/apply paths, so executable non-ignored tests for active `raw_imports` rotation or invariant-abort behavior would fail for implementation reasons rather than coverage regressions.
+
+**Locked blockers**
+
+- `import_dir_write_path_keeps_exactly_one_active_raw_import_row_for_latest_bytes` — Task 5.4d
+- `ingest_force_reingest_keeps_exactly_one_active_raw_import_row_for_latest_bytes` — Task 5.4g
+- `put_occ_update_keeps_exactly_one_active_raw_import_row_for_latest_bytes` — Task 5.4h (deferred)
+- `full_hash_reconcile_aborts_when_a_page_has_zero_active_raw_import_rows` — Task 4.4 (deferred)
+
+These are intentionally ignored with exact task references so Fry/Leela can unignore them as the corresponding implementation lands.
+
+### Professor — Vault Sync Batch F Gate
+
+**Verdict:** APPROVE
+
+Batch F is ready to land as the apply-pipeline slice of `vault-sync-engine`.
+
+**Rationale**
+
+1. Shared raw-import rotation now sits behind `core::raw_imports::rotate_active_raw_import()` and is used by the in-scope content-changing paths (`ingest`, `import_dir`, reconciler apply). Those paths keep page/file-state mutation, raw-import rotation, and embedding enqueue in one SQLite transaction.
+2. The active-row invariant now fails explicitly on corrupt history (zero active rows with historical rows present) instead of silently repairing it.
+3. Reconciler delete/quarantine decisions are re-checked inside apply via fresh DB queries over the five DB-only-state branches, so execution does not trust stale classification.
+4. Apply work is chunked into explicit 500-action transactions with regression coverage for partial progress on later-chunk failure.
+5. `tasks.md` is honest that restore/full-hash zero-active enforcement and later write-through surfaces remain deferred.
+
+**Reviewer note**
+
+There are still deferred seams (`full_hash_reconcile`, restore caller hookup, brain_put write-through), but they are named as deferred rather than hidden behind success-shaped behavior. That keeps this slice mergeable.
+
+### Nibbler — Vault Sync Batch F Gate
+
+**Verdict:** APPROVE
+
+**Controlled seams**
+
+1. In-scope raw-import writers (`ingest`, `import_dir`, reconciler apply) all call the shared rotation helper from the same SQLite transaction that mutates `pages` / `file_state`, so the active-row flip is not left stranded outside commit boundaries.
+2. The rotation helper refuses to run when a page already has historical `raw_imports` rows but zero active rows, which fails closed instead of silently "healing" corrupt history into a new authoritative byte stream.
+3. Reconciler hard-delete vs quarantine is re-evaluated inside apply through a fresh DB-only-state query, so a page that gains DB-only state after classification is quarantined, not hard-deleted because of a stale snapshot.
+
+**Deferred seams kept honest**
+
+- Restore / `full_hash_reconcile` zero-active handling is still deferred, but both code and tasks keep it error-shaped and explicitly unimplemented rather than pretending success.
+- Later UUID writeback / `brain_put` write-through surfaces remain deferred and are named as such in tasks, not smuggled into this approval.
+
+**Reviewer note**
+
+I did not find an in-scope path that can commit zero active `raw_imports` rows through split transactions, nor an apply-time delete path that trusts stale DB-only-state classification. The remaining risk sits in later restore/remap/full-hash and UUID writeback work, and that risk is documented as future work rather than hidden inside Batch F.
+
+### Leela — Vault Sync Engine Next Batch Routing (Batch F Context)
+
+**By:** Leela  
+**Date:** 2026-04-22  
+**Scope:** Batch F = Apply Pipeline + raw_imports Rotation  
+
+Batch F closes the "reconciler is a dry-run" gap: raw_imports rotation becomes the required primitive for every content-changing write, and the apply pipeline wires the full classification to real mutations. After Batch F, `gbrain collection sync` actually reconciles a vault rather than classifying it.
+
+**Deferred from Batch F**
+
+- 5.4f (daily background sweep) — Requires serve infrastructure (Group 11)
+- 4.4 (full_hash_reconcile) — Only needed by restore, remap, audit; not Batch F callers
+- 5.8+ (restore/remap defense) — Depends on 4.4
+- 5a.5+ (UUID write-back, migrate-uuids) — Depends on rename-before-commit landing first
+- Group 6 (watcher pipeline) — Standalone serve-slice
+- Group 12 (brain_put rename-before-commit) — Large standalone slice
+- 17.5g7, 17.5i (quarantine export/discard tests) — Require CLI scaffolding (Group 9)
+
+**Key validation**
+
+- cargo test clean — all existing tests pass plus new Batch F tests
+- cargo clippy -- -D warnings clean
+- gbrain collection sync on a test vault produces real DB mutations on first pass; second pass produces zero mutations (idempotency)
+- Every write-path test asserts exactly one active raw_imports row per page (17.5aaa1 gate)
+

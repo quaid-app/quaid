@@ -634,3 +634,26 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 **Next:**
 - Merge Batch E PR
 - Move to Batch F: apply pipeline + raw_imports rotation + full_hash_reconcile
+
+### 2026-04-22 23:30:00 - Vault-Sync Batch F (apply pipeline + raw_imports rotation)
+
+**What worked:**
+- Shared `core::raw_imports` helpers made the invariant practical: ingest, directory import, and reconciler apply now rotate bytes inside the same SQLite transaction as page/file_state mutation
+- Reconciler can now move from dry-run classification to real apply behavior while preserving `pages.id` across rename matches and re-checking DB-only state at delete time
+- Chunking apply work into 500-file transactions is testable with a deliberate second-chunk failure: first chunk commits, later chunk rolls back
+
+**Key decisions locked:**
+1. Batch F only wires raw_import rotation for ingest/import/reconcile paths in scope; `brain_put` / UUID self-write hooks stay deferred with their later write surfaces
+2. Delete-vs-quarantine must be decided inside the apply transaction, not trusted from an earlier snapshot
+3. `embedding_jobs` enqueue is the write-side primitive for reconciler apply; immediate worker/drain behavior remains later work
+
+**Tests added:**
+- raw_import rotation keeps exactly one active row, enforces keep/TTL GC, honors KEEP_ALL, and rejects zero-active historical corruption
+- ingest/import_dir/reconciler write-path tests assert the active-row invariant after commit
+- reconcile apply tests cover hard-delete, quarantine for every DB-only branch, hash-rename apply, and 500-file chunk commit boundaries
+
+**Validation:**
+- `cargo test --quiet`: green
+- `cargo clippy --all-targets --locked -- -D warnings`: green
+- `GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model`: green
+- `cargo clippy --all-targets --no-default-features --features bundled,online-model --locked -- -D warnings`: green

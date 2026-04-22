@@ -16,6 +16,8 @@
 - For vault-bound walks, `WalkBuilder` output is only a candidate list; root-bounded `open_root_fd` + `walk_to_parent` + `stat_at_nofollow` must be the only authority for classification if symlink escapes are to stay closed.
 - Hash-based rename guards are not safe if they use whole-file byte counts plus a non-empty-body check; conservative pairing needs post-frontmatter body significance, or template notes can inherit the wrong page identity.
 - Batch E re-gate closed the hash-rename seam once both sides measured trimmed post-frontmatter body bytes, not whole-file size, and regression coverage pinned both refusal and success boundaries.
+- Batch F is gateable when raw-import rotation fails closed on zero-active history inside the same write transaction and delete/quarantine decisions re-query DB-only state at apply time rather than replaying classification snapshots.
+- Deferred restore/full-hash and UUID writeback seams are acceptable only when tasks and code comments keep them explicit and error-shaped; success-shaped stubs would make the same slice rejectable.
 
 ## 2026-04-15 In Progress
 

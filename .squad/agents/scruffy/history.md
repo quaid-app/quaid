@@ -7,6 +7,8 @@
 
 ## Learnings
 
+- Batch F coverage is most truthful when current-idempotency assertions stay live while raw_imports/apply invariants are locked as ignored seam tests with exact task blockers; otherwise the suite either blesses missing safety work or goes red before implementation exists.
+
 - The team wants high unit-test coverage, not token test presence.
 - Proposal-first work helps define the invariants tests must guard.
 - Coverage depth is a first-class role in this squad.
@@ -276,3 +278,4 @@ Do not add tests that would accidentally bless incomplete implementation or impl
 **Next coverage focus:**
 - Batch F: direct tests for rename inference outcomes (UUID → page_id preservation, hash ambiguity → quarantine)
 - Later: watcher-native event seam once Group 6 lands
+

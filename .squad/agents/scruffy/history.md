@@ -7,6 +7,8 @@
 
 ## Learnings
 
+- Batch G raw_imports repair is safest when `apply_reingest()` is pinned directly on both existing-page seams: explicit `existing_page_id` and slug-matched lookup must refuse zero-total history before any page/file_state mutation, while truly new pages may still bootstrap their first raw import row.
+- Batch G coverage stays honest when active tests pin the implemented reconcile/put boundaries (unchanged=no rotation, changed=rotation, stored UUID preserved) and deferred `full_hash_reconcile` / render-backfill behavior is locked behind ignored seam tests with exact task blockers.
 - Batch F coverage is most truthful when current-idempotency assertions stay live while raw_imports/apply invariants are locked as ignored seam tests with exact task blockers; otherwise the suite either blesses missing safety work or goes red before implementation exists.
 
 - The team wants high unit-test coverage, not token test presence.

@@ -4274,3 +4274,85 @@ Batch F closes the "reconciler is a dry-run" gap: raw_imports rotation becomes t
 - gbrain collection sync on a test vault produces real DB mutations on first pass; second pass produces zero mutations (idempotency)
 - Every write-path test asserts exactly one active raw_imports row per page (17.5aaa1 gate)
 
+---
+
+## Vault Sync Batch G — Full Hash Reconcile + UUID Identity Hardening (fry/scruffy/professor/nibbler/leela, 2026-04-22)
+
+**Scope:** OpenSpec `vault-sync-engine` Batch G; four tasks (4.4, 5.4h, 5a.6, 5a.7 partial) + repair cycle.
+
+**Timeline:**
+1. Leela proposed Batch G scope: all four tasks unblocked by prior batches; coherent boundary at reconciler completeness + UUID identity
+2. Fry implemented full_hash_reconcile (4.4), InvariantViolationError wiring (5.4h), render_page UUID emission (5a.6), UUID identity tests (5a.7 partial)
+3. Scruffy authored coverage strategy: active seams tested; deferred surfaces locked with visible blockers
+4. Professor approved: authorization contract explicit; UUID preservation correct; tasks.md truthful
+5. Nibbler rejected initial submission on zero-total existing-page bootstrap seam
+6. Leela authored narrow repair: apply_reingest preflight guard before any mutation
+7. Nibbler re-gated: repair closes bootstrap seam; new-page path unaffected
+
+**Decisions:**
+
+### D-VS-G1: full_hash_reconcile authorization contract
+
+`full_hash_reconcile` accepts a closed-mode authorization enum (FullHashReconcileMode, FullHashReconcileAuthorization) with explicit caller responsibility documented in the function signature. The state/authorization matrix rejects invalid combinations with typed UnauthorizedFullHashReconcile error. Bypassing the `state='active'` gate requires explicit caller opt-in (e.g., DriftCapture mode for restore/remap).
+
+**Rationale:** Professor required explicit authorization semantics rather than a bare helper signature. The authorization matrix is caller-responsibility, not implicit. This prevents future restore/remap callers from accidentally exercising the bypass without understanding its scope.
+
+### D-VS-G2: Unchanged-hash path is metadata-only; no raw_imports rotation
+
+build_full_hash_plan() classifies unchanged files by sha256 match. apply_full_hash_metadata_self_heal() updates only file_state and last_full_hash_at; no raw_imports rotation occurs on the unchanged path.
+
+**Rationale:** Periodic audit/remap paths must not mutate byte-preserving history for no user-visible change. If sha256(disk) == raw_imports.sha256 WHERE is_active=1, the history is accurate — only stat fields need refresh.
+
+### D-VS-G3: Render page always emits gbrain_id when pages.uuid is non-empty
+
+render_page() in core/markdown.rs overlays persisted pages.uuid as gbrain_id in frontmatter when uuid is non-empty. Pages with uuid IS NULL or uuid = '' omit the field (preserving legacy behavior).
+
+**Rationale:** brain_put / brain_get round-trips must preserve page identity. render_page is the UUID write-back seam for passive reconciliation (without requiring opt-in write-through logic).
+
+### D-VS-G4: New-page bootstrap remains narrow after repair
+
+apply_reingest() now includes a pre-flight zero-total raw_imports guard for existing pages (resolved by explicit existing_page_id or slug match). This guard runs BEFORE any pages/file_state/raw_imports mutation. Truly new pages (current_page = None) are unaffected; the bootstrap path stays narrow and intentional.
+
+**Rationale:** Nibbler's adversarial gate found that stat-diff paths could bootstrap first history for existing pages instead of failing closed. The preflight guard closes that seam at the application layer (apply_reingest) where new vs existing distinction is known, not in rotate_active_raw_import (which is shared with true new-page ingest).
+
+### D-VS-G5: Partial coverage by design with visible seam locks
+
+Active coverage seams:
+- reconcile unchanged path: one active raw_imports, no rotation
+- reconcile changed-hash apply path: rotates raw_imports to latest bytes
+- reconcile aborts before mutation on zero-active existing raw_imports
+- brain_put preserves stored pages.uuid when input omits gbrain_id
+
+Deferred coverage seams (locked with explicit blockers):
+- full_hash_reconcile unchanged-hash self-heal → #[ignore = "blocker: 4.4"]
+- full_hash_reconcile changed-hash rotation → #[ignore = "blocker: 5.4h"]
+- render_page UUID back-fill for legacy pages → #[ignore = "blocker: 5a.5"]
+
+**Rationale:** Truth over silence. The current tree supports direct branch validation for reconcile/put slices. Deferred surfaces need visible seam locks in the test suite, not silent omission.
+
+### D-VS-G6: UUID identity tests locked to achievable scope
+
+Batch G covers (without Group 12 or write-back 5a.5):
+- gbrain_id adoption: ingest file with gbrain_id; assert pages.uuid matches
+- brain_put gbrain_id preservation: get → put → assert survives round-trip
+- UUIDv7 monotonicity: N UUID generations strictly increasing
+- Frontmatter round-trip: parse/render preserves gbrain_id
+
+Deferred to later batch (requires 5a.5 + Group 12):
+- Opt-in rewrite rotates file_state/raw_imports atomically
+- migrate-uuids --dry-run mutates nothing
+
+**Rationale:** These tests are achievable with render_page emission (5a.6) alone. Opt-in write-back requires write-through logic (5a.5) and rename-before-commit (Group 12), both deferred.
+
+### D-VS-G7: Gate criteria all verified
+
+- ✅ full_hash_reconcile runs to completion; produces no errors
+- ✅ Second run on unchanged vault yields ReconcileStats { unchanged: N, modified: 0, new: 0, ... } (idempotent)
+- ✅ Zero active raw_imports rows triggers InvariantViolationError (not silent pass)
+- ✅ --allow-rerender flag suppresses error and logs WARN
+- ✅ render_page emits gbrain_id for non-empty uuid; omits for NULL/empty
+- ✅ MCP brain_get → brain_put round-trip preserves gbrain_id
+- ✅ cargo test and cargo clippy clean
+
+**Status:** Approved for landing. All implementation + test gates green. Authorization contract explicit. Coverage landmarks clear. repair closes bootstrap seam. Ready to merge to main and begin next-batch planning.
+

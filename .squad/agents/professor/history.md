@@ -24,6 +24,8 @@
 - A narrow re-gate can clear a prior task-ledger blocker when the current-state note explicitly supersedes the historical repair note and each repaired claim is directly traceable to real code paths and tests.
 - A UUID-identity slice is landable when `Page.uuid` becomes mandatory in typed read paths, UUID generation/adoption stays explicit and read-only by default, and task notes clearly defer frontmatter write-back and watcher-native production work.
 - A reconciliation apply slice is landable when raw-import rotation is shared across every in-scope writer, DB-only-state is re-checked inside the apply transaction, and later restore/full-hash seams stay explicitly deferred instead of being papered over.
+- A full-hash recovery slice is landable only when its API makes authorization explicit, separates stat self-heal from content-changing reingest, and treats zero-active `raw_imports` as a typed invariant failure rather than a recoverable convenience case.
+- A follow-on full-hash gate is landable when the unchanged-hash path is provably metadata-only, the changed/new path reuses the existing atomic apply seam, and the task ledger names `brain_put` UUID preservation as a render seam rather than pretending passive reconcile now writes files.
 
 
 ## Core Context

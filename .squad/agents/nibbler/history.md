@@ -18,6 +18,8 @@
 - Batch E re-gate closed the hash-rename seam once both sides measured trimmed post-frontmatter body bytes, not whole-file size, and regression coverage pinned both refusal and success boundaries.
 - Batch F is gateable when raw-import rotation fails closed on zero-active history inside the same write transaction and delete/quarantine decisions re-query DB-only state at apply time rather than replaying classification snapshots.
 - Deferred restore/full-hash and UUID writeback seams are acceptable only when tasks and code comments keep them explicit and error-shaped; success-shaped stubs would make the same slice rejectable.
+- Reconcile apply must distinguish true creates from existing-page updates before raw_import rotation; if an existing page reaches apply with zero total raw_import history, silent bootstrap is identity corruption, not healing.
+- Zero-total `raw_imports` is a different seam from zero-active history: the shared rotation helper may still allow first-write bootstrap, so existing-page apply paths need their own pre-mutation guard while truly new pages remain the only narrow row-count-zero bootstrap case.
 
 ## 2026-04-15 In Progress
 

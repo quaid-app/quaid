@@ -14,6 +14,23 @@
 - Coverage denominator ambiguity (src only? all Rust? which features? which platforms?) blocks hard gate enforcement — scope must be explicit first.
 - Foundation-slice checkmarks are not credible until schema-compatible legacy tests are repaired; otherwise coverage numbers on the new seam are meaningless.
 - When a foundation slice has 181 test failures post-PR, the issue is likely NOT coverage but schema/write-path coherence. Coverage metrics are only meaningful after the foundation is stable.
+- A repaired foundation can still be under-tested: green default+online suites do not prove collection-routing logic, schema-version refusal, or quarantine filters unless those branches have direct assertions.
+
+## 2026-04-22 Vault-Sync Foundation Re-review — Compatibility Repaired, Branch Depth Still Thin
+
+**Session:** Re-checked Leela's repaired foundation slice strictly from compatibility and unit-test depth.
+
+**Validation rerun:**
+- `cargo test --quiet` passed on the default channel.
+- `cargo test --quiet --no-default-features --features bundled,online-model` passed on the online channel with `GBRAIN_FORCE_HASH_SHIM=1`.
+
+**Assessment:**
+- Compatibility repairs look real: legacy ingest/import paths still have `ingest_log`, legacy page inserts route through `collection_id DEFAULT 1`, and composite upserts were repaired to `ON CONFLICT(collection_id, slug)`.
+- The slice is now stable enough to build on, but the newly introduced collection-routing seam is not deeply tested yet.
+- `src/core/collections.rs` currently has validator-only tests; the `parse_slug()` operation matrix (read vs create vs update/admin, single vs multi-collection, write-target vs ambiguity) still lacks direct coverage.
+- The new quarantine-safety branches also lack direct regression tests: no targeted assertion for `search_vec()` excluding quarantined pages, and no targeted assertion for the explicit v4/v5 schema-version refusal path.
+
+**Gate call:** REJECT for next implementation batch until the branchy foundation seams above get direct tests. Green suites prove the repairs stopped the bleeding; they do not yet prove the new routing and quarantine invariants will survive refactors.
 
 ## 2026-04-22 Vault-Sync Foundation Coverage — Coverage Metrics Only Credible After Coherence
 

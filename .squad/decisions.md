@@ -3570,3 +3570,89 @@ Schema v5 is the foundation layer for multi-collection vault sync. This repair m
 4. Wiring quarantine filtering consistently across all search surfaces
 
 This unblocks follow-on implementation batches on a solid foundation.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Professor Re-Review
+
+**By:** Professor (Reviewer)
+
+**What:** Second-pass review of Leela's vault-sync foundation repair. Assessment of schema coherence, legacy-open safety, and task truthfulness before final approval.
+
+**Findings:**
+
+1. **Proposal/Design Truthfulness Gap:** Proposal and design still describe `gbrain import` and `ingest_log` as removed, but implementation retains both as temporary compatibility shims. This is a valid technical choice, but artifacts must be explicit about the transitional contract.
+
+2. **Legacy-Open Safety Issue:** `open_connection()` executes v5 schema DDL before checking version. Pre-v5 databases can be partially mutated before the re-init refusal error is returned. Preflight safety must happen before ANY v5 execution.
+
+3. **Coverage Depth Gaps:** Three new branchy seams lack direct regression tests:
+   - Collection routing matrix (`parse_slug()` with explicit form, bare-slug single/multi-collection)
+   - Quarantine filtering (quarantined pages excluded from vector search)
+   - Schema refusal branch (pre-v5 brains rejected before mutations)
+
+**Required Before Reconsideration:**
+
+1. Align proposal/design with actual transitional contract (keep shims OR remove now)
+2. Reorder schema gating: version check before ANY v5 DDL
+3. Add three focused unit-test groups for new seams
+
+**Decision:** REPAIR DECISION ISSUED. Three gates remain before landing.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Coverage-Depth Review
+
+**By:** Scruffy (Test Coverage)
+
+**What:** Assessed test coverage depth on new branchy seams introduced by vault-sync v5 schema repairs. Evaluation of whether new logic paths are directly defended.
+
+**Findings:**
+
+**Positive:**
+- Default-channel tests pass (0 failures from 181 prior failures)
+- Online-model tests pass
+- Legacy compatibility shims work (ingest_log, collection_id DEFAULT 1)
+- Legacy upserts repaired to `ON CONFLICT(collection_id, slug)`
+- Quarantine filtering now in vector search
+
+**Coverage Gaps:**
+
+1. **Collection routing untested:** `src/core/collections.rs::parse_slug()` implements 6 operation types and ambiguity paths. Only validators tested; no direct tests for:
+   - Explicit `<collection>::<slug>` resolution
+   - Single-collection bare-slug routing
+   - Multi-collection bare-slug read ambiguity
+   - WriteCreate/WriteUpdate/WriteAdmin ambiguity paths
+
+2. **Quarantine filtering indirectly covered:** `search_vec()` now excludes quarantined pages, but no focused regression test proves a quarantined page with valid embedding is omitted.
+
+3. **Schema refusal branch unguarded:** `db::open_with_model()` rejects pre-v5 brains by stored `brain_config.schema_version`, but no direct test covers the re-init error path.
+
+**Required Before Approval:**
+
+1. Focused unit-test matrix for `parse_slug()` covering all operation types and ambiguity paths
+2. Regression test for quarantined pages being excluded from vector search
+3. Regression test for v4-or-older schema refusal with re-init error
+
+**Decision:** REJECT FOR TEST DEPTH. Repairs are effective; new seams need direct coverage before landing.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Review Gating Policy
+
+**By:** Professor (via Scribe decision merge)
+
+**What:** Establish standing policy for vault-sync foundation review gates going forward.
+
+**Policy:**
+
+Future vault-sync review passes must validate three dimensions:
+
+1. **Artifact Truthfulness:** Proposal/design must accurately describe implementation state. No overstated removals. Compatibility shims must be explicitly named as temporary or removed immediately.
+
+2. **Preflight Safety:** For schema version changes, version checks must happen BEFORE any v5 DDL side effects. This prevents partial mutations of legacy databases before refusal error is returned.
+
+3. **Coverage Depth:** New branchy code seams (collection routing, quarantine filtering, schema refusal) must be directly tested. End-to-end validation is insufficient for foundational slices.
+
+**Rationale:** Schema-foundation slices are foundational for all later implementation. Truthfulness, safety, and coverage depth gates protect downstream work from discovering broken assumptions after landing.
+
+**Decision:** ADOPTED for vault-sync review cadence.

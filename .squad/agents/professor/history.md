@@ -12,6 +12,9 @@
 - Maintainability and architectural coherence are key review criteria.
 - For CLI review, validate behavior from more than one working directory; path-dependent “embedded” resources can look correct at repo root while failing the shipped-binary contract.
 - A schema-foundation slice is not landable if it bumps required page fields or uniqueness rules without updating downstream insert/query callsites and quarantine filters; `cargo check` can stay green while runtime tests collapse.
+- A repair pass is still rejectable when `tasks.md` is updated but proposal/design artifacts continue to describe a different contract; reviewer truthfulness is proposal-first, not task-note-first.
+- Full green tests do not clear a schema slice if legacy-open paths still mutate an old database before refusing it; preflight safety must happen before any v5 DDL side effects.
+- When a foundation slice keeps a temporary compatibility shim, proposal/design text must say so explicitly; a repair note in tasks.md is not enough to clear truthfulness review.
 
 ## 2026-04-14 Update
 
@@ -75,6 +78,57 @@
 - **Fry advancing slices:** Progressive retrieval (tasks 5.1–5.6) and assertions/check (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Token-budget logic and contradiction dedup verified. Awaiting Nibbler's final graph re-review before Phase 2 sign-off.
 
 ---
+
+## 2026-04-22 Vault-Sync Foundation Third-Pass Review
+
+**Status:** REPAIR DECISION ISSUED
+
+**Scope:** Vault-sync-engine foundation slice (tasks 1.1–2.6) repaired by Leela for schema coherence, legacy compatibility, and test failures.
+
+**Work Performed:**
+
+1. **Artifact Cross-Validation:** Re-read proposal/design against implementation to detect overstated removals
+   - Proposal still describes `gbrain import` and `ingest_log` as removed
+   - Implementation retains both as temporary compatibility shims
+   - This is a valid technical choice, but artifacts must be explicit
+
+2. **Legacy-Open Safety Audit:** Traced schema version checking in `db.rs`
+   - `open_with_model()` calls `open_connection()` which executes v5 DDL BEFORE version check
+   - Pre-v5 databases can be partially mutated before re-init refusal
+   - Preflight safety must happen before ANY v5 execution
+
+3. **Coverage Depth Assessment:** Identified three new branchy seams without direct tests
+   - Collection routing matrix (`parse_slug()` with 6 operation types)
+   - Quarantine filtering (quarantined pages excluded from vector search)
+   - Schema refusal branch (pre-v5 brains rejected before mutations)
+
+**Findings:**
+
+- ✅ Repairs resolve 181 prior test failures (cargo test now passes)
+- ✅ Legacy write paths work with new schema
+- ✅ Quarantine filtering wired through vector search
+- ⚠️ Proposal/design truthfulness — GATE 1
+- ⚠️ Legacy-open safety reordering — GATE 2
+- ⚠️ Coverage depth for new seams — GATE 3
+
+**Required Before Landing:**
+
+1. **Gate 1:** Align proposal/design with actual transitional contract (keep shims OR remove now)
+2. **Gate 2:** Reorder schema gating: version check before ANY v5 DDL
+3. **Gate 3:** Add three focused unit-test groups for new seams
+
+**Key Learning:** Schema foundation slices cannot land with green tests alone. Truthfulness (proposal vs implementation), safety (preflight gating), and coverage depth (new seams directly tested) are co-equal gates.
+
+**Verdict:** REPAIR DECISION ISSUED. Three gates remain before landing.
+
+**Decision Artifacts Merged:**
+1. Vault-Sync Foundation Review Gating — three-gate policy for future review passes
+2. Coverage Depth Review — Scruffy assessment of new branchy seams
+3. Professor re-review — artifact truthfulness + safety + coverage findings
+
+**Next Steps:** Leela addresses gates 1–3; resubmits; Professor conducts final review.
+
+
 
 ## 2026-04-16: Phase 3 Core Review — Rejection (tasks 8.1)
 

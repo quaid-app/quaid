@@ -13,6 +13,7 @@
 - Local-first systems still need security and misuse thinking.
 - Privacy-safe fields are not enough if adjacent free-form fields can still carry the same secret.
 - Line-oriented shell protocols need explicit payload caps or raw-data endpoints become an easy memory-pressure path.
+- For vault-bound walks, `WalkBuilder` output is only a candidate list; root-bounded `open_root_fd` + `walk_to_parent` + `stat_at_nofollow` must be the only authority for classification if symlink escapes are to stay closed.
 
 ## 2026-04-15 In Progress
 

@@ -1,21 +1,15 @@
-chore(scribe): merge vault-sync batch B decisions and session logs
+Scribe: vault-sync-batch-c-approval session logging
 
-Session summary:
-- Orchestration logs: Fry (Batch B implementation), Scruffy (Batch B coverage)
-- Session log: Vault-Sync Batch B completion with architectural decisions
-- Decision inbox: Merged 4 entries into canonical decisions.md; deleted inbox files
-- Cross-agent updates: Appended batch completion notes to Fry and Scruffy histories
-- Batch B deliverables:
-  * Fry: Group 3 (ignore patterns), partial Group 4 (file state), Group 5.1 (reconciler)
-  * Scruffy: Seam-level coverage on parse_slug routing, ignore error shapes, file_state drift
-  * Both approved for integration; all gates green
+- Orchestration logs for leela (repair), scruffy (re-gate), professor (final approval)
+- Session log: Batch C foundation approved after targeted repair cycle
+- Decision inbox merged: 9 decisions consolidated into decisions.md
+- Agent histories updated with session outcomes
+- No decisions-archive needed yet (oldest entry is 8 days old, threshold is 30 days)
 
-Decisions merged:
-- 2026-04-22: Vault-Sync Batch B — Fry Implementation Completion
-- 2026-04-22: Vault-Sync Batch B — Scruffy Coverage Completion
-- 2026-04-22: Vault-Sync Foundation — Leela Lead Review Gate (Professor + Scruffy approval)
-- Related logs and orchestration records archived
-
-All decision inbox files deleted after merge. Team memory updated.
+Batch C (reconciler scaffold + fd-safety primitives) is now ready to land as explicitly unwired foundation:
+- Safety-critical stubs fail explicitly instead of returning benign success
+- Tasks demoted to reflect deferred walk/hash/apply behavior
+- Conditional imports fixed for Unix compilation
+- All 439 lib tests pass, no regressions
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

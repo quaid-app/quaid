@@ -10,6 +10,9 @@
 - The team wants high unit-test coverage, not token test presence.
 - Proposal-first work helps define the invariants tests must guard.
 - Coverage depth is a first-class role in this squad.
+- Batch D coverage is strongest when `has_db_only_state` exposes each safety branch directly; otherwise a single SQL OR hides which quarantine guard regressed.
+- Source-truth tests matter at audit seams: programmatic links should be written explicitly as `source_kind='programmatic'`, and imported assertions should stay `asserted_by='import'` so the delete classifier does not quarantine vault-derivable state by mistake.
+- Reconciler symlink safety needs boundary tests, not just primitive tests: root rejection, skipped symlink entries, and repeat walks all belong on the reconciler seam itself.
 - Vault-sync adds large new stateful surfaces (watchers, reconciliation, restore/finalize, collection routing) — must track separately from repo legacy backfill.
 - Coverage denominator ambiguity (src only? all Rust? which features? which platforms?) blocks hard gate enforcement — scope must be explicit first.
 - Foundation-slice checkmarks are not credible until schema-compatible legacy tests are repaired; otherwise coverage numbers on the new seam are meaningless.

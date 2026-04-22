@@ -2618,6 +2618,67 @@ A new `overwrite: Option<bool>` field (default `false`) is added to `BrainRawInp
 
 ### D-M3: brain_gap context capped at 500 characters
 
+---
+
+## Vault Sync Batch D — Walk Core + Classify (fry/scruffy/nibbler/professor/leela, 2026-04-22)
+
+**Scope:** OpenSpec `vault-sync-engine` proposal; Batch D implementation, testing, review, and truthfulness repair.
+
+**Timeline:**
+1. Fry implemented walk core + delete-vs-quarantine classifier (code + tests green)
+2. Scruffy added five-branch coverage + symlink safety validation (tests green)
+3. Nibbler approved security seams (root-bounded nofollow, provenance audit)
+4. Professor initial gate rejected on `tasks.md` truthfulness (documentation blocker, not code)
+5. Leela repaired three stale/false claims in tasks.md (narrow documentation repair only)
+6. Professor re-gated on truthfulness scope only; approved for landing
+
+**Decisions:**
+
+### D-VS-D1: Walker metadata is advisory; fd-relative nofollow stat is authoritative
+
+`ignore::WalkBuilder` is used only to enumerate candidate paths under the collection root. Every candidate entry is re-validated through `walk_to_parent(root_fd, relative_path)` and `stat_at_nofollow(parent_fd, file_name)` before classification. If a direct entry is a symlink, or an ancestor resolves as a symlink during the fd-relative walk, the reconciler emits WARN and skips it instead of trusting walker `file_type` / `d_type`.
+
+**Rationale:** TOCTOU mitigation. Kernel-reported d_type is advisory and subject to race conditions. fd-relative nofollow stat is the authoritative gate for symlink detection in a security-sensitive traversal.
+
+### D-VS-D2: Batch D stops at classification, not mutation
+
+`reconcile()` now returns real walk + stat-diff + delete-vs-quarantine counts. It still does not apply ingest, rename, quarantine, or hard-delete mutations; `full_hash_reconcile()` stays explicit-error until the apply pipeline lands. This keeps Batch D gateable as "walk + classify" without pretending rename/apply is complete.
+
+**Rationale:** Scope boundary clarity. Batch D is bounded, reviewable, and independently testable. The mutation layer (rename resolution, apply logic, raw_imports rotation) remains explicit-deferred.
+
+### D-VS-D3: Provenance audit completeness is classifier correctness
+
+Current `links` insert callsites set `source_kind` explicitly. Current `assertions` insert callsites set `asserted_by` truthfully. Schema defaults fail safe toward quarantine rather than silently creating hard-delete eligibility.
+
+**Rationale:** The five-branch `has_db_only_state()` predicate depends on audit columns being truthful. A missed callsite or silent schema default could corrupt the predicate and cause pages to be hard-deleted instead of quarantined.
+
+### D-VS-D4: Multi-batch task notes use addendum lines, not in-place rewrites
+
+When a task note must be updated across batches, add an addendum line (e.g., "**Batch D update:**") instead of replacing the prior note. This preserves the audit trail for each batch's reviewer decisions and keeps the historical context visible for future reviewers.
+
+**Rationale:** Audit trail preservation. In-place rewrites make it impossible to see what each batch reviewer approved or what changed between decisions. Addendum lines keep the full decision history.
+
+### D-VS-D5: A task note is a truth claim about the current tree
+
+Intent and future behavior belong in the task description body, not in the completion note. Task notes must accurately describe what has landed and what remains deferred. False claims in task notes become blocking issues for downstream gatekeepers.
+
+**Rationale:** The gate explicitly asks whether task documentation accurately states current behavior. Stale task notes break the forward contract and delay landing unnecessarily.
+
+**Status:** Approved for landing. All implementation + test gates green. Security seams approved. Documentation truthfulness repaired and re-gated. Ready to merge to main and begin next-batch planning.
+
+---
+
+## User Directive — Session Goals (2026-04-22)
+
+**By:** Matt (via Copilot)  
+**Date:** 2026-04-22T23:00:09Z
+
+**What:** Once the current work is done and pushed remote, start the next session to drive 90%+ coverage with 100% pass, fully update project and public docs, get a PR merged, release v0.9.6, then do a cleanup PR from latest main and close fixed or stale issues.
+
+**Why:** User request — captured for team memory.
+
+**Status:** Recorded. Next-batch planning to follow Batch D landing.
+
 `context` in `BrainGapInput` is validated to ≤ 500 characters. Longer values return `-32602`. The constant `MAX_GAP_CONTEXT_LEN = 500` is defined in `server.rs` alongside the other `MAX_*` constants.
 
 **Rationale:** The context field is a short clue for gap resolution — not a transcript or document. An unbounded context enables attack vectors: (1) a caller leaking raw PII or query text through the context field to bypass the query_hash-only privacy model; (2) trivial DB bloat. 500 chars is sufficient for any legitimate use.

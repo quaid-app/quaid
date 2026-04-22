@@ -580,3 +580,18 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - Implement reconciler and watcher pipeline
 - Add platform-gated fs-safety module for Unix
 
+### 2026-04-22 20:55:00 - Vault-Sync Batch D (walk + classify)
+
+**What worked:**
+- Reconciler walk can use `ignore::WalkBuilder` for enumeration while still treating fd-relative `walk_to_parent` + `stat_at_nofollow` as the source of truth for every candidate entry
+- Symlink safety gets cleaner when symlinked ancestors are handled the same as direct symlink entries: warn and skip, never trust walker metadata alone
+- The delete-vs-quarantine seam is safest as a real SQL predicate plus a pure classification step before any later apply/delete wiring
+
+**Challenges:**
+- Windows local validation compiles shared code and runs non-Unix tests, but the symlink walk tests remain Unix-gated by design
+- Existing assertion extraction used `asserted_by='agent'`; switching import-derived rows to `import` required updating the replacement semantics too
+
+**Next:**
+- Wire the same walk/classify output into rename resolution and the later apply pipeline
+- Add the eventual extracted-link insertion path with explicit `source_kind='wiki_link'` when that ingest code lands
+

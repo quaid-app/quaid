@@ -20,6 +20,8 @@
 - A narrow repair is sufficient to clear a blocker when the scaffold remains explicitly unwired, the task text no longer overclaims replacement, and any safety-critical stub now errors loudly instead of returning benign success.
 - Vault-sync foundation stubs on authoritative recovery paths (`full_hash_reconcile`, main `reconcile`) are still rejectable when they return zeroed success stats; unwired safety paths must error loudly, and checked tasks must not claim `WalkBuilder`/rehash delivery before code exists.
 - A re-gate can approve an unfinished foundation scaffold when every safety-critical entry point now fails explicitly, the task ledger names deferred walk/hash work honestly, and Unix-only imports are wired so the code is structurally ready for real Unix builds.
+- A technically solid vault-sync slice is still rejectable when `tasks.md` mixes stale repair notes with current-state claims; the ledger must describe today's behavior, not preserve contradicted historical status inline.
+- A narrow re-gate can clear a prior task-ledger blocker when the current-state note explicitly supersedes the historical repair note and each repaired claim is directly traceable to real code paths and tests.
 
 
 ## Core Context

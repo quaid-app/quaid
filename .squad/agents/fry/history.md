@@ -7,6 +7,17 @@
 
 ## Learnings
 
+### 2026-04-23 20:40:00 - Vault-Sync Batch K2 (offline restore integrity closure)
+
+**What worked:**
+- Offline restore stayed honest without widening plain sync by keeping `gbrain collection sync <name> --finalize-pending` as the single explicit CLI completion path from post-Tx-B state to active attach completion.
+- `collection info` needed a distinct post-Tx-B attach-pending surface; treating it as generic `restoring` hid the real operator action.
+- Terminal integrity has to remain sticky inside `finalize_pending_restore()`: once `integrity_failed_at` is set, a later manifest match must NOT auto-clear it without explicit `restore-reset`.
+
+**Challenges:**
+- The restore attach path was using active-lease authorization while reconcile authorization only admitted restore-specific identities; the contract had to be aligned before CLI completion could work.
+- Windows still hard-gates vault-sync restore flows, so the real `17.11` proof has to remain Unix-only until the broader platform task lands.
+
 - Vault-sync-engine Batch K1 (2026-04-23): **FINAL APPROVAL CONFIRMED**. Collection add scaffolding + shared read-only gate narrowed to honest boundary: `1.1b`, `1.1c`, `9.2`, `9.2b`, `9.3`, `17.5qq10`, `17.5qq11` only. Pre-gate approvals: ✅ Professor (K1 is safe boundary, non-negotiables affirmed), ✅ Nibbler (adversarial seams specified). Implementation + proof lanes: ✅ Fry (add validates before row creation, detached attach, short-lived lease cleanup, writable truth surface), ✅ Scruffy (partial then full after Leela repairs), ✅ Leela (repaired MCP surface + task honesty). Final re-gate: ✅ Professor (read-only gate honestly scoped, caveat attached), ✅ Nibbler (seams controlled, DB-only mutators out of K1 claim, no offline restore broadening). All 8 decisions merged to canonical ledger. Required caveat: K1 is default attach + list/info truth + vault-byte refusal only; `--write-gbrain-id`, broader mutators, restore-integrity closure deferred to K2. **K1 APPROVED FOR LANDING.**
 - Vault-sync-engine Batch J (2026-04-23): **APPROVED FOR LANDING**. Narrowed Batch J (plain sync + reconcile-halt safety) implemented in four files: `src/commands/collection.rs` (sync command, fail-closed gates, CLI truth), `src/core/vault_sync.rs` (sync path with lease/entry checks), `src/core/reconciler.rs` (DuplicateUuidError + UnresolvableTrivialContentError halts terminal), `tests/collection_cli_truth.rs` (15 test cases, all pass). All five blocked states fail-closed; lease acquired/heartbeat/released via RAII; duplicate/trivial halts terminal; operator surfaces truthful. Validation: ✅ `cargo test --quiet` (default lane), ✅ online-model lane. Scruffy proof lane confirmed. All 6 decisions merged to canonical ledger. Final re-gate approvals: ✅ Professor (fail-closed finalize gate established, CLI-only boundary preserved), ✅ Nibbler (blocking seam controlled, no success-shaped outcomes leak, repair narrow, deferral explicit). **Batch J CLOSED — ready for merge to main.**
 - Vault-sync-engine Batch G (2026-04-22): `full_hash_reconcile` now needs an explicit, closed mode/authorization contract validated against `collections.state` before any walk, and the hash-unchanged branch must self-heal only `file_state` metadata while preserving user bytes and `raw_imports`. The `render_page` seam now always re-emits persisted `pages.uuid` as `gbrain_id`, so agent updates cannot strip identity even when incoming markdown omits the field.
@@ -689,3 +700,11 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 **Next:**
 - Finish the remaining Batch I adversarial proofs (`17.5ii4`, `17.5pp`, `17.5qq2-8`, restore integrity escalation paths) before calling the batch fully closed.
 - Vault-sync-engine Batch K1 (2026-04-23): `collection add` should validate the root and parse `.gbrainignore` before inserting any row; then attach via the detached fresh-attach path with a short-lived lease so `collection_owners`, `serve_sessions`, and probe files clean themselves up even on failure. The K1 read-only gate is best kept narrow: persist `collections.writable`, surface `read-only` truthfully in list/info, and use `CollectionReadOnlyError` only on vault-byte-facing write surfaces (`put` in current scope), while slug-bound `brain_gap` still takes the restoring interlock but is not falsely blocked on `writable=0`.
+
+## 2026-04-23T09:02:00Z Batch K2 Final Approval
+
+**Status:** K2 APPROVED FOR LANDING
+
+Offline restore integrity closure is now fully approved by both Professor and Nibbler. Fresh-attach + lease discipline from K1 maintained. Restore originator identity persisted and compared. Tx-B residue durable and auditable. Manifest retry/escalation/tamper behavior coherent. Reset/finalize surfaces truthful. CLI completion path via \sync --finalize-pending -> attach\ proven end-to-end.
+
+Ready for implementation and landing.

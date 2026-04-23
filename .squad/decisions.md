@@ -4731,3 +4731,25 @@ It does **not** certify offline restore integrity, RCRT/CLI finalize end-to-end 
 
 **Why:** Approved narrowed boundary is fresh-attach + persisted writability truth + shared vault-byte refusal, not offline-restore certification or broader mutator blocking. K2 will be the home for destructive-path proof closure.
 
+
+---
+
+## Batch K2 Status Summary
+
+**Batch K2 APPROVED FOR LANDING:**
+- ✅ Final approvals confirmed (Professor + Nibbler, 2026-04-23)
+- ✅ Offline restore integrity closure proven (CLI path end-to-end)
+- ✅ Restore originator identity persisted and compared
+- ✅ Tx-B residue durable and auditable
+- ✅ Manifest retry/escalation/tamper behavior coherent
+- ✅ Reset/finalize surfaces truthful and non-destructive
+- ✅ Fresh-attach + lease discipline from K1 maintained
+- ✅ Team memory synchronized
+
+**Offline CLI completion path:** \sync --finalize-pending -> attach\ proven with residue cleanup in success/failure paths.
+
+**Why:** Approved narrowed boundary is offline restore integrity closure via CLI, not broader destructive surfaces or online handshake.
+
+**Caveats:** K2 approval covers offline CLI closure only. Startup/orphan recovery, online handshake, MCP destructive-path widening, and broader multi-collection restore semantics remain deferred to K3+.
+
+---

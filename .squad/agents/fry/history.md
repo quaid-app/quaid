@@ -7,6 +7,12 @@
 
 ## Learnings
 
+### 2026-04-24 01:35:00 - Vault-Sync Batch M1a (pre-gated writer sentinel crash core)
+
+- Landed only the narrow writer-side sentinel crash seam: sentinel create+durability, tempfile rename, parent-fsync hard-stop, post-rename foreign-rename detection, retained sentinel on post-rename failure, and startup-recovery fallback when `collections.needs_full_sync` cannot be written.
+- Kept full `12.1` honest by splitting out `12.1a`; `12.2`, `12.3`, `12.4` mutex, `12.5`, `12.6*`, `12.7`, IPC, and generic startup-healing claims all remain deferred.
+- Validation on this Windows host: `cargo test --quiet` passed. Unix-only M1a proofs were added under `#[cfg(unix)]`, but a Linux cross-check was not feasible locally because the required `x86_64-linux-gnu-gcc` toolchain is absent.
+
 ### 2026-04-23 23:30:00 - Vault-Sync Batch L1 (restore-orphan startup recovery narrowed slice) - APPROVED FOR LANDING
 
 **Scope:** L1 narrowed to startup restore-orphan recovery only after K2 proved the happy offline restore path.

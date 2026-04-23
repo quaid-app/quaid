@@ -2,6 +2,26 @@
 
 ## Active Decisions
 
+### 2026-04-24: Vault-sync-engine Batch M1a scope split
+**By:** Fry
+**What:** Split `12.1` before implementation and landed only `12.1a`, the pre-gated writer-side sentinel crash core. The implemented seam is limited to sentinel creation/durable ordering, tempfile rename, parent-directory fsync hard-stop, post-rename foreign-rename detection, retained sentinel on post-rename failure, and fresh-connection `needs_full_sync` best-effort fallback.
+**Why:** The full `12.1` contract still depends on deferred work (`12.2`, `12.3`, `12.4` mutex, and routing/IPC tasks). Recording the split keeps task truth aligned with what is actually proved today while still allowing the existing startup sentinel consumer to recover rename-ahead-of-DB failures.
+
+### 2026-04-24: Vault-sync-engine Batch M1a proof lane — internal Unix crash-core seam only
+**By:** Scruffy
+**What:** Treat Batch M1a as a **pre-gated internal proof seam only**: prove `12.4aa`, `12.4b`, `12.4c`, `12.4d`, `17.5t`, `17.5u`, `17.5u2`, and `17.5v`; keep the implementation as an internal Unix crash-core seam in `src/core/vault_sync.rs`; anchor recovery truth on startup reconcile + sentinel retention.
+**Why:** This slice is credible only if it stays narrower than full `brain_put` rollout. The tests can honestly pin sentinel-create failure, pre-rename/rename cleanup, post-rename abort retention, fresh-connection `needs_full_sync` as best-effort only, and foreign-rename + `SQLITE_BUSY` recovery from the sentinel alone without claiming `12.2`, `12.3`, `12.4` mutex proof, happy-path write-through closure, live worker / IPC / generic startup healing. Narrow proof seam; deferred full contract and routing.
+
+### 2026-04-24: Vault-sync-engine Batch L2 final approval
+**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
+**What:** Approved Batch L2 for landing as the startup-only sentinel recovery slice: `11.1b`, `11.4`, and `17.12`.
+**Why:** Startup now bootstraps `<brain-data-dir>\recovery\<collection_id>\`, scans only owned sentinel-bearing collections, marks them dirty, reuses the existing startup reconcile path, and unlinks sentinels only after successful reconcile. The proof is synthetic and narrow: post-rename/pre-commit disk-ahead-of-DB convergence plus foreign-owner skip and failed-reconcile sentinel retention; it does not cover real `brain_put` sentinel creation/unlink, live recovery workers, generic startup healing, remap reopen, IPC, or handshake widening.
+
+### 2026-04-23: Vault-sync-engine Batch L1 final approval
+**By:** Professor + Nibbler (recorded via Copilot)
+**What:** Approved Batch L1 for landing as the narrowed restore-orphan startup recovery slice only: `11.1a`, `17.5ll`, and `17.13`.
+**Why:** Startup ordering, the shared 15-second heartbeat gate, exact-once orphan recovery, and `collection_owners`-scoped ownership are now directly proved. This approval does not cover `11.1b`, `11.4`, `17.12`, sentinel recovery, generic `needs_full_sync` healing, remap reopen, IPC, or broader online-handshake claims.
+
 ### 2026-04-13: Core intake sources
 **By:** macro88 (via Squad)
 **What:** Use `docs\spec.md` as the primary product spec, GitHub issues as work intake, and OpenSpec in `openspec\` for structured change proposals and spec evolution.

@@ -40,7 +40,7 @@ enum Commands {
     /// Write or update a page (reads from stdin)
     Put {
         slug: String,
-        /// Expected current version for OCC (omit for new pages or unconditional upsert)
+        /// Expected current version for OCC (required for Unix updates; optional for creates)
         #[arg(long)]
         expected_version: Option<i64>,
     },
@@ -197,6 +197,11 @@ enum Commands {
     },
     /// Checkpoint WAL to single file
     Compact,
+    /// Manage vault collections
+    Collection {
+        #[command(subcommand)]
+        action: commands::collection::CollectionAction,
+    },
     /// Get or set config values
     Config {
         #[command(subcommand)]
@@ -365,6 +370,7 @@ async fn main() -> Result<()> {
         }
         Commands::Gaps { limit, resolved } => commands::gaps::run(&db, limit, resolved, cli.json),
         Commands::Compact => commands::compact::run(&db),
+        Commands::Collection { action } => commands::collection::run(&db, action, cli.json),
         Commands::Config { action } => commands::config::run(&db, action),
         Commands::Validate {
             all,

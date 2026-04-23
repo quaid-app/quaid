@@ -2,6 +2,9 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::core::collections::OpKind;
+use crate::core::vault_sync;
+
 #[derive(Debug, Serialize)]
 struct TimelineOutput {
     slug: String,
@@ -13,11 +16,15 @@ struct TimelineOutput {
 pub fn run(db: &Connection, slug: &str, limit: u32, json: bool) -> Result<()> {
     // Verify page exists
     let page = crate::commands::get::get_page(db, slug)?;
+    let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::Read)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     let page_id: i64 = db
-        .query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+            rusqlite::params![resolved.collection_id, resolved.slug],
+            |row| row.get(0),
+        )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
             other => other.into(),
@@ -96,10 +103,16 @@ pub fn add(
     source: Option<String>,
     detail: Option<String>,
 ) -> Result<()> {
+    let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let page_id: i64 = db
-        .query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+            rusqlite::params![resolved.collection_id, resolved.slug],
+            |row| row.get(0),
+        )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
             other => other.into(),
@@ -157,6 +170,22 @@ fn split_timeline(timeline: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::db;
+    use rusqlite::Connection;
+
+    fn open_test_db() -> Connection {
+        db::open(":memory:").unwrap()
+    }
+
+    fn insert_page(conn: &Connection, slug: &str) {
+        conn.execute(
+            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+                                frontmatter, wing, room, version) \
+             VALUES (?1, 'note', ?1, '', '', '', '{}', '', '', 1)",
+            [slug],
+        )
+        .unwrap();
+    }
 
     #[test]
     fn split_timeline_separates_on_bare_boundary() {
@@ -174,5 +203,20 @@ mod tests {
     fn split_timeline_empty_returns_empty() {
         let entries = split_timeline("");
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn add_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+        let conn = open_test_db();
+        insert_page(&conn, "notes/alice");
+        conn.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let error = add(&conn, "notes/alice", "2026-04-22", "blocked", None, None).unwrap_err();
+
+        assert!(error.to_string().contains("CollectionRestoringError"));
     }
 }

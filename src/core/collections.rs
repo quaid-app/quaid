@@ -24,6 +24,22 @@ pub struct Collection {
     pub ignore_parse_errors: Option<String>,
     pub needs_full_sync: bool,
     pub last_sync_at: Option<String>,
+    pub active_lease_session_id: Option<String>,
+    pub restore_command_id: Option<String>,
+    pub restore_lease_session_id: Option<String>,
+    pub reload_generation: i64,
+    pub watcher_released_session_id: Option<String>,
+    pub watcher_released_generation: Option<i64>,
+    pub watcher_released_at: Option<String>,
+    pub pending_command_heartbeat_at: Option<String>,
+    pub pending_root_path: Option<String>,
+    pub pending_restore_manifest: Option<String>,
+    pub restore_command_pid: Option<i64>,
+    pub restore_command_host: Option<String>,
+    pub integrity_failed_at: Option<String>,
+    pub pending_manifest_incomplete_at: Option<String>,
+    pub reconcile_halted_at: Option<String>,
+    pub reconcile_halt_reason: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -211,8 +227,13 @@ pub fn get_by_name(conn: &Connection, name: &str) -> Result<Option<Collection>, 
     let mut stmt = conn.prepare(
         "SELECT id, name, root_path, state, writable, is_write_target, \
                ignore_patterns, ignore_parse_errors, needs_full_sync, last_sync_at, \
-               created_at, updated_at \
-         FROM collections WHERE name = ?1",
+               active_lease_session_id, restore_command_id, restore_lease_session_id, \
+               reload_generation, watcher_released_session_id, watcher_released_generation, \
+               watcher_released_at, pending_command_heartbeat_at, pending_root_path, \
+               pending_restore_manifest, restore_command_pid, restore_command_host, \
+               integrity_failed_at, pending_manifest_incomplete_at, reconcile_halted_at, \
+               reconcile_halt_reason, created_at, updated_at \
+          FROM collections WHERE name = ?1",
     )?;
 
     let result = stmt
@@ -228,8 +249,24 @@ pub fn get_by_name(conn: &Connection, name: &str) -> Result<Option<Collection>, 
                 ignore_parse_errors: row.get(7)?,
                 needs_full_sync: row.get::<_, i64>(8)? != 0,
                 last_sync_at: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                active_lease_session_id: row.get(10)?,
+                restore_command_id: row.get(11)?,
+                restore_lease_session_id: row.get(12)?,
+                reload_generation: row.get(13)?,
+                watcher_released_session_id: row.get(14)?,
+                watcher_released_generation: row.get(15)?,
+                watcher_released_at: row.get(16)?,
+                pending_command_heartbeat_at: row.get(17)?,
+                pending_root_path: row.get(18)?,
+                pending_restore_manifest: row.get(19)?,
+                restore_command_pid: row.get(20)?,
+                restore_command_host: row.get(21)?,
+                integrity_failed_at: row.get(22)?,
+                pending_manifest_incomplete_at: row.get(23)?,
+                reconcile_halted_at: row.get(24)?,
+                reconcile_halt_reason: row.get(25)?,
+                created_at: row.get(26)?,
+                updated_at: row.get(27)?,
             })
         })
         .optional()?;
@@ -242,8 +279,13 @@ pub fn get_write_target(conn: &Connection) -> Result<Option<Collection>, Collect
     let mut stmt = conn.prepare(
         "SELECT id, name, root_path, state, writable, is_write_target, \
                ignore_patterns, ignore_parse_errors, needs_full_sync, last_sync_at, \
-               created_at, updated_at \
-         FROM collections WHERE is_write_target = 1",
+               active_lease_session_id, restore_command_id, restore_lease_session_id, \
+               reload_generation, watcher_released_session_id, watcher_released_generation, \
+               watcher_released_at, pending_command_heartbeat_at, pending_root_path, \
+               pending_restore_manifest, restore_command_pid, restore_command_host, \
+               integrity_failed_at, pending_manifest_incomplete_at, reconcile_halted_at, \
+               reconcile_halt_reason, created_at, updated_at \
+          FROM collections WHERE is_write_target = 1",
     )?;
 
     let result = stmt
@@ -259,8 +301,24 @@ pub fn get_write_target(conn: &Connection) -> Result<Option<Collection>, Collect
                 ignore_parse_errors: row.get(7)?,
                 needs_full_sync: row.get::<_, i64>(8)? != 0,
                 last_sync_at: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                active_lease_session_id: row.get(10)?,
+                restore_command_id: row.get(11)?,
+                restore_lease_session_id: row.get(12)?,
+                reload_generation: row.get(13)?,
+                watcher_released_session_id: row.get(14)?,
+                watcher_released_generation: row.get(15)?,
+                watcher_released_at: row.get(16)?,
+                pending_command_heartbeat_at: row.get(17)?,
+                pending_root_path: row.get(18)?,
+                pending_restore_manifest: row.get(19)?,
+                restore_command_pid: row.get(20)?,
+                restore_command_host: row.get(21)?,
+                integrity_failed_at: row.get(22)?,
+                pending_manifest_incomplete_at: row.get(23)?,
+                reconcile_halted_at: row.get(24)?,
+                reconcile_halt_reason: row.get(25)?,
+                created_at: row.get(26)?,
+                updated_at: row.get(27)?,
             })
         })
         .optional()?;

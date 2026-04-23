@@ -2,6 +2,21 @@
 
 ## Active Decisions
 
+### 2026-04-24: Vault-sync-engine Batch M2b-prime final approval
+**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
+**What:** Approved Batch M2b-prime for landing as the narrow mutex + mechanical ordering proof slice: `12.4`, narrow `17.5k`, and `17.17e`.
+**Why:** The implemented seam now has a real same-slug within-process write lock for vault-byte writes, while keeping different slugs concurrent and leaving DB CAS responsible for cross-process safety. The `brain_put` happy path is only claimed at the mechanical sequence level (`tempfile -> rename -> single-tx commit`), with dedup-echo suppression still deferred, and `expected_version` ordering is proved only for the enumerated vault-byte entry points (`brain_put` prevalidation and CLI `gbrain put` / `put_from_string` before any tempfile, dedup, filesystem, or DB mutation). No non-Unix, live-serve, or broader mutator widening is approved here.
+
+### 2026-04-24: Vault-sync-engine Batch M2a-prime final approval
+**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
+**What:** Approved Batch M2a-prime for landing as the narrow platform-safety + wording/proof cleanup slice: `2.4a2`, `17.16`, narrowed `17.16a`, and `12.5` as closure-note/proof cleanup only.
+**Why:** The implemented Windows gate now truthfully covers only the currently implemented vault-sync CLI handlers (`gbrain serve`, `gbrain put`, `gbrain collection {add,sync,restore}`), while existing DB-only reset handlers remain outside that gate and may still run offline. `12.5` / `17.16a` are now truthfully scoped to vault-byte write entry points only (`gbrain put`, `brain_put` via `put_from_string`) through `ensure_collection_vault_write_allowed`; broader DB-only mutator coverage remains deferred.
+
+### 2026-04-24: Vault-sync-engine Batches M1b-i and M1b-ii final approval
+**By:** Professor + Nibbler (recorded via Copilot)
+**What:** Approved `M1b-i` for the real write-interlock seam (`17.5s2`, `17.5s3`, `17.5s4`, `17.5s5`) and approved `M1b-ii` for the Unix precondition/CAS seam (`12.2`, `12.3`, `12.4a`, `17.5l-s`).
+**Why:** `tasks.md` is now truthful that `17.5s5` depends on real production gates in `brain_link`, `brain_check`, and `brain_raw`, not only an MCP matrix. `brain_put` now runs `ensure_collection_write_allowed` before OCC/existence prevalidation so blocked collections surface `CollectionRestoringError` before version/existence conflicts. These approvals remain narrow: no full `12.1`, no full `12.4`, no `12.5`, no `12.6*`, no `12.7`, no dedup `7.x`, no `17.5k`, no IPC/live routing, and no generic startup-healing or happy-path write-through closure claim.
+
 ### 2026-04-24: Vault-sync-engine Batch M1b-ii precondition split
 **By:** Fry
 **What:** Keep the Unix `gbrain put` / `brain_put` precondition gate split in two layers: a real `check_fs_precondition()` helper that can self-heal stat drift on hash match, and a no-side-effect pre-sentinel inspection path for actual writes.

@@ -1,12 +1,21 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
+use crate::core::collections::OpKind;
+use crate::core::vault_sync;
+
 /// Manage tags on a page: list, add, or remove.
 ///
 /// Tags live in the `tags` table — no OCC, no page version bump.
 /// Without `--add` or `--remove`, prints current tags one per line.
 pub fn run(db: &Connection, slug: &str, add: &[String], remove: &[String]) -> Result<()> {
-    let page_id = resolve_page_id(db, slug)?;
+    let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    if !add.is_empty() || !remove.is_empty() {
+        vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    }
+    let page_id = resolve_page_id(db, resolved.collection_id, &resolved.slug)?;
 
     for tag in add {
         db.execute(
@@ -32,10 +41,12 @@ pub fn run(db: &Connection, slug: &str, add: &[String], remove: &[String]) -> Re
     Ok(())
 }
 
-fn resolve_page_id(db: &Connection, slug: &str) -> Result<i64> {
-    db.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
-        row.get(0)
-    })
+fn resolve_page_id(db: &Connection, collection_id: i64, slug: &str) -> Result<i64> {
+    db.query_row(
+        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+        rusqlite::params![collection_id, slug],
+        |row| row.get(0),
+    )
     .map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
         other => other.into(),
@@ -77,7 +88,7 @@ mod tests {
     fn list_tags_returns_empty_for_untagged_page() {
         let conn = open_test_db();
         insert_page(&conn, "people/alice");
-        let page_id = resolve_page_id(&conn, "people/alice").unwrap();
+        let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
 
         let tags = list_tags(&conn, page_id).unwrap();
         assert!(tags.is_empty());
@@ -90,7 +101,7 @@ mod tests {
 
         run(&conn, "people/alice", &["investor".into()], &[]).unwrap();
 
-        let page_id = resolve_page_id(&conn, "people/alice").unwrap();
+        let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
         let tags = list_tags(&conn, page_id).unwrap();
         assert_eq!(tags, vec!["investor"]);
     }
@@ -103,7 +114,7 @@ mod tests {
         run(&conn, "people/alice", &["investor".into()], &[]).unwrap();
         run(&conn, "people/alice", &["investor".into()], &[]).unwrap();
 
-        let page_id = resolve_page_id(&conn, "people/alice").unwrap();
+        let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
         let tags = list_tags(&conn, page_id).unwrap();
         assert_eq!(tags, vec!["investor"]);
     }
@@ -122,7 +133,7 @@ mod tests {
         .unwrap();
         run(&conn, "people/alice", &[], &["investor".into()]).unwrap();
 
-        let page_id = resolve_page_id(&conn, "people/alice").unwrap();
+        let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
         let tags = list_tags(&conn, page_id).unwrap();
         assert_eq!(tags, vec!["founder"]);
     }
@@ -184,8 +195,23 @@ mod tests {
         )
         .unwrap();
 
-        let page_id = resolve_page_id(&conn, "people/alice").unwrap();
+        let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
         let tags = list_tags(&conn, page_id).unwrap();
         assert_eq!(tags, vec!["alpha", "mid", "zebra"]);
+    }
+
+    #[test]
+    fn add_tags_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+        let conn = open_test_db();
+        insert_page(&conn, "people/alice");
+        conn.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let error = run(&conn, "people/alice", &["investor".into()], &[]).unwrap_err();
+
+        assert!(error.to_string().contains("CollectionRestoringError"));
     }
 }

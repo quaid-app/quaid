@@ -124,14 +124,15 @@ mod tests {
 
     fn insert_page(conn: &Connection, slug: &str, compiled_truth: &str) -> Page {
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
-             VALUES (?1, 'person', 'Alice', 'Founder', ?2, '', '{}', 'people', '', 1)",
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, '01969f11-9448-7d79-8d3f-c68f54761234', 'person', 'Alice', 'Founder', ?2, '', '{}', 'people', '', 1)",
             params![slug, compiled_truth],
         )
         .expect("insert page");
 
         Page {
             slug: slug.to_owned(),
+            uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_owned(),
             page_type: "person".to_owned(),
             title: "Alice".to_owned(),
             summary: "Founder".to_owned(),

@@ -32,10 +32,15 @@ fn open_test_db() -> rusqlite::Connection {
 
 fn insert_page(conn: &rusqlite::Connection, slug: &str, title: &str, truth: &str) -> i64 {
     conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+        "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
-         VALUES (?1, 'person', ?2, '', ?3, '', '{}', 'people', '', 1)",
-        rusqlite::params![slug, title, truth],
+         VALUES (?1, ?2, 'person', ?3, '', ?4, '', '{}', 'people', '', 1)",
+        rusqlite::params![
+            slug,
+            gbrain::core::page_uuid::generate_uuid_v7(),
+            title,
+            truth
+        ],
     )
     .expect("insert page");
     conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {

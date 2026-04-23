@@ -12,6 +12,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
     pub slug: String,
+    pub uuid: String,
     #[serde(rename = "type")]
     pub page_type: String,
     pub title: String,
@@ -103,11 +104,13 @@ pub struct Chunk {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeGap {
     pub id: i64,
+    pub page_id: Option<i64>,
     pub query_hash: String,
     pub context: String,
     pub confidence_score: Option<f64>,
     pub sensitivity: String,
     pub resolved_at: Option<String>,
+    pub resolved_by_slug: Option<String>,
     pub detected_at: String,
 }
 
@@ -203,6 +206,7 @@ mod tests {
     fn page_serde_roundtrip_preserves_identifying_fields_and_tags_frontmatter() {
         let page = Page {
             slug: "people/alice".to_string(),
+            uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
             page_type: "person".to_string(),
             title: "Alice".to_string(),
             summary: "Operator".to_string(),
@@ -240,6 +244,41 @@ mod tests {
                 7,
                 Some("operator, founder".to_string()),
             )
+        );
+    }
+
+    #[test]
+    fn page_serde_roundtrip_preserves_gbrain_id_frontmatter() {
+        let page = Page {
+            slug: "people/alice".to_string(),
+            uuid: "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
+            page_type: "person".to_string(),
+            title: "Alice".to_string(),
+            summary: "Operator".to_string(),
+            compiled_truth: "Alice runs ops.".to_string(),
+            timeline: "- **2024** | role — Joined Acme".to_string(),
+            frontmatter: HashMap::from([
+                (
+                    "gbrain_id".to_string(),
+                    "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
+                ),
+                ("title".to_string(), "Alice".to_string()),
+            ]),
+            wing: "people".to_string(),
+            room: String::new(),
+            version: 7,
+            created_at: "2026-04-15T00:00:00Z".to_string(),
+            updated_at: "2026-04-15T00:00:00Z".to_string(),
+            truth_updated_at: "2026-04-15T00:00:00Z".to_string(),
+            timeline_updated_at: "2026-04-15T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&page).unwrap();
+        let round_trip: Page = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            round_trip.frontmatter.get("gbrain_id").map(String::as_str),
+            Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
     }
 }

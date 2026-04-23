@@ -33,6 +33,24 @@ fn open_disk_db() -> (rusqlite::Connection, tempfile::TempDir) {
     (conn, dir)
 }
 
+fn insert_page(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    uuid: &str,
+    page_type: &str,
+    title: &str,
+    truth: &str,
+    wing: &str,
+) {
+    conn.execute(
+        "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
+                            frontmatter, wing, room, version) \
+         VALUES (?1, ?2, ?3, ?4, '', ?5, '', '{}', ?6, '', 1)",
+        rusqlite::params![slug, uuid, page_type, title, truth, wing],
+    )
+    .expect("insert page");
+}
+
 fn fixtures_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -176,27 +194,24 @@ fn conflicting_ingest_contradiction_is_detected() {
     let conn = open_test_db();
 
     // Insert two pages with conflicting facts about the same entity
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('people/alice', 'person', 'Alice', '', \
-                 '## Assertions
-Alice works at Acme Corp.', \
-                 '', '{}', 'people', '', 1)",
-        [],
-    )
-    .expect("insert page 1");
-
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('sources/update', 'concept', 'Update', '', \
-                 '## Assertions
-Alice works at Beta Corp.', \
-                 '', '{}', 'sources', '', 1)",
-        [],
-    )
-    .expect("insert page 2");
+    insert_page(
+        &conn,
+        "people/alice",
+        "01969f11-9448-7d79-8d3f-c68f54761234",
+        "person",
+        "Alice",
+        "## Assertions\nAlice works at Acme Corp.",
+        "people",
+    );
+    insert_page(
+        &conn,
+        "sources/update",
+        "01969f11-9448-7d79-8d3f-c68f54761235",
+        "concept",
+        "Update",
+        "## Assertions\nAlice works at Beta Corp.",
+        "sources",
+    );
 
     // Extract assertions from both pages
     let page_a = gbrain::commands::get::get_page(&conn, "people/alice").expect("get alice");
@@ -228,25 +243,24 @@ Alice works at Beta Corp.', \
 fn prose_only_pages_do_not_create_false_contradictions() {
     let conn = open_test_db();
 
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('notes/research-a', 'concept', 'Research A', '', \
-                 'Alice works at Acme Corp. This paragraph is just narrative analysis.', \
-                 '', '{}', 'notes', '', 1)",
-        [],
-    )
-    .expect("insert prose page 1");
-
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('notes/research-b', 'concept', 'Research B', '', \
-                 'Alice works at Beta Corp. This paragraph is also general prose.', \
-                 '', '{}', 'notes', '', 1)",
-        [],
-    )
-    .expect("insert prose page 2");
+    insert_page(
+        &conn,
+        "notes/research-a",
+        "01969f11-9448-7d79-8d3f-c68f54761236",
+        "concept",
+        "Research A",
+        "Alice works at Acme Corp. This paragraph is just narrative analysis.",
+        "notes",
+    );
+    insert_page(
+        &conn,
+        "notes/research-b",
+        "01969f11-9448-7d79-8d3f-c68f54761237",
+        "concept",
+        "Research B",
+        "Alice works at Beta Corp. This paragraph is also general prose.",
+        "notes",
+    );
 
     check::execute_check(&conn, None, true, None).expect("run check --all");
 

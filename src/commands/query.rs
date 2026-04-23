@@ -31,7 +31,7 @@ pub async fn run(
 
     // Auto-log knowledge gap on weak results
     if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
-        if let Err(e) = gaps::log_gap(query, "", results.first().map(|r| r.score), db) {
+        if let Err(e) = gaps::log_gap(None, query, "", results.first().map(|r| r.score), db) {
             eprintln!("Warning: failed to log knowledge gap: {e}");
         } else {
             eprintln!("Knowledge gap logged.");
@@ -152,6 +152,7 @@ mod tests {
         // Simulate the gap logging that query::run does
         if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
             gaps::log_gap(
+                None,
                 "nonexistent quantum socks",
                 "",
                 results.first().map(|r| r.score),

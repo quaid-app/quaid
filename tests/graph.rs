@@ -38,8 +38,9 @@ fn insert_link(
         })
         .unwrap();
     conn.execute(
-        "INSERT INTO links (from_page_id, to_page_id, relationship, valid_from, valid_until) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO links (
+            from_page_id, to_page_id, relationship, source_kind, valid_from, valid_until
+         ) VALUES (?1, ?2, ?3, 'programmatic', ?4, ?5)",
         rusqlite::params![from_id, to_id, rel, valid_from, valid_until],
     )
     .unwrap();

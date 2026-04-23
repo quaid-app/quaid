@@ -76,7 +76,7 @@ pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, Asser
     }
 
     conn.execute(
-        "DELETE FROM assertions WHERE page_id = ?1 AND asserted_by = 'agent'",
+        "DELETE FROM assertions WHERE page_id = ?1 AND asserted_by = 'import'",
         [page_id],
     )?;
 
@@ -85,7 +85,7 @@ pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, Asser
             "INSERT INTO assertions (
                 page_id, subject, predicate, object, valid_from, valid_until,
                 confidence, asserted_by, source_ref, evidence_text
-            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0.8, 'agent', '', ?5)",
+            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0.8, 'import', '', ?5)",
             rusqlite::params![
                 page_id,
                 assertion.triple.subject,
@@ -553,6 +553,28 @@ mod tests {
         insert_page_with_frontmatter(conn, slug, slug, truth, "{}");
     }
 
+    fn test_uuid(slug: &str) -> String {
+        let mut hex = String::new();
+        for byte in slug.as_bytes() {
+            hex.push_str(&format!("{byte:02x}"));
+            if hex.len() >= 32 {
+                break;
+            }
+        }
+        while hex.len() < 32 {
+            hex.push('0');
+        }
+
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    }
+
     fn insert_page_with_frontmatter(
         conn: &Connection,
         slug: &str,
@@ -561,10 +583,10 @@ mod tests {
         frontmatter: &str,
     ) {
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                                  frontmatter, wing, room, version) \
-             VALUES (?1, 'person', ?2, '', ?3, '', ?4, 'people', '', 1)",
-            rusqlite::params![slug, title, truth, frontmatter],
+             VALUES (?1, ?2, 'person', ?3, '', ?4, '', ?5, 'people', '', 1)",
+            rusqlite::params![slug, test_uuid(slug), title, truth, frontmatter],
         )
         .unwrap();
     }
@@ -664,28 +686,28 @@ mod tests {
                         "founded".to_string(),
                         "Brain Co".to_string(),
                         0.8,
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                     (
                         "Alice".to_string(),
                         "is_a".to_string(),
                         "founder".to_string(),
                         0.8,
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                     (
                         "Alice".to_string(),
                         "works_at".to_string(),
                         "Acme Corp".to_string(),
                         0.8,
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                 ]
             );
         }
 
         #[test]
-        fn reindexing_replaces_prior_agent_triples() {
+        fn reindexing_replaces_prior_import_triples() {
             let conn = open_test_db();
             insert_page(
                 &conn,
@@ -793,7 +815,7 @@ mod tests {
                     (
                         "founded".to_string(),
                         "Brain Co".to_string(),
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                     (
                         "employer".to_string(),

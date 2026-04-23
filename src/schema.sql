@@ -27,12 +27,54 @@ CREATE TABLE IF NOT EXISTS collections (
     ignore_parse_errors TEXT    DEFAULT NULL,
     needs_full_sync     INTEGER NOT NULL DEFAULT 0,
     last_sync_at        TEXT    DEFAULT NULL,
+    active_lease_session_id   TEXT DEFAULT NULL,
+    restore_command_id        TEXT DEFAULT NULL,
+    restore_lease_session_id  TEXT DEFAULT NULL,
+    reload_generation         INTEGER NOT NULL DEFAULT 0,
+    watcher_released_session_id TEXT DEFAULT NULL,
+    watcher_released_generation INTEGER DEFAULT NULL,
+    watcher_released_at         TEXT DEFAULT NULL,
+    pending_command_heartbeat_at TEXT DEFAULT NULL,
+    pending_root_path           TEXT DEFAULT NULL,
+    pending_restore_manifest    TEXT DEFAULT NULL,
+    restore_command_pid         INTEGER DEFAULT NULL,
+    restore_command_host        TEXT DEFAULT NULL,
+    integrity_failed_at         TEXT DEFAULT NULL,
+    pending_manifest_incomplete_at TEXT DEFAULT NULL,
+    reconcile_halted_at         TEXT DEFAULT NULL,
+    reconcile_halt_reason       TEXT DEFAULT NULL,
     created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_write_target
     ON collections(is_write_target) WHERE is_write_target = 1;
+CREATE INDEX IF NOT EXISTS idx_collections_restore_state
+    ON collections(state, needs_full_sync, reload_generation);
+CREATE INDEX IF NOT EXISTS idx_collections_reconcile_halt
+    ON collections(reconcile_halted_at) WHERE reconcile_halted_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS serve_sessions (
+    session_id    TEXT PRIMARY KEY,
+    pid           INTEGER NOT NULL,
+    host          TEXT    NOT NULL,
+    started_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    heartbeat_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    ipc_path      TEXT    DEFAULT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_serve_sessions_heartbeat
+    ON serve_sessions(heartbeat_at);
+
+CREATE TABLE IF NOT EXISTS collection_owners (
+    collection_id INTEGER PRIMARY KEY REFERENCES collections(id) ON DELETE CASCADE,
+    session_id    TEXT NOT NULL REFERENCES serve_sessions(session_id) ON DELETE CASCADE,
+    claimed_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_collection_owners_session
+    ON collection_owners(session_id);
 
 -- ============================================================
 -- pages: the core content table

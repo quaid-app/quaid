@@ -246,10 +246,29 @@ mod tests {
         truth: &str,
         wing: &str,
     ) {
+        let mut hex = String::new();
+        for byte in slug.as_bytes() {
+            hex.push_str(&format!("{byte:02x}"));
+            if hex.len() >= 32 {
+                break;
+            }
+        }
+        while hex.len() < 32 {
+            hex.push('0');
+        }
+        let uuid = format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        );
+
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
-             VALUES (?1, 'person', ?2, ?3, ?4, '', '{}', ?5, '', 1)",
-            rusqlite::params![slug, title, summary, truth, wing],
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'person', ?3, ?4, ?5, '', '{}', ?6, '', 1)",
+            rusqlite::params![slug, uuid, title, summary, truth, wing],
         )
         .expect("insert page");
     }

@@ -275,11 +275,33 @@ mod tests {
         conn
     }
 
+    fn test_uuid(slug: &str) -> String {
+        let mut hex = String::new();
+        for byte in slug.as_bytes() {
+            hex.push_str(&format!("{byte:02x}"));
+            if hex.len() >= 32 {
+                break;
+            }
+        }
+        while hex.len() < 32 {
+            hex.push('0');
+        }
+
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    }
+
     fn insert_test_page(conn: &Connection, slug: &str, compiled_truth: &str, timeline: &str) {
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
-             VALUES (?1, 'person', 'Alice', 'Founder', ?2, ?3, '{}', 'people', '', 1)",
-            rusqlite::params![slug, compiled_truth, timeline],
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'person', 'Alice', 'Founder', ?3, ?4, '{}', 'people', '', 1)",
+            rusqlite::params![slug, test_uuid(slug), compiled_truth, timeline],
         )
         .expect("insert page");
     }

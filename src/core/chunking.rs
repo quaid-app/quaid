@@ -140,6 +140,7 @@ mod tests {
     fn test_page(compiled_truth: &str, timeline: &str) -> Page {
         Page {
             slug: "people/alice".to_owned(),
+            uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_owned(),
             page_type: "person".to_owned(),
             title: "Alice".to_owned(),
             summary: "Founder".to_owned(),

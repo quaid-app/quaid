@@ -1,5 +1,6 @@
 pub mod call;
 pub mod check;
+pub mod collection;
 pub mod compact;
 pub mod config;
 pub mod embed;

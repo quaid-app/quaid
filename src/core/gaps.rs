@@ -21,6 +21,7 @@ pub enum GapsError {
 /// Uses `INSERT OR IGNORE` against the UNIQUE index on `query_hash`
 /// so duplicate queries produce exactly one gap row.
 pub fn log_gap(
+    page_id: Option<i64>,
     query: &str,
     context: &str,
     confidence_score: Option<f64>,
@@ -28,11 +29,21 @@ pub fn log_gap(
 ) -> Result<(), GapsError> {
     let hash = sha256_hex(query);
     conn.execute(
-        "INSERT OR IGNORE INTO knowledge_gaps (query_hash, context, confidence_score, sensitivity) \
-         VALUES (?1, ?2, ?3, 'internal')",
-        params![hash, context, confidence_score],
+        "INSERT OR IGNORE INTO knowledge_gaps (page_id, query_hash, context, confidence_score, sensitivity) \
+         VALUES (?1, ?2, ?3, ?4, 'internal')",
+        params![page_id, hash, context, confidence_score],
     )?;
     Ok(())
+}
+
+pub fn log_gap_for_page(
+    page_id: i64,
+    query: &str,
+    context: &str,
+    confidence_score: Option<f64>,
+    conn: &Connection,
+) -> Result<(), GapsError> {
+    log_gap(Some(page_id), query, context, confidence_score, conn)
 }
 
 /// List knowledge gaps, optionally including resolved ones.
@@ -42,10 +53,10 @@ pub fn list_gaps(
     conn: &Connection,
 ) -> Result<Vec<KnowledgeGap>, GapsError> {
     let sql = if resolved {
-        "SELECT id, query_hash, context, confidence_score, sensitivity, resolved_at, detected_at \
+        "SELECT id, page_id, query_hash, context, confidence_score, sensitivity, resolved_at, resolved_by_slug, detected_at \
          FROM knowledge_gaps ORDER BY detected_at DESC LIMIT ?1"
     } else {
-        "SELECT id, query_hash, context, confidence_score, sensitivity, resolved_at, detected_at \
+        "SELECT id, page_id, query_hash, context, confidence_score, sensitivity, resolved_at, resolved_by_slug, detected_at \
          FROM knowledge_gaps WHERE resolved_at IS NULL ORDER BY detected_at DESC LIMIT ?1"
     };
 
@@ -53,12 +64,14 @@ pub fn list_gaps(
     let rows = stmt.query_map(params![limit as i64], |row| {
         Ok(KnowledgeGap {
             id: row.get(0)?,
-            query_hash: row.get(1)?,
-            context: row.get(2)?,
-            confidence_score: row.get(3)?,
-            sensitivity: row.get(4)?,
-            resolved_at: row.get(5)?,
-            detected_at: row.get(6)?,
+            page_id: row.get(1)?,
+            query_hash: row.get(2)?,
+            context: row.get(3)?,
+            confidence_score: row.get(4)?,
+            sensitivity: row.get(5)?,
+            resolved_at: row.get(6)?,
+            resolved_by_slug: row.get(7)?,
+            detected_at: row.get(8)?,
         })
     })?;
 
@@ -109,6 +122,7 @@ mod tests {
     fn log_gap_inserts_a_row() {
         let conn = open_test_db();
         log_gap(
+            None,
             "who invented quantum socks",
             "query context",
             Some(0.1),
@@ -134,8 +148,8 @@ mod tests {
     #[test]
     fn duplicate_query_is_idempotent() {
         let conn = open_test_db();
-        log_gap("same query twice", "", None, &conn).unwrap();
-        log_gap("same query twice", "", None, &conn).unwrap();
+        log_gap(None, "same query twice", "", None, &conn).unwrap();
+        log_gap(None, "same query twice", "", None, &conn).unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM knowledge_gaps", [], |row| row.get(0))
@@ -146,8 +160,8 @@ mod tests {
     #[test]
     fn list_gaps_returns_only_unresolved_by_default() {
         let conn = open_test_db();
-        log_gap("unresolved query", "", None, &conn).unwrap();
-        log_gap("resolved query", "", None, &conn).unwrap();
+        log_gap(None, "unresolved query", "", None, &conn).unwrap();
+        log_gap(None, "resolved query", "", None, &conn).unwrap();
 
         // Resolve the second gap
         let id: i64 = conn
@@ -170,7 +184,7 @@ mod tests {
     #[test]
     fn resolve_gap_sets_resolved_at() {
         let conn = open_test_db();
-        log_gap("test query", "", None, &conn).unwrap();
+        log_gap(None, "test query", "", None, &conn).unwrap();
 
         let id: i64 = conn
             .query_row("SELECT id FROM knowledge_gaps LIMIT 1", [], |row| {
@@ -201,7 +215,7 @@ mod tests {
     #[test]
     fn list_gaps_with_resolved_true_includes_resolved_rows() {
         let conn = open_test_db();
-        log_gap("resolved query", "", None, &conn).unwrap();
+        log_gap(None, "resolved query", "", None, &conn).unwrap();
         let id: i64 = conn
             .query_row("SELECT id FROM knowledge_gaps LIMIT 1", [], |row| {
                 row.get(0)
@@ -212,6 +226,40 @@ mod tests {
         let gaps = list_gaps(true, 10, &conn).unwrap();
 
         assert!(gaps[0].resolved_at.is_some());
+    }
+
+    #[test]
+    fn list_gaps_preserves_page_binding_and_resolved_slug() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES (1, 'notes/page-gap', 'note', 'Page Gap', '', '', '', '{}', '', '', 1)",
+            [],
+        )
+        .unwrap();
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/page-gap'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        log_gap_for_page(page_id, "page bound query", "", None, &conn).unwrap();
+        let gap_id: i64 = conn
+            .query_row(
+                "SELECT id FROM knowledge_gaps WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        resolve_gap(gap_id, "notes/page-gap", &conn).unwrap();
+
+        let gaps = list_gaps(true, 10, &conn).unwrap();
+
+        assert_eq!(gaps[0].page_id, Some(page_id));
+        assert_eq!(gaps[0].resolved_by_slug.as_deref(), Some("notes/page-gap"));
     }
 
     #[test]

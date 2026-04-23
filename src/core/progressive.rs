@@ -151,8 +151,8 @@ mod tests {
             })
             .unwrap();
         conn.execute(
-            "INSERT INTO links (from_page_id, to_page_id, relationship) \
-             VALUES (?1, ?2, 'related')",
+            "INSERT INTO links (from_page_id, to_page_id, relationship, source_kind) \
+             VALUES (?1, ?2, 'related', 'programmatic')",
             rusqlite::params![from_id, to_id],
         )
         .unwrap();

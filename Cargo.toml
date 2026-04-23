@@ -59,12 +59,16 @@ sha2 = "0.10"
 hex = "0.4"
 
 # UUID for import batch IDs
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 dirs = "6.0.0"
 
 # Filesystem watching and ignore patterns
 ignore = "0.4"
 globset = "0.4"
+
+# Unix fd-relative syscalls for path-traversal safety
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "0.38", features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3"

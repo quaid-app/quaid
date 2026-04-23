@@ -4,6 +4,8 @@
 // every indexed file. Reconciliation compares these four stat fields first; any mismatch
 // triggers a re-hash.
 
+#![allow(dead_code)]
+
 use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -26,12 +28,22 @@ pub struct FileStat {
 
 /// Stat a file and return the tuple.
 ///
-/// This is a platform-agnostic wrapper. On Windows, `ctime_ns` and `inode` are `None`.
-/// On Unix (when rustix is available), full stat fields are populated.
+/// Delegates to the path-based fallback (`std::fs::metadata`).
+/// For fd-relative, NOFOLLOW semantics use `stat_file_fd` directly.
 ///
-/// For now, this is a simple `std::fs::metadata` wrapper. Task 2.4a will add rustix-based
-/// `fstatat(AT_SYMLINK_NOFOLLOW)` for Unix platforms.
+/// # Windows behavior
+/// Always uses `std::fs::metadata`. `ctime_ns` and `inode` are `None`.
 pub fn stat_file(path: &Path) -> io::Result<FileStat> {
+    // For now, use the fallback path-based stat
+    // Task 4.2 will wire fd-relative callers to use stat_file_fd directly
+    stat_file_fallback(path)
+}
+
+/// Stat a file via the fallback path-based approach (std::fs::metadata).
+///
+/// On Unix, this uses `stat` (follows symlinks). For NOFOLLOW semantics,
+/// use `fs_safety::stat_at_nofollow` with a parent fd.
+fn stat_file_fallback(path: &Path) -> io::Result<FileStat> {
     let metadata = fs::metadata(path)?;
     let size_bytes = metadata.len() as i64;
 
@@ -64,6 +76,34 @@ pub fn stat_file(path: &Path) -> io::Result<FileStat> {
             inode: None,
         })
     }
+}
+
+#[cfg(unix)]
+use crate::core::fs_safety;
+
+/// Stat a file via fd-relative `fstatat(AT_SYMLINK_NOFOLLOW)` (Unix only).
+///
+/// This is the preferred stat path for reconciler walks — provides path-traversal
+/// safety and NOFOLLOW semantics.
+///
+/// # Conversion note
+/// `fs_safety::FileStatNoFollow` always has non-nullable ctime_ns and inode.
+/// We convert to `FileStat` with `Some(...)` wrappers.
+#[cfg(unix)]
+pub fn stat_file_fd<Fd: rustix::fd::AsFd>(parent_fd: Fd, name: &Path) -> io::Result<FileStat> {
+    let stat = fs_safety::stat_at_nofollow(parent_fd, name)?;
+    Ok(FileStat {
+        mtime_ns: stat.mtime_ns,
+        ctime_ns: Some(stat.ctime_ns),
+        size_bytes: stat.size_bytes,
+        inode: Some(stat.inode),
+    })
+}
+
+#[cfg(not(unix))]
+pub fn stat_file_fd<Fd>(_parent_fd: Fd, name: &Path) -> io::Result<FileStat> {
+    // Windows fallback: use path-based stat
+    stat_file_fallback(name)
 }
 
 // ── SHA-256 Hashing ───────────────────────────────────────────
@@ -212,6 +252,8 @@ mod tests {
     use rusqlite::Connection;
     use std::io::Write;
     use tempfile::NamedTempFile;
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
     fn open_file_state_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -265,6 +307,38 @@ mod tests {
             hash,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_file_fd_returns_full_tuple_for_regular_file() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("note.md"), b"hello").unwrap();
+
+        let root_fd = crate::core::fs_safety::open_root_fd(dir.path()).unwrap();
+        let stat = stat_file_fd(&root_fd, Path::new("note.md")).unwrap();
+
+        assert_eq!(stat.size_bytes, 5);
+        assert!(stat.mtime_ns > 0);
+        assert!(stat.ctime_ns.is_some());
+        assert!(stat.inode.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stat_file_fd_uses_nofollow_semantics_for_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("target.md"), b"hello").unwrap();
+        symlink(dir.path().join("target.md"), dir.path().join("link.md")).unwrap();
+
+        let root_fd = crate::core::fs_safety::open_root_fd(dir.path()).unwrap();
+        let stat = stat_file_fd(&root_fd, Path::new("link.md")).unwrap();
+
+        assert_ne!(stat.size_bytes, 5);
+        assert!(stat.ctime_ns.is_some());
+        assert!(stat.inode.is_some());
     }
 
     #[test]

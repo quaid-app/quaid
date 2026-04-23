@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Once;
 
@@ -201,10 +202,91 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
 
     let conn = Connection::open(path)?;
     conn.execute_batch(include_str!("../schema.sql"))?;
+    ensure_collection_owner_columns(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+fn ensure_collection_owner_columns(conn: &Connection) -> Result<(), DbError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(collections)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    for (column_name, column_sql) in [
+        (
+            "active_lease_session_id",
+            "ALTER TABLE collections ADD COLUMN active_lease_session_id TEXT DEFAULT NULL",
+        ),
+        (
+            "restore_command_id",
+            "ALTER TABLE collections ADD COLUMN restore_command_id TEXT DEFAULT NULL",
+        ),
+        (
+            "restore_lease_session_id",
+            "ALTER TABLE collections ADD COLUMN restore_lease_session_id TEXT DEFAULT NULL",
+        ),
+        (
+            "reload_generation",
+            "ALTER TABLE collections ADD COLUMN reload_generation INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "watcher_released_session_id",
+            "ALTER TABLE collections ADD COLUMN watcher_released_session_id TEXT DEFAULT NULL",
+        ),
+        (
+            "watcher_released_generation",
+            "ALTER TABLE collections ADD COLUMN watcher_released_generation INTEGER DEFAULT NULL",
+        ),
+        (
+            "watcher_released_at",
+            "ALTER TABLE collections ADD COLUMN watcher_released_at TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_command_heartbeat_at",
+            "ALTER TABLE collections ADD COLUMN pending_command_heartbeat_at TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_root_path",
+            "ALTER TABLE collections ADD COLUMN pending_root_path TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_restore_manifest",
+            "ALTER TABLE collections ADD COLUMN pending_restore_manifest TEXT DEFAULT NULL",
+        ),
+        (
+            "restore_command_pid",
+            "ALTER TABLE collections ADD COLUMN restore_command_pid INTEGER DEFAULT NULL",
+        ),
+        (
+            "restore_command_host",
+            "ALTER TABLE collections ADD COLUMN restore_command_host TEXT DEFAULT NULL",
+        ),
+        (
+            "integrity_failed_at",
+            "ALTER TABLE collections ADD COLUMN integrity_failed_at TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_manifest_incomplete_at",
+            "ALTER TABLE collections ADD COLUMN pending_manifest_incomplete_at TEXT DEFAULT NULL",
+        ),
+        (
+            "reconcile_halted_at",
+            "ALTER TABLE collections ADD COLUMN reconcile_halted_at TEXT DEFAULT NULL",
+        ),
+        (
+            "reconcile_halt_reason",
+            "ALTER TABLE collections ADD COLUMN reconcile_halt_reason TEXT DEFAULT NULL",
+        ),
+    ] {
+        if !existing_columns.contains(column_name) {
+            conn.execute_batch(column_sql)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Ensure a collection with id=1 exists in the database.
@@ -525,6 +607,7 @@ mod tests {
             "assertions",
             "brain_config",
             "collections",
+            "collection_owners",
             "config",
             "contradictions",
             "embedding_jobs",
@@ -539,6 +622,7 @@ mod tests {
             "pages",
             "raw_data",
             "raw_imports",
+            "serve_sessions",
             "tags",
             "timeline_entries",
         ];

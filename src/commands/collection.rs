@@ -1,0 +1,1506 @@
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, bail, Context, Result};
+use clap::{Args, Subcommand};
+use rusqlite::{params, Connection};
+use serde::Serialize;
+use uuid::Uuid;
+
+use crate::core::collections;
+#[cfg(unix)]
+use crate::core::fs_safety;
+use crate::core::ignore_patterns::{self, ParseResult};
+use crate::core::vault_sync;
+
+#[derive(Subcommand, Debug)]
+pub enum CollectionAction {
+    /// Attach a vault as a collection
+    Add(CollectionAddArgs),
+    /// List collections
+    List,
+    /// Show collection diagnostics
+    Info { name: String },
+    /// Reconcile a collection or adopt a new root
+    Sync(CollectionSyncArgs),
+    /// Restore a collection to a target path
+    Restore(CollectionRestoreArgs),
+    /// Clear restore-integrity blocked state
+    #[command(name = "restore-reset")]
+    RestoreReset {
+        name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Clear reconcile-halted state after manual repair
+    #[command(name = "reconcile-reset")]
+    ReconcileReset {
+        name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct CollectionAddArgs {
+    pub name: String,
+    pub path: PathBuf,
+    #[arg(long, conflicts_with = "writable")]
+    pub read_only: bool,
+    #[arg(long, conflicts_with = "read_only")]
+    pub writable: bool,
+    #[arg(long)]
+    pub write_gbrain_id: bool,
+    #[arg(long)]
+    pub watcher_mode: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct CollectionSyncArgs {
+    pub name: String,
+    #[arg(long)]
+    pub remap_root: Option<PathBuf>,
+    #[arg(long)]
+    pub finalize_pending: bool,
+    #[arg(long)]
+    pub online: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CollectionRestoreArgs {
+    pub name: String,
+    pub target: PathBuf,
+    #[arg(long)]
+    pub online: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CollectionInfoOutput {
+    name: String,
+    root_path: String,
+    writable: bool,
+    writable_mode: String,
+    write_target: bool,
+    state: String,
+    needs_full_sync: bool,
+    last_sync_at: Option<String>,
+    page_count: i64,
+    queue_depth: i64,
+    ignore_parse_errors: Option<String>,
+    pending_root_path: Option<String>,
+    restore_command_id: Option<String>,
+    restore_command_pid: Option<i64>,
+    restore_command_host: Option<String>,
+    pending_command_heartbeat_at: Option<String>,
+    integrity_failed_at: Option<String>,
+    pending_manifest_incomplete_at: Option<String>,
+    reconcile_halted_at: Option<String>,
+    reconcile_halt_reason: Option<String>,
+    reload_generation: i64,
+    watcher_released_session_id: Option<String>,
+    watcher_released_generation: Option<i64>,
+    blocked_state: String,
+    integrity_blocked: Option<String>,
+    suggested_command: Option<String>,
+    status_message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CollectionListRow {
+    name: String,
+    state: String,
+    writable: String,
+    write_target: bool,
+    root_path: String,
+    page_count: i64,
+    last_sync_at: Option<String>,
+    queue_depth: i64,
+}
+
+#[derive(Debug)]
+struct CollectionStatusSummary {
+    blocked_state: String,
+    integrity_blocked: Option<String>,
+    suggested_command: Option<String>,
+    status_message: String,
+}
+
+#[derive(Debug)]
+struct CollectionMetrics {
+    page_count: i64,
+    queue_depth: i64,
+}
+
+pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> {
+    match action {
+        CollectionAction::Add(args) => {
+            ensure_unix_collection_command("gbrain collection add")?;
+            add(db, args, json)
+        }
+        CollectionAction::List => list(db, json),
+        CollectionAction::Info { name } => info(db, &name, json),
+        CollectionAction::Sync(args) => {
+            ensure_unix_collection_command("gbrain collection sync")?;
+            sync(db, args, json)
+        }
+        CollectionAction::Restore(args) => {
+            ensure_unix_collection_command("gbrain collection restore")?;
+            restore(db, args, json)
+        }
+        CollectionAction::RestoreReset { name, confirm } => {
+            if !confirm {
+                bail!("restore-reset requires --confirm");
+            }
+            vault_sync::restore_reset(db, &name)?;
+            render_success(
+                json,
+                serde_json::json!({ "status": "ok", "command": "restore-reset", "collection": name }),
+            )
+        }
+        CollectionAction::ReconcileReset { name, confirm } => {
+            if !confirm {
+                bail!("reconcile-reset requires --confirm");
+            }
+            vault_sync::reconcile_reset(db, &name)?;
+            render_success(
+                json,
+                serde_json::json!({ "status": "ok", "command": "reconcile-reset", "collection": name }),
+            )
+        }
+    }
+}
+
+fn ensure_unix_collection_command(command: &'static str) -> Result<()> {
+    vault_sync::ensure_unix_platform(command).map_err(|err| anyhow!(err.to_string()))
+}
+
+fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
+    collections::validate_collection_name(&args.name).map_err(|err| anyhow!(err.to_string()))?;
+    if collections::get_by_name(db, &args.name)?.is_some() {
+        bail!("collection already exists: {}", args.name);
+    }
+    if args.write_gbrain_id {
+        bail!(
+            "--write-gbrain-id is deferred in Batch K2; K1 only supports default read-only attach"
+        );
+    }
+    if let Some(mode) = args.watcher_mode {
+        bail!("--watcher-mode {mode} is not implemented in Batch K1");
+    }
+
+    let root_path = resolve_collection_root(&args.path)?;
+    let ignore_patterns = read_initial_ignore_patterns(&root_path)?;
+    let writable = if args.read_only {
+        false
+    } else {
+        probe_root_writable(&root_path)?
+    };
+
+    if args.writable && !writable {
+        return Err(anyhow!(vault_sync::VaultSyncError::CollectionReadOnly {
+            collection_name: args.name.clone(),
+        }
+        .to_string()));
+    }
+
+    let collection_id = {
+        let tx = db.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO collections (
+                 name,
+                 root_path,
+                 state,
+                 writable,
+                 is_write_target,
+                 ignore_patterns,
+                 ignore_parse_errors,
+                 needs_full_sync
+             )
+             VALUES (?1, ?2, 'detached', ?3, 0, ?4, NULL, 1)",
+            params![
+                args.name,
+                root_path.display().to_string(),
+                i64::from(writable),
+                ignore_patterns,
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        id
+    };
+
+    let attach_command_id = Uuid::now_v7().to_string();
+    let stats = match vault_sync::fresh_attach_collection(db, collection_id, &attach_command_id) {
+        Ok(stats) => stats,
+        Err(err) => {
+            let _ = db.execute("DELETE FROM collections WHERE id = ?1", [collection_id]);
+            return Err(anyhow!(err.to_string()));
+        }
+    };
+
+    let collection = collections::get_by_name(db, &args.name)?
+        .ok_or_else(|| anyhow!("collection not found after attach: {}", args.name))?;
+    let metrics = collection_metrics(db, collection.id)?;
+
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "add",
+            "collection": collection.name,
+            "root_path": collection.root_path,
+            "state": collection.state.as_str(),
+            "writable": collection.writable,
+            "writable_mode": writable_label(collection.writable),
+            "write_target": collection.is_write_target,
+            "page_count": metrics.page_count,
+            "queue_depth": metrics.queue_depth,
+            "last_sync_at": collection.last_sync_at,
+            "attach_command_id": attach_command_id,
+            "walked": stats.walked,
+            "modified": stats.modified,
+            "new": stats.new,
+            "missing": stats.missing,
+            "uuid_renamed": stats.uuid_renamed,
+            "hash_renamed": stats.hash_renamed
+        }),
+    )
+}
+
+fn list(db: &Connection, json: bool) -> Result<()> {
+    let mut stmt = db.prepare(
+        "SELECT c.id,
+                c.name,
+                c.state,
+                c.writable,
+                c.is_write_target,
+                c.root_path,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM pages p
+                    WHERE p.collection_id = c.id AND p.quarantined_at IS NULL
+                ), 0),
+                c.last_sync_at,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM embedding_jobs ej
+                    JOIN pages p ON p.id = ej.page_id
+                    WHERE p.collection_id = c.id
+                ), 0)
+         FROM collections c
+         WHERE c.root_path <> ''
+         ORDER BY c.name",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(CollectionListRow {
+                name: row.get(1)?,
+                state: row.get::<_, String>(2)?,
+                writable: writable_label(row.get::<_, i64>(3)? != 0).to_owned(),
+                write_target: row.get::<_, i64>(4)? != 0,
+                root_path: row.get(5)?,
+                page_count: row.get(6)?,
+                last_sync_at: row.get(7)?,
+                queue_depth: row.get(8)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        println!("name | state | writable | write_target | root_path | page_count | last_sync_at | queue_depth");
+        for row in rows {
+            println!(
+                "{} | {} | {} | {} | {} | {} | {} | {}",
+                row.name,
+                row.state,
+                row.writable,
+                row.write_target,
+                row.root_path,
+                row.page_count,
+                row.last_sync_at.as_deref().unwrap_or("-"),
+                row.queue_depth
+            );
+        }
+    }
+    Ok(())
+}
+
+fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
+    let collection = collections::get_by_name(db, name)?
+        .ok_or_else(|| anyhow::anyhow!("collection not found: {name}"))?;
+    let status = describe_collection_status(&collection);
+    let metrics = collection_metrics(db, collection.id)?;
+    let output = CollectionInfoOutput {
+        name: collection.name,
+        root_path: collection.root_path,
+        writable: collection.writable,
+        writable_mode: writable_label(collection.writable).to_owned(),
+        write_target: collection.is_write_target,
+        state: collection.state.as_str().to_owned(),
+        needs_full_sync: collection.needs_full_sync,
+        last_sync_at: collection.last_sync_at,
+        page_count: metrics.page_count,
+        queue_depth: metrics.queue_depth,
+        ignore_parse_errors: collection.ignore_parse_errors,
+        pending_root_path: collection.pending_root_path,
+        restore_command_id: collection.restore_command_id,
+        restore_command_pid: collection.restore_command_pid,
+        restore_command_host: collection.restore_command_host,
+        pending_command_heartbeat_at: collection.pending_command_heartbeat_at,
+        integrity_failed_at: collection.integrity_failed_at,
+        pending_manifest_incomplete_at: collection.pending_manifest_incomplete_at,
+        reconcile_halted_at: collection.reconcile_halted_at,
+        reconcile_halt_reason: collection.reconcile_halt_reason,
+        reload_generation: collection.reload_generation,
+        watcher_released_session_id: collection.watcher_released_session_id,
+        watcher_released_generation: collection.watcher_released_generation,
+        blocked_state: status.blocked_state,
+        integrity_blocked: status.integrity_blocked,
+        suggested_command: status.suggested_command,
+        status_message: status.status_message,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!(
+            "collection={} state={} writable={} write_target={} root_path={}",
+            output.name, output.state, output.writable_mode, output.write_target, output.root_path
+        );
+        println!(
+            "page_count={} queue_depth={} needs_full_sync={} last_sync_at={}",
+            output.page_count,
+            output.queue_depth,
+            output.needs_full_sync,
+            output.last_sync_at.as_deref().unwrap_or("null")
+        );
+        println!(
+            "pending_root_path={} integrity_failed_at={} reconcile_halted_at={} ignore_parse_errors={}",
+            output.pending_root_path.as_deref().unwrap_or("null"),
+            output.integrity_failed_at.as_deref().unwrap_or("null"),
+            output.reconcile_halted_at.as_deref().unwrap_or("null"),
+            output.ignore_parse_errors.as_deref().unwrap_or("null")
+        );
+        println!(
+            "blocked_state={} integrity_blocked={} suggested_command={} status_message=\"{}\"",
+            output.blocked_state,
+            output.integrity_blocked.as_deref().unwrap_or("null"),
+            output.suggested_command.as_deref().unwrap_or("null"),
+            output.status_message
+        );
+    }
+    Ok(())
+}
+
+fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionMetrics> {
+    db.query_row(
+        "SELECT COALESCE((
+                 SELECT COUNT(*)
+                 FROM pages
+                 WHERE collection_id = ?1 AND quarantined_at IS NULL
+             ), 0),
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM embedding_jobs ej
+                    JOIN pages p ON p.id = ej.page_id
+                    WHERE p.collection_id = ?1
+                ), 0)",
+        [collection_id],
+        |row| {
+            Ok(CollectionMetrics {
+                page_count: row.get(0)?,
+                queue_depth: row.get(1)?,
+            })
+        },
+    )
+    .map_err(Into::into)
+}
+
+fn describe_collection_status(collection: &collections::Collection) -> CollectionStatusSummary {
+    if collection.reconcile_halted_at.is_some() {
+        let reason = collection
+            .reconcile_halt_reason
+            .as_deref()
+            .unwrap_or("unknown");
+        return CollectionStatusSummary {
+            blocked_state: "reconcile_halted".to_owned(),
+            integrity_blocked: Some(reason.to_owned()),
+            suggested_command: Some(format!(
+                "gbrain collection reconcile-reset {} --confirm",
+                collection.name
+            )),
+            status_message: match reason {
+                "duplicate_uuid" => format!(
+                    "reconcile is halted on duplicate gbrain_id values; repair the vault first, then run gbrain collection reconcile-reset {} --confirm",
+                    collection.name
+                ),
+                "unresolvable_trivial_content" => format!(
+                    "reconcile is halted on trivial-content identity ambiguity; run gbrain collection migrate-uuids {} or restore the vault, then run gbrain collection reconcile-reset {} --confirm",
+                    collection.name, collection.name
+                ),
+                _ => format!(
+                    "reconcile is halted; repair the vault first, then run gbrain collection reconcile-reset {} --confirm",
+                    collection.name
+                ),
+            },
+        };
+    }
+    if collection.integrity_failed_at.is_some() {
+        return CollectionStatusSummary {
+            blocked_state: "restore_integrity_blocked".to_owned(),
+            integrity_blocked: Some("manifest_tampering".to_owned()),
+            suggested_command: Some(format!(
+                "gbrain collection restore-reset {} --confirm",
+                collection.name
+            )),
+            status_message: format!(
+                "restore is terminally blocked by integrity failure; run gbrain collection restore-reset {} --confirm after repair",
+                collection.name
+            ),
+        };
+    }
+    if collection.pending_manifest_incomplete_at.is_some() {
+        return CollectionStatusSummary {
+            blocked_state: "pending_finalize".to_owned(),
+            integrity_blocked: Some("manifest_incomplete_pending".to_owned()),
+            suggested_command: Some(format!(
+                "gbrain collection sync {} --finalize-pending",
+                collection.name
+            )),
+            status_message: format!(
+                "restore manifest is still incomplete; collection remains blocked until the files reappear and gbrain collection sync {} --finalize-pending succeeds",
+                collection.name
+            ),
+        };
+    }
+    if collection.pending_root_path.is_some() {
+        return CollectionStatusSummary {
+            blocked_state: "pending_finalize".to_owned(),
+            integrity_blocked: None,
+            suggested_command: Some(format!(
+                "gbrain collection sync {} --finalize-pending",
+                collection.name
+            )),
+            status_message: format!(
+                "restore is waiting for finalize; plain sync stays closed until gbrain collection sync {} --finalize-pending succeeds",
+                collection.name
+            ),
+        };
+    }
+    if matches!(collection.state, collections::CollectionState::Restoring)
+        && collection.needs_full_sync
+    {
+        return CollectionStatusSummary {
+            blocked_state: "pending_attach".to_owned(),
+            integrity_blocked: Some("post_tx_b_attach_pending".to_owned()),
+            suggested_command: Some(format!(
+                "gbrain collection sync {} --finalize-pending",
+                collection.name
+            )),
+            status_message: format!(
+                "restore finalized its root switch but writes stay closed until gbrain collection sync {} --finalize-pending completes attach",
+                collection.name
+            ),
+        };
+    }
+    if matches!(collection.state, collections::CollectionState::Restoring) {
+        return CollectionStatusSummary {
+            blocked_state: "restoring".to_owned(),
+            integrity_blocked: None,
+            suggested_command: None,
+            status_message:
+                "restore is still in progress; plain sync will not reopen this collection"
+                    .to_owned(),
+        };
+    }
+    if collection.needs_full_sync {
+        return CollectionStatusSummary {
+            blocked_state: "active_reconcile_needed".to_owned(),
+            integrity_blocked: None,
+            suggested_command: Some(format!("gbrain collection sync {}", collection.name)),
+            status_message:
+                "collection is active but needs a real reconcile before writes are considered fully healthy"
+                    .to_owned(),
+        };
+    }
+
+    CollectionStatusSummary {
+        blocked_state: "active".to_owned(),
+        integrity_blocked: None,
+        suggested_command: None,
+        status_message:
+            "collection is active; plain sync only reports success after active-root reconcile completes"
+                .to_owned(),
+    }
+}
+
+fn sync(db: &Connection, args: CollectionSyncArgs, json: bool) -> Result<()> {
+    if args.finalize_pending {
+        let collection = collections::get_by_name(db, &args.name)?
+            .ok_or_else(|| anyhow::anyhow!("collection not found: {}", args.name))?;
+        let outcome = vault_sync::finalize_pending_restore_via_cli(db, collection.id)?;
+        match &outcome {
+            vault_sync::FinalizeCliOutcome::Attached
+            | vault_sync::FinalizeCliOutcome::OrphanRecovered => {
+                return render_success(
+                    json,
+                    serde_json::json!({
+                        "status": "ok",
+                        "command": "sync",
+                        "collection": args.name,
+                        "finalize_pending": format!("{outcome:?}")
+                    }),
+                );
+            }
+            blocked => {
+                bail!(
+                    "FinalizePendingBlockedError: collection={} outcome={blocked:?} collection remains blocked and was not finalized",
+                    args.name
+                );
+            }
+        }
+    }
+    if let Some(remap_root) = args.remap_root {
+        let summary = vault_sync::remap_collection(db, &args.name, &remap_root, args.online)?;
+        return render_success(
+            json,
+            serde_json::json!({
+                "status": "ok",
+                "command": "sync",
+                "collection": args.name,
+                "remap_root": remap_root.display().to_string(),
+                "resolved_pages": summary.resolved_pages,
+                "missing_pages": summary.missing_pages,
+                "mismatched_pages": summary.mismatched_pages,
+                "extra_files": summary.extra_files
+            }),
+        );
+    }
+    let stats = vault_sync::sync_collection(db, &args.name)?;
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "sync",
+            "collection": args.name,
+            "active_root_reconciled": true,
+            "status_message": "active root reconciled",
+            "walked": stats.walked,
+            "modified": stats.modified,
+            "new": stats.new,
+            "missing": stats.missing,
+            "uuid_renamed": stats.uuid_renamed,
+            "hash_renamed": stats.hash_renamed
+        }),
+    )
+}
+
+fn restore(db: &Connection, args: CollectionRestoreArgs, json: bool) -> Result<()> {
+    let command_identity = vault_sync::begin_restore(db, &args.name, &args.target, args.online)?;
+    let collection = collections::get_by_name(db, &args.name)?
+        .ok_or_else(|| anyhow::anyhow!("collection not found: {}", args.name))?;
+    let page_count: i64 = db.query_row(
+        "SELECT COUNT(*) FROM pages WHERE collection_id = ?1 AND quarantined_at IS NULL",
+        [collection.id],
+        |row| row.get(0),
+    )?;
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "restore",
+            "collection": args.name,
+            "target": args.target.display().to_string(),
+            "command_identity": command_identity,
+            "restored": page_count,
+            "byte_exact": page_count,
+            "pending_finalize": false
+        }),
+    )
+}
+
+fn resolve_collection_root(path: &Path) -> Result<PathBuf> {
+    let canonical = fs::canonicalize(path).with_context(|| {
+        format!(
+            "collection root does not exist or cannot be resolved: {}",
+            path.display()
+        )
+    })?;
+    let metadata = fs::metadata(&canonical)
+        .with_context(|| format!("failed to stat collection root: {}", canonical.display()))?;
+    if !metadata.is_dir() {
+        bail!(
+            "collection root must be a directory: {}",
+            canonical.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        fs_safety::open_root_fd(&canonical).map_err(|err| {
+            anyhow!(
+                "collection root must be a real directory and not a symlink: {} ({err})",
+                canonical.display()
+            )
+        })?;
+    }
+    Ok(canonical)
+}
+
+fn read_initial_ignore_patterns(root_path: &Path) -> Result<Option<String>> {
+    let ignore_path = root_path.join(".gbrainignore");
+    if !ignore_path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&ignore_path)
+        .with_context(|| format!("failed to read {}", ignore_path.display()))?;
+    match ignore_patterns::parse_ignore_file(&content) {
+        ParseResult::Valid(patterns) => Ok(Some(serde_json::to_string(&patterns)?)),
+        ParseResult::Invalid(errors) => {
+            let details = errors
+                .iter()
+                .map(|error| {
+                    format!(
+                        "line {} raw={} error={}",
+                        error.line,
+                        serde_json::to_string(&error.raw).unwrap_or_else(|_| "\"\"".to_owned()),
+                        error.message
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "invalid .gbrainignore at {}\n{}\nFix .gbrainignore and re-run gbrain collection add.",
+                ignore_path.display(),
+                details
+            );
+        }
+    }
+}
+
+fn writable_label(writable: bool) -> &'static str {
+    if writable {
+        "writable"
+    } else {
+        "read-only"
+    }
+}
+
+fn probe_root_writable(root_path: &Path) -> Result<bool> {
+    let probe_name = format!(".gbrain-probe-{}", Uuid::now_v7());
+    let probe_path = root_path.join(&probe_name);
+
+    #[cfg(unix)]
+    {
+        let root_fd = fs_safety::open_root_fd(root_path).map_err(|err| {
+            anyhow!(
+                "failed to open collection root for capability probe: {}",
+                err
+            )
+        })?;
+        match fs_safety::openat_create_excl(&root_fd, Path::new(&probe_name)) {
+            Ok(fd) => {
+                drop(fd);
+                fs_safety::unlinkat_parent_fd(&root_fd, Path::new(&probe_name)).map_err(|err| {
+                    anyhow!(
+                        "created capability probe file but failed to remove it: {} ({err})",
+                        probe_path.display()
+                    )
+                })?;
+                Ok(true)
+            }
+            Err(err) if is_read_only_probe_error(&err) => {
+                let _ = fs::remove_file(&probe_path);
+                eprintln!(
+                    "WARN: collection root is read-only; attaching {} as read-only",
+                    root_path.display()
+                );
+                Ok(false)
+            }
+            Err(err) => {
+                let _ = fs::remove_file(&probe_path);
+                Err(anyhow!(
+                    "failed capability probe in {}: {}",
+                    root_path.display(),
+                    err
+                ))
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        match fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&probe_path)
+        {
+            Ok(file) => {
+                drop(file);
+                fs::remove_file(&probe_path)?;
+                Ok(true)
+            }
+            Err(err) if is_read_only_probe_error(&err) => {
+                let _ = fs::remove_file(&probe_path);
+                eprintln!(
+                    "WARN: collection root is read-only; attaching {} as read-only",
+                    root_path.display()
+                );
+                Ok(false)
+            }
+            Err(err) => Err(anyhow!(
+                "failed capability probe in {}: {}",
+                root_path.display(),
+                err
+            )),
+        }
+    }
+}
+
+fn is_read_only_probe_error(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::PermissionDenied || err.raw_os_error() == Some(30)
+}
+
+fn render_success(json: bool, value: serde_json::Value) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        println!(
+            "{}",
+            value
+                .as_object()
+                .into_iter()
+                .flat_map(|object| object.iter())
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::put;
+    use crate::core::db;
+    use std::path::Path;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    fn open_test_db() -> Connection {
+        db::open(":memory:").unwrap()
+    }
+
+    #[cfg(unix)]
+    fn open_test_db_file() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("brain.db");
+        let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        (dir, conn)
+    }
+
+    fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
+        conn.execute(
+            "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+             VALUES (?1, ?2, 'active', 1, 0)",
+            rusqlite::params![name, root_path.display().to_string()],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_refuses_invalid_root_before_creating_collection_row() {
+        let conn = open_test_db();
+        let missing = PathBuf::from(r"D:\does-not-exist");
+
+        let error = run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "work".to_owned(),
+                path: missing,
+                read_only: false,
+                writable: false,
+                write_gbrain_id: false,
+                watcher_mode: None,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("collection root"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM collections WHERE name = 'work'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_refuses_invalid_ignore_before_creating_collection_row() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(root.path().join(".gbrainignore"), "[broken\n").unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_gbrain_id: false,
+                watcher_mode: None,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("invalid .gbrainignore"));
+        assert!(error.to_string().contains("Fix .gbrainignore and re-run"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM collections WHERE name = 'work'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_attaches_collection_and_cleans_short_lived_lease_residue() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_gbrain_id: false,
+                watcher_mode: None,
+            }),
+            true,
+        )
+        .unwrap();
+
+        let row: (String, i64, Option<String>, i64, i64) = conn
+            .query_row(
+                "SELECT state, writable, active_lease_session_id,
+                        (SELECT COUNT(*) FROM collection_owners),
+                        (SELECT COUNT(*) FROM serve_sessions)
+                 FROM collections WHERE name = 'work'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "active");
+        assert_eq!(row.1, 1);
+        assert!(row.2.is_none());
+        assert_eq!(row.3, 0);
+        assert_eq!(row.4, 0);
+
+        let page_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages p JOIN collections c ON c.id = p.collection_id WHERE c.name = 'work'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_count, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capability_probe_leaves_no_residue_on_success() {
+        let root = tempfile::TempDir::new().unwrap();
+
+        let writable = probe_root_writable(root.path()).unwrap();
+
+        assert!(writable);
+        let residue = fs::read_dir(root.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".gbrain-probe-")
+            });
+        assert!(!residue);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_marks_collection_read_only_when_probe_hits_permission_denied() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        let original_permissions = fs::metadata(root.path()).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_mode(0o555);
+        fs::set_permissions(root.path(), read_only_permissions).unwrap();
+
+        let result = run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "ro-vault".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_gbrain_id: false,
+                watcher_mode: None,
+            }),
+            true,
+        );
+
+        fs::set_permissions(root.path(), original_permissions).unwrap();
+        result.unwrap();
+
+        let writable: i64 = conn
+            .query_row(
+                "SELECT writable FROM collections WHERE name = 'ro-vault'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(writable, 0);
+        let residue = fs::read_dir(root.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".gbrain-probe-")
+            });
+        assert!(!residue);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn info_and_list_surfaces_report_read_only_truthfully() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "archive".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: true,
+                writable: false,
+                write_gbrain_id: false,
+                watcher_mode: None,
+            }),
+            true,
+        )
+        .unwrap();
+
+        let collection = collections::get_by_name(&conn, "archive").unwrap().unwrap();
+        assert!(!collection.writable);
+        let status = describe_collection_status(&collection);
+        assert_eq!(status.blocked_state, "active");
+
+        let metrics = collection_metrics(&conn, collection.id).unwrap();
+        assert_eq!(metrics.page_count, 1);
+        let row = CollectionListRow {
+            name: collection.name.clone(),
+            state: collection.state.as_str().to_owned(),
+            writable: writable_label(collection.writable).to_owned(),
+            write_target: collection.is_write_target,
+            root_path: collection.root_path.clone(),
+            page_count: metrics.page_count,
+            last_sync_at: collection.last_sync_at.clone(),
+            queue_depth: metrics.queue_depth,
+        };
+        assert_eq!(row.writable, "read-only");
+
+        let info = CollectionInfoOutput {
+            name: collection.name,
+            root_path: collection.root_path,
+            writable: collection.writable,
+            writable_mode: writable_label(collection.writable).to_owned(),
+            write_target: collection.is_write_target,
+            state: collection.state.as_str().to_owned(),
+            needs_full_sync: collection.needs_full_sync,
+            last_sync_at: collection.last_sync_at,
+            page_count: metrics.page_count,
+            queue_depth: metrics.queue_depth,
+            ignore_parse_errors: collection.ignore_parse_errors,
+            pending_root_path: collection.pending_root_path,
+            restore_command_id: collection.restore_command_id,
+            restore_command_pid: collection.restore_command_pid,
+            restore_command_host: collection.restore_command_host,
+            pending_command_heartbeat_at: collection.pending_command_heartbeat_at,
+            integrity_failed_at: collection.integrity_failed_at,
+            pending_manifest_incomplete_at: collection.pending_manifest_incomplete_at,
+            reconcile_halted_at: collection.reconcile_halted_at,
+            reconcile_halt_reason: collection.reconcile_halt_reason,
+            reload_generation: collection.reload_generation,
+            watcher_released_session_id: collection.watcher_released_session_id,
+            watcher_released_generation: collection.watcher_released_generation,
+            blocked_state: status.blocked_state,
+            integrity_blocked: status.integrity_blocked,
+            suggested_command: status.suggested_command,
+            status_message: status.status_message,
+        };
+        assert_eq!(info.writable_mode, "read-only");
+        assert!(!info.writable);
+    }
+
+    #[test]
+    fn put_refuses_read_only_collection() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET writable = 0 WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = put::put_from_string(
+            &conn,
+            "work::notes/read-only",
+            "---\ntitle: Read Only\ntype: note\n---\nhello\n",
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("CollectionReadOnlyError"));
+    }
+
+    #[test]
+    fn restore_reset_requires_confirm() {
+        let conn = db::open(":memory:").unwrap();
+        let error = run(
+            &conn,
+            CollectionAction::RestoreReset {
+                name: "work".to_owned(),
+                confirm: false,
+            },
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--confirm"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn add_refuses_windows_platform() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_gbrain_id: false,
+                watcher_mode: None,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UnsupportedPlatformError"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_refuses_windows_platform() {
+        let conn = open_test_db();
+
+        let error = run(
+            &conn,
+            CollectionAction::Sync(CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: false,
+                online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UnsupportedPlatformError"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn restore_refuses_windows_platform() {
+        let conn = open_test_db();
+        let target = tempfile::TempDir::new().unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Restore(CollectionRestoreArgs {
+                name: "work".to_owned(),
+                target: target.path().to_path_buf(),
+                online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UnsupportedPlatformError"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_finalize_pending_uses_external_finalize_path() {
+        let (_db_dir, conn) = open_test_db_file();
+        let temp = tempfile::TempDir::new().unwrap();
+        let pending_root = temp.path().join("restored");
+        fs::create_dir_all(&pending_root).unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 pending_root_path = ?2,
+                 pending_restore_manifest = '{\"entries\":[]}',
+                 restore_command_id = 'restore-1',
+                 pending_command_heartbeat_at = datetime('now', '-120 seconds')
+             WHERE id = ?1",
+            rusqlite::params![collection_id, pending_root.display().to_string()],
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Sync(CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: true,
+                online: false,
+            }),
+            true,
+        )
+        .unwrap();
+
+        let row: (String, String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT state, root_path, needs_full_sync, pending_root_path
+                  FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "active");
+        assert_eq!(row.1, pending_root.display().to_string());
+        assert_eq!(row.2, 0);
+        assert!(row.3.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_without_flags_requires_active_root_collection() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections SET state = 'detached' WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let error = run(
+            &conn,
+            CollectionAction::Sync(CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: false,
+                online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("PlainSyncActiveRootRequiredError"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_without_flags_refuses_restore_in_progress_state() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Sync(CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: false,
+                online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(error.to_string().contains("RestoreInProgressError"));
+        assert_eq!(state, "restoring");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_without_flags_does_not_finalize_pending_restore_state() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let pending_root = temp.path().join("restored");
+        fs::create_dir_all(&pending_root).unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 pending_root_path = ?2,
+                 pending_restore_manifest = '{\"entries\":[]}',
+                 restore_command_id = 'restore-1',
+                 pending_command_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?1",
+            rusqlite::params![collection_id, pending_root.display().to_string()],
+        )
+        .unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Sync(CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: false,
+                online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        let row: (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT state, pending_root_path, restore_command_id
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(error.to_string().contains("RestorePendingFinalizeError"));
+        assert_eq!(row.0, "restoring");
+        assert_eq!(row.1.as_deref(), Some(pending_root.to_str().unwrap()));
+        assert_eq!(row.2.as_deref(), Some("restore-1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_without_flags_refuses_restore_integrity_blocked_state() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 integrity_failed_at = '2026-04-23T00:00:00Z'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Sync(CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: false,
+                online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        let row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT state, integrity_failed_at FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(error.to_string().contains("RestoreIntegrityBlockedError"));
+        assert_eq!(row.0, "restoring");
+        assert_eq!(row.1.as_deref(), Some("2026-04-23T00:00:00Z"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_without_flags_does_not_clear_integrity_or_reconcile_halt_markers() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET integrity_failed_at = '2026-04-23T00:00:00Z',
+                 reconcile_halted_at = '2026-04-23T00:05:00Z',
+                 reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Sync(CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: false,
+                online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        let row: (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT integrity_failed_at, reconcile_halted_at, reconcile_halt_reason
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(error.to_string().contains("ReconcileHaltedError"));
+        assert_eq!(row.0.as_deref(), Some("2026-04-23T00:00:00Z"));
+        assert_eq!(row.1.as_deref(), Some("2026-04-23T00:05:00Z"));
+        assert_eq!(row.2.as_deref(), Some("duplicate_uuid"));
+    }
+
+    #[test]
+    fn describe_collection_status_points_pending_finalize_to_finalize_command() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 pending_root_path = 'D:\\vault\\restored'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "pending_finalize");
+        assert_eq!(
+            status.suggested_command.as_deref(),
+            Some("gbrain collection sync work --finalize-pending")
+        );
+    }
+
+    #[test]
+    fn describe_collection_status_points_retryable_manifest_gap_to_finalize_command() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 pending_root_path = 'D:\\vault\\restored',
+                 pending_manifest_incomplete_at = '2026-04-23T00:00:00Z'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "pending_finalize");
+        assert_eq!(
+            status.integrity_blocked.as_deref(),
+            Some("manifest_incomplete_pending")
+        );
+        assert_eq!(
+            status.suggested_command.as_deref(),
+            Some("gbrain collection sync work --finalize-pending")
+        );
+    }
+
+    #[test]
+    fn describe_collection_status_points_pending_attach_to_finalize_command() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 needs_full_sync = 1
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "pending_attach");
+        assert_eq!(
+            status.integrity_blocked.as_deref(),
+            Some("post_tx_b_attach_pending")
+        );
+        assert_eq!(
+            status.suggested_command.as_deref(),
+            Some("gbrain collection sync work --finalize-pending")
+        );
+    }
+}

@@ -7,8 +7,12 @@ use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
 use crate::core::markdown;
+use crate::core::page_uuid;
 use crate::core::palace;
+use crate::core::raw_imports;
+use crate::core::vault_sync;
 
+#[derive(Debug)]
 pub struct ImportStats {
     pub imported: usize,
     /// Files skipped because they were already ingested (same SHA-256).
@@ -51,7 +55,7 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
         let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
 
         match parse_file(&raw, file_path, dir) {
-            Ok(entry) => parsed.push((file_path.clone(), hash, entry)),
+            Ok(entry) => parsed.push((file_path.clone(), raw_bytes, hash, entry)),
             Err(e) => errors.push(format!("{}: {e}", file_path.display())),
         }
     }
@@ -61,7 +65,7 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
     }
 
     if validate_only {
-        let type_inferred = parsed.iter().filter(|(_, _, e)| e.type_inferred).count();
+        let type_inferred = parsed.iter().filter(|(_, _, _, e)| e.type_inferred).count();
         return Ok(ImportStats {
             imported: parsed.len(),
             skipped_already_ingested: 0,
@@ -75,9 +79,12 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
     let mut skipped_already_ingested = 0;
     let mut type_inferred_count = 0;
 
+    vault_sync::ensure_all_collections_write_allowed(db)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+
     let tx = db.unchecked_transaction()?;
 
-    for (file_path, hash, entry) in &parsed {
+    for (file_path, raw_bytes, hash, entry) in &parsed {
         if is_already_ingested(&tx, hash)? {
             // Content unchanged — refresh the source path in case the file moved.
             refresh_ingest_source(&tx, hash, &file_path.to_string_lossy(), entry)?;
@@ -94,6 +101,13 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
         }
 
         insert_page(&tx, entry)?;
+        let page_id = page_id_for_slug(&tx, &entry.slug)?;
+        raw_imports::rotate_active_raw_import(
+            &tx,
+            page_id,
+            &file_path.to_string_lossy(),
+            raw_bytes,
+        )?;
         record_ingest(&tx, hash, &file_path.to_string_lossy(), &entry.slug)?;
         imported += 1;
     }
@@ -184,6 +198,7 @@ fn validate_roundtrip(db: &Connection, output_path: &Path) -> Result<()> {
 
 struct ParsedEntry {
     slug: String,
+    uuid: String,
     title: String,
     page_type: String,
     type_inferred: bool,
@@ -236,9 +251,11 @@ fn parse_file(raw: &str, file_path: &Path, root: &Path) -> Result<ParsedEntry> {
         .unwrap_or_else(|| palace::derive_wing(&slug));
     let room = palace::derive_room(&compiled_truth);
     let frontmatter_json = serde_json::to_string(&frontmatter)?;
+    let uuid = page_uuid::resolve_page_uuid(&frontmatter, None)?;
 
     Ok(ParsedEntry {
         slug,
+        uuid,
         title,
         page_type,
         type_inferred,
@@ -311,10 +328,11 @@ fn derive_slug_from_path(file_path: &Path, root: &Path) -> String {
 fn insert_page(db: &Connection, entry: &ParsedEntry) -> Result<()> {
     db.execute(
         "INSERT INTO pages \
-             (slug, type, title, summary, compiled_truth, timeline, \
+             (slug, uuid, type, title, summary, compiled_truth, timeline, \
               frontmatter, wing, room, version) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1) \
          ON CONFLICT(collection_id, slug) DO UPDATE SET \
+             uuid = COALESCE(pages.uuid, excluded.uuid), \
              type = excluded.type, \
              title = excluded.title, \
              summary = excluded.summary, \
@@ -327,6 +345,7 @@ fn insert_page(db: &Connection, entry: &ParsedEntry) -> Result<()> {
              updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
         rusqlite::params![
             entry.slug,
+            entry.uuid,
             entry.page_type,
             entry.title,
             entry.summary,
@@ -452,6 +471,15 @@ fn page_exists(db: &Connection, slug: &str) -> Result<bool> {
     Ok(exists != 0)
 }
 
+fn page_id_for_slug(db: &Connection, slug: &str) -> Result<i64> {
+    db.query_row(
+        "SELECT id FROM pages WHERE collection_id = 1 AND slug = ?1",
+        [slug],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
 /// Returns `(md_files, non_markdown_count)`.
 fn collect_files(dir: &Path) -> Result<(Vec<std::path::PathBuf>, usize)> {
     if !dir.exists() {
@@ -501,31 +529,38 @@ fn sha256_hex(data: &[u8]) -> String {
 fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
     let mut stmt = db.prepare(
         "SELECT slug, type, title, summary, compiled_truth, timeline, \
-                frontmatter, wing, room, version, created_at, updated_at, \
+                uuid, frontmatter, wing, room, version, created_at, updated_at, \
                 truth_updated_at, timeline_updated_at \
          FROM pages ORDER BY slug",
     )?;
 
     let rows = stmt.query_map([], |row| {
-        let frontmatter_json: String = row.get(6)?;
+        let frontmatter_json: String = row.get(7)?;
         let frontmatter: HashMap<String, String> =
             serde_json::from_str(&frontmatter_json).unwrap_or_default();
 
         Ok(crate::core::types::Page {
             slug: row.get(0)?,
+            uuid: row.get::<_, Option<String>>(6)?.ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Null,
+                    Box::new(page_uuid::PageUuidError::EmptyFrontmatterUuid),
+                )
+            })?,
             page_type: row.get(1)?,
             title: row.get(2)?,
             summary: row.get(3)?,
             compiled_truth: row.get(4)?,
             timeline: row.get(5)?,
             frontmatter,
-            wing: row.get(7)?,
-            room: row.get(8)?,
-            version: row.get(9)?,
-            created_at: row.get(10)?,
-            updated_at: row.get(11)?,
-            truth_updated_at: row.get(12)?,
-            timeline_updated_at: row.get(13)?,
+            wing: row.get(8)?,
+            room: row.get(9)?,
+            version: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+            truth_updated_at: row.get(13)?,
+            timeline_updated_at: row.get(14)?,
         })
     })?;
 
@@ -540,6 +575,7 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
 mod tests {
     use super::*;
     use crate::core::db;
+    use crate::core::raw_imports;
     use std::path::Path;
 
     fn open_test_db() -> Connection {
@@ -548,6 +584,26 @@ mod tests {
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         std::mem::forget(dir);
         conn
+    }
+
+    fn active_raw_import_count_for_slug(conn: &Connection, slug: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM raw_imports \
+             WHERE page_id = (SELECT id FROM pages WHERE slug = ?1) AND is_active = 1",
+            [slug],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn active_raw_import_bytes_for_slug(conn: &Connection, slug: &str) -> Vec<u8> {
+        conn.query_row(
+            "SELECT raw_bytes FROM raw_imports \
+             WHERE page_id = (SELECT id FROM pages WHERE slug = ?1) AND is_active = 1",
+            [slug],
+            |row| row.get(0),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -566,6 +622,31 @@ mod tests {
         assert_eq!(stats.imported, 1);
         assert_eq!(stats.skipped_already_ingested, 0);
         assert_eq!(stats.skipped_non_markdown, 0);
+    }
+
+    #[test]
+    fn import_dir_refuses_when_any_collection_write_is_blocked() {
+        let conn = open_test_db();
+        conn.execute(
+            "UPDATE collections SET state = 'restoring' WHERE is_write_target = 1",
+            [],
+        )
+        .unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("blocked.md");
+        fs::write(&file_path, "---\nslug: blocked\n---\nblocked").unwrap();
+
+        let error = import_dir(&conn, dir.path(), false).unwrap_err();
+
+        assert!(error.to_string().contains("CollectionRestoringError"));
+        let page_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE slug = 'blocked'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_count, 0);
     }
 
     #[test]
@@ -588,12 +669,77 @@ mod tests {
     }
 
     #[test]
+    fn import_dir_second_pass_is_zero_change_for_existing_page_rows() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("note.md");
+        fs::write(
+            &file_path,
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is still here.\n",
+        )
+        .unwrap();
+
+        let first = import_dir(&conn, dir.path(), false).unwrap();
+        let version_before: i64 = conn
+            .query_row(
+                "SELECT version FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let page_count_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
+            .unwrap();
+
+        let second = import_dir(&conn, dir.path(), false).unwrap();
+        let version_after: i64 = conn
+            .query_row(
+                "SELECT version FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let page_count_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(first.imported, 1);
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.skipped_already_ingested, 1);
+        assert_eq!(page_count_before, page_count_after);
+        assert_eq!(version_before, version_after);
+        assert_eq!(version_after, 1);
+    }
+
+    #[test]
+    #[ignore = "blocked on task 5.4d/5.4g: import_dir does not rotate raw_imports yet"]
+    fn import_dir_write_path_keeps_exactly_one_active_raw_import_row_for_latest_bytes() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("note.md");
+        let original =
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice founded Acme.\n";
+        fs::write(&file_path, original).unwrap();
+        import_dir(&conn, dir.path(), false).unwrap();
+
+        let updated = "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice founded Acme and now runs operations.\n";
+        fs::write(&file_path, updated).unwrap();
+        import_dir(&conn, dir.path(), false).unwrap();
+
+        assert_eq!(active_raw_import_count_for_slug(&conn, "people/alice"), 1);
+        assert_eq!(
+            active_raw_import_bytes_for_slug(&conn, "people/alice"),
+            updated.as_bytes()
+        );
+    }
+
+    #[test]
     fn export_dir_creates_md_files() {
         let conn = open_test_db();
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                                 frontmatter, wing, room, version) \
-             VALUES ('test/page', 'concept', 'Test', '', 'Content.', '', \
+             VALUES ('test/page', '01969f11-9448-7d79-8d3f-c68f54761234', 'concept', 'Test', '', 'Content.', '', \
                      '{\"title\":\"Test\",\"type\":\"concept\"}', 'test', '', 1)",
             [],
         )
@@ -634,9 +780,9 @@ mod tests {
     fn export_then_reimport_roundtrips() {
         let conn = open_test_db();
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                                 frontmatter, wing, room, version) \
-             VALUES ('test/page', 'concept', 'Test', 'Summary', 'Content.', 'Timeline.', \
+             VALUES ('test/page', '01969f11-9448-7d79-8d3f-c68f54761234', 'concept', 'Test', 'Summary', 'Content.', 'Timeline.', \
                      '{\"title\":\"Test\",\"type\":\"concept\"}', 'test', '', 1)",
             [],
         )
@@ -836,6 +982,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn import_dir_rotates_raw_imports_with_exactly_one_active_row() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("note.md");
+        fs::write(
+            &file_path,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nFirst version.\n",
+        )
+        .unwrap();
+
+        import_dir(&conn, dir.path(), false).unwrap();
+        fs::write(
+            &file_path,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nSecond version with a changed hash.\n",
+        )
+        .unwrap();
+        import_dir(&conn, dir.path(), false).unwrap();
+
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let inactive_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM raw_imports
+                 WHERE page_id = ?1 AND is_active = 0",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            raw_imports::active_raw_import_count(&conn, page_id).unwrap(),
+            1
+        );
+        assert_eq!(inactive_count, 1);
+    }
+
     /// Re-importing a directory where a file was moved to a subdirectory
     /// must refresh the source_ref to the new nested path.
     #[test]
@@ -923,6 +1112,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pages_updated, "[\"note\"]");
+    }
+
+    #[test]
+    fn import_export_reimport_preserves_gbrain_id_frontmatter() {
+        let source_db = open_test_db();
+        let source_dir = tempfile::TempDir::new().unwrap();
+        fs::write(
+            source_dir.path().join("alice.md"),
+            "---\ngbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+        )
+        .unwrap();
+
+        import_dir(&source_db, source_dir.path(), false).unwrap();
+
+        let export_dir_path = tempfile::TempDir::new().unwrap();
+        export_dir(&source_db, export_dir_path.path()).unwrap();
+
+        let exported =
+            fs::read_to_string(export_dir_path.path().join("people").join("alice.md")).unwrap();
+        assert!(
+            exported.contains("gbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\n"),
+            "exported markdown must keep gbrain_id frontmatter, got: {exported}"
+        );
+
+        let reimport_db = open_test_db();
+        import_dir(&reimport_db, export_dir_path.path(), false).unwrap();
+
+        let frontmatter_json: String = reimport_db
+            .query_row(
+                "SELECT frontmatter FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let frontmatter: HashMap<String, String> = serde_json::from_str(&frontmatter_json).unwrap();
+        assert_eq!(
+            frontmatter.get("gbrain_id").map(String::as_str),
+            Some("0195c7c0-2d06-7df0-bf59-acde48001122")
+        );
     }
 
     // ── infer_type_from_path tests ───────────────────────────────

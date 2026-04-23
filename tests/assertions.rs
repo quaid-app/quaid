@@ -10,12 +10,34 @@ fn open_test_db() -> Connection {
     db::open(":memory:").unwrap()
 }
 
+fn test_uuid(slug: &str) -> String {
+    let mut hex = String::new();
+    for byte in slug.as_bytes() {
+        hex.push_str(&format!("{byte:02x}"));
+        if hex.len() >= 32 {
+            break;
+        }
+    }
+    while hex.len() < 32 {
+        hex.push('0');
+    }
+
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
 fn insert_page(conn: &Connection, slug: &str, compiled_truth: &str) {
     conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+        "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
-         VALUES (?1, 'person', ?1, '', ?2, '', '{}', 'people', '', 1)",
-        rusqlite::params![slug, compiled_truth],
+         VALUES (?1, ?2, 'person', ?1, '', ?3, '', '{}', 'people', '', 1)",
+        rusqlite::params![slug, test_uuid(slug), compiled_truth],
     )
     .unwrap();
 }
@@ -69,6 +91,7 @@ fn extract_on_missing_page_returns_page_not_found() {
     let conn = open_test_db();
     let page = gbrain::core::types::Page {
         slug: "people/ghost".to_string(),
+        uuid: "01969f11-9448-7d79-8d3f-c68f54761299".to_string(),
         page_type: "person".to_string(),
         title: "Ghost".to_string(),
         summary: String::new(),

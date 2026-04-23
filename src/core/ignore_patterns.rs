@@ -4,6 +4,8 @@
 // DB column is a cached mirror. Atomic parsing ensures the mirror is only updated
 // when the entire file is valid.
 
+#![allow(dead_code)]
+
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -138,7 +140,7 @@ pub fn reload_patterns(
             let err = IgnoreParseError::file_stably_absent();
             conn.execute(
                 "UPDATE collections SET ignore_parse_errors = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?2",
-                [serde_json::to_string(&[err.clone()]).unwrap(), collection_id.to_string()],
+                [serde_json::to_string(std::slice::from_ref(&err)).unwrap(), collection_id.to_string()],
             )
             .map_err(|e| ReloadError::DbError(e.to_string()))?;
             return Err(ReloadError::FileStablyAbsent(err));
@@ -215,6 +217,14 @@ pub fn build_globset(conn: &Connection, collection_id: i64) -> Result<GlobSet, S
         )
         .map_err(|e| format!("Failed to query ignore_patterns: {}", e))?;
 
+    build_globset_from_patterns(user_patterns.as_deref())
+}
+
+/// Build a `GlobSet` from built-ins plus a serialized ignore mirror payload.
+///
+/// This is used by the reconciler after `.gbrainignore` has been atomically
+/// reloaded into `collections.ignore_patterns`.
+pub fn build_globset_from_patterns(user_patterns_json: Option<&str>) -> Result<GlobSet, String> {
     let mut builder = GlobSetBuilder::new();
 
     // Add built-in defaults
@@ -224,8 +234,8 @@ pub fn build_globset(conn: &Connection, collection_id: i64) -> Result<GlobSet, S
     }
 
     // Add user patterns from mirror
-    if let Some(json) = user_patterns {
-        if let Ok(patterns) = serde_json::from_str::<Vec<String>>(&json) {
+    if let Some(json) = user_patterns_json {
+        if let Ok(patterns) = serde_json::from_str::<Vec<String>>(json) {
             for pattern in patterns {
                 // Already validated during atomic parse, but be defensive
                 if let Ok(glob) = Glob::new(&pattern) {
@@ -401,7 +411,8 @@ mod tests {
         let errors: Vec<IgnoreParseError> = serde_json::from_str(&errors_json.unwrap()).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].code, "parse_error");
-        let mirror: Vec<String> = serde_json::from_str(&fetch_ignore_mirror(&conn).unwrap()).unwrap();
+        let mirror: Vec<String> =
+            serde_json::from_str(&fetch_ignore_mirror(&conn).unwrap()).unwrap();
         assert_eq!(mirror, vec!["private/**"]);
     }
 
@@ -422,7 +433,8 @@ mod tests {
         assert_eq!(shape.raw, "");
         assert!(shape.message.contains("ignore clear"));
 
-        let mirror: Vec<String> = serde_json::from_str(&fetch_ignore_mirror(&conn).unwrap()).unwrap();
+        let mirror: Vec<String> =
+            serde_json::from_str(&fetch_ignore_mirror(&conn).unwrap()).unwrap();
         assert_eq!(mirror, vec!["private/**"]);
         let stored_errors: Vec<IgnoreParseError> =
             serde_json::from_str(&fetch_ignore_errors(&conn).unwrap()).unwrap();
@@ -446,7 +458,8 @@ mod tests {
 
         reload_patterns(&conn, 1, temp_dir.path()).unwrap();
 
-        let mirror: Vec<String> = serde_json::from_str(&fetch_ignore_mirror(&conn).unwrap()).unwrap();
+        let mirror: Vec<String> =
+            serde_json::from_str(&fetch_ignore_mirror(&conn).unwrap()).unwrap();
         assert_eq!(mirror, vec!["archive/**"]);
         assert!(fetch_ignore_errors(&conn).is_none());
     }
@@ -476,5 +489,14 @@ mod tests {
         assert!(globset.is_match("test.tmp"));
         assert!(globset.is_match("file.bak"));
         assert!(globset.is_match(".git/config")); // builtin still applies
+    }
+
+    #[test]
+    fn build_globset_from_patterns_includes_builtins_and_user_patterns() {
+        let globset = build_globset_from_patterns(Some(r#"["private/**","*.bak"]"#)).unwrap();
+
+        assert!(globset.is_match("private/plan.md"));
+        assert!(globset.is_match("notes/archive.bak"));
+        assert!(globset.is_match(".obsidian/workspace.json"));
     }
 }

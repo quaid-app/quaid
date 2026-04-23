@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use anyhow::{bail, Result};
 use rusqlite::Connection;
 
-use crate::core::markdown;
 use crate::core::types::Page;
+use crate::core::{markdown, page_uuid, vault_sync};
 
 /// Read a page by slug and print it to stdout.
 pub fn run(db: &Connection, slug: &str, json: bool) -> Result<()> {
@@ -21,38 +21,51 @@ pub fn run(db: &Connection, slug: &str, json: bool) -> Result<()> {
 
 /// Load a single page from the database by slug.
 pub fn get_page(db: &Connection, slug: &str) -> Result<Page> {
+    let resolved = vault_sync::resolve_page_for_read(db, slug)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    get_page_by_key(db, resolved.collection_id, &resolved.slug)
+}
+
+pub fn get_page_by_key(db: &Connection, collection_id: i64, slug: &str) -> Result<Page> {
     let mut stmt = db.prepare(
-        "SELECT slug, type, title, summary, compiled_truth, timeline, \
+        "SELECT slug, uuid, type, title, summary, compiled_truth, timeline, \
                 frontmatter, wing, room, version, created_at, updated_at, \
                 truth_updated_at, timeline_updated_at \
-         FROM pages WHERE slug = ?1",
+           FROM pages WHERE collection_id = ?1 AND slug = ?2",
     )?;
 
-    let page = stmt.query_row([slug], |row| {
-        let frontmatter_json: String = row.get(6)?;
+    let page = stmt.query_row(rusqlite::params![collection_id, slug], |row| {
+        let frontmatter_json: String = row.get(7)?;
         let frontmatter: HashMap<String, String> =
             serde_json::from_str(&frontmatter_json).unwrap_or_default();
 
         Ok(Page {
             slug: row.get(0)?,
-            page_type: row.get(1)?,
-            title: row.get(2)?,
-            summary: row.get(3)?,
-            compiled_truth: row.get(4)?,
-            timeline: row.get(5)?,
+            uuid: row.get::<_, Option<String>>(1)?.ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Null,
+                    Box::new(page_uuid::PageUuidError::EmptyFrontmatterUuid),
+                )
+            })?,
+            page_type: row.get(2)?,
+            title: row.get(3)?,
+            summary: row.get(4)?,
+            compiled_truth: row.get(5)?,
+            timeline: row.get(6)?,
             frontmatter,
-            wing: row.get(7)?,
-            room: row.get(8)?,
-            version: row.get(9)?,
-            created_at: row.get(10)?,
-            updated_at: row.get(11)?,
-            truth_updated_at: row.get(12)?,
-            timeline_updated_at: row.get(13)?,
+            wing: row.get(8)?,
+            room: row.get(9)?,
+            version: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+            truth_updated_at: row.get(13)?,
+            timeline_updated_at: row.get(14)?,
         })
     });
 
     match page {
-        Ok(p) => Ok(p),
+        Ok(page) => Ok(page),
         Err(rusqlite::Error::QueryReturnedNoRows) => {
             bail!("page not found: {slug}")
         }
@@ -64,6 +77,7 @@ pub fn get_page(db: &Connection, slug: &str) -> Result<Page> {
 mod tests {
     use super::*;
     use crate::core::db;
+    use crate::core::page_uuid;
 
     /// Insert a test page directly into the database.
     fn insert_test_page(conn: &Connection, slug: &str, title: &str, truth: &str, timeline: &str) {
@@ -72,11 +86,12 @@ mod tests {
             "type": "person"
         });
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                                 frontmatter, wing, room, version) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 slug,
+                page_uuid::generate_uuid_v7(),
                 "person",
                 title,
                 "Test summary",

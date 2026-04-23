@@ -2,16 +2,27 @@ use anyhow::{bail, Result};
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::core::collections::OpKind;
 use crate::core::types::Link;
+use crate::core::vault_sync;
 
 // ── slug → page_id resolution ────────────────────────────────
 
 /// Resolve a slug to its integer page ID. Returns an error if the page doesn't exist.
-fn resolve_page_id(db: &Connection, slug: &str) -> Result<i64> {
-    db.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
-        row.get(0)
-    })
-    .map_err(|_| anyhow::anyhow!("page not found: {slug}"))
+fn resolve_page_id(db: &Connection, slug: &str, op_kind: OpKind) -> Result<(i64, i64)> {
+    let resolved = vault_sync::resolve_slug_for_op(db, slug, op_kind)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let page_id = db
+        .query_row(
+            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+            rusqlite::params![resolved.collection_id, resolved.slug],
+            |row| row.get(0),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
+            other => anyhow::anyhow!(other),
+        })?;
+    Ok((resolved.collection_id, page_id))
 }
 
 // ── gbrain link ──────────────────────────────────────────────
@@ -51,8 +62,12 @@ pub fn run_silent(
     valid_from: Option<String>,
     valid_until: Option<String>,
 ) -> Result<bool> {
-    let from_id = resolve_page_id(db, from)?;
-    let to_id = resolve_page_id(db, to)?;
+    let (from_collection_id, from_id) = resolve_page_id(db, from, OpKind::WriteUpdate)?;
+    let (to_collection_id, to_id) = resolve_page_id(db, to, OpKind::WriteUpdate)?;
+    vault_sync::ensure_collection_write_allowed(db, from_collection_id)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    vault_sync::ensure_collection_write_allowed(db, to_collection_id)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     // Close scenario: existing link + valid_until supplied → update.
     if let Some(ref until) = valid_until {
@@ -70,8 +85,9 @@ pub fn run_silent(
 
     // Create scenario: insert a new link row.
     db.execute(
-        "INSERT INTO links (from_page_id, to_page_id, relationship, valid_from, valid_until) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO links (
+            from_page_id, to_page_id, relationship, source_kind, valid_from, valid_until
+         ) VALUES (?1, ?2, ?3, 'programmatic', ?4, ?5)",
         rusqlite::params![from_id, to_id, relationship, valid_from, valid_until],
     )?;
 
@@ -89,6 +105,18 @@ pub fn close(db: &Connection, link_id: u64, valid_until: &str) -> Result<()> {
 
 /// Close a temporal link by ID without printing to stdout. Safe to call from MCP handlers.
 pub fn close_silent(db: &Connection, link_id: u64, valid_until: &str) -> Result<()> {
+    let collection_id: i64 = db
+        .query_row(
+            "SELECT p.collection_id
+             FROM links l
+             JOIN pages p ON p.id = l.from_page_id
+             WHERE l.id = ?1",
+            [link_id as i64],
+            |row| row.get(0),
+        )
+        .map_err(|_| anyhow::anyhow!("link not found: id {link_id}"))?;
+    vault_sync::ensure_collection_write_allowed(db, collection_id)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let rows = db.execute(
         "UPDATE links SET valid_until = ?1 WHERE id = ?2",
         rusqlite::params![valid_until, link_id],
@@ -115,7 +143,7 @@ struct LinkRow {
 
 /// List all outbound links for a page.
 pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool) -> Result<()> {
-    let from_id = resolve_page_id(db, slug)?;
+    let (_, from_id) = resolve_page_id(db, slug, OpKind::Read)?;
 
     let mut stmt = db.prepare(
         "SELECT l.id, p.slug, l.relationship, l.valid_from, l.valid_until \
@@ -159,8 +187,12 @@ pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool)
 
 /// Remove a cross-reference entirely.
 pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String>) -> Result<()> {
-    let from_id = resolve_page_id(db, from)?;
-    let to_id = resolve_page_id(db, to)?;
+    let (from_collection_id, from_id) = resolve_page_id(db, from, OpKind::WriteUpdate)?;
+    let (to_collection_id, to_id) = resolve_page_id(db, to, OpKind::WriteUpdate)?;
+    vault_sync::ensure_collection_write_allowed(db, from_collection_id)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    vault_sync::ensure_collection_write_allowed(db, to_collection_id)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     let rows = if let Some(ref rel) = relationship {
         db.execute(
@@ -186,7 +218,7 @@ pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String
 
 /// List backlinks (inbound links) for a page.
 pub fn backlinks(db: &Connection, slug: &str, _temporal: Option<String>, json: bool) -> Result<()> {
-    let to_id = resolve_page_id(db, slug)?;
+    let (_, to_id) = resolve_page_id(db, slug, OpKind::Read)?;
 
     let mut stmt = db.prepare(
         "SELECT l.id, p.slug, l.relationship, l.valid_from, l.valid_until \
@@ -319,6 +351,31 @@ mod tests {
         assert!(link.valid_until.is_none());
     }
 
+    #[test]
+    fn create_link_marks_row_as_programmatic() {
+        let conn = open_test_db();
+        insert_page(&conn, "people/alice", "person");
+        insert_page(&conn, "companies/acme", "company");
+
+        run(
+            &conn,
+            "people/alice",
+            "companies/acme",
+            "works_at",
+            None,
+            None,
+        )
+        .unwrap();
+
+        let source_kind: String = conn
+            .query_row("SELECT source_kind FROM links WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(source_kind, "programmatic");
+    }
+
     // ── close link ───────────────────────────────────────────
 
     #[test]
@@ -417,6 +474,30 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("page not found"));
+    }
+
+    #[test]
+    fn create_link_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+        let conn = open_test_db();
+        insert_page(&conn, "people/alice", "person");
+        insert_page(&conn, "companies/acme", "company");
+        conn.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let error = run(
+            &conn,
+            "people/alice",
+            "companies/acme",
+            "works_at",
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("CollectionRestoringError"));
     }
 
     // ── unlink ───────────────────────────────────────────────

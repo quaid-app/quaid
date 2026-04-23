@@ -3,6 +3,8 @@ use rusqlite::Connection;
 
 use crate::commands::get::get_page;
 use crate::core::assertions::{self, Contradiction};
+use crate::core::collections::OpKind;
+use crate::core::vault_sync;
 
 #[derive(Debug)]
 pub struct CheckReport {
@@ -32,6 +34,15 @@ pub fn execute_check(
     all: bool,
     check_type: Option<&str>,
 ) -> Result<CheckReport> {
+    if let Some(page_slug) = slug {
+        let resolved = vault_sync::resolve_slug_for_op(db, page_slug, OpKind::WriteUpdate)
+            .map_err(|err| anyhow!(err.to_string()))?;
+        vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
+            .map_err(|err| anyhow!(err.to_string()))?;
+    } else if all {
+        vault_sync::ensure_all_collections_write_allowed(db)
+            .map_err(|err| anyhow!(err.to_string()))?;
+    }
     let slugs = resolve_targets(db, slug, all)?;
 
     for page_slug in &slugs {
@@ -177,12 +188,34 @@ mod tests {
         db::open(":memory:").unwrap()
     }
 
+    fn test_uuid(slug: &str) -> String {
+        let mut hex = String::new();
+        for byte in slug.as_bytes() {
+            hex.push_str(&format!("{byte:02x}"));
+            if hex.len() >= 32 {
+                break;
+            }
+        }
+        while hex.len() < 32 {
+            hex.push('0');
+        }
+
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    }
+
     fn insert_page(conn: &Connection, slug: &str, truth: &str) {
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                                 frontmatter, wing, room, version) \
-             VALUES (?1, 'person', ?2, '', ?3, '', '{}', 'people', '', 1)",
-            rusqlite::params![slug, slug, truth],
+             VALUES (?1, ?2, 'person', ?3, '', ?4, '', '{}', 'people', '', 1)",
+            rusqlite::params![slug, test_uuid(slug), slug, truth],
         )
         .unwrap();
     }
@@ -301,5 +334,24 @@ mod tests {
 
         assert!(output.contains("[people/alice] ↔ [sources/alice-profile]"));
         assert!(output.contains("1 contradiction(s) found across 2 pages."));
+    }
+
+    #[test]
+    fn all_mode_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "people/alice",
+            "## Assertions\nAlice works at Acme Corp.\n",
+        );
+        conn.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let error = execute_check(&conn, None, true, None).unwrap_err();
+
+        assert!(error.to_string().contains("CollectionRestoringError"));
     }
 }

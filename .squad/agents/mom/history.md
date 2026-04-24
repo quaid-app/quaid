@@ -214,3 +214,31 @@ on 5 consolidated blockers. Mom assigned as second revision author.
 - Contradictory documentation is a blocker in its own right. A task body that says
   "deferred" and a note that says "included" cannot both be true. Pick one and say it.
 
+---
+
+### 2026-04-25 Restore Artifact Reconciliation (mixed-author cleanup)
+
+**Context:** Fry's restore artifact was rejected and Fry locked out. My prior commit
+`e29d1d0` fixed the 5 quarantine restore blockers. Uncommitted changes remained in 4 files
+containing a mix of required glue and a dropped Fry artifact piece.
+
+**What happened:**
+- Audited all 4 uncommitted files against the narrow Unix restore contract.
+- **Kept:** `linkat_parent_fd` (required by committed `quarantine.rs`), `pub(crate)` lease
+  visibility (required by `quarantine.rs`), restore routing in `collection.rs`, rewritten
+  CLI truth tests.
+- **Dropped:** `walk_to_parent_create_dirs` (both variants + test + doc line) — explicitly
+  rejected in `e29d1d0` as Blocker 4. Fry's artifact included it; the safe contract refuses
+  absent parents rather than silently recreating them without a durable fsync chain.
+- Committed clean artifact in `6a3d54c`. 591 tests pass. 2 Windows-only pre-existing failures.
+- Decision record: `.squad/decisions/inbox/mom-restore-artifact-reconcile.md`
+
+**Lesson:**
+- When auditing a mixed-author worktree, the question is not "does this compile?" but
+  "which piece was explicitly rejected and why?" A removed function that sneaks back in
+  as a dependency of another change is a silent contract violation. Check the commit
+  message of the prior revision for the exact reason each piece was excluded.
+- Compile-required ≠ contract-required. `walk_to_parent_create_dirs` was not called by
+  any live path — it was dead code that would have silently re-opened the Fry design.
+  The test for it would have falsely green-lit the pattern as accepted behavior.
+

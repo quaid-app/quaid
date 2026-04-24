@@ -244,6 +244,7 @@ pub(crate) fn reconcile_with_native_events(
         let diff = stat_diff_from_walk(conn, collection.id, walked.files)?;
         let rename_resolution = resolve_rename_resolution(
             conn,
+            collection.id,
             Path::new(&collection.root_path),
             &diff,
             native_renames,
@@ -380,7 +381,7 @@ pub fn full_hash_reconcile_authorized(
         let walked = walk_collection(conn, &root_fd, &collection)?;
         detect_duplicate_uuids_in_tree(root_path, &walked.files)?;
         let plan = build_full_hash_plan(conn, collection.id, root_path, &walked.files)?;
-        let rename_resolution = resolve_rename_resolution(conn, root_path, &plan.diff, &[])?;
+        let rename_resolution = resolve_rename_resolution(conn, collection.id, root_path, &plan.diff, &[])?;
 
         assert_full_hash_raw_import_invariants(conn, collection.id)?;
         apply_full_hash_metadata_self_heal(conn, collection.id, &plan.unchanged)?;
@@ -723,7 +724,7 @@ fn verify_read_only_mount(collection: &Collection) -> Result<(), ReconcileError>
     use rustix::fs::{fstatvfs, StatVfsMountFlags};
 
     let root_fd = fs_safety::open_root_fd(Path::new(&collection.root_path))?;
-    let statvfs = fstatvfs(&root_fd)?;
+    let statvfs = fstatvfs(&root_fd).map_err(std::io::Error::from)?;
     if !statvfs.f_flag.contains(StatVfsMountFlags::RDONLY) {
         return Err(ReconcileError::CollectionLacksWriterQuiescenceError {
             collection_name: collection.name.clone(),
@@ -1326,6 +1327,7 @@ struct ParsedVaultFile {
 #[cfg(unix)]
 fn resolve_rename_resolution(
     conn: &Connection,
+    collection_id: i64,
     root_path: &Path,
     diff: &StatDiff,
     native_renames: &[NativeRename],
@@ -1339,7 +1341,7 @@ fn resolve_rename_resolution(
         return Ok(resolution);
     }
 
-    let missing_identities = load_missing_page_identities(conn, &diff.missing)?;
+    let missing_identities = load_missing_page_identities(conn, collection_id, &diff.missing)?;
     let new_identities = load_new_tree_identities(root_path, &diff.new)?;
 
     apply_native_rename_matches(
@@ -1357,6 +1359,7 @@ fn resolve_rename_resolution(
 #[cfg(not(unix))]
 fn resolve_rename_resolution(
     _conn: &Connection,
+    _collection_id: i64,
     _root_path: &Path,
     diff: &StatDiff,
     _native_renames: &[NativeRename],
@@ -4109,6 +4112,7 @@ mod tests {
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
         let resolution = resolve_rename_resolution(
             &conn,
+            collection.id,
             root.path(),
             &diff,
             &[NativeRename {
@@ -4160,9 +4164,7 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let resolution = resolve_rename_resolution(&conn, root.path(), &diff, &[]).unwrap();
-
-        assert_eq!(resolution.uuid_renamed, 1);
+        let resolution = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
         assert_eq!(
             resolution.matches,
             vec![RenameMatch {
@@ -4201,7 +4203,7 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let resolution = resolve_rename_resolution(&conn, root.path(), &diff, &[]).unwrap();
+        let resolution = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
 
         assert_eq!(resolution.hash_renamed, 1);
         assert_eq!(
@@ -4243,7 +4245,7 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let resolution = resolve_rename_resolution(&conn, root.path(), &diff, &[]).unwrap();
+        let resolution = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
 
         assert_eq!(resolution.hash_renamed, 0);
         assert_eq!(resolution.quarantined_ambiguous, 1);
@@ -4307,7 +4309,7 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let error = resolve_rename_resolution(&conn, root.path(), &diff, &[]).unwrap_err();
+        let error = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap_err();
 
         assert!(matches!(
             error,

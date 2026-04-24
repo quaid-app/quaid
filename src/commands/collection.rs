@@ -1559,6 +1559,7 @@ mod tests {
             last_sync_at: collection.last_sync_at,
             page_count: metrics.page_count,
             queue_depth: metrics.queue_depth,
+            quarantined_pages_awaiting_action: metrics.quarantined_pages_awaiting_action,
             ignore_parse_errors: collection.ignore_parse_errors,
             pending_root_path: collection.pending_root_path,
             restore_command_id: collection.restore_command_id,

@@ -75,7 +75,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 gbrain init ~/brain.db
 ```
 
-This creates a new `brain.db` file with the full v5 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (on the vault-sync-engine branch) collections, file_state, and raw_imports tables.
+This creates a new `brain.db` file with the full v5 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (in `v0.9.6`) collections, file_state, and raw_imports tables.
 
 ### 2. Import an existing markdown directory
 
@@ -381,7 +381,7 @@ gbrain skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands are implemented on the `spec/vault-sync-engine` branch. They are not yet in a tagged release.
+> These commands are shipped in `v0.9.6`. The current release line exposes the landed vault-sync slice while keeping Windows `serve`/restore hosting and IPC follow-ons explicitly deferred.
 
 ### Attach a vault
 

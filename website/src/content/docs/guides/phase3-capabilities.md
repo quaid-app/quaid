@@ -83,7 +83,7 @@ If violations are found, `validate` exits with code 1:
 
 ### `call` — raw MCP tool invocation
 
-Invoke any of the 16 Phase 3 MCP tools directly from the command line. Useful for debugging and scripting. (The vault-sync-engine branch adds a 17th: `brain_collections`.)
+Invoke any of the 16 Phase 3 MCP tools directly from the command line. Useful for debugging and scripting. (`v0.9.6` adds a 17th: `brain_collections`.)
 
 ```bash
 # Search via MCP tool

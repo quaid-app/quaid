@@ -54,7 +54,7 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 - **MCP server** — `gbrain serve` exposes 17 tools over stdio JSON-RPC 2.0 in `v0.9.6` (Unix/macOS/Linux on the vault-sync line). Works with Claude Code and other MCP-compatible agents
 - **Hybrid search** — FTS5 keyword + vector semantic search with set-union merge, exact-match short-circuit, and optional palace-style hierarchical filtering
 - **Live file watcher** *(v0.9.6, Unix/macOS/Linux)* — `gbrain serve` runs a per-collection watcher with 1.5 s debounce and reconcile-backed flushes so the brain stays current as you edit in Obsidian or any editor
-- **Collection management** *(vault-sync-engine branch)* — attach one or more vaults with `gbrain collection add`; per-collection writable/read-only, ignore patterns via `.gbrainignore`, and `<collection>::<slug>` routing across all CLI/MCP surfaces
+- **Collection management** *(v0.9.6)* — attach one or more vaults with `gbrain collection add`; per-collection writable/read-only, ignore patterns via `.gbrainignore`, and `<collection>::<slug>` routing across all CLI/MCP surfaces
 - **Quarantine lifecycle** *(v0.9.6)* — deleted or renamed pages with DB-only state (links, assertions, gaps) are quarantined rather than hard-deleted; inspect, export, discard, or narrowly restore on Unix via `gbrain collection quarantine ...`
 - **Progressive retrieval** — token-budget-gated content expansion (summary → section → full page)
 - **Temporal knowledge graph** — typed links with validity windows, contradiction detection via assertions
@@ -215,7 +215,7 @@ gbrain get people/pedro-franceschi
 # Write/update a page
 cat updated.md | gbrain put people/pedro-franceschi
 
-# Collection-qualified slug (vault-sync-engine branch)
+# Collection-qualified slug (v0.9.6)
 gbrain get "work::people/pedro-franceschi"
 
 # Create a typed, temporal cross-reference
@@ -257,7 +257,7 @@ echo '{"tool":"brain_search","input":{"query":"machine learning"}}' | gbrain pip
 gbrain skills list             # list active skills and resolution order
 gbrain skills doctor           # verify skill hashes and shadowing
 
-# --- Collection management (vault-sync-engine branch) ---
+# --- Collection management (v0.9.6) ---
 
 # Attach a vault directory as a collection
 gbrain collection add work /path/to/my-obsidian-vault

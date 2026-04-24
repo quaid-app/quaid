@@ -16,7 +16,7 @@ pub fn run(
     } else {
         sanitize_fts_query(query)
     };
-    let results = search_fts_canonical(&effective_query, wing.as_deref(), db, limit as usize);
+    let results = search_fts_canonical(&effective_query, wing.as_deref(), None, db, limit as usize);
 
     let results = match results {
         Ok(r) => r,

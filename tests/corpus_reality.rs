@@ -115,7 +115,7 @@ fn sms_exact_slug_returns_page_as_top_1() {
     ];
 
     for slug in &slugs {
-        let results = hybrid_search(slug, None, &conn, 5).expect("search");
+        let results = hybrid_search(slug, None, None, &conn, 5).expect("search");
         assert!(
             !results.is_empty(),
             "exact-slug search for '{slug}' returned no results"
@@ -146,7 +146,7 @@ fn timeline_retrieval_known_fact_appears_in_top_5() {
     ];
 
     for (query, expected_slug) in &cases {
-        let results = hybrid_search(query, None, &conn, 5).expect("hybrid search");
+        let results = hybrid_search(query, None, None, &conn, 5).expect("hybrid search");
         let slugs: Vec<&str> = results.iter().map(|r| r.slug.as_str()).collect();
         assert!(
             slugs.contains(expected_slug),
@@ -386,7 +386,7 @@ fn latency_100_queries_p95_under_250ms() {
     for i in 0..100 {
         let query = queries[i % queries.len()];
         let start = Instant::now();
-        let _ = hybrid_search(query, None, &conn, 10).expect("search");
+        let _ = hybrid_search(query, None, None, &conn, 10).expect("search");
         durations_ms.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -431,7 +431,7 @@ fn fts5_search_finds_all_fixture_pages_by_distinctive_terms() {
     ];
 
     for (term, expected_slug) in cases {
-        let results = search_fts(term, None, &conn, 10).expect("fts search");
+        let results = search_fts(term, None, None, &conn, 10).expect("fts search");
         let slugs: Vec<&str> = results.iter().map(|r| r.slug.as_str()).collect();
         assert!(
             slugs.contains(expected_slug),

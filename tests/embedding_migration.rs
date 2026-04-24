@@ -218,7 +218,7 @@ fn embedding_migration_zero_cross_model_contamination() {
     assert_eq!(active_model_name(&conn), model_b_name);
 
     let results_b =
-        gbrain::core::inference::search_vec("knowledge brain embeddings", 10, None, &conn)
+        gbrain::core::inference::search_vec("knowledge brain embeddings", 10, None, None, &conn)
             .expect("search with model B");
 
     // All results should come from model B's embeddings
@@ -250,6 +250,7 @@ fn embedding_migration_zero_cross_model_contamination() {
     let results_a = gbrain::core::inference::search_vec(
         "software engineer distributed systems",
         10,
+        None,
         None,
         &conn,
     )
@@ -369,7 +370,7 @@ fn vec_search_on_empty_model_returns_no_results() {
     )
     .expect("deactivate others");
 
-    let results = gbrain::core::inference::search_vec("anything", 10, None, &conn)
+    let results = gbrain::core::inference::search_vec("anything", 10, None, None, &conn)
         .expect("search empty model");
 
     assert!(

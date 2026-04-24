@@ -1064,24 +1064,27 @@ pub fn search_vec(
     query: &str,
     k: usize,
     wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_vec_internal(query, k, wing_filter, conn, false)
+    search_vec_internal(query, k, wing_filter, collection_filter, conn, false)
 }
 
 pub fn search_vec_canonical(
     query: &str,
     k: usize,
     wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_vec_internal(query, k, wing_filter, conn, true)
+    search_vec_internal(query, k, wing_filter, collection_filter, conn, true)
 }
 
 fn search_vec_internal(
     query: &str,
     k: usize,
     wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Vec<SearchResult>, SearchError> {
@@ -1137,6 +1140,12 @@ fn search_vec_internal(
     if let Some(wing) = wing_filter {
         sql.push_str(" AND p.wing = ?3");
         params.push(Box::new(wing.to_owned()));
+    }
+
+    if let Some(collection_id) = collection_filter {
+        sql.push_str(" AND p.collection_id = ?");
+        sql.push_str(&(params.len() + 1).to_string());
+        params.push(Box::new(collection_id));
     }
 
     let limit_index = params.len() + 1;
@@ -1378,7 +1387,7 @@ mod tests {
     #[test]
     fn search_vec_on_empty_db_returns_empty_vec() {
         let conn = open_test_db();
-        let results = search_vec("board member tech company", 5, None, &conn)
+        let results = search_vec("board member tech company", 5, None, None, &conn)
             .expect("empty db search should succeed");
 
         assert!(results.is_empty());
@@ -1430,7 +1439,7 @@ mod tests {
         )
         .expect("insert embedding metadata");
 
-        let err = search_vec("startup founder", 5, None, &conn).unwrap_err();
+        let err = search_vec("startup founder", 5, None, None, &conn).unwrap_err();
 
         assert!(matches!(err, SearchError::Internal { .. }));
     }
@@ -1467,7 +1476,7 @@ mod tests {
         )
         .expect("insert embedding metadata");
 
-        let results = search_vec("startup founder", 5, Some("people"), &conn)
+        let results = search_vec("startup founder", 5, Some("people"), None, &conn)
             .expect("vector search should succeed");
 
         assert_eq!(results.len(), 1);
@@ -1535,7 +1544,7 @@ mod tests {
         )
         .expect("insert quarantined embedding metadata");
 
-        let results = search_vec("startup founder", 5, Some("people"), &conn)
+        let results = search_vec("startup founder", 5, Some("people"), None, &conn)
             .expect("vector search should succeed");
 
         assert_eq!(results.len(), 1);

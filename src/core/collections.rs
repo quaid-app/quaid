@@ -326,6 +326,46 @@ pub fn get_write_target(conn: &Connection) -> Result<Option<Collection>, Collect
     Ok(result)
 }
 
+/// Return the sole active collection when exactly one collection is active.
+pub fn get_single_active_collection(
+    conn: &Connection,
+) -> Result<Option<Collection>, CollectionError> {
+    let active_names = conn
+        .prepare("SELECT name FROM collections WHERE state = 'active' ORDER BY id LIMIT 2")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    match active_names.as_slice() {
+        [name] => get_by_name(conn, name),
+        _ => Ok(None),
+    }
+}
+
+/// Resolve the effective collection filter for MCP read tools.
+///
+/// Rules:
+/// - explicit `collection` selects that collection or returns `NotFound`
+/// - absent filter uses the sole active collection when there is exactly one
+/// - otherwise falls back to the write-target collection
+pub fn resolve_read_collection_filter(
+    conn: &Connection,
+    collection_name: Option<&str>,
+) -> Result<Option<Collection>, CollectionError> {
+    if let Some(collection_name) = collection_name {
+        return get_by_name(conn, collection_name)?
+            .ok_or_else(|| CollectionError::NotFound {
+                name: collection_name.to_owned(),
+            })
+            .map(Some);
+    }
+
+    if let Some(collection) = get_single_active_collection(conn)? {
+        return Ok(Some(collection));
+    }
+
+    get_write_target(conn)
+}
+
 // ── Slug parsing ──────────────────────────────────────────────
 
 /// Parse a slug input and resolve it to a collection.

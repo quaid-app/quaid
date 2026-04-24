@@ -14,24 +14,27 @@ use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 pub fn hybrid_search(
     query: &str,
     wing: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(query, wing, conn, limit, false)
+    hybrid_search_impl(query, wing, collection_filter, conn, limit, false)
 }
 
 pub fn hybrid_search_canonical(
     query: &str,
     wing: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(query, wing, conn, limit, true)
+    hybrid_search_impl(query, wing, collection_filter, conn, limit, true)
 }
 
 fn hybrid_search_impl(
     query: &str,
     wing: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -42,7 +45,9 @@ fn hybrid_search_impl(
     }
 
     if let Some(slug) = exact_slug_query(trimmed) {
-        if let Some(result) = exact_slug_result(slug, wing, conn, canonical_slug)? {
+        if let Some(result) =
+            exact_slug_result(slug, wing, collection_filter, conn, canonical_slug)?
+        {
             return Ok(vec![result]);
         }
     }
@@ -53,14 +58,14 @@ fn hybrid_search_impl(
     }
 
     let fts_results = if canonical_slug {
-        search_fts_canonical(&fts_safe, wing, conn, limit)?
+        search_fts_canonical(&fts_safe, wing, collection_filter, conn, limit)?
     } else {
-        search_fts(&fts_safe, wing, conn, limit)?
+        search_fts(&fts_safe, wing, collection_filter, conn, limit)?
     };
     let vec_results = if canonical_slug {
-        search_vec_canonical(trimmed, 10, wing, conn)?
+        search_vec_canonical(trimmed, 10, wing, collection_filter, conn)?
     } else {
-        search_vec(trimmed, 10, wing, conn)?
+        search_vec(trimmed, 10, wing, collection_filter, conn)?
     };
 
     let mut merged = match read_merge_strategy(conn)? {
@@ -111,40 +116,39 @@ fn exact_slug_query(query: &str) -> Option<&str> {
 fn exact_slug_result(
     slug: &str,
     wing: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Option<SearchResult>, SearchError> {
     if canonical_slug {
-        return exact_slug_result_canonical(slug, wing, conn);
+        return exact_slug_result_canonical(slug, wing, collection_filter, conn);
     }
 
-    let query = if wing.is_some() {
-        "SELECT slug, title, summary, wing FROM pages WHERE slug = ?1 AND wing = ?2 LIMIT 1"
-    } else {
-        "SELECT slug, title, summary, wing FROM pages WHERE slug = ?1 LIMIT 1"
-    };
+    let mut query = String::from("SELECT slug, title, summary, wing FROM pages WHERE slug = ?1");
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(slug.to_owned())];
 
-    let result = if let Some(wing) = wing {
-        conn.query_row(query, rusqlite::params![slug, wing], |row| {
-            Ok(SearchResult {
-                slug: row.get(0)?,
-                title: row.get(1)?,
-                summary: row.get(2)?,
-                score: 1.0,
-                wing: row.get(3)?,
-            })
+    if let Some(wing) = wing {
+        query.push_str(" AND wing = ?");
+        query.push_str(&(params.len() + 1).to_string());
+        params.push(Box::new(wing.to_owned()));
+    }
+    if let Some(collection_id) = collection_filter {
+        query.push_str(" AND collection_id = ?");
+        query.push_str(&(params.len() + 1).to_string());
+        params.push(Box::new(collection_id));
+    }
+    query.push_str(" LIMIT 1");
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let result = conn.query_row(&query, param_refs.as_slice(), |row| {
+        Ok(SearchResult {
+            slug: row.get(0)?,
+            title: row.get(1)?,
+            summary: row.get(2)?,
+            score: 1.0,
+            wing: row.get(3)?,
         })
-    } else {
-        conn.query_row(query, [slug], |row| {
-            Ok(SearchResult {
-                slug: row.get(0)?,
-                title: row.get(1)?,
-                summary: row.get(2)?,
-                score: 1.0,
-                wing: row.get(3)?,
-            })
-        })
-    };
+    });
 
     match result {
         Ok(result) => Ok(Some(result)),
@@ -156,8 +160,13 @@ fn exact_slug_result(
 fn exact_slug_result_canonical(
     slug: &str,
     wing: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
+    if let Some(collection_id) = collection_filter {
+        return exact_slug_result_canonical_for_collection(slug, wing, collection_id, conn);
+    }
+
     let resolved = match collections::parse_slug(conn, slug, OpKind::Read) {
         Ok(SlugResolution::Resolved {
             collection_id,
@@ -207,6 +216,68 @@ fn exact_slug_result_canonical(
              WHERE p.collection_id = ?1 AND p.slug = ?2
              LIMIT 1",
             rusqlite::params![resolved.0, &resolved.2],
+            |row| {
+                Ok(SearchResult {
+                    slug: row.get(0)?,
+                    title: row.get(1)?,
+                    summary: row.get(2)?,
+                    score: 1.0,
+                    wing: row.get(3)?,
+                })
+            },
+        )
+    };
+
+    match result {
+        Ok(result) => Ok(Some(result)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(SearchError::from(err)),
+    }
+}
+
+fn exact_slug_result_canonical_for_collection(
+    slug: &str,
+    wing: Option<&str>,
+    collection_id: i64,
+    conn: &Connection,
+) -> Result<Option<SearchResult>, SearchError> {
+    let stripped_slug = if let Some((collection_name, relative_slug)) = slug.split_once("::") {
+        match collections::get_by_name(conn, collection_name) {
+            Ok(Some(collection)) if collection.id == collection_id => relative_slug.to_owned(),
+            Ok(Some(_)) | Ok(None) => return Ok(None),
+            Err(collections::CollectionError::Sqlite(err)) => return Err(SearchError::from(err)),
+            Err(_) => return Ok(None),
+        }
+    } else {
+        slug.to_owned()
+    };
+
+    let result = if let Some(wing) = wing {
+        conn.query_row(
+            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
+             FROM pages p
+             JOIN collections c ON c.id = p.collection_id
+             WHERE p.collection_id = ?1 AND p.slug = ?2 AND p.wing = ?3
+             LIMIT 1",
+            rusqlite::params![collection_id, &stripped_slug, wing],
+            |row| {
+                Ok(SearchResult {
+                    slug: row.get(0)?,
+                    title: row.get(1)?,
+                    summary: row.get(2)?,
+                    score: 1.0,
+                    wing: row.get(3)?,
+                })
+            },
+        )
+    } else {
+        conn.query_row(
+            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
+             FROM pages p
+             JOIN collections c ON c.id = p.collection_id
+             WHERE p.collection_id = ?1 AND p.slug = ?2
+             LIMIT 1",
+            rusqlite::params![collection_id, &stripped_slug],
             |row| {
                 Ok(SearchResult {
                     slug: row.get(0)?,
@@ -391,7 +462,8 @@ mod tests {
             "people",
         );
 
-        let results = hybrid_search("people/alice", None, &conn, 1000).expect("hybrid search");
+        let results =
+            hybrid_search("people/alice", None, None, &conn, 1000).expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -409,7 +481,8 @@ mod tests {
             "people",
         );
 
-        let results = hybrid_search("[[people/alice]]", None, &conn, 1000).expect("hybrid search");
+        let results =
+            hybrid_search("[[people/alice]]", None, None, &conn, 1000).expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -459,7 +532,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("AI founder", None, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search("AI founder", None, None, &conn, 1000).expect("hybrid search");
         let slugs: Vec<_> = results.iter().map(|result| result.slug.as_str()).collect();
 
         assert!(slugs.contains(&"people/alice"));
@@ -488,7 +561,7 @@ mod tests {
         embed::run(&conn, None, true, false).expect("embed pages");
 
         let results =
-            hybrid_search("AI founder", Some("people"), &conn, 1000).expect("hybrid search");
+            hybrid_search("AI founder", Some("people"), None, &conn, 1000).expect("hybrid search");
 
         assert!(!results.is_empty());
         assert!(results.iter().all(|result| result.wing == "people"));
@@ -519,7 +592,7 @@ mod tests {
         embed::run(&conn, None, true, false).expect("embed pages");
 
         let results =
-            hybrid_search("what is rust?", None, &conn, 1000).expect("hybrid search with ?");
+            hybrid_search("what is rust?", None, None, &conn, 1000).expect("hybrid search with ?");
         assert!(!results.is_empty());
     }
 
@@ -538,7 +611,8 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("AND?", None, &conn, 1000).expect("hybrid search with AND?");
+        let results =
+            hybrid_search("AND?", None, None, &conn, 1000).expect("hybrid search with AND?");
         assert!(results.is_empty());
     }
 
@@ -555,7 +629,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("???***", None, &conn, 1000)
+        let results = hybrid_search("???***", None, None, &conn, 1000)
             .expect("hybrid search with punctuation only");
         assert!(results.is_empty());
     }
@@ -576,7 +650,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("hello, world.", None, &conn, 1000).is_ok());
+        assert!(hybrid_search("hello, world.", None, None, &conn, 1000).is_ok());
     }
 
     #[test]
@@ -592,7 +666,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("what's rust's type system?", None, &conn, 1000).is_ok());
+        assert!(hybrid_search("what's rust's type system?", None, None, &conn, 1000).is_ok());
     }
 
     #[test]
@@ -608,7 +682,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("path/to/thing key=value", None, &conn, 1000).is_ok());
+        assert!(hybrid_search("path/to/thing key=value", None, None, &conn, 1000).is_ok());
     }
 
     #[test]
@@ -624,6 +698,6 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("memory; safety", None, &conn, 1000).is_ok());
+        assert!(hybrid_search("memory; safety", None, None, &conn, 1000).is_ok());
     }
 }

@@ -81,24 +81,27 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
 pub fn search_fts(
     query: &str,
     wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_internal(query, wing_filter, conn, limit, false)
+    search_fts_internal(query, wing_filter, collection_filter, conn, limit, false)
 }
 
 pub fn search_fts_canonical(
     query: &str,
     wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_internal(query, wing_filter, conn, limit, true)
+    search_fts_internal(query, wing_filter, collection_filter, conn, limit, true)
 }
 
 fn search_fts_internal(
     query: &str,
     wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -131,11 +134,17 @@ fn search_fts_internal(
     if let Some(wing) = wing_filter {
         sql.push_str(" AND p.wing = ?2");
         params.push(Box::new(wing.to_owned()));
-        sql.push_str(" ORDER BY bm25(page_fts) LIMIT ?3");
-    } else {
-        // bm25() returns negative values; ascending order = most relevant first.
-        sql.push_str(" ORDER BY bm25(page_fts) LIMIT ?2");
     }
+
+    if let Some(collection_id) = collection_filter {
+        sql.push_str(" AND p.collection_id = ?");
+        sql.push_str(&(params.len() + 1).to_string());
+        params.push(Box::new(collection_id));
+    }
+
+    // bm25() returns negative values; ascending order = most relevant first.
+    sql.push_str(" ORDER BY bm25(page_fts) LIMIT ?");
+    sql.push_str(&(params.len() + 1).to_string());
     params.push(Box::new(limit as i64));
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -194,7 +203,7 @@ mod tests {
     #[test]
     fn search_on_empty_db_returns_empty_vec() {
         let conn = open_test_db();
-        let results = search_fts("anything", None, &conn, 1000).unwrap();
+        let results = search_fts("anything", None, None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -202,7 +211,7 @@ mod tests {
     fn search_with_empty_query_returns_empty_vec() {
         let conn = open_test_db();
         insert_page(&conn, "test/a", "Test A", "test", "summary", "content");
-        let results = search_fts("", None, &conn, 1000).unwrap();
+        let results = search_fts("", None, None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -210,7 +219,7 @@ mod tests {
     fn search_with_whitespace_query_returns_empty_vec() {
         let conn = open_test_db();
         insert_page(&conn, "test/a", "Test A", "test", "summary", "content");
-        let results = search_fts("   ", None, &conn, 1000).unwrap();
+        let results = search_fts("   ", None, None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -228,7 +237,7 @@ mod tests {
             "Machine learning is a branch of artificial intelligence.",
         );
 
-        let results = search_fts("machine learning", None, &conn, 1000).unwrap();
+        let results = search_fts("machine learning", None, None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "concepts/ml");
         assert_eq!(results[0].title, "Machine Learning");
@@ -247,7 +256,7 @@ mod tests {
             "Works on distributed systems.",
         );
 
-        let results = search_fts("alice", None, &conn, 1000).unwrap();
+        let results = search_fts("alice", None, None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
     }
@@ -264,7 +273,7 @@ mod tests {
             "Machine learning is a branch of artificial intelligence.",
         );
 
-        let results = search_fts("zzzznonexistent", None, &conn, 1000).unwrap();
+        let results = search_fts("zzzznonexistent", None, None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -290,7 +299,7 @@ mod tests {
             "A startup focused on fundraising technology.",
         );
 
-        let results = search_fts("fundraising", Some("companies"), &conn, 1000).unwrap();
+        let results = search_fts("fundraising", Some("companies"), None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "companies/acme");
     }
@@ -315,7 +324,7 @@ mod tests {
             "A startup focused on fundraising technology.",
         );
 
-        let results = search_fts("fundraising", None, &conn, 1000).unwrap();
+        let results = search_fts("fundraising", None, None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -343,7 +352,7 @@ mod tests {
             "A brief note about intelligence in computing.",
         );
 
-        let results = search_fts("intelligence", None, &conn, 1000).unwrap();
+        let results = search_fts("intelligence", None, None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 2);
         assert!(results[0].score >= results[1].score);
     }
@@ -362,7 +371,7 @@ mod tests {
             "Bob works on quantum computing research.",
         );
 
-        let results = search_fts("quantum", None, &conn, 1000).unwrap();
+        let results = search_fts("quantum", None, None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
 
         let r = &results[0];
@@ -484,7 +493,7 @@ mod tests {
         );
 
         // Explicit FTS5 phrase query must pass through unmodified and match.
-        let results = search_fts("\"systems programming\"", None, &conn, 1000).unwrap();
+        let results = search_fts("\"systems programming\"", None, None, &conn, 1000).unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].slug, "concepts/rust");
     }
@@ -502,7 +511,7 @@ mod tests {
         );
 
         // FTS5 boolean AND operator must work for expert users.
-        let results = search_fts("systems AND programming", None, &conn, 1000).unwrap();
+        let results = search_fts("systems AND programming", None, None, &conn, 1000).unwrap();
         assert!(!results.is_empty());
     }
 
@@ -522,7 +531,7 @@ mod tests {
         );
 
         // A bare `?` is not valid FTS5 syntax — Err is the contract.
-        let result = search_fts("rust?", None, &conn, 1000);
+        let result = search_fts("rust?", None, None, &conn, 1000);
         assert!(
             result.is_err(),
             "search_fts must propagate FTS5 syntax errors"

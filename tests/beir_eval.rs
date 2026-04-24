@@ -263,7 +263,7 @@ fn beir_fiqa_ndcg_at_10_meets_baseline() {
     let mut eval_results: Vec<(Vec<String>, HashMap<String, u32>)> = Vec::new();
 
     for query in &test_queries {
-        let results = hybrid_search(&query.text, None, &conn, 10).unwrap_or_default();
+        let results = hybrid_search(&query.text, None, None, &conn, 10).unwrap_or_default();
         let retrieved: Vec<String> = results
             .iter()
             .map(|r| r.slug.strip_prefix("fiqa/").unwrap_or(&r.slug).to_string())
@@ -349,7 +349,7 @@ fn beir_nq_ndcg_at_10_meets_baseline() {
     let mut eval_results: Vec<(Vec<String>, HashMap<String, u32>)> = Vec::new();
 
     for query in &test_queries {
-        let results = hybrid_search(&query.text, None, &conn, 10).unwrap_or_default();
+        let results = hybrid_search(&query.text, None, None, &conn, 10).unwrap_or_default();
         let retrieved: Vec<String> = results
             .iter()
             .map(|r| r.slug.strip_prefix("nq/").unwrap_or(&r.slug).to_string())

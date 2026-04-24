@@ -2749,6 +2749,10 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     sweep_stale_sessions(&conn)?;
     let session_id = register_session(&conn)?;
     run_startup_sequence(&conn, Path::new(&db_path), &session_id)?;
+    #[cfg(unix)]
+    let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
+    #[cfg(unix)]
+    sync_collection_watchers(&conn, &db_path, &mut watchers)?;
     let mut stmt = conn.prepare("SELECT id, reload_generation FROM collections")?;
     let initial_generations = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
@@ -2764,7 +2768,7 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         let mut last_quarantine_sweep = Instant::now();
         let mut last_generations = initial_generations;
         #[cfg(unix)]
-        let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
+        let mut watchers = watchers;
         #[cfg(unix)]
         let mut last_dedup_sweep = Instant::now();
         while !stop_signal.load(Ordering::SeqCst) {

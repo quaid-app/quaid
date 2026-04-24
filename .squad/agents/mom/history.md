@@ -89,3 +89,21 @@
 
 **Lesson:**
 - For CLI slug parity, resolving the page and then doing any later raw `WHERE slug = ?` lookup is not a harmless shortcut — it reopens the duplicate-slug bug through a second, quieter path. The safe pattern is resolve once, then carry `(collection_id, slug)` all the way through every downstream lookup and proof.
+
+### 2026-04-25 Vault Sync 13.5 Repair — `brain_query` cross-collection expansion fix
+
+**Context:** Fry authored slice 13.5 (MCP-only read filter). Nibbler rejected; Mom assigned as revision author.
+
+**What happened:**
+- `brain_query` correctly scoped the initial `hybrid_search_canonical(...)` call to the effective collection filter, but when `depth="auto"`, `progressive_retrieve(...)` was called without that filter, allowing `outbound_neighbours()` to follow cross-collection links and return pages from outside the requested/defaulted collection.
+- Fix: added `collection_filter: Option<i64>` parameter to `progressive_retrieve` and `outbound_neighbours`. The SQL now includes `AND (?3 IS NULL OR p2.collection_id = ?3)` so target pages are constrained to the active collection when a filter is in effect. When `?3 IS NULL` (CLI path, which always passes `None`), the clause is a no-op, preserving existing CLI behaviour.
+- `brain_query` in `server.rs` now passes `collection_filter.as_ref().map(|c| c.id)`.
+- `commands/query.rs` passes `None` (no collection filter concept in CLI path).
+- All existing `progressive_retrieve` unit tests updated with `None`.
+- New test `brain_query_auto_depth_does_not_expand_across_collections` added to `server.rs` — creates a cross-collection link and asserts the `work::` page never appears in `default`-scoped `depth="auto"` results.
+- All three validation passes green: `cargo test --quiet mcp::server` (101 tests), `cargo test --quiet` (full suite), `GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model`.
+
+**Decision record:** `.squad/decisions/inbox/mom-13-5-repair.md`
+
+**Lesson:**
+- When a filter is established at the query entry point, it must be threaded through every subsequent expansion step. A filter that only covers the seed set but not the BFS frontier is a half-fence. The `?3 IS NULL OR p2.collection_id = ?3` pattern is the right idiom: one SQL clause handles both the filtered (MCP) and unfiltered (CLI) call sites without branching the prepared statement or duplicating the query.

@@ -110,6 +110,13 @@ fn resolve_slug_for_mcp(
     }
 }
 
+fn resolve_read_collection_filter_for_mcp(
+    db: &Connection,
+    collection_name: Option<&str>,
+) -> Result<Option<collections::Collection>, rmcp::Error> {
+    collections::resolve_read_collection_filter(db, collection_name).map_err(map_collection_error)
+}
+
 fn page_id_for_resolved(
     db: &Connection,
     resolved: &vault_sync::ResolvedSlug,
@@ -425,6 +432,8 @@ pub struct BrainPutInput {
 pub struct BrainQueryInput {
     /// Search query string
     pub query: String,
+    /// Optional collection filter
+    pub collection: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Maximum results to return
@@ -437,6 +446,8 @@ pub struct BrainQueryInput {
 pub struct BrainSearchInput {
     /// FTS5 search query string
     pub query: String,
+    /// Optional collection filter
+    pub collection: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Maximum results to return
@@ -445,6 +456,8 @@ pub struct BrainSearchInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BrainListInput {
+    /// Optional collection filter
+    pub collection: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Optional type filter
@@ -642,10 +655,18 @@ impl GigaBrainServer {
         #[tool(aggr)] input: BrainQueryInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collection_filter =
+            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
-        let results = hybrid_search_canonical(&input.query, input.wing.as_deref(), &db, limit)
-            .map_err(map_search_error)?;
+        let results = hybrid_search_canonical(
+            &input.query,
+            input.wing.as_deref(),
+            collection_filter.as_ref().map(|collection| collection.id),
+            &db,
+            limit,
+        )
+        .map_err(map_search_error)?;
 
         // Auto-log knowledge gap on weak results
         if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
@@ -670,7 +691,7 @@ impl GigaBrainServer {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(4000);
-                progressive_retrieve(results.clone(), budget, 3, &db).unwrap_or(results)
+                progressive_retrieve(results.clone(), budget, 3, collection_filter.as_ref().map(|c| c.id), &db).unwrap_or(results)
             }
             _ => results,
         };
@@ -686,12 +707,19 @@ impl GigaBrainServer {
         #[tool(aggr)] input: BrainSearchInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collection_filter =
+            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         let safe_query = sanitize_fts_query(&input.query);
-        let results =
-            crate::core::fts::search_fts_canonical(&safe_query, input.wing.as_deref(), &db, limit)
-                .map_err(map_search_error)?;
+        let results = crate::core::fts::search_fts_canonical(
+            &safe_query,
+            input.wing.as_deref(),
+            collection_filter.as_ref().map(|collection| collection.id),
+            &db,
+            limit,
+        )
+        .map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
@@ -704,6 +732,8 @@ impl GigaBrainServer {
         #[tool(aggr)] input: BrainListInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collection_filter =
+            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT);
         let mut sql = String::from(
@@ -721,6 +751,10 @@ impl GigaBrainServer {
         if let Some(ref t) = input.page_type {
             sql.push_str(" AND p.type = ?");
             params.push(Box::new(t.clone()));
+        }
+        if let Some(collection) = collection_filter {
+            sql.push_str(" AND p.collection_id = ?");
+            params.push(Box::new(collection.id));
         }
         sql.push_str(" ORDER BY p.updated_at DESC LIMIT ?");
         params.push(Box::new(limit));
@@ -1818,6 +1852,7 @@ mod tests {
         let result = server
             .brain_query(BrainQueryInput {
                 query: "who runs the moon colony".to_string(),
+                collection: None,
                 wing: None,
                 limit: None,
                 depth: None,
@@ -1861,6 +1896,7 @@ mod tests {
         let result = server
             .brain_query(BrainQueryInput {
                 query: "alpha".to_string(),
+                collection: None,
                 wing: None,
                 limit: Some(1),
                 depth: Some("auto".to_string()),
@@ -1871,6 +1907,54 @@ mod tests {
         assert!(rows
             .iter()
             .any(|row| row["slug"] == "default::concepts/child"));
+    }
+
+    // 13.5 contract: depth="auto" must NOT expand across collection boundaries
+    #[test]
+    fn brain_query_auto_depth_does_not_expand_across_collections() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+
+        // Anchor page in "default" — will match the query
+        create_page(
+            &server,
+            "concepts/anchor",
+            "---\ntitle: Anchor\ntype: concept\n---\ncross collection fence anchor\n",
+        );
+        // Outside page in "work" — linked from anchor but must NOT appear
+        create_page_in_collection(
+            &server,
+            "work",
+            "concepts/outside",
+            "---\ntitle: Outside\ntype: concept\n---\nshould not appear in filtered results\n",
+        );
+        // Cross-collection link: default::concepts/anchor -> work::concepts/outside
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "default::concepts/anchor".to_string(),
+                to_slug: "work::concepts/outside".to_string(),
+                relationship: "related".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "cross collection fence anchor".to_string(),
+                collection: Some("default".to_string()),
+                wing: None,
+                limit: Some(5),
+                depth: Some("auto".to_string()),
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(
+            !rows.iter().any(|row| row["slug"] == "work::concepts/outside"),
+            "depth=auto expansion must not cross into a different collection: got {rows:?}"
+        );
     }
 
     #[test]
@@ -1886,6 +1970,7 @@ mod tests {
         let result = server
             .brain_search(BrainSearchInput {
                 query: "fundraising".to_string(),
+                collection: None,
                 wing: None,
                 limit: None,
             })
@@ -1904,6 +1989,7 @@ mod tests {
         // '?' would be invalid FTS5 syntax if passed raw — brain_search must sanitize.
         let result = server.brain_search(BrainSearchInput {
             query: "what is CLARITY?".to_string(),
+            collection: None,
             wing: None,
             limit: None,
         });
@@ -1939,6 +2025,7 @@ mod tests {
 
         let result = server
             .brain_list(BrainListInput {
+                collection: None,
                 wing: Some("people".to_string()),
                 page_type: Some("person".to_string()),
                 limit: None,
@@ -1948,6 +2035,234 @@ mod tests {
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["slug"], "default::people/alice");
+    }
+
+    #[test]
+    fn brain_search_explicit_collection_filter_returns_only_named_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-hit",
+            "---\ntitle: Default Hit\ntype: note\n---\nshared needle\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-hit",
+            "---\ntitle: Work Hit\ntype: note\n---\nshared needle\n",
+        );
+
+        let result = server
+            .brain_search(BrainSearchInput {
+                query: "shared".to_string(),
+                collection: Some("work".to_string()),
+                wing: None,
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::notes/work-hit");
+    }
+
+    #[test]
+    fn brain_query_explicit_collection_filter_returns_only_named_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-hit",
+            "---\ntitle: Default Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-hit",
+            "---\ntitle: Work Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
+        );
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "robotics leadership".to_string(),
+                collection: Some("work".to_string()),
+                wing: None,
+                limit: None,
+                depth: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::notes/work-hit");
+    }
+
+    #[test]
+    fn brain_list_explicit_collection_filter_returns_only_named_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice Default\ntype: person\n---\nDefault Alice\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "people/alice",
+            "---\ntitle: Alice Work\ntype: person\n---\nWork Alice\n",
+        );
+
+        let result = server
+            .brain_list(BrainListInput {
+                collection: Some("work".to_string()),
+                wing: Some("people".to_string()),
+                page_type: Some("person".to_string()),
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::people/alice");
+    }
+
+    #[test]
+    fn read_tools_unknown_collection_filter_errors_clearly() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let query_error = server
+            .brain_query(BrainQueryInput {
+                query: "anything".to_string(),
+                collection: Some("missing".to_string()),
+                wing: None,
+                limit: None,
+                depth: None,
+            })
+            .unwrap_err();
+        assert_eq!(query_error.code, ErrorCode(-32001));
+        assert!(query_error
+            .message
+            .contains("collection not found: missing"));
+
+        let search_error = server
+            .brain_search(BrainSearchInput {
+                query: "anything".to_string(),
+                collection: Some("missing".to_string()),
+                wing: None,
+                limit: None,
+            })
+            .unwrap_err();
+        assert_eq!(search_error.code, ErrorCode(-32001));
+        assert!(search_error
+            .message
+            .contains("collection not found: missing"));
+
+        let list_error = server
+            .brain_list(BrainListInput {
+                collection: Some("missing".to_string()),
+                wing: None,
+                page_type: None,
+                limit: None,
+            })
+            .unwrap_err();
+        assert_eq!(list_error.code, ErrorCode(-32001));
+        assert!(list_error.message.contains("collection not found: missing"));
+    }
+
+    #[test]
+    fn brain_search_defaults_to_single_active_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        set_collection_state(&conn, "default", "detached");
+        let server = GigaBrainServer::new(conn);
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/only-active",
+            "---\ntitle: Only Active\ntype: note\n---\nsole active marker\n",
+        );
+
+        let result = server
+            .brain_search(BrainSearchInput {
+                query: "sole".to_string(),
+                collection: None,
+                wing: None,
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::notes/only-active");
+    }
+
+    #[test]
+    fn brain_query_defaults_to_write_target_when_multiple_collections_are_active() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-target",
+            "---\ntitle: Default Target\ntype: note\n---\nshared semantic marker\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-target",
+            "---\ntitle: Work Target\ntype: note\n---\nshared semantic marker\n",
+        );
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "shared semantic marker".to_string(),
+                collection: None,
+                wing: None,
+                limit: None,
+                depth: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "default::notes/default-target");
+    }
+
+    #[test]
+    fn brain_list_defaults_to_write_target_when_multiple_collections_are_active() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-target",
+            "---\ntitle: Default Target\ntype: note\n---\ndefault target body\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-target",
+            "---\ntitle: Work Target\ntype: note\n---\nwork target body\n",
+        );
+
+        let result = server
+            .brain_list(BrainListInput {
+                collection: None,
+                wing: Some("notes".to_string()),
+                page_type: Some("note".to_string()),
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "default::notes/default-target");
     }
 
     // ── Phase 2 MCP tests ────────────────────────────────────
@@ -1987,6 +2302,14 @@ mod tests {
                 format!(r"C:\vaults\{name}"),
                 if is_write_target { 1 } else { 0 }
             ],
+        )
+        .unwrap();
+    }
+
+    fn set_collection_state(conn: &Connection, name: &str, state: &str) {
+        conn.execute(
+            "UPDATE collections SET state = ?1 WHERE name = ?2",
+            rusqlite::params![state, name],
         )
         .unwrap();
     }

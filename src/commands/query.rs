@@ -27,7 +27,7 @@ pub async fn run(
     wing: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let results = hybrid_search_canonical(query, wing.as_deref(), db, limit as usize)?;
+    let results = hybrid_search_canonical(query, wing.as_deref(), None, db, limit as usize)?;
 
     // Auto-log knowledge gap on weak results
     if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
@@ -44,7 +44,7 @@ pub async fn run(
         } else {
             read_token_budget(db)
         };
-        progressive_retrieve(results.clone(), budget, 3, db).unwrap_or(results)
+        progressive_retrieve(results.clone(), budget, 3, None, db).unwrap_or(results)
     } else {
         results
     };
@@ -146,6 +146,7 @@ mod tests {
         // Query with no results should log a gap
         let results = crate::core::search::hybrid_search_canonical(
             "nonexistent quantum socks",
+            None,
             None,
             &conn,
             10,

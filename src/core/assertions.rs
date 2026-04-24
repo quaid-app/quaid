@@ -114,6 +114,13 @@ pub fn check_assertions(
     conn: &Connection,
 ) -> Result<Vec<Contradiction>, AssertionError> {
     let root_page_id = resolve_page_id(conn, slug)?;
+    check_assertions_for_page_id(root_page_id, conn)
+}
+
+pub fn check_assertions_for_page_id(
+    root_page_id: i64,
+    conn: &Connection,
+) -> Result<Vec<Contradiction>, AssertionError> {
     let subjects = load_subjects_for_page(conn, root_page_id)?;
     let mut contradictions = Vec::new();
 

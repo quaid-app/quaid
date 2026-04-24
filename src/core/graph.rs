@@ -72,18 +72,55 @@ pub fn neighborhood_graph(
     filter: TemporalFilter,
     conn: &Connection,
 ) -> Result<GraphResult, GraphError> {
-    let effective_depth = depth.min(MAX_DEPTH);
-
-    // Resolve root slug → page id
-    let root: (i64, String, String) = conn
-        .query_row(
-            "SELECT id, type, title FROM pages WHERE slug = ?1",
-            [slug],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
+    let root_id: i64 = conn
+        .query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
+            row.get(0)
+        })
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => GraphError::PageNotFound {
                 slug: slug.to_string(),
+            },
+            other => GraphError::Sqlite(other),
+        })?;
+    neighborhood_graph_from_root(root_id, slug.to_string(), depth, filter, conn, false)
+}
+
+pub fn neighborhood_graph_for_page(
+    page_id: i64,
+    collection_name: &str,
+    slug: &str,
+    depth: u32,
+    filter: TemporalFilter,
+    conn: &Connection,
+) -> Result<GraphResult, GraphError> {
+    neighborhood_graph_from_root(
+        page_id,
+        format!("{collection_name}::{slug}"),
+        depth,
+        filter,
+        conn,
+        true,
+    )
+}
+
+fn neighborhood_graph_from_root(
+    root_page_id: i64,
+    root_slug: String,
+    depth: u32,
+    filter: TemporalFilter,
+    conn: &Connection,
+    canonical_slug: bool,
+) -> Result<GraphResult, GraphError> {
+    let effective_depth = depth.min(MAX_DEPTH);
+    let root: (String, String) = conn
+        .query_row(
+            "SELECT type, title FROM pages WHERE id = ?1",
+            [root_page_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => GraphError::PageNotFound {
+                slug: root_slug.clone(),
             },
             other => GraphError::Sqlite(other),
         })?;
@@ -93,11 +130,11 @@ pub fn neighborhood_graph(
     let mut visited: HashSet<i64> = HashSet::new();
 
     // Seed BFS with root
-    visited.insert(root.0);
+    visited.insert(root_page_id);
     nodes.push(GraphNode {
-        slug: slug.to_string(),
-        node_type: root.1,
-        title: root.2,
+        slug: root_slug,
+        node_type: root.0,
+        title: root.1,
     });
 
     if effective_depth == 0 {
@@ -106,7 +143,7 @@ pub fn neighborhood_graph(
 
     // BFS frontier: (page_id, current_depth)
     let mut queue: VecDeque<(i64, u32)> = VecDeque::new();
-    queue.push_back((root.0, 0));
+    queue.push_back((root_page_id, 0));
 
     // Build the temporal clause: active links must have started and not yet ended.
     let temporal_clause = match filter {
@@ -120,13 +157,23 @@ pub fn neighborhood_graph(
     // Outbound-only BFS: a page's neighbourhood is the set of pages it explicitly
     // links to.  Inbound links are accessible via `gbrain backlinks`, keeping the
     // two directions orthogonal and the rendering unambiguous.
+    let target_slug_expr = if canonical_slug {
+        "c.name || '::' || p.slug"
+    } else {
+        "p.slug"
+    };
+    let collection_join = if canonical_slug {
+        " JOIN collections c ON c.id = p.collection_id"
+    } else {
+        ""
+    };
     let outbound_sql = format!(
-        "SELECT l.id, l.to_page_id, p.slug, p.type, p.title, \
+        "SELECT l.id, l.to_page_id, {target_slug_expr}, p.type, p.title, \
                 l.relationship, l.valid_from, l.valid_until \
-         FROM links l \
-         JOIN pages p ON l.to_page_id = p.id \
-         WHERE l.from_page_id = ?1{temporal_clause} \
-         ORDER BY p.slug, l.relationship"
+          FROM links l \
+          JOIN pages p ON l.to_page_id = p.id{collection_join} \
+          WHERE l.from_page_id = ?1{temporal_clause} \
+          ORDER BY p.slug, l.relationship"
     );
 
     let mut seen_edges: HashSet<i64> = HashSet::new();
@@ -137,10 +184,20 @@ pub fn neighborhood_graph(
         }
 
         // Resolve the current node's slug for edge recording.
-        let current_slug: String =
+        let current_slug: String = if canonical_slug {
+            conn.query_row(
+                "SELECT c.name || '::' || p.slug
+                 FROM pages p
+                 JOIN collections c ON c.id = p.collection_id
+                 WHERE p.id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )?
+        } else {
             conn.query_row("SELECT slug FROM pages WHERE id = ?1", [page_id], |row| {
                 row.get(0)
-            })?;
+            })?
+        };
 
         let mut stmt = conn.prepare_cached(&outbound_sql)?;
         let rows = stmt.query_map([page_id], |row| {

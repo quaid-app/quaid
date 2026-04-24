@@ -1066,6 +1066,25 @@ pub fn search_vec(
     wing_filter: Option<&str>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_internal(query, k, wing_filter, conn, false)
+}
+
+pub fn search_vec_canonical(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_internal(query, k, wing_filter, conn, true)
+}
+
+fn search_vec_internal(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    conn: &Connection,
+    canonical_slug: bool,
+) -> Result<Vec<SearchResult>, SearchError> {
     if query.trim().is_empty() || k == 0 {
         return Ok(Vec::new());
     }
@@ -1092,13 +1111,23 @@ pub fn search_vec(
     })?;
     let query_blob = embedding_to_blob(&query_embedding);
 
+    let slug_expr = if canonical_slug {
+        "c.name || '::' || p.slug"
+    } else {
+        "p.slug"
+    };
+    let collection_join = if canonical_slug {
+        " JOIN collections c ON c.id = p.collection_id"
+    } else {
+        ""
+    };
     let mut sql = format!(
-        "SELECT p.slug, p.title, p.summary, \
+        "SELECT {slug_expr}, p.title, p.summary, \
                 MAX(1.0 - vec_distance_cosine(pev.embedding, ?1)) AS score, \
                 p.wing \
          FROM {vec_table} pev \
          JOIN page_embeddings pe ON pev.rowid = pe.vec_rowid \
-         JOIN pages p ON p.id = pe.page_id \
+         JOIN pages p ON p.id = pe.page_id{collection_join} \
          WHERE pe.model = ?2 \
            AND p.quarantined_at IS NULL"
     );

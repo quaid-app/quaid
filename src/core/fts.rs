@@ -84,15 +84,44 @@ pub fn search_fts(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_internal(query, wing_filter, conn, limit, false)
+}
+
+pub fn search_fts_canonical(
+    query: &str,
+    wing_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_internal(query, wing_filter, conn, limit, true)
+}
+
+fn search_fts_internal(
+    query: &str,
+    wing_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+    canonical_slug: bool,
+) -> Result<Vec<SearchResult>, SearchError> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut sql = String::from(
-        "SELECT p.slug, p.title, p.summary, -bm25(page_fts) AS score, p.wing \
+    let slug_expr = if canonical_slug {
+        "c.name || '::' || p.slug"
+    } else {
+        "p.slug"
+    };
+    let collection_join = if canonical_slug {
+        " JOIN collections c ON c.id = p.collection_id"
+    } else {
+        ""
+    };
+    let mut sql = format!(
+        "SELECT {slug_expr}, p.title, p.summary, -bm25(page_fts) AS score, p.wing \
          FROM page_fts \
-         JOIN pages p ON p.id = page_fts.rowid \
+         JOIN pages p ON p.id = page_fts.rowid{collection_join} \
          WHERE page_fts MATCH ?1",
     );
 

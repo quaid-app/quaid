@@ -1,5 +1,5 @@
-updated_at: 2026-04-24T18:41:00Z
-focus_area: vault-sync-engine post-M3a next-slice selection
+updated_at: 2026-04-24T02:48:01Z
+focus_area: vault-sync-engine post-N1 next-slice selection
 active_issues: []
 active_branch: spec/vault-sync-engine
 ---
@@ -8,7 +8,7 @@ active_branch: spec/vault-sync-engine
 
 **Active change (vault-sync-engine):**
 
-1. `vault-sync-engine` — Batch M3a closed; next slice not yet selected.
+1. `vault-sync-engine` — Batch N1 closed (`13.1` / `13.2` / `13.4`, MCP-only); next slice not yet selected.
    Owner lane: Fry. Reviewers: Professor, Nibbler. Test lane: Scruffy.
    - M1b-i closed the real write-interlock refusal seam for `17.5s2-s5`
    - M1b-ii closed Unix precondition/CAS hardening for `12.2`, `12.3`, `12.4a`, `17.5l-s`
@@ -16,7 +16,9 @@ active_branch: spec/vault-sync-engine
    - M2b-prime closed the same-slug within-process mutex + narrow mechanical write-through proof seam (`12.4`, narrow `17.5k`, `17.17e`)
    - M2c closed the explicit finalize-caller proof seam (`17.17b`) with a test-only invariant over production finalize helper call sites
    - M3a closed `2.4c` as a reconciler-specific wording/closure note: `ignore::WalkBuilder` enumeration with fd-relative revalidation and WARN-skip symlink behavior, not a generic `readdir` walk claim
-   - Pick the next truthful slice before widening into routing, IPC, watcher surfaces, or broader mutator coverage
+   - N1 closed the MCP slug-routing truth seam only: slug-bearing MCP handlers now resolve collection-aware inputs first, page-referencing MCP outputs emit canonical `<collection>::<slug>` addresses, and ambiguity failures expose a stable machine-readable payload
+   - `13.3`, `13.5`, and `13.6` remain open; do not overclaim CLI parity, collection filters/defaults, or a `brain_collections` tool
+   - Pick the next truthful slice before widening into CLI routing, IPC, watcher surfaces, or broader mutator coverage
 
 **Completed in this branch:**
 - Batch H — Phase 0-3 restore/remap safety helpers + fresh-connection full-hash activation
@@ -33,6 +35,7 @@ active_branch: spec/vault-sync-engine
 - Batch M2b-prime — same-slug mutex + narrow mechanical ordering proof
 - Batch M2c — explicit finalize-caller proof
 - Batch M3a — reconciler symlink-walk wording closure
+- Batch N1 — MCP slug-routing truth (`13.1`, `13.2`, `13.4` only)
 
 **Explicitly deferred after M1b:**
 - Online restore handshake, IPC socket work, and the `17.5pp` / `17.5qq*` series that depend on IPC security design
@@ -42,4 +45,4 @@ active_branch: spec/vault-sync-engine
 - Live/background recovery worker, IPC/live routing, and any claim that generic startup healing or remap reopen is already complete
 - Post-landing coverage/docs/release/cleanup/issues agenda remains queued until the vault-sync branch reaches an appropriate stop point
 
-**Gate:** No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes.
+**Gate:** N1 is closed. No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes.

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use rusqlite::Connection;
 
+use super::collections::{self, OpKind, SlugResolution};
 use super::types::{SearchError, SearchResult};
 
 /// Hard safety cap on expansion depth regardless of caller-supplied value.
@@ -76,9 +77,13 @@ pub fn progressive_retrieve(
 
 /// Approximate token cost of a page: `len(compiled_truth) / 4`.
 fn token_cost(slug: &str, conn: &Connection) -> usize {
+    let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, slug) else {
+        return 0;
+    };
+
     conn.query_row(
-        "SELECT LENGTH(compiled_truth) FROM pages WHERE slug = ?1",
-        [slug],
+        "SELECT LENGTH(compiled_truth) FROM pages WHERE collection_id = ?1 AND slug = ?2",
+        rusqlite::params![collection_id, resolved_slug],
         |row| row.get::<_, i64>(0),
     )
     .map(|len| (len as usize) / 4)
@@ -87,20 +92,33 @@ fn token_cost(slug: &str, conn: &Connection) -> usize {
 
 /// Fetch outbound link targets from a page, returning them as SearchResults.
 fn outbound_neighbours(slug: &str, conn: &Connection) -> Result<Vec<SearchResult>, SearchError> {
-    let mut stmt = conn
-        .prepare_cached(
-            "SELECT p2.slug, p2.title, p2.summary, p2.wing \
-             FROM links l \
-             JOIN pages p1 ON l.from_page_id = p1.id \
-             JOIN pages p2 ON l.to_page_id = p2.id \
-             WHERE p1.slug = ?1 \
-               AND (l.valid_from IS NULL OR l.valid_from <= date('now')) \
-               AND (l.valid_until IS NULL OR l.valid_until >= date('now'))",
-        )
-        .map_err(SearchError::from)?;
+    let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, slug) else {
+        return Ok(Vec::new());
+    };
+    let canonical_slug = slug.contains("::");
+    let target_slug_expr = if canonical_slug {
+        "c2.name || '::' || p2.slug"
+    } else {
+        "p2.slug"
+    };
+    let collection_join = if canonical_slug {
+        " JOIN collections c2 ON c2.id = p2.collection_id"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT {target_slug_expr}, p2.title, p2.summary, p2.wing \
+         FROM links l \
+         JOIN pages p1 ON l.from_page_id = p1.id \
+         JOIN pages p2 ON l.to_page_id = p2.id{collection_join} \
+         WHERE p1.collection_id = ?1 AND p1.slug = ?2 \
+           AND (l.valid_from IS NULL OR l.valid_from <= date('now')) \
+           AND (l.valid_until IS NULL OR l.valid_until >= date('now'))"
+    );
+    let mut stmt = conn.prepare_cached(&sql).map_err(SearchError::from)?;
 
     let rows = stmt
-        .query_map([slug], |row| {
+        .query_map(rusqlite::params![collection_id, resolved_slug], |row| {
             Ok(SearchResult {
                 slug: row.get(0)?,
                 title: row.get(1)?,
@@ -116,6 +134,17 @@ fn outbound_neighbours(slug: &str, conn: &Connection) -> Result<Vec<SearchResult
         results.push(row.map_err(SearchError::from)?);
     }
     Ok(results)
+}
+
+fn resolve_slug_key(conn: &Connection, slug: &str) -> Option<(i64, String)> {
+    match collections::parse_slug(conn, slug, OpKind::Read).ok()? {
+        SlugResolution::Resolved {
+            collection_id,
+            slug,
+            ..
+        } => Some((collection_id, slug)),
+        SlugResolution::NotFound { .. } | SlugResolution::Ambiguous { .. } => None,
+    }
 }
 
 #[cfg(test)]

@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use super::fts::{sanitize_fts_query, search_fts};
-use super::inference::search_vec;
+use super::collections::{self, OpKind, SlugResolution};
+use super::fts::{sanitize_fts_query, search_fts, search_fts_canonical};
+use super::inference::{search_vec, search_vec_canonical};
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
@@ -16,13 +17,32 @@ pub fn hybrid_search(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    hybrid_search_impl(query, wing, conn, limit, false)
+}
+
+pub fn hybrid_search_canonical(
+    query: &str,
+    wing: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    hybrid_search_impl(query, wing, conn, limit, true)
+}
+
+fn hybrid_search_impl(
+    query: &str,
+    wing: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+    canonical_slug: bool,
+) -> Result<Vec<SearchResult>, SearchError> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
 
     if let Some(slug) = exact_slug_query(trimmed) {
-        if let Some(result) = exact_slug_result(slug, wing, conn)? {
+        if let Some(result) = exact_slug_result(slug, wing, conn, canonical_slug)? {
             return Ok(vec![result]);
         }
     }
@@ -32,8 +52,16 @@ pub fn hybrid_search(
         return Ok(Vec::new());
     }
 
-    let fts_results = search_fts(&fts_safe, wing, conn, limit)?;
-    let vec_results = search_vec(trimmed, 10, wing, conn)?;
+    let fts_results = if canonical_slug {
+        search_fts_canonical(&fts_safe, wing, conn, limit)?
+    } else {
+        search_fts(&fts_safe, wing, conn, limit)?
+    };
+    let vec_results = if canonical_slug {
+        search_vec_canonical(trimmed, 10, wing, conn)?
+    } else {
+        search_vec(trimmed, 10, wing, conn)?
+    };
 
     let mut merged = match read_merge_strategy(conn)? {
         SearchMergeStrategy::SetUnion => merge_set_union(&fts_results, &vec_results),
@@ -84,7 +112,12 @@ fn exact_slug_result(
     slug: &str,
     wing: Option<&str>,
     conn: &Connection,
+    canonical_slug: bool,
 ) -> Result<Option<SearchResult>, SearchError> {
+    if canonical_slug {
+        return exact_slug_result_canonical(slug, wing, conn);
+    }
+
     let query = if wing.is_some() {
         "SELECT slug, title, summary, wing FROM pages WHERE slug = ?1 AND wing = ?2 LIMIT 1"
     } else {
@@ -111,6 +144,69 @@ fn exact_slug_result(
                 wing: row.get(3)?,
             })
         })
+    };
+
+    match result {
+        Ok(result) => Ok(Some(result)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(SearchError::from(err)),
+    }
+}
+
+fn exact_slug_result_canonical(
+    slug: &str,
+    wing: Option<&str>,
+    conn: &Connection,
+) -> Result<Option<SearchResult>, SearchError> {
+    let resolved = match collections::parse_slug(conn, slug, OpKind::Read) {
+        Ok(SlugResolution::Resolved {
+            collection_id,
+            collection_name,
+            slug,
+        }) => (collection_id, collection_name, slug),
+        Ok(SlugResolution::NotFound { .. }) | Ok(SlugResolution::Ambiguous { .. }) => {
+            return Ok(None);
+        }
+        Err(collections::CollectionError::Sqlite(err)) => return Err(SearchError::from(err)),
+        Err(_) => return Ok(None),
+    };
+
+    let result = if let Some(wing) = wing {
+        conn.query_row(
+            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
+             FROM pages p
+             JOIN collections c ON c.id = p.collection_id
+             WHERE p.collection_id = ?1 AND p.slug = ?2 AND p.wing = ?3
+             LIMIT 1",
+            rusqlite::params![resolved.0, &resolved.2, wing],
+            |row| {
+                Ok(SearchResult {
+                    slug: row.get(0)?,
+                    title: row.get(1)?,
+                    summary: row.get(2)?,
+                    score: 1.0,
+                    wing: row.get(3)?,
+                })
+            },
+        )
+    } else {
+        conn.query_row(
+            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
+             FROM pages p
+             JOIN collections c ON c.id = p.collection_id
+             WHERE p.collection_id = ?1 AND p.slug = ?2
+             LIMIT 1",
+            rusqlite::params![resolved.0, &resolved.2],
+            |row| {
+                Ok(SearchResult {
+                    slug: row.get(0)?,
+                    title: row.get(1)?,
+                    summary: row.get(2)?,
+                    score: 1.0,
+                    wing: row.get(3)?,
+                })
+            },
+        )
     };
 
     match result {

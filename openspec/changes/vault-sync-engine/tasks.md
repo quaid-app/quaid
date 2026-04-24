@@ -176,8 +176,10 @@
 - [ ] 9.8 `gbrain collection quarantine {list,restore,discard,export,audit}`. `discard` on a page with DB-only state requires `--force` OR a prior `export` (which dumps all five DB-only-state categories as JSON).
 - [ ] 9.9 Auto-sweep TTL: `GBRAIN_QUARANTINE_TTL_DAYS` (default 30) auto-discards ONLY pages where `has_db_only_state` is false; log each discard and DEBUG-log each skip.
 - [ ] 9.9b `gbrain collection info` surfaces count of "quarantined pages awaiting user action".
-- [ ] 9.10 `gbrain collection ignore add|remove|list|clear --confirm` per §3.
-- [ ] 9.11 All `collection` subcommands produce stable machine-parseable summaries on success and non-zero exit on any error.
+- [x] 9.10 `gbrain collection ignore add|remove|list|clear --confirm` per §3.
+  > **Closed 9.10 (CLI ignore-only):** `gbrain collection ignore add|remove|list|clear --confirm` now wraps `.gbrainignore` with dry-run-first validation, canonical restore/needs-full-sync interlocks, explicit clear semantics, mirror refresh via `reload_patterns()` / `clear_patterns()`, and active-collection reconcile proofs. Watcher-driven reload (`17.5y`/`17.5z`) and broader MCP ignore-diagnostic widening (`17.5aa5`) remain open.
+- [x] 9.11 All `collection` subcommands produce stable machine-parseable summaries on success and non-zero exit on any error.
+  > **Closed 9.11 (current collection surface):** the currently implemented `gbrain collection` subcommands, including the new `ignore` verbs, expose stable success payloads under the existing JSON mode and continue to fail with non-zero exit on any propagated error. This closure does not claim anything about deferred collection subcommands that do not exist yet.
 
 ## 10. `gbrain init` changes
 
@@ -321,11 +323,12 @@
 - [ ] 17.5y `.gbrainignore` valid edit refreshes mirror + triggers reconciliation.
 - [ ] 17.5z `.gbrainignore` single-line parse failure preserves last-known-good mirror.
 - [ ] 17.5aa Absent `.gbrainignore` with prior mirror → WARN, mirror unchanged.
-- [ ] 17.5aa2 `ignore clear --confirm` clears mirror and reconciles.
-- [ ] 17.5aa3 CLI `ignore add` with invalid glob refuses with no disk mutation, no DB mutation.
-- [ ] 17.5aa4 CLI `ignore remove` updates file and mirror transactionally.
-- [ ] 17.5aa4b CLI is never the writer of `collections.ignore_patterns`.
-- [ ] 17.5aa4c Built-in defaults always apply regardless of `.gbrainignore` state.
+- [x] 17.5aa2 `ignore clear --confirm` clears mirror and reconciles.
+- [x] 17.5aa3 CLI `ignore add` with invalid glob refuses with no disk mutation, no DB mutation.
+- [x] 17.5aa4 CLI `ignore remove` updates file and mirror transactionally.
+- [x] 17.5aa4b CLI is never the writer of `collections.ignore_patterns`.
+- [x] 17.5aa4c Built-in defaults always apply regardless of `.gbrainignore` state.
+  > **Closed with 9.10:** CLI ignore mutations now validate proposed file content before any write, refuse malformed globs without touching disk or mirror state, use an explicit clear path to drop the mirror and reconcile, and keep `collections.ignore_patterns` as a helper-owned cache rather than a CLI-written source of truth. Built-in defaults still layer in at globset build time regardless of user-file state.
 - [ ] 17.5aa5 `brain_collections.ignore_parse_errors` expands from parse-error-only surfacing to the full tagged-union shape, including `file_stably_absent_but_clear_not_confirmed`.
 - [ ] 17.5bb Dedup echo suppression works within TTL.
 - [ ] 17.5cc External edit after TTL is ingested normally.

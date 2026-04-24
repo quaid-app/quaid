@@ -66,6 +66,12 @@ pub enum ParseResult {
     Invalid(Vec<IgnoreParseError>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingFileMode {
+    PreserveMirror,
+    ClearMirror,
+}
+
 /// Atomic parse of `.gbrainignore`: validate every non-comment line before any effect.
 ///
 /// Returns `Valid(patterns)` if all lines are valid or comment/blank.
@@ -122,6 +128,28 @@ pub fn reload_patterns(
     collection_id: i64,
     root_path: &Path,
 ) -> Result<(), ReloadError> {
+    reload_patterns_with_mode(
+        conn,
+        collection_id,
+        root_path,
+        MissingFileMode::PreserveMirror,
+    )
+}
+
+pub fn clear_patterns(
+    conn: &Connection,
+    collection_id: i64,
+    root_path: &Path,
+) -> Result<(), ReloadError> {
+    reload_patterns_with_mode(conn, collection_id, root_path, MissingFileMode::ClearMirror)
+}
+
+fn reload_patterns_with_mode(
+    conn: &Connection,
+    collection_id: i64,
+    root_path: &Path,
+    missing_file_mode: MissingFileMode,
+) -> Result<(), ReloadError> {
     let ignore_path = root_path.join(".gbrainignore");
     let file_exists = ignore_path.exists();
 
@@ -135,6 +163,18 @@ pub fn reload_patterns(
         .map_err(|e| ReloadError::DbError(e.to_string()))?;
 
     if !file_exists {
+        if missing_file_mode == MissingFileMode::ClearMirror {
+            conn.execute(
+                "UPDATE collections
+                 SET ignore_patterns = NULL,
+                     ignore_parse_errors = NULL,
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                 WHERE id = ?1",
+                [collection_id],
+            )
+            .map_err(|e| ReloadError::DbError(e.to_string()))?;
+            return Ok(());
+        }
         if prior_mirror.is_some() {
             // File stably absent but mirror exists → operator must explicitly clear
             let err = IgnoreParseError::file_stably_absent();
@@ -439,6 +479,26 @@ mod tests {
         let stored_errors: Vec<IgnoreParseError> =
             serde_json::from_str(&fetch_ignore_errors(&conn).unwrap()).unwrap();
         assert_eq!(stored_errors, vec![shape]);
+    }
+
+    #[test]
+    fn clear_patterns_absent_file_with_prior_mirror_clears_mirror_and_errors() {
+        let conn = open_collection_db();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mirror_json = serde_json::to_string(&vec!["private/**"]).unwrap();
+        let prior_errors =
+            serde_json::to_string(&vec![IgnoreParseError::file_stably_absent()]).unwrap();
+        insert_collection_with_mirror(
+            &conn,
+            temp_dir.path(),
+            Some(&mirror_json),
+            Some(&prior_errors),
+        );
+
+        clear_patterns(&conn, 1, temp_dir.path()).unwrap();
+
+        assert!(fetch_ignore_mirror(&conn).is_none());
+        assert!(fetch_ignore_errors(&conn).is_none());
     }
 
     #[test]

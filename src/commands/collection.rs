@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -22,6 +23,11 @@ pub enum CollectionAction {
     List,
     /// Show collection diagnostics
     Info { name: String },
+    /// Manage .gbrainignore patterns
+    Ignore {
+        #[command(subcommand)]
+        action: CollectionIgnoreAction,
+    },
     /// Reconcile a collection or adopt a new root
     Sync(CollectionSyncArgs),
     /// Restore a collection to a target path
@@ -73,6 +79,22 @@ pub struct CollectionRestoreArgs {
     pub target: PathBuf,
     #[arg(long)]
     pub online: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CollectionIgnoreAction {
+    /// Add a user-authored ignore pattern
+    Add { name: String, pattern: String },
+    /// Remove a user-authored ignore pattern
+    Remove { name: String, pattern: String },
+    /// List cached user-authored ignore patterns
+    List { name: String },
+    /// Explicitly clear the ignore file and cached mirror
+    Clear {
+        name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -140,6 +162,7 @@ pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> 
         }
         CollectionAction::List => list(db, json),
         CollectionAction::Info { name } => info(db, &name, json),
+        CollectionAction::Ignore { action } => ignore(db, action, json),
         CollectionAction::Sync(args) => {
             ensure_unix_collection_command("gbrain collection sync")?;
             sync(db, args, json)
@@ -329,8 +352,7 @@ fn list(db: &Connection, json: bool) -> Result<()> {
 }
 
 fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
-    let collection = collections::get_by_name(db, name)?
-        .ok_or_else(|| anyhow::anyhow!("collection not found: {name}"))?;
+    let collection = load_collection_by_name(db, name)?;
     let status = describe_collection_status(&collection);
     let metrics = collection_metrics(db, collection.id)?;
     let output = CollectionInfoOutput {
@@ -392,6 +414,317 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn ignore(db: &Connection, action: CollectionIgnoreAction, json: bool) -> Result<()> {
+    match action {
+        CollectionIgnoreAction::Add { name, pattern } => {
+            ensure_unix_collection_command("gbrain collection ignore add")?;
+            ignore_add(db, &name, &pattern, json)
+        }
+        CollectionIgnoreAction::Remove { name, pattern } => {
+            ensure_unix_collection_command("gbrain collection ignore remove")?;
+            ignore_remove(db, &name, &pattern, json)
+        }
+        CollectionIgnoreAction::List { name } => ignore_list(db, &name, json),
+        CollectionIgnoreAction::Clear { name, confirm } => {
+            ensure_unix_collection_command("gbrain collection ignore clear")?;
+            if !confirm {
+                bail!("ignore clear requires --confirm");
+            }
+            ignore_clear(db, &name, json)
+        }
+    }
+}
+
+fn load_collection_by_name(db: &Connection, name: &str) -> Result<collections::Collection> {
+    collections::get_by_name(db, name)?.ok_or_else(|| anyhow!("collection not found: {name}"))
+}
+
+fn cached_user_ignore_patterns(collection: &collections::Collection) -> Result<Vec<String>> {
+    match &collection.ignore_patterns {
+        Some(json) => serde_json::from_str(json)
+            .with_context(|| format!("invalid ignore pattern mirror for {}", collection.name)),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn ignore_file_path(collection: &collections::Collection) -> PathBuf {
+    Path::new(&collection.root_path).join(".gbrainignore")
+}
+
+fn load_ignore_source(collection: &collections::Collection) -> Result<Option<String>> {
+    let ignore_path = ignore_file_path(collection);
+    match fs::read_to_string(&ignore_path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            let patterns = cached_user_ignore_patterns(collection)?;
+            if patterns.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(render_patterns_file(&patterns)))
+            }
+        }
+        Err(err) => Err(anyhow!("failed to read {}: {}", ignore_path.display(), err)),
+    }
+}
+
+fn render_patterns_file(patterns: &[String]) -> String {
+    if patterns.is_empty() {
+        String::new()
+    } else {
+        let mut rendered = patterns.join("\n");
+        rendered.push('\n');
+        rendered
+    }
+}
+
+fn ignore_content_contains_pattern(content: &str, pattern: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with('#') && trimmed == pattern
+    })
+}
+
+fn add_ignore_pattern_content(current: Option<String>, pattern: &str) -> String {
+    let mut content = current.unwrap_or_default();
+    if ignore_content_contains_pattern(&content, pattern) {
+        return content;
+    }
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(pattern);
+    content.push('\n');
+    content
+}
+
+fn remove_ignore_pattern_content(current: Option<String>, pattern: &str) -> String {
+    let Some(content) = current else {
+        return String::new();
+    };
+    let had_trailing_newline = content.ends_with('\n');
+    let remaining = content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            trimmed.is_empty() || trimmed.starts_with('#') || trimmed != pattern
+        })
+        .collect::<Vec<_>>();
+    if remaining.is_empty() {
+        String::new()
+    } else {
+        let mut rendered = remaining.join("\n");
+        if had_trailing_newline {
+            rendered.push('\n');
+        }
+        rendered
+    }
+}
+
+fn validate_cli_ignore_pattern(pattern: &str) -> Result<String> {
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        bail!("ignore pattern must be a non-empty glob");
+    }
+    validate_proposed_ignore_content(&format!("{trimmed}\n"))?;
+    Ok(trimmed.to_owned())
+}
+
+fn validate_proposed_ignore_content(content: &str) -> Result<()> {
+    match ignore_patterns::parse_ignore_file(content) {
+        ParseResult::Valid(_) => Ok(()),
+        ParseResult::Invalid(errors) => bail!(format_ignore_parse_errors(&errors)),
+    }
+}
+
+fn format_ignore_parse_errors(errors: &[ignore_patterns::IgnoreParseError]) -> String {
+    errors
+        .iter()
+        .map(|error| {
+            format!(
+                "line {} raw={} error={}",
+                error.line,
+                serde_json::to_string(&error.raw).unwrap_or_else(|_| "\"\"".to_owned()),
+                error.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn write_ignore_file_atomically(root_path: &Path, contents: Option<&str>) -> Result<PathBuf> {
+    let ignore_path = root_path.join(".gbrainignore");
+    match contents {
+        Some(contents) => {
+            let temp_path = root_path.join(format!(".gbrainignore.tmp-{}", Uuid::now_v7()));
+            {
+                let mut file = fs::File::create(&temp_path).with_context(|| {
+                    format!(
+                        "failed to create temporary ignore file at {}",
+                        temp_path.display()
+                    )
+                })?;
+                file.write_all(contents.as_bytes()).with_context(|| {
+                    format!(
+                        "failed to write temporary ignore file at {}",
+                        temp_path.display()
+                    )
+                })?;
+                file.sync_all().with_context(|| {
+                    format!(
+                        "failed to flush temporary ignore file at {}",
+                        temp_path.display()
+                    )
+                })?;
+            }
+            fs::rename(&temp_path, &ignore_path).with_context(|| {
+                let _ = fs::remove_file(&temp_path);
+                format!("failed to move {} into place", temp_path.display())
+            })?;
+        }
+        None => {
+            if ignore_path.exists() {
+                fs::remove_file(&ignore_path)
+                    .with_context(|| format!("failed to remove {}", ignore_path.display()))?;
+            }
+        }
+    }
+    Ok(ignore_path)
+}
+
+fn refresh_ignore_mirror(
+    db: &Connection,
+    collection: &collections::Collection,
+    explicit_clear: bool,
+) -> Result<()> {
+    let root_path = Path::new(&collection.root_path);
+    let result = if explicit_clear {
+        ignore_patterns::clear_patterns(db, collection.id, root_path)
+    } else {
+        ignore_patterns::reload_patterns(db, collection.id, root_path)
+    };
+    result.map_err(|err| anyhow!(err.to_string()))
+}
+
+fn reconcile_after_ignore_change(
+    db: &Connection,
+    collection: &collections::Collection,
+) -> Result<crate::core::reconciler::ReconcileStats> {
+    if collection.state == collections::CollectionState::Active {
+        return vault_sync::sync_collection(db, &collection.name)
+            .map_err(|err| anyhow!(err.to_string()));
+    }
+    Ok(crate::core::reconciler::ReconcileStats::default())
+}
+
+fn ignore_add(db: &Connection, name: &str, pattern: &str, json: bool) -> Result<()> {
+    let pattern = validate_cli_ignore_pattern(pattern)?;
+    let collection = load_collection_by_name(db, name)?;
+    vault_sync::ensure_collection_write_allowed(db, collection.id)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    let proposed = add_ignore_pattern_content(load_ignore_source(&collection)?, &pattern);
+    validate_proposed_ignore_content(&proposed)?;
+    let ignore_path =
+        write_ignore_file_atomically(Path::new(&collection.root_path), Some(&proposed))?;
+    refresh_ignore_mirror(db, &collection, false)?;
+    let stats = reconcile_after_ignore_change(db, &collection)?;
+    let updated = load_collection_by_name(db, name)?;
+    let patterns = cached_user_ignore_patterns(&updated)?;
+
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "ignore-add",
+            "collection": name,
+            "pattern": pattern,
+            "file_path": ignore_path.display().to_string(),
+            "patterns": patterns,
+            "walked": stats.walked,
+            "modified": stats.modified,
+            "new": stats.new,
+            "missing": stats.missing,
+            "uuid_renamed": stats.uuid_renamed,
+            "hash_renamed": stats.hash_renamed
+        }),
+    )
+}
+
+fn ignore_remove(db: &Connection, name: &str, pattern: &str, json: bool) -> Result<()> {
+    let pattern = validate_cli_ignore_pattern(pattern)?;
+    let collection = load_collection_by_name(db, name)?;
+    vault_sync::ensure_collection_write_allowed(db, collection.id)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    let proposed = remove_ignore_pattern_content(load_ignore_source(&collection)?, &pattern);
+    validate_proposed_ignore_content(&proposed)?;
+    let ignore_path =
+        write_ignore_file_atomically(Path::new(&collection.root_path), Some(&proposed))?;
+    refresh_ignore_mirror(db, &collection, false)?;
+    let stats = reconcile_after_ignore_change(db, &collection)?;
+    let updated = load_collection_by_name(db, name)?;
+    let patterns = cached_user_ignore_patterns(&updated)?;
+
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "ignore-remove",
+            "collection": name,
+            "pattern": pattern,
+            "file_path": ignore_path.display().to_string(),
+            "patterns": patterns,
+            "walked": stats.walked,
+            "modified": stats.modified,
+            "new": stats.new,
+            "missing": stats.missing,
+            "uuid_renamed": stats.uuid_renamed,
+            "hash_renamed": stats.hash_renamed
+        }),
+    )
+}
+
+fn ignore_list(db: &Connection, name: &str, json: bool) -> Result<()> {
+    let collection = load_collection_by_name(db, name)?;
+    let patterns = cached_user_ignore_patterns(&collection)?;
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "ignore-list",
+            "collection": name,
+            "patterns": patterns,
+            "file_present": ignore_file_path(&collection).exists()
+        }),
+    )
+}
+
+fn ignore_clear(db: &Connection, name: &str, json: bool) -> Result<()> {
+    let collection = load_collection_by_name(db, name)?;
+    vault_sync::ensure_collection_write_allowed(db, collection.id)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    let ignore_path = write_ignore_file_atomically(Path::new(&collection.root_path), None)?;
+    refresh_ignore_mirror(db, &collection, true)?;
+    let stats = reconcile_after_ignore_change(db, &collection)?;
+    let updated = load_collection_by_name(db, name)?;
+    let patterns = cached_user_ignore_patterns(&updated)?;
+
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "ignore-clear",
+            "collection": name,
+            "file_path": ignore_path.display().to_string(),
+            "patterns": patterns,
+            "walked": stats.walked,
+            "modified": stats.modified,
+            "new": stats.new,
+            "missing": stats.missing,
+            "uuid_renamed": stats.uuid_renamed,
+            "hash_renamed": stats.hash_renamed
+        }),
+    )
 }
 
 fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionMetrics> {
@@ -813,6 +1146,46 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn collection_page_count(conn: &Connection, name: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*)
+               FROM pages p
+               JOIN collections c ON c.id = p.collection_id
+              WHERE c.name = ?1 AND p.quarantined_at IS NULL",
+            [name],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn fetch_ignore_mirror(conn: &Connection, name: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT ignore_patterns FROM collections WHERE name = ?1",
+            [name],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn attach_collection(conn: &Connection, name: &str, root_path: &Path) {
+        run(
+            conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: name.to_owned(),
+                path: root_path.to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_gbrain_id: false,
+                watcher_mode: None,
+            }),
+            true,
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
     #[test]
     fn add_refuses_invalid_root_before_creating_collection_row() {
         let conn = open_test_db();
@@ -1122,6 +1495,223 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("--confirm"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignore_add_updates_file_mirror_and_reconciles() {
+        let (_db_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        attach_collection(&conn, "work", root.path());
+
+        run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Add {
+                    name: "work".to_owned(),
+                    pattern: "note.md".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join(".gbrainignore")).unwrap(),
+            "note.md\n"
+        );
+        let mirror: Vec<String> =
+            serde_json::from_str(&fetch_ignore_mirror(&conn, "work").unwrap()).unwrap();
+        assert_eq!(mirror, vec!["note.md"]);
+        assert_eq!(collection_page_count(&conn, "work"), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignore_clear_removes_file_clears_mirror_and_reconciles() {
+        let (_db_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        attach_collection(&conn, "work", root.path());
+        run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Add {
+                    name: "work".to_owned(),
+                    pattern: "note.md".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Clear {
+                    name: "work".to_owned(),
+                    confirm: true,
+                },
+            },
+            true,
+        )
+        .unwrap();
+
+        assert!(!root.path().join(".gbrainignore").exists());
+        assert!(fetch_ignore_mirror(&conn, "work").is_none());
+        assert_eq!(collection_page_count(&conn, "work"), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignore_add_invalid_glob_refuses_without_disk_or_db_mutation() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+
+        let error = run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Add {
+                    name: "work".to_owned(),
+                    pattern: "[broken".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Invalid glob pattern"));
+        assert!(!root.path().join(".gbrainignore").exists());
+        assert!(fetch_ignore_mirror(&conn, "work").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignore_remove_updates_file_and_mirror() {
+        let (_db_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        attach_collection(&conn, "work", root.path());
+        run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Add {
+                    name: "work".to_owned(),
+                    pattern: "note.md".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap();
+        run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Add {
+                    name: "work".to_owned(),
+                    pattern: "archive/**".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Remove {
+                    name: "work".to_owned(),
+                    pattern: "note.md".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join(".gbrainignore")).unwrap(),
+            "archive/**\n"
+        );
+        let mirror: Vec<String> =
+            serde_json::from_str(&fetch_ignore_mirror(&conn, "work").unwrap()).unwrap();
+        assert_eq!(mirror, vec!["archive/**"]);
+        assert_eq!(collection_page_count(&conn, "work"), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignore_mutations_refuse_while_collection_is_restoring() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::Add {
+                    name: "work".to_owned(),
+                    pattern: "private/**".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("CollectionRestoringError"));
+        assert!(!root.path().join(".gbrainignore").exists());
+    }
+
+    #[test]
+    fn ignore_list_reads_cached_user_patterns_only() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET ignore_patterns = ?2 WHERE id = ?1",
+            rusqlite::params![
+                collection_id,
+                serde_json::to_string(&vec!["private/**", "*.bak"]).unwrap()
+            ],
+        )
+        .unwrap();
+
+        let collection = load_collection_by_name(&conn, "work").unwrap();
+        let patterns = cached_user_ignore_patterns(&collection).unwrap();
+
+        assert_eq!(patterns, vec!["private/**", "*.bak"]);
+        let globset =
+            ignore_patterns::build_globset_from_patterns(collection.ignore_patterns.as_deref())
+                .unwrap();
+        assert!(globset.is_match(".git/config"));
+        assert!(globset.is_match("private/plan.md"));
+    }
+
+    #[test]
+    fn ignore_cli_never_writes_ignore_mirror_directly() {
+        let source = include_str!("collection.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        assert!(!production_source.contains("SET ignore_patterns ="));
+        assert!(production_source.contains("ignore_patterns::reload_patterns"));
+        assert!(production_source.contains("ignore_patterns::clear_patterns"));
     }
 
     #[cfg(not(unix))]

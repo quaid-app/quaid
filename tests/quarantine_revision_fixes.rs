@@ -4,7 +4,7 @@ use rusqlite::{params, Connection};
 use std::fs;
 use std::path::Path;
 #[cfg(unix)]
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use tempfile::TempDir;
 
 fn open_test_db(path: &Path) -> Connection {
@@ -390,6 +390,8 @@ fn restore_refuses_when_target_appears_after_the_earlier_absence_check() {
         .arg("work::notes/quarantined")
         .arg("notes/restored")
         .env("GBRAIN_TEST_QUARANTINE_RESTORE_PAUSE_FILE", &pause_file)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn restore");
 

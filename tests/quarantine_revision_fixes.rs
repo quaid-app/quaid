@@ -1,12 +1,10 @@
-/// Targeted tests for Mom's quarantine revision blockers (Professor + Nibbler rejection)
-///
-/// Truth repair: quarantine restore is currently backed out of the live CLI surface.
-/// Prior blocker 1: Failed export still unlocks discard
-/// Restore-specific regression guard: disabled restore must not mutate disk or DB.
+/// Targeted tests for quarantine restore's narrow re-enable gate.
 use gbrain::core::db;
 use rusqlite::{params, Connection};
 use std::fs;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::{Command, Output};
 use tempfile::TempDir;
 
 fn open_test_db(path: &Path) -> Connection {
@@ -44,6 +42,29 @@ fn insert_quarantined_page(
     )
     .expect("insert raw_import");
     page_id
+}
+
+#[cfg(unix)]
+fn run_restore(db_path: &Path, slug: &str, relative_path: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_gbrain"))
+        .arg("--db")
+        .arg(db_path)
+        .arg("collection")
+        .arg("quarantine")
+        .arg("restore")
+        .arg(slug)
+        .arg(relative_path)
+        .output()
+        .expect("run restore")
+}
+
+#[cfg(unix)]
+fn combined_output(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
 }
 
 #[test]
@@ -138,8 +159,9 @@ fn blocker_1_failed_export_does_not_unlock_discard() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn restore_surface_is_deferred_for_non_markdown_target() {
+fn restore_rejects_non_markdown_target() {
     let dir = TempDir::new().expect("tempdir");
     let db_path = dir.path().join("test.db");
     let conn = open_test_db(&db_path);
@@ -154,16 +176,7 @@ fn restore_surface_is_deferred_for_non_markdown_target() {
     );
     drop(conn);
 
-    let restore_result = std::process::Command::new(env!("CARGO_BIN_EXE_gbrain"))
-        .arg("--db")
-        .arg(&db_path)
-        .arg("collection")
-        .arg("quarantine")
-        .arg("restore")
-        .arg("work::notes/quarantined")
-        .arg("notes/restored.txt")
-        .output()
-        .expect("run restore");
+    let restore_result = run_restore(&db_path, "work::notes/quarantined", "notes/restored.txt");
 
     assert!(
         !restore_result.status.success(),
@@ -171,8 +184,8 @@ fn restore_surface_is_deferred_for_non_markdown_target() {
     );
     let output_text = String::from_utf8_lossy(&restore_result.stderr);
     assert!(
-        output_text.contains("quarantine restore is deferred in this batch"),
-        "restore must surface the deferred-surface error: {output_text}"
+        output_text.contains("QuarantineRestoreTargetNotMarkdownError"),
+        "restore must surface the Markdown-target error: {output_text}"
     );
 
     assert!(
@@ -181,8 +194,9 @@ fn restore_surface_is_deferred_for_non_markdown_target() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn restore_surface_is_deferred_for_live_owned_collection() {
+fn restore_refuses_live_owned_collection() {
     let dir = TempDir::new().expect("tempdir");
     let db_path = dir.path().join("test.db");
     let conn = open_test_db(&db_path);
@@ -210,16 +224,7 @@ fn restore_surface_is_deferred_for_live_owned_collection() {
     .expect("establish live owner");
     drop(conn);
 
-    let restore_result = std::process::Command::new(env!("CARGO_BIN_EXE_gbrain"))
-        .arg("--db")
-        .arg(&db_path)
-        .arg("collection")
-        .arg("quarantine")
-        .arg("restore")
-        .arg("work::notes/quarantined")
-        .arg("notes/restored")
-        .output()
-        .expect("run restore");
+    let restore_result = run_restore(&db_path, "work::notes/quarantined", "notes/restored");
 
     assert!(
         !restore_result.status.success(),
@@ -227,8 +232,8 @@ fn restore_surface_is_deferred_for_live_owned_collection() {
     );
     let output_text = String::from_utf8_lossy(&restore_result.stderr);
     assert!(
-        output_text.contains("quarantine restore is deferred in this batch"),
-        "restore must surface the deferred-surface error: {output_text}"
+        output_text.contains("ServeOwnsCollectionError"),
+        "restore must preserve the live-owner refusal: {output_text}"
     );
 
     assert!(
@@ -237,8 +242,9 @@ fn restore_surface_is_deferred_for_live_owned_collection() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn restore_surface_is_deferred_before_target_conflict_mutation() {
+fn restore_refuses_existing_target_without_mutation() {
     let dir = TempDir::new().expect("tempdir");
     let db_path = dir.path().join("test.db");
     let conn = open_test_db(&db_path);
@@ -257,16 +263,7 @@ fn restore_surface_is_deferred_before_target_conflict_mutation() {
         .expect("create conflicting file");
     drop(conn);
 
-    let restore_result = std::process::Command::new(env!("CARGO_BIN_EXE_gbrain"))
-        .arg("--db")
-        .arg(&db_path)
-        .arg("collection")
-        .arg("quarantine")
-        .arg("restore")
-        .arg("work::notes/quarantined")
-        .arg("notes/conflict")
-        .output()
-        .expect("run restore");
+    let restore_result = run_restore(&db_path, "work::notes/quarantined", "notes/conflict");
 
     assert!(
         !restore_result.status.success(),
@@ -274,8 +271,8 @@ fn restore_surface_is_deferred_before_target_conflict_mutation() {
     );
     let output_text = String::from_utf8_lossy(&restore_result.stderr);
     assert!(
-        output_text.contains("quarantine restore is deferred in this batch"),
-        "restore must surface the deferred-surface error: {output_text}"
+        output_text.contains("QuarantineRestoreTargetOccupiedError"),
+        "restore must surface the occupied-target refusal: {output_text}"
     );
 
     let conn = open_test_db(&db_path);
@@ -330,8 +327,9 @@ fn restore_surface_is_deferred_before_target_conflict_mutation() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn restore_surface_is_deferred_for_read_only_collection() {
+fn restore_refuses_read_only_collection() {
     let dir = TempDir::new().expect("tempdir");
     let db_path = dir.path().join("test.db");
     let conn = open_test_db(&db_path);
@@ -347,16 +345,7 @@ fn restore_surface_is_deferred_for_read_only_collection() {
     );
     drop(conn);
 
-    let restore_result = std::process::Command::new(env!("CARGO_BIN_EXE_gbrain"))
-        .arg("--db")
-        .arg(&db_path)
-        .arg("collection")
-        .arg("quarantine")
-        .arg("restore")
-        .arg("readonly::notes/quarantined")
-        .arg("notes/restored")
-        .output()
-        .expect("run restore");
+    let restore_result = run_restore(&db_path, "readonly::notes/quarantined", "notes/restored");
 
     assert!(
         !restore_result.status.success(),
@@ -364,12 +353,377 @@ fn restore_surface_is_deferred_for_read_only_collection() {
     );
     let output_text = String::from_utf8_lossy(&restore_result.stderr);
     assert!(
-        output_text.contains("quarantine restore is deferred in this batch"),
-        "restore must surface the deferred-surface error: {output_text}"
+        output_text.contains("CollectionReadOnlyError"),
+        "restore must surface the read-only vault-byte gate: {output_text}"
     );
 
     assert!(
         !root.join("notes").join("restored.md").exists(),
         "no file should be written when collection is read-only"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_refuses_when_target_appears_after_the_earlier_absence_check() {
+    let dir = TempDir::new().expect("tempdir");
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    fs::create_dir_all(root.join("notes")).expect("create notes dir");
+    let collection_id = insert_collection(&conn, "work", &root, true);
+    let page_id = insert_quarantined_page(
+        &conn,
+        collection_id,
+        "notes/quarantined",
+        b"---\ntitle: Q\ntype: note\n---\nquarantined\n",
+    );
+    drop(conn);
+
+    let pause_file = dir.path().join("restore.pause");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+        .arg("--db")
+        .arg(&db_path)
+        .arg("collection")
+        .arg("quarantine")
+        .arg("restore")
+        .arg("work::notes/quarantined")
+        .arg("notes/restored")
+        .env("GBRAIN_TEST_QUARANTINE_RESTORE_PAUSE_FILE", &pause_file)
+        .spawn()
+        .expect("spawn restore");
+
+    while !pause_file.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    fs::write(root.join("notes").join("restored.md"), b"competing target")
+        .expect("write competing target");
+    fs::remove_file(&pause_file).expect("release restore");
+    let restore_result = child.wait_with_output().expect("wait for restore");
+
+    assert!(
+        !restore_result.status.success(),
+        "restore must fail closed when target appears after precheck: {restore_result:?}"
+    );
+    let output_text = combined_output(&restore_result);
+    assert!(
+        output_text.contains("QuarantineRestoreTargetOccupiedError"),
+        "restore must report the install-time no-replace refusal: {output_text}"
+    );
+    assert_eq!(
+        fs::read(root.join("notes").join("restored.md")).expect("read competing target"),
+        b"competing target"
+    );
+
+    let conn = open_test_db(&db_path);
+    let state: (Option<String>, i64) = conn
+        .query_row(
+            "SELECT quarantined_at,
+                    (SELECT COUNT(*) FROM file_state WHERE page_id = ?1)
+             FROM pages
+             WHERE id = ?1",
+            [page_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load quarantined state");
+    assert!(state.0.is_some(), "page must remain quarantined");
+    assert_eq!(state.1, 0, "file_state must remain inactive");
+    let residue: Vec<_> = fs::read_dir(root.join("notes"))
+        .expect("read notes dir")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".quarantine-restore-")
+        })
+        .collect();
+    assert!(residue.is_empty(), "restore must leave no tempfile residue");
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_cleans_up_tempfile_when_write_fails() {
+    // Blocker 1: pre-install write_all/sync_all failure must not leave
+    // a `.quarantine-restore-*.tmp` residue on disk.
+    let dir = TempDir::new().expect("tempdir");
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    fs::create_dir_all(root.join("notes")).expect("create notes dir");
+    let collection_id = insert_collection(&conn, "work", &root, true);
+    let page_id = insert_quarantined_page(
+        &conn,
+        collection_id,
+        "notes/quarantined",
+        b"---\ntitle: Q\ntype: note\n---\nquarantined\n",
+    );
+    drop(conn);
+
+    let restore_result = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+        .arg("--db")
+        .arg(&db_path)
+        .arg("collection")
+        .arg("quarantine")
+        .arg("restore")
+        .arg("work::notes/quarantined")
+        .arg("notes/restored")
+        .env(
+            "GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_TEMPFILE_CREATE",
+            "1",
+        )
+        .output()
+        .expect("run restore");
+
+    assert!(
+        !restore_result.status.success(),
+        "injected tempfile-create failure must cause restore to fail: {restore_result:?}"
+    );
+    let output_text = combined_output(&restore_result);
+    assert!(
+        output_text.contains("QuarantineRestoreHookError"),
+        "injected failure must surface hook error: {output_text}"
+    );
+
+    assert!(
+        !root.join("notes").join("restored.md").exists(),
+        "no target file should be written"
+    );
+    let residue: Vec<_> = fs::read_dir(root.join("notes"))
+        .expect("read notes dir")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".quarantine-restore-")
+        })
+        .collect();
+    assert!(
+        residue.is_empty(),
+        "pre-install failure must leave no tempfile residue: {residue:?}"
+    );
+
+    let conn = open_test_db(&db_path);
+    let quarantined: Option<String> = conn
+        .query_row(
+            "SELECT quarantined_at FROM pages WHERE id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )
+        .expect("load page");
+    assert!(
+        quarantined.is_some(),
+        "page must still be quarantined after failed restore"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_rolls_back_target_when_parse_fails_after_install() {
+    // Blocker 3: a parse-time error after the file is installed must roll back the
+    // installed target, leaving no orphaned vault bytes with the page still quarantined.
+    let dir = TempDir::new().expect("tempdir");
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    fs::create_dir_all(root.join("notes")).expect("create notes dir");
+    let collection_id = insert_collection(&conn, "work", &root, true);
+    let page_id = insert_quarantined_page(
+        &conn,
+        collection_id,
+        "notes/quarantined",
+        b"---\ntitle: Q\ntype: note\n---\nquarantined\n",
+    );
+    drop(conn);
+
+    let restore_result = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+        .arg("--db")
+        .arg(&db_path)
+        .arg("collection")
+        .arg("quarantine")
+        .arg("restore")
+        .arg("work::notes/quarantined")
+        .arg("notes/restored")
+        .env("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_IN_PARSE", "1")
+        .output()
+        .expect("run restore");
+
+    assert!(
+        !restore_result.status.success(),
+        "injected parse failure must cause restore to fail: {restore_result:?}"
+    );
+    let output_text = combined_output(&restore_result);
+    assert!(
+        output_text.contains("QuarantineRestoreHookError"),
+        "injected parse failure must surface hook error: {output_text}"
+    );
+
+    assert!(
+        !root.join("notes").join("restored.md").exists(),
+        "parse-failure rollback must leave no installed target on disk"
+    );
+    let residue: Vec<_> = fs::read_dir(root.join("notes"))
+        .expect("read notes dir")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".quarantine-restore-")
+        })
+        .collect();
+    assert!(
+        residue.is_empty(),
+        "parse-failure rollback must leave no tempfile residue"
+    );
+
+    let conn = open_test_db(&db_path);
+    let state: (Option<String>, i64) = conn
+        .query_row(
+            "SELECT quarantined_at,
+                    (SELECT COUNT(*) FROM file_state WHERE page_id = ?1)
+             FROM pages
+             WHERE id = ?1",
+            [page_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load quarantined state");
+    assert!(
+        state.0.is_some(),
+        "page must remain quarantined after parse-failure rollback"
+    );
+    assert_eq!(
+        state.1, 0,
+        "file_state must remain inactive after parse-failure rollback"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_refuses_absent_parent_directory() {
+    // Blocker 4: restore now refuses targets whose parent directory does not exist.
+    // Previously walk_to_parent_create_dirs would silently create it without durably
+    // fsyncing the new chain. The narrow fix is to require the caller to pre-create
+    // the directory, keeping the slice within crash-durable install semantics only.
+    let dir = TempDir::new().expect("tempdir");
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    fs::create_dir_all(&root).expect("create vault root");
+    // Note: root/notes does NOT exist — parent directory is absent.
+    let collection_id = insert_collection(&conn, "work", &root, true);
+    let _page_id = insert_quarantined_page(
+        &conn,
+        collection_id,
+        "notes/quarantined",
+        b"---\ntitle: Q\ntype: note\n---\nquarantined\n",
+    );
+    drop(conn);
+
+    let restore_result = run_restore(&db_path, "work::notes/quarantined", "notes/restored");
+
+    assert!(
+        !restore_result.status.success(),
+        "restore with absent parent directory must fail: {restore_result:?}"
+    );
+    // Parent-absent failure surfaces as an I/O error (NotFound).
+    assert!(
+        !root.join("notes").exists(),
+        "absent parent directory must not be created by restore"
+    );
+    assert!(
+        !root.join("notes").join("restored.md").exists(),
+        "no file should be written when parent is absent"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_rollback_unlinks_residue_and_fsyncs_parent_before_returning() {
+    let dir = TempDir::new().expect("tempdir");
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    fs::create_dir_all(root.join("notes")).expect("create notes dir");
+    let collection_id = insert_collection(&conn, "work", &root, true);
+    let page_id = insert_quarantined_page(
+        &conn,
+        collection_id,
+        "notes/quarantined",
+        b"---\ntitle: Q\ntype: note\n---\nquarantined\n",
+    );
+    drop(conn);
+
+    let trace_file = dir.path().join("restore.trace");
+    let restore_result = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+        .arg("--db")
+        .arg(&db_path)
+        .arg("collection")
+        .arg("quarantine")
+        .arg("restore")
+        .arg("work::notes/quarantined")
+        .arg("notes/restored")
+        .env("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_INSTALL", "1")
+        .env("GBRAIN_TEST_QUARANTINE_RESTORE_TRACE_FILE", &trace_file)
+        .output()
+        .expect("run restore");
+
+    assert!(
+        !restore_result.status.success(),
+        "restore hook must force a post-install rollback: {restore_result:?}"
+    );
+    let output_text = combined_output(&restore_result);
+    assert!(
+        output_text.contains("QuarantineRestoreHookError"),
+        "injected restore failure must surface the hook error: {output_text}"
+    );
+    assert!(
+        !root.join("notes").join("restored.md").exists(),
+        "rolled-back restore must leave no target bytes behind"
+    );
+    let residue: Vec<_> = fs::read_dir(root.join("notes"))
+        .expect("read notes dir")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".quarantine-restore-")
+        })
+        .collect();
+    assert!(
+        residue.is_empty(),
+        "rollback must leave no tempfile residue"
+    );
+
+    let trace = fs::read_to_string(&trace_file).expect("read trace");
+    let events: Vec<_> = trace.lines().collect();
+    assert_eq!(
+        events,
+        vec![
+            "unlink:temp",
+            "fsync-after-unlink:temp",
+            "unlink:target",
+            "fsync-after-unlink:target"
+        ],
+        "rollback must fsync the parent after every successful unlink: {trace}"
+    );
+
+    let conn = open_test_db(&db_path);
+    let state: (Option<String>, i64) = conn
+        .query_row(
+            "SELECT quarantined_at,
+                    (SELECT COUNT(*) FROM file_state WHERE page_id = ?1)
+             FROM pages
+             WHERE id = ?1",
+            [page_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load quarantined state");
+    assert!(
+        state.0.is_some(),
+        "page must remain quarantined after rollback"
+    );
+    assert_eq!(state.1, 0, "file_state must remain inactive after rollback");
 }

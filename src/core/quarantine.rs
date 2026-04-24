@@ -1,16 +1,42 @@
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
+use std::io::Write;
 use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::thread;
+#[cfg(unix)]
+use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+#[cfg(unix)]
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+#[cfg(unix)]
+use uuid::Uuid;
 
 use crate::core::collections::{self, OpKind};
+#[cfg(unix)]
+use crate::core::file_state;
+#[cfg(unix)]
+use crate::core::fs_safety;
 use crate::core::markdown;
+use crate::core::page_uuid;
+#[cfg(unix)]
+use crate::core::palace;
+#[cfg(unix)]
+use crate::core::raw_imports;
 use crate::core::reconciler;
 use crate::core::types::{Page, TimelineEntry};
 use crate::core::vault_sync::{self, ResolvedSlug, VaultSyncError};
+
+#[cfg(unix)]
+use rustix::fd::AsFd;
+#[cfg(unix)]
+use rustix::fs::fsync;
 
 const DEFAULT_QUARANTINE_TTL_DAYS: i64 = 30;
 
@@ -50,6 +76,15 @@ pub struct QuarantineDiscardReceipt {
     pub quarantined_at: String,
     pub forced: bool,
     pub exported_before_discard: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QuarantineRestoreReceipt {
+    pub collection: String,
+    pub slug: String,
+    pub restored_slug: String,
+    pub restored_relative_path: String,
+    pub quarantined_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
@@ -204,6 +239,22 @@ pub enum QuarantineError {
         counts: DbOnlyStateCounts,
     },
 
+    #[cfg(unix)]
+    #[error("QuarantineRestoreTargetNotMarkdownError: target={target}")]
+    RestoreTargetNotMarkdown { target: String },
+
+    #[cfg(unix)]
+    #[error("QuarantineRestoreTargetOccupiedError: target={target}")]
+    RestoreTargetOccupied { target: String },
+
+    #[cfg(unix)]
+    #[error("QuarantineRestorePathOwnedError: target={target} owner_slug={owner_slug}")]
+    RestorePathOwned { target: String, owner_slug: String },
+
+    #[cfg(unix)]
+    #[error("QuarantineRestoreHookError: {message}")]
+    RestoreHook { message: String },
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
@@ -221,6 +272,9 @@ pub enum QuarantineError {
 
     #[error(transparent)]
     VaultSync(#[from] VaultSyncError),
+
+    #[error(transparent)]
+    PageUuid(#[from] page_uuid::PageUuidError),
 }
 
 pub fn quarantine_ttl_days() -> i64 {
@@ -342,6 +396,158 @@ pub fn discard_quarantined_page(
         forced: force,
         exported_before_discard,
     })
+}
+
+#[cfg(unix)]
+pub fn restore_quarantined_page(
+    conn: &Connection,
+    slug_input: &str,
+    relative_path_input: &str,
+) -> Result<QuarantineRestoreReceipt, QuarantineError> {
+    let resolved = vault_sync::resolve_slug_for_op(conn, slug_input, OpKind::WriteUpdate)?;
+    vault_sync::ensure_collection_vault_write_allowed(conn, resolved.collection_id)?;
+    let _lease = vault_sync::start_short_lived_owner_lease(conn, resolved.collection_id)?;
+    let page = load_quarantined_page(conn, &resolved)?;
+    let collection = collections::get_by_name(conn, &page.collection_name)?.ok_or_else(|| {
+        QuarantineError::CollectionNotFound {
+            collection: page.collection_name.clone(),
+        }
+    })?;
+    let normalized_relative_path = normalize_restore_relative_path(relative_path_input)?;
+    refuse_restore_path_owned_by_other_page(
+        conn,
+        resolved.collection_id,
+        &normalized_relative_path,
+        page.page_id,
+    )?;
+
+    let root_path = Path::new(&collection.root_path);
+    let raw_bytes = active_raw_import_bytes(conn, page.page_id)?;
+    let sha256 = sha256_hex(&raw_bytes);
+    let root_fd = fs_safety::open_root_fd(root_path)?;
+    let target_relative_path = Path::new(&normalized_relative_path);
+    // Use walk_to_parent (not walk_to_parent_create_dirs): absent parent directories are refused
+    // rather than silently created without a durable fsync chain. Callers must pre-create the
+    // target directory structure before restoring.
+    let parent_fd = fs_safety::walk_to_parent(&root_fd, target_relative_path)?;
+    let target_name =
+        target_relative_path
+            .file_name()
+            .ok_or_else(|| QuarantineError::RestoreHook {
+                message: format!(
+                    "relative path has no terminal component: {}",
+                    target_relative_path.display()
+                ),
+            })?;
+    let absolute_target_path = root_path.join(&normalized_relative_path);
+    refuse_existing_target(&parent_fd, target_name, &absolute_target_path)?;
+    maybe_pause_after_precheck()?;
+
+    let temp_name = PathBuf::from(format!(".quarantine-restore-{}.tmp", Uuid::now_v7()));
+    let mut temp_file = std::fs::File::from(fs_safety::openat_create_excl(&parent_fd, &temp_name)?);
+
+    // Test hook: simulate failure immediately after tempfile creation (before write/sync).
+    if should_fail_after_tempfile_create() {
+        drop(temp_file);
+        cleanup_tempfile(&parent_fd, &temp_name)?;
+        return Err(QuarantineError::RestoreHook {
+            message: "injected failure after tempfile create".to_owned(),
+        });
+    }
+
+    // write_all / sync_all failure must clean up the tempfile before propagating the error,
+    // otherwise a partial `.quarantine-restore-*.tmp` is left on disk across a crash restart.
+    if let Err(err) = temp_file.write_all(&raw_bytes).and_then(|()| temp_file.sync_all()) {
+        drop(temp_file);
+        cleanup_tempfile(&parent_fd, &temp_name)?;
+        return Err(err.into());
+    }
+    drop(temp_file);
+
+    let install_result = install_tempfile_without_replace(&parent_fd, &temp_name, target_name);
+    if let Err(err) = install_result {
+        cleanup_tempfile(&parent_fd, &temp_name)?;
+        return Err(match err.kind() {
+            std::io::ErrorKind::AlreadyExists => QuarantineError::RestoreTargetOccupied {
+                target: absolute_target_path.display().to_string(),
+            },
+            _ => err.into(),
+        });
+    }
+
+    if let Err(err) = cleanup_tempfile(&parent_fd, &temp_name) {
+        rollback_target_entry(&parent_fd, target_name)?;
+        return Err(err);
+    }
+
+    if should_fail_after_install_before_db() {
+        rollback_target_entry(&parent_fd, target_name)?;
+        return Err(QuarantineError::RestoreHook {
+            message: "injected failure after install and before DB reactivation".to_owned(),
+        });
+    }
+
+    let target_stat = match file_state::stat_file_fd(&parent_fd, target_name) {
+        Ok(stat) => stat,
+        Err(err) => {
+            rollback_target_entry(&parent_fd, target_name)?;
+            return Err(err.into());
+        }
+    };
+    // parse_restored_page can fail (UUID conflict, JSON serialization). On failure the
+    // installed target must be rolled back before returning so the vault is not left with
+    // an orphaned file while the page remains quarantined in the DB.
+    let parsed = match parse_restored_page(&raw_bytes, &absolute_target_path, root_path, &page.uuid) {
+        Ok(p) => p,
+        Err(err) => {
+            rollback_target_entry(&parent_fd, target_name)?;
+            return Err(err);
+        }
+    };
+
+    let tx = conn.unchecked_transaction()?;
+    let now = current_timestamp(&tx)?;
+    let update_result = restore_page_transaction(
+        &tx,
+        &page,
+        resolved.collection_id,
+        &normalized_relative_path,
+        &parsed,
+        &target_stat,
+        &sha256,
+        &now,
+    );
+    match update_result.and_then(|()| tx.commit().map_err(QuarantineError::from)) {
+        Ok(()) => {
+            eprintln!(
+                "INFO: quarantine_restored collection={} slug={} restored_slug={} relative_path={}",
+                page.collection_name, page.slug, parsed.slug, normalized_relative_path
+            );
+            Ok(QuarantineRestoreReceipt {
+                collection: page.collection_name,
+                slug: page.slug,
+                restored_slug: parsed.slug,
+                restored_relative_path: normalized_relative_path,
+                quarantined_at: page.quarantined_at,
+            })
+        }
+        Err(err) => {
+            rollback_target_entry(&parent_fd, target_name)?;
+            Err(err)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn restore_quarantined_page(
+    _conn: &Connection,
+    _slug_input: &str,
+    _relative_path_input: &str,
+) -> Result<QuarantineRestoreReceipt, QuarantineError> {
+    Err(VaultSyncError::UnsupportedPlatform {
+        command: "gbrain collection quarantine restore",
+    }
+    .into())
 }
 
 pub fn sweep_expired_quarantined_pages(
@@ -731,6 +937,319 @@ fn active_raw_import_markdown(
     .optional()
     .map(|raw| raw.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
     .map_err(Into::into)
+}
+
+#[cfg(unix)]
+fn active_raw_import_bytes(conn: &Connection, page_id: i64) -> Result<Vec<u8>, QuarantineError> {
+    conn.query_row(
+        "SELECT raw_bytes
+         FROM raw_imports
+         WHERE page_id = ?1
+           AND is_active = 1",
+        [page_id],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+#[cfg(unix)]
+fn normalize_restore_relative_path(relative_path_input: &str) -> Result<String, QuarantineError> {
+    let normalized = if relative_path_input.ends_with(".md") {
+        relative_path_input.to_owned()
+    } else if Path::new(relative_path_input).extension().is_some() {
+        return Err(QuarantineError::RestoreTargetNotMarkdown {
+            target: relative_path_input.to_owned(),
+        });
+    } else {
+        format!("{relative_path_input}.md")
+    };
+    collections::validate_relative_path(&normalized)?;
+    Ok(normalized)
+}
+
+#[cfg(unix)]
+fn refuse_restore_path_owned_by_other_page(
+    conn: &Connection,
+    collection_id: i64,
+    relative_path: &str,
+    restoring_page_id: i64,
+) -> Result<(), QuarantineError> {
+    if let Some((owner_page_id, owner_slug)) = conn
+        .query_row(
+            "SELECT p.id, p.slug
+             FROM file_state f
+             JOIN pages p ON p.id = f.page_id
+             WHERE f.collection_id = ?1
+               AND f.relative_path = ?2",
+            params![collection_id, relative_path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+    {
+        if owner_page_id != restoring_page_id {
+            return Err(QuarantineError::RestorePathOwned {
+                target: relative_path.to_owned(),
+                owner_slug,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn refuse_existing_target<Fd: AsFd>(
+    parent_fd: Fd,
+    target_name: &Path,
+    absolute_target_path: &Path,
+) -> Result<(), QuarantineError> {
+    match fs_safety::stat_at_nofollow(parent_fd, target_name) {
+        Ok(_) => Err(QuarantineError::RestoreTargetOccupied {
+            target: absolute_target_path.display().to_string(),
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+#[cfg(unix)]
+fn install_tempfile_without_replace<Fd: AsFd>(
+    parent_fd: Fd,
+    temp_name: &Path,
+    target_name: &Path,
+) -> std::io::Result<()> {
+    fs_safety::linkat_parent_fd(parent_fd, temp_name, target_name)
+}
+
+#[cfg(unix)]
+fn cleanup_tempfile<Fd: AsFd>(parent_fd: Fd, temp_name: &Path) -> Result<(), QuarantineError> {
+    remove_entry_and_sync_parent(parent_fd, temp_name, "temp")
+}
+
+#[cfg(unix)]
+fn rollback_target_entry<Fd: AsFd>(
+    parent_fd: Fd,
+    target_name: &Path,
+) -> Result<(), QuarantineError> {
+    remove_entry_and_sync_parent(parent_fd, target_name, "target")
+}
+
+#[cfg(unix)]
+fn remove_entry_and_sync_parent<Fd: AsFd>(
+    parent_fd: Fd,
+    name: &Path,
+    trace_label: &'static str,
+) -> Result<(), QuarantineError> {
+    match fs_safety::unlinkat_parent_fd(&parent_fd, name) {
+        Ok(()) => {
+            append_restore_trace(&format!("unlink:{trace_label}"))?;
+            sync_parent_fd(&parent_fd)?;
+            append_restore_trace(&format!("fsync-after-unlink:{trace_label}"))?;
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+#[cfg(unix)]
+fn sync_parent_fd<Fd: AsFd>(parent_fd: Fd) -> Result<(), QuarantineError> {
+    fsync(parent_fd.as_fd())
+        .map_err(|err| std::io::Error::from_raw_os_error(err.raw_os_error()).into())
+}
+
+#[cfg(unix)]
+fn parse_restored_page(
+    raw_bytes: &[u8],
+    absolute_target_path: &Path,
+    root_path: &Path,
+    stored_uuid: &str,
+) -> Result<ParsedRestoredPage, QuarantineError> {
+    // Test hook: simulate a parse failure to exercise post-install rollback.
+    if should_fail_in_parse() {
+        return Err(QuarantineError::RestoreHook {
+            message: "injected parse failure".to_owned(),
+        });
+    }
+    let raw = String::from_utf8_lossy(raw_bytes).into_owned();
+    let (frontmatter, body) = markdown::parse_frontmatter(&raw);
+    let (compiled_truth, timeline) = markdown::split_content(&body);
+    let summary = markdown::extract_summary(&compiled_truth);
+    let slug = frontmatter
+        .get("slug")
+        .cloned()
+        .unwrap_or_else(|| derive_slug_from_path(absolute_target_path, root_path));
+    let title = frontmatter
+        .get("title")
+        .cloned()
+        .unwrap_or_else(|| slug.clone());
+    let page_type = frontmatter
+        .get("type")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("null"))
+        .map(str::to_owned)
+        .unwrap_or_else(|| "concept".to_owned());
+    let wing = frontmatter
+        .get("wing")
+        .cloned()
+        .unwrap_or_else(|| palace::derive_wing(&slug));
+    let room = palace::derive_room(&compiled_truth);
+    let uuid = page_uuid::resolve_page_uuid(&frontmatter, Some(stored_uuid))?;
+    Ok(ParsedRestoredPage {
+        slug,
+        uuid,
+        title,
+        page_type,
+        summary,
+        compiled_truth,
+        timeline,
+        frontmatter_json: serde_json::to_string(&frontmatter)?,
+        wing,
+        room,
+    })
+}
+
+#[cfg(unix)]
+struct ParsedRestoredPage {
+    slug: String,
+    uuid: String,
+    title: String,
+    page_type: String,
+    summary: String,
+    compiled_truth: String,
+    timeline: String,
+    frontmatter_json: String,
+    wing: String,
+    room: String,
+}
+
+#[cfg(unix)]
+fn restore_page_transaction(
+    conn: &Connection,
+    page: &QuarantinedPageRecord,
+    collection_id: i64,
+    relative_path: &str,
+    parsed: &ParsedRestoredPage,
+    stat: &file_state::FileStat,
+    sha256: &str,
+    now: &str,
+) -> Result<(), QuarantineError> {
+    conn.execute(
+        "UPDATE pages
+         SET slug = ?1,
+             uuid = ?2,
+             type = ?3,
+             title = ?4,
+             summary = ?5,
+             compiled_truth = ?6,
+             timeline = ?7,
+             frontmatter = ?8,
+             wing = ?9,
+             room = ?10,
+             quarantined_at = NULL,
+             version = version + 1,
+             updated_at = ?11,
+             truth_updated_at = ?11,
+             timeline_updated_at = ?11
+         WHERE id = ?12",
+        params![
+            parsed.slug,
+            parsed.uuid,
+            parsed.page_type,
+            parsed.title,
+            parsed.summary,
+            parsed.compiled_truth,
+            parsed.timeline,
+            parsed.frontmatter_json,
+            parsed.wing,
+            parsed.room,
+            now,
+            page.page_id
+        ],
+    )?;
+    file_state::upsert_file_state(
+        conn,
+        collection_id,
+        relative_path,
+        page.page_id,
+        stat,
+        sha256,
+    )?;
+    conn.execute(
+        "DELETE FROM file_state
+         WHERE page_id = ?1
+           AND relative_path != ?2",
+        params![page.page_id, relative_path],
+    )?;
+    raw_imports::assert_exactly_one_active_row(conn, page.page_id)?;
+    raw_imports::enqueue_embedding_job(conn, page.page_id)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn derive_slug_from_path(file_path: &Path, root_path: &Path) -> String {
+    file_path
+        .strip_prefix(root_path)
+        .unwrap_or(file_path)
+        .with_extension("")
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+#[cfg(unix)]
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+#[cfg(unix)]
+fn maybe_pause_after_precheck() -> Result<(), QuarantineError> {
+    let Some(flag_path) = std::env::var_os("GBRAIN_TEST_QUARANTINE_RESTORE_PAUSE_FILE") else {
+        return Ok(());
+    };
+    let flag_path = PathBuf::from(flag_path);
+    fs::write(&flag_path, b"ready")?;
+    while flag_path.exists() {
+        thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn should_fail_after_tempfile_create() -> bool {
+    std::env::var("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_TEMPFILE_CREATE")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[cfg(unix)]
+fn should_fail_after_install_before_db() -> bool {
+    std::env::var("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_INSTALL")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[cfg(unix)]
+fn should_fail_in_parse() -> bool {
+    std::env::var("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_IN_PARSE")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[cfg(unix)]
+fn append_restore_trace(event: &str) -> Result<(), QuarantineError> {
+    let Some(trace_path) = std::env::var_os("GBRAIN_TEST_QUARANTINE_RESTORE_TRACE_FILE") else {
+        return Ok(());
+    };
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(trace_path)?;
+    writeln!(file, "{event}")?;
+    Ok(())
 }
 
 fn count<P>(conn: &Connection, sql: &str, params: P) -> Result<i64, QuarantineError>

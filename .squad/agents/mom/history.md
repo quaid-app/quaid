@@ -178,3 +178,39 @@
 - **Transaction-first rollback is the canonical atomicity pattern for multi-resource commits.** Filesystem-first + cleanup-on-failure is error-prone and misses corner cases. Committing the DB only after all filesystem steps succeed (inside the same transaction) is the correct ordering.
 - **When a gate exists (like `ServeOwnsCollectionError`), every code path that performs the gated action must enforce it.** Restore is a vault write; it must honor the same ownership fences as PUT. Adding `ensure_collection_not_live_owned()` as a reusable helper makes this explicit.
 
+---
+
+### 2026-04-25 Quarantine Restore Second Revision (5-Blocker Fix)
+
+**Context:** Bender's first revision of the quarantine restore slice was itself rejected
+on 5 consolidated blockers. Mom assigned as second revision author.
+
+**What happened:**
+- Fixed all 5 blockers in narrow, targeted edits:
+  1. **Pre-install tempfile residue:** `write_all`/`sync_all` failures now clean up the
+     tempfile before returning. If cleanup also fails, the cleanup error takes precedence.
+  2. **tasks.md contradiction:** Task 9.8 body said "restore remains deferred" while the
+     closure note said it was re-enabled. Rewrote body + note to be non-contradictory and
+     accurate, attributing the note to Mom with a description of the current contract.
+  3. **Parse-failure orphan:** `parse_restored_page` failure after `linkat` now rolls back
+     the installed target via `rollback_target_entry` before returning.
+  4. **Absent-parent fsync gap:** Switched restore from `walk_to_parent_create_dirs`
+     to `walk_to_parent` (no-create). Absent parents are now refused with a clear error
+     rather than silently recreated without a durable fsync chain.
+  5. **Narrow contract preserved:** No watcher, no audit, no overwrite policy widening.
+
+- Added 3 focused tests: tempfile cleanup, parse-failure rollback, absent-parent refusal.
+- 591 lib tests pass. 2 pre-existing Windows-only failures confirmed unrelated.
+- Decision record: `.squad/decisions/inbox/mom-restore-revision.md`
+- Skill file updated: `.squad/skills/quarantine-noreplace-rollback/SKILL.md`
+
+**Lessons:**
+- Pre-install tempfile residue is a silent crash hazard: wrap every write/sync call that
+  follows tempfile creation with cleanup-on-failure, not just the install step.
+- Post-install work failure must roll back. Any `?` after `linkat` is a potential half-
+  installed vault state. Make rollback the explicit default, not a case-by-case addition.
+- When a directory-creation variant exists, prefer the no-create variant for restore paths.
+  Missing parents are a signal, not a task. Surface them; don't quietly patch them over.
+- Contradictory documentation is a blocker in its own right. A task body that says
+  "deferred" and a note that says "included" cannot both be true. Pick one and say it.
+

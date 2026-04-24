@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Once;
+use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -201,6 +202,9 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     ensure_sqlite_vec();
 
     let conn = Connection::open(path)?;
+    // Set busy timeout *before* schema DDL so concurrent opens don't race on the
+    // write lock required by the initial PRAGMA + CREATE TABLE IF NOT EXISTS batch.
+    conn.busy_timeout(Duration::from_secs(5))?;
     conn.execute_batch(include_str!("../schema.sql"))?;
     ensure_collection_owner_columns(&conn)?;
     set_version(&conn)?;

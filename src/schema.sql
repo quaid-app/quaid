@@ -142,7 +142,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS page_fts USING fts5(
     tokenize='porter unicode61'
 );
 
-CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
+DROP TRIGGER IF EXISTS pages_ai;
+CREATE TRIGGER pages_ai AFTER INSERT ON pages BEGIN
     INSERT INTO page_fts(rowid, title, slug, compiled_truth, timeline)
     SELECT new.id, new.title, new.slug, new.compiled_truth, new.timeline
     WHERE new.quarantined_at IS NULL;
@@ -155,9 +156,11 @@ CREATE TRIGGER pages_ad AFTER DELETE ON pages BEGIN
     WHERE old.quarantined_at IS NULL;
 END;
 
-CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+DROP TRIGGER IF EXISTS pages_au;
+CREATE TRIGGER pages_au AFTER UPDATE ON pages BEGIN
     INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
-    VALUES ('delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline);
+    SELECT 'delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline
+    WHERE old.quarantined_at IS NULL;
     INSERT INTO page_fts(rowid, title, slug, compiled_truth, timeline)
     SELECT new.id, new.title, new.slug, new.compiled_truth, new.timeline
     WHERE new.quarantined_at IS NULL;

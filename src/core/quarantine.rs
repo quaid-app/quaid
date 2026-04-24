@@ -430,16 +430,14 @@ pub fn restore_quarantined_page(
     // rather than silently created without a durable fsync chain. Callers must pre-create the
     // target directory structure before restoring.
     let parent_fd = fs_safety::walk_to_parent(&root_fd, target_relative_path)?;
-    let target_name = Path::new(
-        target_relative_path
-            .file_name()
-            .ok_or_else(|| QuarantineError::RestoreHook {
-                message: format!(
-                    "relative path has no terminal component: {}",
-                    target_relative_path.display()
-                ),
-            })?,
-    );
+    let target_name = Path::new(target_relative_path.file_name().ok_or_else(|| {
+        QuarantineError::RestoreHook {
+            message: format!(
+                "relative path has no terminal component: {}",
+                target_relative_path.display()
+            ),
+        }
+    })?);
     let absolute_target_path = root_path.join(&normalized_relative_path);
     refuse_existing_target(&parent_fd, target_name, &absolute_target_path)?;
     maybe_pause_after_precheck()?;

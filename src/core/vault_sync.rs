@@ -5063,10 +5063,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_rcrt_pass_clears_needs_full_sync_after_tx_b() {
+        const COLLECTION_ID: i64 = 50_000;
+
         init_process_registries().unwrap();
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
-        let collection_id = insert_collection(&conn, "work", temp.path());
+        let collection_id = insert_collection_with_id(&conn, COLLECTION_ID, "work", temp.path());
         conn.execute(
             "UPDATE collections
              SET state = 'restoring',
@@ -5100,6 +5102,8 @@ mod tests {
 
     #[test]
     fn run_rcrt_pass_preserves_pending_root_path_when_manifest_is_incomplete() {
+        const COLLECTION_ID: i64 = 50_001;
+
         init_process_registries().unwrap();
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
@@ -5107,7 +5111,7 @@ mod tests {
         write_restore_file(&pending_root, "notes/a.md", b"hello from restore");
         let manifest_json = manifest_json_for_directory(&pending_root);
         fs::remove_file(pending_root.join("notes").join("a.md")).unwrap();
-        let collection_id = insert_collection(&conn, "work", temp.path());
+        let collection_id = insert_collection_with_id(&conn, COLLECTION_ID, "work", temp.path());
         conn.execute(
             "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-1', 1, 'host')",
             [],
@@ -5562,10 +5566,12 @@ mod tests {
 
     #[test]
     fn run_rcrt_pass_skips_reconcile_halted_collections() {
+        const COLLECTION_ID: i64 = 50_002;
+
         init_process_registries().unwrap();
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
-        let collection_id = insert_collection(&conn, "work", temp.path());
+        let collection_id = insert_collection_with_id(&conn, COLLECTION_ID, "work", temp.path());
         conn.execute(
             "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-1', 1, 'host')",
             [],

@@ -8,6 +8,12 @@
 **Why:** Fry tightened quarantine/watcher coverage and wired delete paths to DB-only state gating; task definitions updated to match implementation; targeted tests added. Bender validated all docs/site surfaces and fixed stale "tag pending" language in `docs/roadmap.md`. Professor and Nibbler approved. Work landed as ffe9b18.  
 **Scope:** Coverage + delete-path gating + task truth + tests + docs validation + roadmap fix ✓  
 
+### 2026-04-24: Quarantine restore proof lane scaffolding
+**By:** Scruffy  
+**What:** Landed non-conflicting proof scaffolding for restore path without claiming restore deployment. Added ignored test proofs for `17.5j` CLI happy-path, install-time no-replace race, and rollback cleanup parent-fsync contract.  
+**Why:** Restore is intentionally deferred at CLI dispatch, so only proof structure and expectation hooks were added. Next seam (Fry) must expose deterministic test hooks at (1) after absence check but before final install, and (2) after install begins but before DB reactivation for forced rollback and parent-fsync proof.  
+**Status:** Proof scaffolding complete, CLI dispatch still deferred. No pretend-green behavior tests added.
+
 ### 2026-04-24: Vault-sync-engine Batch M3a final approval
 **By:** Professor + Nibbler + Scruffy (recorded via Copilot)
 **What:** Approved Batch M3a for landing as the reconciler-specific `2.4c` wording/closure note only.

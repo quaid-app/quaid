@@ -213,7 +213,7 @@ pub fn reconcile(
     reconcile_with_native_events(conn, collection, &[])
 }
 
-fn reconcile_with_native_events(
+pub(crate) fn reconcile_with_native_events(
     conn: &Connection,
     collection: &Collection,
     native_renames: &[NativeRename],
@@ -1230,7 +1230,7 @@ pub fn stat_diff(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct NativeRename {
+pub(crate) struct NativeRename {
     from_path: PathBuf,
     to_path: PathBuf,
 }

@@ -422,6 +422,7 @@ fn persist_with_vault_write(
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
+                &target_path,
                 &dedup_key,
                 &recovery_dir,
                 &sentinel_name,
@@ -437,6 +438,7 @@ fn persist_with_vault_write(
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
+                &target_path,
                 &dedup_key,
                 &recovery_dir,
                 &sentinel_name,
@@ -450,6 +452,7 @@ fn persist_with_vault_write(
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
+                &target_path,
                 &dedup_key,
                 &recovery_dir,
                 &sentinel_name,
@@ -459,9 +462,22 @@ fn persist_with_vault_write(
     }
 
     if let Err(error) = vault_sync::insert_write_dedup(&dedup_key) {
+        let _ = vault_sync::forget_self_write_path(&target_path);
         let _ = cleanup_pre_rename(
             &parent_fd,
             &temp_name,
+            &target_path,
+            &dedup_key,
+            &recovery_dir,
+            &sentinel_name,
+        );
+        return Err(error);
+    }
+    if let Err(error) = vault_sync::remember_self_write_path(&target_path, &prepared.sha256) {
+        let _ = cleanup_pre_rename(
+            &parent_fd,
+            &temp_name,
+            &target_path,
             &dedup_key,
             &recovery_dir,
             &sentinel_name,
@@ -475,6 +491,7 @@ fn persist_with_vault_write(
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
+                &target_path,
                 &dedup_key,
                 &recovery_dir,
                 &sentinel_name,
@@ -487,6 +504,7 @@ fn persist_with_vault_write(
         let _ = cleanup_pre_rename(
             &parent_fd,
             &temp_name,
+            &target_path,
             &dedup_key,
             &recovery_dir,
             &sentinel_name,
@@ -501,6 +519,7 @@ fn persist_with_vault_write(
                 prepared,
                 relative_path,
                 &sentinel_path,
+                &target_path,
                 &dedup_key,
                 "fsync-parent",
                 io::Error::other("injected parent fsync failure").to_string(),
@@ -513,6 +532,7 @@ fn persist_with_vault_write(
             prepared,
             relative_path,
             &sentinel_path,
+            &target_path,
             &dedup_key,
             "fsync-parent",
             error.to_string(),
@@ -531,6 +551,7 @@ fn persist_with_vault_write(
                 prepared,
                 relative_path,
                 &sentinel_path,
+                &target_path,
                 &dedup_key,
                 "post-rename-stat",
                 error.to_string(),
@@ -546,6 +567,7 @@ fn persist_with_vault_write(
                 prepared,
                 relative_path,
                 &sentinel_path,
+                &target_path,
                 &dedup_key,
                 "post-rename-hash",
                 error.to_string(),
@@ -558,6 +580,7 @@ fn persist_with_vault_write(
         || final_hash != prepared.sha256
     {
         let _ = vault_sync::remove_write_dedup(&dedup_key);
+        let _ = vault_sync::forget_self_write_path(&target_path);
         let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
             db,
             prepared.collection_id,
@@ -584,6 +607,7 @@ fn persist_with_vault_write(
                 prepared,
                 relative_path,
                 &sentinel_path,
+                &target_path,
                 &dedup_key,
                 "commit",
                 error.to_string(),
@@ -700,12 +724,14 @@ fn create_tempfile<Fd: AsFd>(
 fn cleanup_pre_rename(
     parent_fd: &impl AsFd,
     temp_name: &Path,
+    target_path: &Path,
     dedup_key: &str,
     recovery_dir: &Path,
     sentinel_name: &str,
 ) -> Result<(), vault_sync::VaultSyncError> {
     let _ = fs_safety::unlinkat_parent_fd(parent_fd, temp_name);
     let _ = vault_sync::remove_write_dedup(dedup_key);
+    let _ = vault_sync::forget_self_write_path(target_path);
     let _ = remove_recovery_sentinel(recovery_dir, sentinel_name);
     Ok(())
 }
@@ -727,11 +753,13 @@ fn handle_post_rename_failure(
     prepared: &PreparedPut,
     relative_path: &str,
     sentinel_path: &Path,
+    target_path: &Path,
     dedup_key: &str,
     stage: &'static str,
     reason: String,
 ) -> vault_sync::VaultSyncError {
     let _ = vault_sync::remove_write_dedup(dedup_key);
+    let _ = vault_sync::forget_self_write_path(target_path);
     let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
         db,
         prepared.collection_id,

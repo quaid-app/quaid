@@ -122,10 +122,11 @@
 
 ## 6. Watcher pipeline
 
-- [ ] 6.1 Add `notify` crate (with `macos_fsevents` feature).
-- [ ] 6.2 Per-collection watcher task: one `notify` recommended watcher per collection, events pushed into a bounded `tokio::mpsc` channel tagged with `CollectionId`.
-- [ ] 6.3 Per-collection debounce buffer; default `GBRAIN_WATCH_DEBOUNCE_MS=1500` coalesces Obsidian bulk saves.
-- [ ] 6.4 Batch processor drains the debounce buffer, runs stat-diff, commits updates.
+- [x] 6.1 Add `notify` crate (with `macos_fsevents` feature).
+  > **Complete (watcher core slice):** Added `notify` with the real crate feature name `macos_fsevent` (singular; task wording used the conceptual plural) and wired it into the serve-only watcher path.
+- [x] 6.2 Per-collection watcher task: one `notify` recommended watcher per collection, events pushed into a bounded `tokio::mpsc` channel tagged with `CollectionId`.
+- [x] 6.3 Per-collection debounce buffer; default `GBRAIN_WATCH_DEBOUNCE_MS=1500` coalesces Obsidian bulk saves.
+- [x] 6.4 Batch processor drains the debounce buffer, runs stat-diff, commits updates.
 - [ ] 6.5 Create/Modify handler: re-ingest bytes; never self-write UUID on observed external edits.
 - [ ] 6.6 Delete handler: invoke delete-vs-quarantine classifier.
 - [ ] 6.7 Rename handler: honor native pair events directly; update `file_state.relative_path`; preserve `pages.id`.
@@ -137,12 +138,13 @@
 
 ## 7. Self-write dedup set
 
-- [ ] 7.1 Implement `Arc<Mutex<HashMap<PathBuf, (sha256, Instant)>>>` in the serve process.
-- [ ] 7.2 Dedup entry inserted at step 8 of the rename-before-commit sequence (AFTER tempfile+fsync, BEFORE `renameat`).
-- [ ] 7.3 Watcher consults dedup set before emitting: if path + hash match an entry younger than 5s, drop the event.
-- [ ] 7.4 Background sweeper removes expired entries every 10s.
+- [x] 7.1 Implement `Arc<Mutex<HashMap<PathBuf, (sha256, Instant)>>>` in the serve process.
+  > **Complete (watcher core slice):** Landed the same serve-process contract via the existing process-global runtime registries: a shared `Mutex<HashMap<PathBuf, SelfWriteDedupEntry>>` keyed by full path with stored hash + insertion instant.
+- [x] 7.2 Dedup entry inserted at step 8 of the rename-before-commit sequence (AFTER tempfile+fsync, BEFORE `renameat`).
+- [x] 7.3 Watcher consults dedup set before emitting: if path + hash match an entry younger than 5s, drop the event.
+- [x] 7.4 Background sweeper removes expired entries every 10s.
 - [ ] 7.5 Failure handlers remove the entry: rename failure unlinks tempfile + sentinel + removes dedup; post-rename failures remove dedup so reconciler can observe the new bytes.
-- [ ] 7.6 Unit tests: echo suppression; path-only match rejects; expired entries no longer suppress; external edit after TTL ingests normally.
+- [x] 7.6 Unit tests: echo suppression; path-only match rejects; expired entries no longer suppress; external edit after TTL ingests normally.
 
 ## 8. Embedding queue and worker
 
@@ -331,9 +333,9 @@
   > **Closed with 9.10:** CLI ignore mutations now validate proposed file content before any write, refuse malformed globs without touching disk or mirror state, use an explicit clear path to drop the mirror and reconcile, and keep `collections.ignore_patterns` as a helper-owned cache rather than a CLI-written source of truth. Built-in defaults still layer in at globset build time regardless of user-file state.
 - [x] 17.5aa5 `brain_collections.ignore_parse_errors` expands from parse-error-only surfacing to the full tagged-union shape, including `file_stably_absent_but_clear_not_confirmed`.
   > **Closed 17.5aa5 (MCP-only):** `brain_collections.ignore_parse_errors` now surfaces both canonical tagged variants: `parse_error` entries preserve their line/raw fields, while `file_stably_absent_but_clear_not_confirmed` is normalized to `line = null` and `raw = null` for MCP output. The frozen 13-field `brain_collections` schema is unchanged, and no watcher, CLI, or DB-storage contract widened in this slice.
-- [ ] 17.5bb Dedup echo suppression works within TTL.
-- [ ] 17.5cc External edit after TTL is ingested normally.
-- [ ] 17.5dd Dedup path-only match (without hash) does NOT suppress.
+- [x] 17.5bb Dedup echo suppression works within TTL.
+- [x] 17.5cc External edit after TTL is ingested normally.
+- [x] 17.5dd Dedup path-only match (without hash) does NOT suppress.
 - [ ] 17.5ee Embedding queue drains after write stampede; FTS always fresh.
 - [ ] 17.5ff Embedding worker survives process restart and resumes pending jobs.
 - [ ] 17.5gg Serve heartbeat row updates every 5s; stale rows >15s are ignored.

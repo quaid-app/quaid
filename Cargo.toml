@@ -65,6 +65,7 @@ dirs = "6.0.0"
 # Filesystem watching and ignore patterns
 ignore = "0.4"
 globset = "0.4"
+notify = { version = "6", features = ["macos_fsevent"] }
 
 # Unix fd-relative syscalls for path-traversal safety
 [target.'cfg(unix)'.dependencies]

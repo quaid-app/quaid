@@ -1,5 +1,5 @@
-updated_at: 2026-04-25T01:05:00Z
-focus_area: vault-sync-engine post-17.5aa5 next-slice selection
+updated_at: 2026-04-25T03:40:00Z
+focus_area: vault-sync-engine post-watcher-core next-slice selection
 active_issues: []
 active_branch: spec/vault-sync-engine
 ---
@@ -8,7 +8,7 @@ active_branch: spec/vault-sync-engine
 
 **Active change (vault-sync-engine):**
 
-1. `vault-sync-engine` — Batch 17.5aa5 closed (brain_collections ignore diagnostic widening only); next slice not yet selected.
+1. `vault-sync-engine` — Watcher core slice closed (`6.1-6.4`, `7.1-7.4`, `7.6`, plus the narrow direct proofs Fry landed); next slice not yet selected.
     Owner lane: Fry. Reviewers: Professor, Nibbler. Test lane: Scruffy.
    - M1b-i closed the real write-interlock refusal seam for `17.5s2-s5`
    - M1b-ii closed Unix precondition/CAS hardening for `12.2`, `12.3`, `12.4a`, `17.5l-s`
@@ -18,11 +18,12 @@ active_branch: spec/vault-sync-engine
    - M3a closed `2.4c` as a reconciler-specific wording/closure note: `ignore::WalkBuilder` enumeration with fd-relative revalidation and WARN-skip symlink behavior, not a generic `readdir` walk claim
    - N1 closed the MCP slug-routing truth seam only: slug-bearing MCP handlers now resolve collection-aware inputs first, page-referencing MCP outputs emit canonical `<collection>::<slug>` addresses, and ambiguity failures expose a stable machine-readable payload
    - 13.3 closed the CLI parity/output seam only: slug-bearing CLI commands now fail closed on ambiguous bare slugs, accept explicit `<collection>::<slug>` routing, and emit canonical page addresses on CLI outputs that reference pages, including single-page `embed`
-    - 13.6 closed the read-only `brain_collections` MCP seam only: frozen 13-field output, truthful recovery/blocker/restore semantics, and parse-error-only `ignore_parse_errors` surfacing
-    - 13.5 closed the MCP read-filter seam only: `brain_search`, `brain_query`, and `brain_list` accept an optional `collection` filter, default to the sole active collection when exactly one exists, otherwise the write-target collection, and keep `brain_query depth="auto"` expansion fenced to that collection
-    - 9.10 / 9.11 closed the collection-ignore CLI seam only: `gbrain collection ignore add|remove|list|clear --confirm` now uses dry-run-first validation, explicit clear semantics, mirror refresh via ignore helpers, active-root reconcile proofs, and the current collection CLI surface emits stable JSON success payloads with non-zero error exits
-    - 17.5aa5 closed the deferred `brain_collections.ignore_parse_errors` widening only: stable-absence ignore diagnostics now surface on MCP with `line`/`raw` normalized to null, while parse-error entries remain unchanged
-    - Pick the next truthful slice before widening into watcher-driven ignore reload, stats expansion, IPC, or broader mutator coverage
+     - 13.6 closed the read-only `brain_collections` MCP seam only: frozen 13-field output, truthful recovery/blocker/restore semantics, and parse-error-only `ignore_parse_errors` surfacing
+     - 13.5 closed the MCP read-filter seam only: `brain_search`, `brain_query`, and `brain_list` accept an optional `collection` filter, default to the sole active collection when exactly one exists, otherwise the write-target collection, and keep `brain_query depth="auto"` expansion fenced to that collection
+     - 9.10 / 9.11 closed the collection-ignore CLI seam only: `gbrain collection ignore add|remove|list|clear --confirm` now uses dry-run-first validation, explicit clear semantics, mirror refresh via ignore helpers, active-root reconcile proofs, and the current collection CLI surface emits stable JSON success payloads with non-zero error exits
+     - 17.5aa5 closed the deferred `brain_collections.ignore_parse_errors` widening only: stable-absence ignore diagnostics now surface on MCP with `line`/`raw` normalized to null, while parse-error entries remain unchanged
+     - Watcher core closed the narrow runtime seam only: serve now runs one watcher per active collection with a bounded queue, 1.5s debounce, reconcile-backed flushes, and path+hash self-write suppression with TTL expiry; broader watcher supervision/health/live ignore reload and dedup failure-removal remain deferred
+     - Pick the next truthful slice before widening into watcher-driven ignore reload, stats expansion, IPC, or broader mutator coverage
 
 **Completed in this branch:**
 - Batch H — Phase 0-3 restore/remap safety helpers + fresh-connection full-hash activation
@@ -45,13 +46,14 @@ active_branch: spec/vault-sync-engine
 - Batch 13.6 — `brain_collections` MCP schema/truth closure (`13.6`, `17.5ddd` only)
 - Batch 9.10 / 9.11 — collection ignore CLI + success-summary truth closure
 - Batch 17.5aa5 — `brain_collections` ignore diagnostic widening closure
+- Batch watcher core — serve watcher runtime + self-write dedup closure (`6.1-6.4`, `7.1-7.4`, `7.6`)
 
 **Explicitly deferred after M1b:**
 - Online restore handshake, IPC socket work, and the `17.5pp` / `17.5qq*` series that depend on IPC security design
 - Broader MCP widening and remaining post-Tx-B / destructive restore surfaces beyond startup recovery
-- Full `12.1`, any broader `12.4` claim beyond same-slug within-process mutex, `12.6*`, `12.7`, dedup `7.x`, and any full happy-path / dedup-echo-suppression closure beyond narrow `17.5k`
+- Full `12.1`, any broader `12.4` claim beyond same-slug within-process mutex, `12.6*`, `12.7`, watcher overflow/supervision/health/live ignore reload, remaining dedup `7.5`, and any broader end-to-end watcher mutation choreography beyond the landed core seam
 - Broader DB-only mutator coverage beyond the narrowed `12.5` / `17.16a` vault-byte closure
 - Live/background recovery worker, IPC/live routing, and any claim that generic startup healing or remap reopen is already complete
 - Post-landing coverage/docs/release/cleanup/issues agenda remains queued until the vault-sync branch reaches an appropriate stop point
 
-**Gate:** 13.5, 13.6, 9.10 / 9.11, and 17.5aa5 are closed. No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes.
+**Gate:** 13.5, 13.6, 9.10 / 9.11, 17.5aa5, and the watcher core slice are closed. No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes.

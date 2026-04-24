@@ -16,11 +16,18 @@ use thiserror::Error;
 use uuid::Uuid;
 
 #[cfg(unix)]
+use notify::{
+    event::ModifyKind, Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind,
+    RecommendedWatcher, RecursiveMode, Watcher,
+};
+#[cfg(unix)]
 use rustix::fs::fsync;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
+use tokio::sync::mpsc::{self, error::TryRecvError};
 
 use crate::commands::get::get_page_by_key;
 use crate::core::collections::{
@@ -44,10 +51,20 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFERRED_RETRY_SECS: u64 = 1;
 const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
+#[cfg(unix)]
+const WATCH_CHANNEL_CAPACITY: usize = 4096;
+#[cfg(unix)]
+const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 1500;
+#[cfg(unix)]
+const SELF_WRITE_DEDUP_TTL_SECS: u64 = 5;
+#[cfg(unix)]
+const SELF_WRITE_DEDUP_SWEEP_SECS: u64 = 10;
 
 struct RuntimeRegistries {
     supervisor_handles: Mutex<HashMap<i64, SupervisorHandle>>,
     dedup: Mutex<HashSet<String>>,
+    #[cfg(unix)]
+    self_write_dedup: Mutex<HashMap<PathBuf, SelfWriteDedupEntry>>,
     slug_writes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     recovering_collections: Mutex<HashSet<i64>>,
 }
@@ -57,6 +74,8 @@ impl RuntimeRegistries {
         Self {
             supervisor_handles: Mutex::new(HashMap::new()),
             dedup: Mutex::new(HashSet::new()),
+            #[cfg(unix)]
+            self_write_dedup: Mutex::new(HashMap::new()),
             slug_writes: Mutex::new(HashMap::new()),
             recovering_collections: Mutex::new(HashSet::new()),
         }
@@ -67,6 +86,37 @@ impl RuntimeRegistries {
 struct SupervisorHandle {
     session_id: String,
     generation: i64,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+struct SelfWriteDedupEntry {
+    sha256: String,
+    inserted_at: Instant,
+}
+
+#[cfg(unix)]
+struct CollectionWatcherState {
+    root_path: PathBuf,
+    generation: i64,
+    receiver: mpsc::Receiver<WatchEvent>,
+    _watcher: RecommendedWatcher,
+    buffer: WatchBatchBuffer,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Default)]
+struct WatchBatchBuffer {
+    dirty_paths: HashSet<PathBuf>,
+    native_renames: Vec<crate::core::reconciler::NativeRename>,
+    debounce_deadline: Option<Instant>,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+enum WatchEvent {
+    DirtyPath(PathBuf),
+    NativeRename(crate::core::reconciler::NativeRename),
 }
 
 static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
@@ -606,6 +656,14 @@ fn init_process_registries() -> Result<&'static RuntimeRegistries, VaultSyncErro
         .lock()
         .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
         .clear();
+    #[cfg(unix)]
+    registries
+        .self_write_dedup
+        .lock()
+        .map_err(|_| VaultSyncError::RegistryPoisoned {
+            registry: "self_write_dedup",
+        })?
+        .clear();
     drop(
         registries
             .supervisor_handles
@@ -1058,6 +1116,114 @@ fn mark_collection_needs_full_sync(
         [collection_id],
     )?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn watch_debounce_duration() -> Duration {
+    std::env::var("GBRAIN_WATCH_DEBOUNCE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_millis(DEFAULT_WATCH_DEBOUNCE_MS))
+}
+
+#[cfg(unix)]
+fn self_write_dedup_ttl() -> Duration {
+    Duration::from_secs(SELF_WRITE_DEDUP_TTL_SECS)
+}
+
+#[cfg(unix)]
+fn self_write_dedup_sweep_interval() -> Duration {
+    Duration::from_secs(SELF_WRITE_DEDUP_SWEEP_SECS)
+}
+
+#[cfg(unix)]
+fn with_self_write_dedup<T>(
+    f: impl FnOnce(&mut HashMap<PathBuf, SelfWriteDedupEntry>) -> T,
+) -> Result<T, VaultSyncError> {
+    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
+    let mut dedup =
+        registries
+            .self_write_dedup
+            .lock()
+            .map_err(|_| VaultSyncError::RegistryPoisoned {
+                registry: "self_write_dedup",
+            })?;
+    Ok(f(&mut dedup))
+}
+
+#[cfg(unix)]
+fn remember_self_write_path_at(
+    path: &Path,
+    sha256: &str,
+    inserted_at: Instant,
+) -> Result<(), VaultSyncError> {
+    with_self_write_dedup(|entries| {
+        entries.insert(
+            path.to_path_buf(),
+            SelfWriteDedupEntry {
+                sha256: sha256.to_owned(),
+                inserted_at,
+            },
+        );
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn remember_self_write_path(path: &Path, sha256: &str) -> Result<(), VaultSyncError> {
+    remember_self_write_path_at(path, sha256, Instant::now())
+}
+
+#[cfg(unix)]
+pub(crate) fn forget_self_write_path(path: &Path) -> Result<(), VaultSyncError> {
+    with_self_write_dedup(|entries| {
+        entries.remove(path);
+    })
+}
+
+#[cfg(unix)]
+fn self_write_should_suppress_at(
+    path: &Path,
+    current_sha256: &str,
+    now: Instant,
+) -> Result<bool, VaultSyncError> {
+    with_self_write_dedup(|entries| {
+        entries
+            .get(path)
+            .map(|entry| {
+                now.duration_since(entry.inserted_at) < self_write_dedup_ttl()
+                    && entry.sha256 == current_sha256
+            })
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(unix)]
+fn sweep_expired_self_write_entries_at(now: Instant) -> Result<usize, VaultSyncError> {
+    let ttl = self_write_dedup_ttl();
+    with_self_write_dedup(|entries| {
+        let before = entries.len();
+        entries.retain(|_, entry| now.duration_since(entry.inserted_at) < ttl);
+        before.saturating_sub(entries.len())
+    })
+}
+
+#[cfg(unix)]
+fn maybe_suppress_self_write_event(path: &Path) -> Result<bool, VaultSyncError> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() {
+        return Ok(false);
+    }
+    let hash = match file_state::hash_file(path) {
+        Ok(hash) => hash,
+        Err(_) => return Ok(false),
+    };
+    self_write_should_suppress_at(path, &hash, Instant::now())
 }
 
 #[cfg(unix)]
@@ -1764,6 +1930,250 @@ fn convert_reconcile_error(
     })
 }
 
+#[cfg(unix)]
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
+#[cfg(unix)]
+fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(root_path).ok()?;
+    is_markdown_path(relative).then(|| relative.to_path_buf())
+}
+
+#[cfg(unix)]
+fn should_suppress_self_write_rename(root_path: &Path, event_paths: &[PathBuf]) -> Result<bool, VaultSyncError> {
+    let Some(target_path) = event_paths.get(1) else {
+        return Ok(false);
+    };
+    if !maybe_suppress_self_write_event(target_path)? {
+        return Ok(false);
+    }
+    let Some(source_path) = event_paths.first() else {
+        return Ok(true);
+    };
+    if relative_markdown_path(root_path, source_path).is_none() {
+        return Ok(true);
+    }
+    maybe_suppress_self_write_event(source_path)
+}
+
+#[cfg(unix)]
+fn classify_watch_event(
+    root_path: &Path,
+    event: NotifyEvent,
+) -> Result<Vec<WatchEvent>, VaultSyncError> {
+    let mut actions = Vec::new();
+    if matches!(event.kind, NotifyEventKind::Modify(ModifyKind::Name(_))) && event.paths.len() >= 2
+    {
+        let from_path = relative_markdown_path(root_path, &event.paths[0]);
+        let to_path = relative_markdown_path(root_path, &event.paths[1]);
+        if should_suppress_self_write_rename(root_path, &event.paths)? {
+            return Ok(actions);
+        }
+        if let (Some(from_path), Some(to_path)) = (from_path, to_path) {
+            actions.push(WatchEvent::NativeRename(
+                crate::core::reconciler::NativeRename {
+                    from_path: from_path.clone(),
+                    to_path: to_path.clone(),
+                },
+            ));
+            actions.push(WatchEvent::DirtyPath(from_path));
+            actions.push(WatchEvent::DirtyPath(to_path));
+            return Ok(actions);
+        }
+    }
+
+    for full_path in event.paths {
+        let Some(relative_path) = relative_markdown_path(root_path, &full_path) else {
+            continue;
+        };
+        if maybe_suppress_self_write_event(&full_path)? {
+            continue;
+        }
+        actions.push(WatchEvent::DirtyPath(relative_path));
+    }
+    Ok(actions)
+}
+
+#[cfg(unix)]
+fn start_collection_watcher(
+    collection_id: i64,
+    root_path: &Path,
+    db_path: &str,
+) -> Result<CollectionWatcherState, VaultSyncError> {
+    let (sender, receiver) = mpsc::channel(WATCH_CHANNEL_CAPACITY);
+    let watch_root = root_path.to_path_buf();
+    let callback_root = watch_root.clone();
+    let db_path = db_path.to_owned();
+    let mut watcher = notify::recommended_watcher(move |result: notify::Result<NotifyEvent>| {
+        let Ok(event) = result else {
+            return;
+        };
+        let Ok(actions) = classify_watch_event(&callback_root, event) else {
+            return;
+        };
+        for action in actions {
+            match sender.try_send(action) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    if let Ok(conn) = Connection::open(&db_path) {
+                        let _ = mark_collection_needs_full_sync(&conn, collection_id);
+                    }
+                    eprintln!(
+                        "WARN: watch_channel_full collection_id={} root={}",
+                        collection_id,
+                        callback_root.display()
+                    );
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+            }
+        }
+    })
+    .map_err(|error| VaultSyncError::InvariantViolation {
+        message: format!("failed to create watcher for collection_id={collection_id}: {error}"),
+    })?;
+    watcher
+        .configure(NotifyConfig::default())
+        .map_err(|error| VaultSyncError::InvariantViolation {
+            message: format!(
+                "failed to configure watcher for collection_id={collection_id}: {error}"
+            ),
+        })?;
+    watcher
+        .watch(&watch_root, RecursiveMode::Recursive)
+        .map_err(|error| VaultSyncError::InvariantViolation {
+            message: format!(
+                "failed to watch root {} for collection_id={collection_id}: {error}",
+                watch_root.display()
+            ),
+        })?;
+    Ok(CollectionWatcherState {
+        root_path: watch_root,
+        generation: 0,
+        receiver,
+        _watcher: watcher,
+        buffer: WatchBatchBuffer::default(),
+    })
+}
+
+#[cfg(unix)]
+fn sync_collection_watchers(
+    conn: &Connection,
+    db_path: &str,
+    watchers: &mut HashMap<i64, CollectionWatcherState>,
+) -> Result<(), VaultSyncError> {
+    let mut active = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT id, root_path, reload_generation
+         FROM collections
+         WHERE state = 'active'",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                PathBuf::from(row.get::<_, String>(1)?),
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (collection_id, root_path, generation) in rows {
+        active.insert(collection_id, (root_path, generation));
+    }
+
+    watchers.retain(|collection_id, _| active.contains_key(collection_id));
+
+    for (collection_id, (root_path, generation)) in active {
+        let needs_replace = watchers
+            .get(&collection_id)
+            .map(|state| state.root_path != root_path || state.generation != generation)
+            .unwrap_or(true);
+        if !needs_replace {
+            continue;
+        }
+        let mut state = start_collection_watcher(collection_id, &root_path, db_path)?;
+        state.generation = generation;
+        watchers.insert(collection_id, state);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn run_watcher_reconcile(
+    conn: &Connection,
+    collection_id: i64,
+    native_renames: &[crate::core::reconciler::NativeRename],
+) -> Result<(), VaultSyncError> {
+    let collection = load_collection_by_id(conn, collection_id)?;
+    if collection.state != CollectionState::Active {
+        return Ok(());
+    }
+
+    match crate::core::reconciler::reconcile_with_native_events(conn, &collection, native_renames) {
+        Ok(_) => {
+            conn.execute(
+                "UPDATE collections
+                 SET needs_full_sync = 0,
+                     last_sync_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                 WHERE id = ?1 AND state = 'active'",
+                [collection.id],
+            )?;
+            Ok(())
+        }
+        Err(err) => Err(convert_reconcile_error(
+            conn,
+            collection.id,
+            &collection.name,
+            err,
+        )?),
+    }
+}
+
+#[cfg(unix)]
+fn poll_collection_watcher(
+    conn: &Connection,
+    collection_id: i64,
+    state: &mut CollectionWatcherState,
+) -> Result<(), VaultSyncError> {
+    let debounce = watch_debounce_duration();
+    loop {
+        match state.receiver.try_recv() {
+            Ok(WatchEvent::DirtyPath(path)) => {
+                state.buffer.dirty_paths.insert(path);
+                state.buffer.debounce_deadline = Some(Instant::now() + debounce);
+            }
+            Ok(WatchEvent::NativeRename(rename)) => {
+                state.buffer.native_renames.push(rename);
+                state.buffer.debounce_deadline = Some(Instant::now() + debounce);
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => {
+                return Err(VaultSyncError::InvariantViolation {
+                    message: format!(
+                        "watch channel disconnected for collection_id={collection_id}"
+                    ),
+                });
+            }
+        }
+    }
+
+    let Some(deadline) = state.buffer.debounce_deadline else {
+        return Ok(());
+    };
+    if Instant::now() < deadline {
+        return Ok(());
+    }
+
+    let native_renames = std::mem::take(&mut state.buffer.native_renames);
+    state.buffer.dirty_paths.clear();
+    state.buffer.debounce_deadline = None;
+    run_watcher_reconcile(conn, collection_id, &native_renames)
+}
+
 fn reconcile_halt_details(err: &ReconcileError) -> Option<(&'static str, String)> {
     match err {
         ReconcileError::DuplicateUuidError { uuid, paths } => Some((
@@ -2358,12 +2768,27 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let handle = thread::spawn(move || {
         let mut last_heartbeat = Instant::now();
         let mut last_generations = initial_generations;
+        #[cfg(unix)]
+        let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
+        #[cfg(unix)]
+        let mut last_dedup_sweep = Instant::now();
         while !stop_signal.load(Ordering::SeqCst) {
             if let Ok(conn) = Connection::open(&db_path) {
                 if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
                     let _ = sweep_stale_sessions(&conn);
                     let _ = heartbeat_session(&conn, &session_id_for_thread);
                     last_heartbeat = Instant::now();
+                }
+                #[cfg(unix)]
+                {
+                    let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
+                    for (collection_id, state) in &mut watchers {
+                        let _ = poll_collection_watcher(&conn, *collection_id, state);
+                    }
+                    if last_dedup_sweep.elapsed() >= self_write_dedup_sweep_interval() {
+                        let _ = sweep_expired_self_write_entries_at(Instant::now());
+                        last_dedup_sweep = Instant::now();
+                    }
                 }
                 if let Ok(mut stmt) = conn.prepare("SELECT id, reload_generation FROM collections")
                 {
@@ -3127,7 +3552,7 @@ fn load_remap_page_rows(
                 slug: row.get(1)?,
                 uuid: row.get(2)?,
                 sha256: sha256_hex(&raw_bytes),
-                body_size_bytes: body.trim().as_bytes().len(),
+                body_size_bytes: body.trim().len(),
                 has_nonempty_body: !body.trim().is_empty(),
             })
         })?
@@ -3149,7 +3574,7 @@ fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncErro
             relative_path: relative_path.clone(),
             uuid: frontmatter.get("gbrain_id").cloned(),
             sha256: sha256_hex(&bytes),
-            body_size_bytes: body.trim().as_bytes().len(),
+            body_size_bytes: body.trim().len(),
             has_nonempty_body: !body.trim().is_empty(),
         });
     }
@@ -3851,6 +4276,255 @@ mod tests {
         assert_eq!(row.0, 0);
         assert_eq!(row.1, 0);
         assert_eq!(row.2, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_write_dedup_suppresses_recent_matching_path_and_hash_only() {
+        init_process_registries().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("notes").join("a.md");
+        write_restore_file(root.path(), "notes/a.md", b"matching bytes");
+        remember_self_write_path_at(
+            &path,
+            &sha256_hex(b"matching bytes"),
+            Instant::now() - Duration::from_secs(1),
+        )
+        .unwrap();
+
+        assert!(self_write_should_suppress_at(
+            &path,
+            &sha256_hex(b"matching bytes"),
+            Instant::now()
+        )
+        .unwrap());
+
+        assert!(!self_write_should_suppress_at(
+            &path,
+            &sha256_hex(b"different bytes"),
+            Instant::now()
+        )
+        .unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn self_write_dedup_does_not_suppress_after_ttl_and_sweeps_expired_entries() {
+        init_process_registries().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("notes").join("a.md");
+        write_restore_file(root.path(), "notes/a.md", b"matching bytes");
+        let stale_now = Instant::now();
+        remember_self_write_path_at(
+            &path,
+            &sha256_hex(b"matching bytes"),
+            stale_now - self_write_dedup_ttl() - Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert!(
+            !self_write_should_suppress_at(&path, &sha256_hex(b"matching bytes"), stale_now)
+                .unwrap()
+        );
+        assert_eq!(sweep_expired_self_write_entries_at(stale_now).unwrap(), 1);
+        assert_eq!(sweep_expired_self_write_entries_at(stale_now).unwrap(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_watch_event_only_suppresses_rename_when_source_is_not_markdown_or_is_self_write() {
+        init_process_registries().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let source_path = root.path().join("notes").join("from.md");
+        let target_path = root.path().join("notes").join("to.md");
+        let temp_path = root.path().join(".gbrain-write-temp.tmp");
+        let bytes = b"matching bytes";
+        write_restore_file(root.path(), "notes/to.md", bytes);
+        remember_self_write_path_at(&target_path, &sha256_hex(bytes), Instant::now()).unwrap();
+
+        let external_rename = NotifyEvent {
+            kind: NotifyEventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)),
+            paths: vec![source_path.clone(), target_path.clone()],
+            attrs: Default::default(),
+        };
+        let actions = classify_watch_event(root.path(), external_rename).unwrap();
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(
+            &actions[0],
+            WatchEvent::NativeRename(rename)
+                if rename.from_path == PathBuf::from("notes/from.md")
+                    && rename.to_path == PathBuf::from("notes/to.md")
+        ));
+        assert!(matches!(
+            &actions[1],
+            WatchEvent::DirtyPath(path) if path == &PathBuf::from("notes/from.md")
+        ));
+        assert!(matches!(
+            &actions[2],
+            WatchEvent::DirtyPath(path) if path == &PathBuf::from("notes/to.md")
+        ));
+
+        let self_write_rename = NotifyEvent {
+            kind: NotifyEventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)),
+            paths: vec![temp_path, target_path],
+            attrs: Default::default(),
+        };
+        assert!(classify_watch_event(root.path(), self_write_rename)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_serve_runtime_watcher_reconciles_external_edit_after_debounce() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        write_restore_file(
+            root.path(),
+            "notes/a.md",
+            b"---\ntitle: A\ntype: note\n---\nOriginal body.\n",
+        );
+        sync_collection(&conn, "work").unwrap();
+        drop(conn);
+
+        let runtime = start_serve_runtime(db_path.clone()).unwrap();
+
+        write_restore_file(
+            root.path(),
+            "notes/a.md",
+            b"---\ntitle: A\ntype: note\n---\nUpdated by watcher.\n",
+        );
+
+        let compiled_truth = wait_for_collection_update(
+            &db_path,
+            collection_id,
+            Duration::from_secs(8),
+            |verify, collection_id| {
+                verify
+                    .query_row(
+                        "SELECT compiled_truth
+                         FROM pages
+                         WHERE collection_id = ?1 AND slug = 'notes/a'",
+                        [collection_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|compiled_truth| {
+                        compiled_truth
+                            .contains("Updated by watcher.")
+                            .then_some(compiled_truth)
+                    })
+            },
+        );
+        assert!(compiled_truth.contains("Updated by watcher."));
+
+        drop(runtime);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_serve_runtime_watcher_rejects_path_only_dedup_match() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let path = root.path().join("notes").join("a.md");
+        write_restore_file(
+            root.path(),
+            "notes/a.md",
+            b"---\ntitle: A\ntype: note\n---\nOriginal body.\n",
+        );
+        sync_collection(&conn, "work").unwrap();
+        drop(conn);
+
+        let runtime = start_serve_runtime(db_path.clone()).unwrap();
+        remember_self_write_path_at(
+            &path,
+            &sha256_hex(b"---\ntitle: A\ntype: note\n---\nDifferent self-write body.\n"),
+            Instant::now(),
+        )
+        .unwrap();
+        write_restore_file(
+            root.path(),
+            "notes/a.md",
+            b"---\ntitle: A\ntype: note\n---\nPath-only mismatch should ingest.\n",
+        );
+
+        let compiled_truth = wait_for_collection_update(
+            &db_path,
+            collection_id,
+            Duration::from_secs(8),
+            |verify, collection_id| {
+                verify
+                    .query_row(
+                        "SELECT compiled_truth
+                         FROM pages
+                         WHERE collection_id = ?1 AND slug = 'notes/a'",
+                        [collection_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|compiled_truth| {
+                        compiled_truth
+                            .contains("Path-only mismatch should ingest.")
+                            .then_some(compiled_truth)
+                    })
+            },
+        );
+        assert!(compiled_truth.contains("Path-only mismatch should ingest."));
+
+        drop(runtime);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_serve_runtime_watcher_ignores_stale_dedup_entries_after_ttl() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let path = root.path().join("notes").join("a.md");
+        let updated_bytes = b"---\ntitle: A\ntype: note\n---\nStale dedup must not block ingest.\n";
+        write_restore_file(
+            root.path(),
+            "notes/a.md",
+            b"---\ntitle: A\ntype: note\n---\nOriginal body.\n",
+        );
+        sync_collection(&conn, "work").unwrap();
+        drop(conn);
+
+        let runtime = start_serve_runtime(db_path.clone()).unwrap();
+        remember_self_write_path_at(
+            &path,
+            &sha256_hex(updated_bytes),
+            Instant::now() - self_write_dedup_ttl() - Duration::from_millis(1),
+        )
+        .unwrap();
+        write_restore_file(root.path(), "notes/a.md", updated_bytes);
+
+        let compiled_truth = wait_for_collection_update(
+            &db_path,
+            collection_id,
+            Duration::from_secs(8),
+            |verify, collection_id| {
+                verify
+                    .query_row(
+                        "SELECT compiled_truth
+                         FROM pages
+                         WHERE collection_id = ?1 AND slug = 'notes/a'",
+                        [collection_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|compiled_truth| {
+                        compiled_truth
+                            .contains("Stale dedup must not block ingest.")
+                            .then_some(compiled_truth)
+                    })
+            },
+        );
+        assert!(compiled_truth.contains("Stale dedup must not block ingest."));
+
+        drop(runtime);
     }
 
     #[test]

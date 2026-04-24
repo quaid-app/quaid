@@ -457,7 +457,10 @@ pub fn restore_quarantined_page(
 
     // write_all / sync_all failure must clean up the tempfile before propagating the error,
     // otherwise a partial `.quarantine-restore-*.tmp` is left on disk across a crash restart.
-    if let Err(err) = temp_file.write_all(&raw_bytes).and_then(|()| temp_file.sync_all()) {
+    if let Err(err) = temp_file
+        .write_all(&raw_bytes)
+        .and_then(|()| temp_file.sync_all())
+    {
         drop(temp_file);
         cleanup_tempfile(&parent_fd, &temp_name)?;
         return Err(err.into());
@@ -497,7 +500,8 @@ pub fn restore_quarantined_page(
     // parse_restored_page can fail (UUID conflict, JSON serialization). On failure the
     // installed target must be rolled back before returning so the vault is not left with
     // an orphaned file while the page remains quarantined in the DB.
-    let parsed = match parse_restored_page(&raw_bytes, &absolute_target_path, root_path, &page.uuid) {
+    let parsed = match parse_restored_page(&raw_bytes, &absolute_target_path, root_path, &page.uuid)
+    {
         Ok(p) => p,
         Err(err) => {
             rollback_target_entry(&parent_fd, target_name)?;

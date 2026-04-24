@@ -329,7 +329,8 @@
 - [x] 17.5aa4b CLI is never the writer of `collections.ignore_patterns`.
 - [x] 17.5aa4c Built-in defaults always apply regardless of `.gbrainignore` state.
   > **Closed with 9.10:** CLI ignore mutations now validate proposed file content before any write, refuse malformed globs without touching disk or mirror state, use an explicit clear path to drop the mirror and reconcile, and keep `collections.ignore_patterns` as a helper-owned cache rather than a CLI-written source of truth. Built-in defaults still layer in at globset build time regardless of user-file state.
-- [ ] 17.5aa5 `brain_collections.ignore_parse_errors` expands from parse-error-only surfacing to the full tagged-union shape, including `file_stably_absent_but_clear_not_confirmed`.
+- [x] 17.5aa5 `brain_collections.ignore_parse_errors` expands from parse-error-only surfacing to the full tagged-union shape, including `file_stably_absent_but_clear_not_confirmed`.
+  > **Closed 17.5aa5 (MCP-only):** `brain_collections.ignore_parse_errors` now surfaces both canonical tagged variants: `parse_error` entries preserve their line/raw fields, while `file_stably_absent_but_clear_not_confirmed` is normalized to `line = null` and `raw = null` for MCP output. The frozen 13-field `brain_collections` schema is unchanged, and no watcher, CLI, or DB-storage contract widened in this slice.
 - [ ] 17.5bb Dedup echo suppression works within TTL.
 - [ ] 17.5cc External edit after TTL is ingested normally.
 - [ ] 17.5dd Dedup path-only match (without hash) does NOT suppress.

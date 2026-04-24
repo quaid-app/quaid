@@ -691,7 +691,12 @@ fn parse_ignore_parse_errors(
         serde_json::from_str(&raw).map_err(|error| VaultSyncError::InvariantViolation {
             message: format!("invalid ignore_parse_errors JSON: {error}"),
         })?;
-    parsed.retain(|entry| entry.code == "parse_error");
+    for entry in &mut parsed {
+        if entry.code == "file_stably_absent_but_clear_not_confirmed" {
+            entry.line = None;
+            entry.raw = None;
+        }
+    }
     Ok((!parsed.is_empty()).then_some(parsed))
 }
 

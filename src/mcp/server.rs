@@ -691,7 +691,14 @@ impl GigaBrainServer {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(4000);
-                progressive_retrieve(results.clone(), budget, 3, collection_filter.as_ref().map(|c| c.id), &db).unwrap_or(results)
+                progressive_retrieve(
+                    results.clone(),
+                    budget,
+                    3,
+                    collection_filter.as_ref().map(|c| c.id),
+                    &db,
+                )
+                .unwrap_or(results)
             }
             _ => results,
         };
@@ -1952,7 +1959,9 @@ mod tests {
 
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
         assert!(
-            !rows.iter().any(|row| row["slug"] == "work::concepts/outside"),
+            !rows
+                .iter()
+                .any(|row| row["slug"] == "work::concepts/outside"),
             "depth=auto expansion must not cross into a different collection: got {rows:?}"
         );
     }
@@ -3699,7 +3708,7 @@ mod tests {
              WHERE id = ?1",
             rusqlite::params![
                 12_i64,
-                r#"[{"code":"file_stably_absent_but_clear_not_confirmed","line":null,"raw":null,"message":"clear requires --confirm"}]"#
+                r#"[{"code":"file_stably_absent_but_clear_not_confirmed","line":0,"raw":"","message":".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly"}]"#
             ],
         )
         .unwrap();
@@ -3770,7 +3779,18 @@ mod tests {
         );
 
         let absent = rows.iter().find(|row| row["name"] == "absent").unwrap();
-        assert!(absent["ignore_parse_errors"].is_null());
+        let absent_errors = absent["ignore_parse_errors"].as_array().unwrap();
+        assert_eq!(absent_errors.len(), 1);
+        assert_eq!(
+            absent_errors[0]["code"].as_str(),
+            Some("file_stably_absent_but_clear_not_confirmed")
+        );
+        assert!(absent_errors[0]["line"].is_null());
+        assert!(absent_errors[0]["raw"].is_null());
+        assert_eq!(
+            absent_errors[0]["message"].as_str(),
+            Some(".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly")
+        );
     }
 
     // ── brain_raw ────────────────────────────────────────────

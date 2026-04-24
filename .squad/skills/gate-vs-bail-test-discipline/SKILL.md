@@ -13,7 +13,7 @@ When a feature is backed out by inserting an early bail (e.g., `bail!("feature X
 2. If the bail message changes, the substring assertion passes vacuously.
 3. When the feature is re-enabled, the tests look green but verify nothing.
 
-This pattern appears in `tests/quarantine_revision_fixes.rs`:
+This pattern **used to appear** in `tests/quarantine_revision_fixes.rs` before quarantine restore was re-enabled:
 
 ```rust
 // These tests are named for behaviors that ARE NOT tested:
@@ -23,7 +23,7 @@ restore_surface_is_deferred_before_target_conflict_mutation  // bail fires befor
 restore_surface_is_deferred_for_read_only_collection   // bail fires before writable check
 ```
 
-All four assert `output_text.contains("quarantine restore is deferred in this batch")`.
+That specific restore example has now graduated to real behavior proofs (`restore_refuses_when_target_appears_after_the_earlier_absence_check`, `restore_rollback_unlinks_residue_and_fsyncs_parent_before_returning`, etc.). Keep using the pattern for future backed-out features, but do not cargo-cult bail assertions once the production seam exists.
 
 ---
 
@@ -93,11 +93,11 @@ assert!(stderr.contains("QuarantineRestoreDeferredError"), "must surface restore
 
 ### `tests/quarantine_revision_fixes.rs`
 
-When `collection quarantine restore` is re-enabled (tasks 9.8, 17.5j):
+This file is the canonical example of how the pattern should end:
 
-1. Replace each `assert!(output_text.contains("quarantine restore is deferred in this batch"))` with assertions for the specific behavior named in the test.
-2. Add `blocker_2_restore_rejects_non_markdown_target`, `blocker_3_restore_respects_live_owner_gate`, `blocker_4_restore_atomicity_no_disk_residue_on_db_failure`, `blocker_5_restore_refuses_read_only_collection`.
-3. The setups in the existing tests are already correct — only the assertions need replacing.
+1. Once Fry exposed deterministic hooks, the bail-only restore assertions were deleted.
+2. The parked behavior names became real, targeted proofs against concrete error codes and state invariants.
+3. The remaining restore deferrals are now genuinely broader-scope items (audit/live routing/overwrite policy), not placeholder assertions pretending those behaviors are covered.
 
 ### Known gap: positive discard path
 

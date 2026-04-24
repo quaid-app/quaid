@@ -26,6 +26,18 @@ pub fn rotate_active_raw_import(
         rusqlite::params![page_id, page_uuid::generate_uuid_v7(), raw_bytes, file_path],
     )?;
 
+    if let Ok(raw_str) = std::str::from_utf8(raw_bytes) {
+        let (fm, _) = crate::core::markdown::parse_frontmatter(raw_str);
+        if !fm.is_empty() {
+            if let Ok(json) = serde_json::to_string(&fm) {
+                let _ = conn.execute(
+                    "UPDATE pages SET frontmatter = ?1 WHERE id = ?2",
+                    rusqlite::params![json, page_id],
+                );
+            }
+        }
+    }
+
     prune_inactive_rows(conn, page_id)?;
     assert_exactly_one_active_row(conn, page_id)
 }

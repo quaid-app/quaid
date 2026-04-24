@@ -1156,7 +1156,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Conflict"));
-        assert!(err.contains("current_version=2"));
+        assert!(err.contains("current version: 2"));
     }
 
     #[test]

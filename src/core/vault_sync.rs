@@ -390,7 +390,7 @@ pub enum VaultSyncError {
 
     #[cfg(unix)]
     #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=StaleExpectedVersion expected_version={expected_version} current_version={current_version}"
+        "Conflict: ConflictError StaleExpectedVersion collection_id={collection_id} relative_path={relative_path} expected_version={expected_version} current version: {current_version}"
     )]
     StaleExpectedVersion {
         collection_id: i64,
@@ -3803,11 +3803,18 @@ mod tests {
         raw_bytes: &[u8],
         relative_path: &str,
     ) -> i64 {
+        let frontmatter_json = std::str::from_utf8(raw_bytes)
+            .ok()
+            .map(|s| {
+                let (fm, _) = markdown::parse_frontmatter(s);
+                serde_json::to_string(&fm).unwrap_or_else(|_| "{}".to_owned())
+            })
+            .unwrap_or_else(|| "{}".to_owned());
         conn.execute(
             "INSERT INTO pages
                  (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
-             VALUES (?1, ?2, ?3, 'concept', ?2, '', ?4, '', '{}', '', '', 1)",
-            params![collection_id, slug, uuid, compiled_truth],
+             VALUES (?1, ?2, ?3, 'concept', ?2, '', ?4, '', ?5, '', '', 1)",
+            params![collection_id, slug, uuid, compiled_truth, frontmatter_json],
         )
         .unwrap();
         let page_id = conn.last_insert_rowid();
@@ -5039,6 +5046,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_rcrt_pass_clears_needs_full_sync_after_tx_b() {
+        init_process_registries().unwrap();
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", temp.path());
@@ -5075,6 +5083,7 @@ mod tests {
 
     #[test]
     fn run_rcrt_pass_preserves_pending_root_path_when_manifest_is_incomplete() {
+        init_process_registries().unwrap();
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
         let pending_root = temp.path().join("restored");
@@ -5536,6 +5545,7 @@ mod tests {
 
     #[test]
     fn run_rcrt_pass_skips_reconcile_halted_collections() {
+        init_process_registries().unwrap();
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", temp.path());
@@ -5789,6 +5799,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_recovers_owned_sentinel_dirty_collection_and_unlinks_all_sentinels() {
+        init_process_registries().unwrap();
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", root.path());

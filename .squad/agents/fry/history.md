@@ -7,6 +7,18 @@
 
 ## Learnings
 
+### 2026-04-25 12:15:00 - Put/OCC stale-conflict test truth
+
+- The in-memory `commands::put` OCC path still reports stale-update conflicts through `persist_page_record()` as `Conflict: page updated elsewhere (current version: N)`, while the Unix vault-write path surfaces the structured `ConflictError` variants from `vault_sync`.
+- For this lane, the stable proof boundary is per surface: CLI/MCP vault-write tests should assert the typed `ConflictError`/`CollectionRestoringError` contract, but pure in-memory unit tests should match the legacy `current version: N` wording instead of assuming Unix-only formatting.
+- Validation on current head after the fix: `cargo test --quiet --lib commands::put`, `cargo test --quiet --lib mcp::server::tests::brain_put -- --nocapture`, and `cargo test --quiet --test concurrency_stress -- --nocapture` all pass on this Windows host.
+
+### 2026-04-25 11:40:00 - Quarantine restore narrow re-enable slice
+
+- The narrowest truthful no-replace restore seam on Unix is "tempfile in target dir → `linkat` install → unlink temp → parent `fsync`" rather than a pre-check plus replace-prone rename; the hard-link install lets a concurrently-created target win at install time without widening into overwrite policy.
+- For rollback credibility, every successful unlink in the post-install window needs its own observable parent-`fsync` proof seam; a tiny env-driven trace hook kept the integration test honest without introducing a production-only state machine.
+- Validation on this Windows host stayed limited: `cargo test --quiet --test quarantine_revision_fixes --test collection_cli_truth` passed, while full `cargo test --quiet` still hits the pre-existing parent-path failures in `commands::init::tests::init_rejects_nonexistent_parent_directory` and `core::db::tests::open_rejects_nonexistent_parent_dir`, and a Linux cross-check remains blocked by missing `x86_64-linux-gnu-gcc`.
+
 ### 2026-04-25 10:20:00 - Vault-Sync post-batch coverage follow-up
 
 - The hard-delete truth for quarantine now stays simplest when every destructive path shares the same five-branch `reconciler::has_db_only_state(...)` predicate and only layers counts/receipts on top for operator messaging.
@@ -808,4 +820,3 @@ Ready for implementation and landing.
 - Added the read-only `brain_collections` MCP surface as a projection helper in `vault_sync.rs`, not as ad hoc JSON assembly in the server, so the frozen 13-field contract lives next to the collection/runtime truth it depends on.
 - Kept the tool honest by masking `root_path` to `null` whenever the collection is not `active`, parsing `ignore_parse_errors` into the tagged union the design froze, and surfacing `integrity_blocked` as the new string-or-null discriminator instead of reusing the older CLI-only blocked-state summary.
 - `recovery_in_progress` needed real runtime truth instead of guesswork, so I added a narrow process-local recovery registry around `complete_attach(...)`; queued recovery remains `needs_full_sync=true, recovery_in_progress=false`, while active attach hashing flips the runtime bit until the handoff completes. Validation on this Windows host: `cargo fmt --all`, targeted `brain_collections` tests, and full `cargo test --quiet` all passed.
-

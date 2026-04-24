@@ -204,3 +204,27 @@ This dual-release cycle validated the full team workflow:
 - **For frozen MCP diagnostic schemas, test the full predicate, not just the label column.** A terminal discriminator like `integrity_blocked` must prove its timestamp/age gate, precedence, and negative cases (reason present without terminal state, queued recovery, pre-window restore) or reviewers will correctly reject it as overclaimed.
 - **When a restore seam still fails crash-durability and no-replace safety, back the surface out instead of inventing a bigger repair.** A deferred command with explicit task reopen is a better batch than pretending a risky restore is "close enough."
 
+## 2026-04-25 Quarantine Restore Re-Enable Validation
+
+- **Verdict:** APPROVED (conditional on Linux CI green for 5 `#[cfg(unix)]` tests).
+- **Scope:** Narrow quarantine-restore re-enable slice — `linkat` no-replace install, crash-durable rollback, env-gated test hooks, and full gate chain.
+- **Gate chain confirmed fail-closed:**
+  1. Double-gated on Windows: `ensure_unix_collection_command` (CLI) + `#[cfg(not(unix))]` (library). Both independently return `UnsupportedPlatformError`.
+  2. `ensure_collection_vault_write_allowed`: checks `state=Restoring`, `needs_full_sync`, and `writable=false` before any FS mutation.
+  3. `start_short_lived_owner_lease` → `acquire_owner_lease`: refuses live foreign serve-owner with `ServeOwnsCollectionError`.
+  4. Pre-check: `stat_at_nofollow` fd-relative, no-follow. Fires before tempfile creation.
+  5. Install: `linkat_parent_fd` — hard-link, not rename. Cannot silently overwrite a competing target.
+  6. Rollback: every unlink followed by parent `fsync`. Trace test verifies exact event sequence: `unlink:temp → fsync-after-unlink:temp → unlink:target → fsync-after-unlink:target`.
+  7. DB tx only commits after FS install succeeds; on DB failure, `rollback_target_entry` fires.
+  8. All three test hooks (pause, fail-after-install, trace-file) are env-gated no-ops in production.
+- **Tests run:** 1 platform-applicable test in `quarantine_revision_fixes.rs` ✅; 5 `#[cfg(unix)]` tests skipped (Windows); 25/25 `collection_cli_truth.rs` pass (including Windows fail-closed check ✅); 591/591 full suite pass (2 pre-existing unrelated failures).
+- **Minor observation (non-blocking):** `ensure_collection_vault_write_allowed` loads the collection twice — once directly, once through `check_writable`. No logic error, just a redundant DB read.
+- **Linux CI required:** The 5 Unix-specific tests in `quarantine_revision_fixes.rs` (non-Markdown target, live-owned, read-only, post-precheck race, rollback trace) must be confirmed green on Linux before full closure.
+- **Decision written:** `.squad/decisions/inbox/bender-restore-validation.md`
+
+## Learnings
+
+- **Double-gating (CLI dispatch + library `#[cfg(not(unix))]`) is stronger than either gate alone.** When validating platform exclusions, always check that both layers are in place. A platform regression in one leaves the other standing.
+- **Trace-file hooks prove rollback ordering without mocking the filesystem.** The `unlink:X → fsync-after-unlink:X` pattern is a reusable proof seam for any cleanup sequence that must guarantee fsync before returning. See `.squad/skills/quarantine-noreplace-rollback/SKILL.md`.
+- **When validating on Windows, enumerate which `#[cfg(unix)]` tests are being skipped and flag them explicitly.** "1 passed" looks weak but is correct if the other tests are platform-gated. Always note the skip count and where CI must close the gap.
+

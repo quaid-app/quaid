@@ -14,6 +14,16 @@ use super::types::DbError;
 static SQLITE_VEC_INIT: Once = Once::new();
 const SCHEMA_VERSION: i64 = 5;
 const LEGACY_SMALL_MODEL_NAME: &str = "bge-small-en-v1.5";
+const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
+const PAGES_AU_TRIGGER_SQL: &str =
+    "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+    INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
+    SELECT 'delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline
+    WHERE old.quarantined_at IS NULL;
+    INSERT INTO page_fts(rowid, title, slug, compiled_truth, timeline)
+    SELECT new.id, new.title, new.slug, new.compiled_truth, new.timeline
+    WHERE new.quarantined_at IS NULL;
+END;";
 
 pub struct OpenDb {
     pub conn: Connection,
@@ -206,11 +216,38 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     // write lock required by the initial PRAGMA + CREATE TABLE IF NOT EXISTS batch.
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.execute_batch(include_str!("../schema.sql"))?;
+    ensure_pages_update_trigger_handles_quarantine(&conn)?;
     ensure_collection_owner_columns(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+fn ensure_pages_update_trigger_handles_quarantine(conn: &Connection) -> Result<(), DbError> {
+    let trigger_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql
+             FROM sqlite_master
+             WHERE type = 'trigger' AND name = 'pages_au'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if trigger_sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains(PAGES_AU_QUARANTINE_GUARD))
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(&format!(
+        "DROP TRIGGER IF EXISTS pages_au;
+         {PAGES_AU_TRIGGER_SQL}"
+    ))?;
+
+    Ok(())
 }
 
 fn ensure_collection_owner_columns(conn: &Connection) -> Result<(), DbError> {

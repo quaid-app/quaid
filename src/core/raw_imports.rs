@@ -35,6 +35,13 @@ pub fn rotate_active_raw_import(
                     rusqlite::params![json, page_id],
                 );
             }
+        } else {
+            // New raw bytes carry no frontmatter — clear stale frontmatter so
+            // pages.frontmatter never drifts from the active raw import.
+            let _ = conn.execute(
+                "UPDATE pages SET frontmatter = '{}' WHERE id = ?1",
+                rusqlite::params![page_id],
+            );
         }
     }
 

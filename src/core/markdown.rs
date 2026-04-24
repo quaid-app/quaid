@@ -70,7 +70,14 @@ pub fn split_content(body: &str) -> (String, String) {
         line_start = next_start;
     }
 
-    (body.to_string(), String::new())
+    // No separator found. Strip a single trailing CRLF/LF so the no-separator
+    // path is consistent with the separator path (which strips the newline that
+    // immediately precedes the `---` line).
+    let trimmed = body
+        .strip_suffix('\n')
+        .map(|s| s.strip_suffix('\r').unwrap_or(s))
+        .unwrap_or(body);
+    (trimmed.to_string(), String::new())
 }
 
 /// Extract a summary from compiled_truth content.
@@ -320,6 +327,32 @@ mod tests {
             let (truth, timeline) = split_content("no boundary here");
 
             assert_eq!(truth, "no boundary here");
+            assert!(timeline.is_empty());
+        }
+
+        #[test]
+        fn strips_single_trailing_newline_when_no_boundary_found() {
+            // The no-separator path should behave consistently with the separator
+            // path, which strips the newline immediately before `---`.
+            let (truth, timeline) = split_content("no boundary here\n");
+
+            assert_eq!(truth, "no boundary here");
+            assert!(timeline.is_empty());
+        }
+
+        #[test]
+        fn strips_single_trailing_crlf_when_no_boundary_found() {
+            let (truth, timeline) = split_content("no boundary here\r\n");
+
+            assert_eq!(truth, "no boundary here");
+            assert!(timeline.is_empty());
+        }
+
+        #[test]
+        fn preserves_internal_newlines_when_stripping_terminal_newline() {
+            let (truth, timeline) = split_content("line one\nline two\n");
+
+            assert_eq!(truth, "line one\nline two");
             assert!(timeline.is_empty());
         }
 

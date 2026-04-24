@@ -289,7 +289,6 @@ pub(crate) fn reconcile_with_native_events(
             quarantined_ambiguous: rename_resolution.quarantined_ambiguous,
             quarantined_db_state: apply_summary.quarantined_db_state,
             hard_deleted: apply_summary.hard_deleted,
-            ..ReconcileStats::default()
         })
     }
 
@@ -2067,7 +2066,7 @@ fn build_apply_actions(
     }
 
     let mut modified_paths: Vec<_> = diff.modified.iter().collect();
-    modified_paths.sort_by(|(left, _), (right, _)| left.cmp(right));
+    modified_paths.sort_by_key(|(left, _)| *left);
     for (relative_path, stat) in modified_paths {
         let Some(page_id) = page_id_for_relative_path(conn, collection_id, relative_path)? else {
             continue;
@@ -2081,7 +2080,7 @@ fn build_apply_actions(
     }
 
     let mut new_paths: Vec<_> = rename_resolution.remaining_new.iter().collect();
-    new_paths.sort_by(|(left, _), (right, _)| left.cmp(right));
+    new_paths.sort_by_key(|(left, _)| *left);
     for (relative_path, stat) in new_paths {
         actions.push(ApplyAction::Reingest {
             existing_page_id: None,

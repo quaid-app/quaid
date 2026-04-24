@@ -1126,6 +1126,7 @@ struct ParsedRestoredPage {
 }
 
 #[cfg(unix)]
+#[expect(clippy::too_many_arguments)]
 fn restore_page_transaction(
     conn: &Connection,
     page: &QuarantinedPageRecord,

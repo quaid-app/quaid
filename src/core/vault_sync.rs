@@ -1305,7 +1305,7 @@ where
     Ok(action())
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WriterSideSentinelCrashMode {
     SentinelCreateFail,
@@ -1316,27 +1316,27 @@ enum WriterSideSentinelCrashMode {
     ForeignRenameBetweenRenameAndStat { foreign_bytes: Vec<u8> },
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn writer_side_sentinel_name(write_id: &str) -> String {
     format!("{write_id}.needs_full_sync")
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn writer_side_tempfile_name(write_id: &str) -> String {
     format!("{write_id}.tmp")
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn writer_side_foreign_tempfile_name(write_id: &str) -> String {
     format!("{write_id}.foreign.tmp")
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn writer_side_dedup_key(target_path: &Path, bytes: &[u8]) -> String {
     format!("{}::{}", target_path.display(), sha256_hex(bytes))
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn insert_writer_side_dedup_entry(key: &str) -> Result<(), VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
     registries
@@ -1347,7 +1347,7 @@ fn insert_writer_side_dedup_entry(key: &str) -> Result<(), VaultSyncError> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn remove_writer_side_dedup_entry(key: &str) -> Result<(), VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
     registries
@@ -1368,7 +1368,7 @@ fn writer_side_dedup_contains(key: &str) -> bool {
         .contains(key)
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn best_effort_mark_collection_needs_full_sync_fresh(
     conn: &Connection,
     collection_id: i64,
@@ -1383,7 +1383,7 @@ fn best_effort_mark_collection_needs_full_sync_fresh(
     mark_collection_needs_full_sync(&fresh, collection_id)
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn cleanup_pre_rename_writer_side_failure(
     parent_fd: &rustix::fd::OwnedFd,
     tempfile_name: &Path,
@@ -1395,13 +1395,13 @@ fn cleanup_pre_rename_writer_side_failure(
     let _ = fs::remove_file(sentinel_path);
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn cleanup_post_rename_writer_side_abort(conn: &Connection, collection_id: i64, dedup_key: &str) {
     let _ = remove_writer_side_dedup_entry(dedup_key);
     let _ = best_effort_mark_collection_needs_full_sync_fresh(conn, collection_id);
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn exercise_writer_side_sentinel_crash_core(
     conn: &Connection,
     collection_id: i64,
@@ -4411,8 +4411,8 @@ mod tests {
         assert!(matches!(
             &actions[0],
             WatchEvent::NativeRename(rename)
-                if rename.from_path == PathBuf::from("notes/from.md")
-                    && rename.to_path == PathBuf::from("notes/to.md")
+                if rename.from_path == Path::new("notes/from.md")
+                    && rename.to_path == Path::new("notes/to.md")
         ));
         assert!(matches!(
             &actions[1],

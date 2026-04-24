@@ -46,6 +46,7 @@ struct PutOutcome {
 }
 
 #[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Default)]
 struct PutTestHooks {
     fail_sentinel_create: bool,
@@ -749,6 +750,7 @@ fn remove_recovery_sentinel(
 }
 
 #[cfg(unix)]
+#[expect(clippy::too_many_arguments)]
 fn handle_post_rename_failure(
     db: &Connection,
     prepared: &PreparedPut,
@@ -1397,9 +1399,8 @@ mod tests {
             result
         });
 
-        assert_eq!(
+        assert!(
             done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            true,
             "different-slug writer should not wait on the blocked slug mutex"
         );
 

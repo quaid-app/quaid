@@ -235,7 +235,8 @@
 - [x] 13.4 `AmbiguityError` payload shape is stable (array of candidate strings + machine-readable code).
   > **Closed N1 (MCP-only):** MCP ambiguity failures now return code `ambiguous_slug` with a stable `candidates` array of canonical page addresses.
 - [ ] 13.5 `brain_search` / `brain_query` / `brain_list` accept an optional `collection` filter; default filters by write-target in single-writer setups, all collections otherwise.
-- [ ] 13.6 New `brain_collections` MCP tool returns the per-collection object documented in design.md (§`brain_collections` schema).
+- [x] 13.6 New `brain_collections` MCP tool returns the per-collection object documented in design.md (§`brain_collections` schema; stable-absence ignore refusal arm remains deferred to 17.5aa5).
+  > **Closed 13.6 (MCP-only):** `brain_collections` now exposes the frozen 13-field read-only collection object with truthful `root_path`, `needs_full_sync`, `recovery_in_progress`, `integrity_blocked`, and `restore_in_progress` semantics. In this slice, `ignore_parse_errors` intentionally surfaces line-level `parse_error` entries only; the stable-absence refusal arm remains deferred to `17.5aa5`.
 
 ## 14. `gbrain stats` update
 
@@ -324,7 +325,7 @@
 - [ ] 17.5aa4 CLI `ignore remove` updates file and mirror transactionally.
 - [ ] 17.5aa4b CLI is never the writer of `collections.ignore_patterns`.
 - [ ] 17.5aa4c Built-in defaults always apply regardless of `.gbrainignore` state.
-- [ ] 17.5aa5 `ignore_parse_errors` surfaces tagged-union shape in `brain_collections`.
+- [ ] 17.5aa5 `brain_collections.ignore_parse_errors` expands from parse-error-only surfacing to the full tagged-union shape, including `file_stably_absent_but_clear_not_confirmed`.
 - [ ] 17.5bb Dedup echo suppression works within TTL.
 - [ ] 17.5cc External edit after TTL is ingested normally.
 - [ ] 17.5dd Dedup path-only match (without hash) does NOT suppress.
@@ -402,7 +403,8 @@
 - [ ] 17.5aaa4 Watcher supervisor restarts on panic with exponential backoff.
 - [ ] 17.5bbb Full-hash audit rehashes files older than `GBRAIN_FULL_HASH_AUDIT_DAYS` and updates `last_full_hash_at`.
 - [x] 17.5ccc Fresh-attach and first-use-after-detach always run `full_hash_reconcile`.
-- [ ] 17.5ddd `brain_collections` response shape matches design.md schema exactly.
+- [x] 17.5ddd `brain_collections` response shape matches design.md schema exactly.
+  > **Closed with 13.6:** exact-key MCP tests now freeze the 13-field response shape and prove the accepted in-slice discriminator semantics, including queued-vs-running recovery, restore-window truth, terminal-blocker precedence, and parse-error-only `ignore_parse_errors` surfacing per the narrowed 13.6 contract.
 - [ ] 17.6 Integration: 1000-file reconciliation completes under the documented budget.
 - [ ] 17.7 Integration: watcher picks up an edit within 2s.
 - [ ] 17.8 Integration: semantic search eventual consistency (FTS fresh, embedding lane catches up).

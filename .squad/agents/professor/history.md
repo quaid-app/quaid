@@ -5,8 +5,15 @@
 - **Stack:** Rust, rusqlite, SQLite FTS5, sqlite-vec, candle + BGE-small-en-v1.5, clap, rmcp
 - **Created:** 2026-04-13T14:22:20Z
 
+## 2026-04-25 — Vault-sync 13.6 + 17.5ddd re-review (spec-boundary correction)
+
+**VERDICT: APPROVE**
+
+The spec boundary correction is sufficient. `parse_ignore_parse_errors` (vault_sync.rs:694) filters the stored `ignore_parse_errors` JSON to `code == "parse_error"` only and collapses an empty result to `None`/null. A DB row holding `file_stably_absent_but_clear_not_confirmed` therefore returns `null` at the MCP layer — exactly what design.md §505 now specifies for task 13.6. The behaviour is not merely asserted in design text: the test at server.rs:3379/3450 plants the stable-absence entry in the DB and directly asserts `ignore_parse_errors` is null on the response. 17.5ddd's frozen-schema test enumerates all 13 required response fields by exact key equality, matching the design.md schema verbatim. The deferred arm (17.5aa5) is explicitly named in both tasks.md and design.md and is not smuggled or overclaimed here. Seam is coherent; slice approved for landing.
+
 ## Learnings
 
+- Vault-sync Batch 13.6 / 17.5ddd review (2026-04-24): **REJECT for landing** when `brain_collections` computes terminal `integrity_blocked` from `reconcile_halt_reason` alone instead of the frozen `reconcile_halted_at IS NOT NULL AND reason` predicate. Read-only shape work is not enough if the presentation can overstate a terminal halt from stale metadata; schema-fidelity reviews must verify the exact truth predicate, not just field names.
 - Vault-sync Batch 13.3 review (2026-04-24): **REJECT for landing** when CLI slug-parity canonicalizes only success paths and leaves a resolved failure path speaking raw inputs. If a command has already resolved `from`/`to` to collection-aware identities (for example `gbrain unlink`), even "no matching link found" must emit canonical `<collection>::<slug>` addresses or the CLI parity claim is still incomplete.
 - Vault-sync Batch N1 review (2026-04-24): **REJECT for landing despite correct MCP truth surface** when a supposedly MCP-only slug-routing slice silently widens shared CLI behavior. Shared-helper reuse is not a scope exemption: if `src/commands/check.rs` changes single-page `gbrain check` resolution/filtering semantics to support `brain_check`, the batch must either narrow the implementation back to MCP-only or state the CLI widening explicitly as its own reviewed surface.
 - Vault-sync Batch L1 final review (2026-04-23): **APPROVE FOR LANDING**. The slice stays inside the approved boundary: registry-startup scaffolding plus restore-orphan startup recovery only. `src/core/vault_sync.rs` keeps one shared 15s stale threshold (`SESSION_LIVENESS_SECS`) across stale-session sweep, owner-liveness checks, and fresh-heartbeat defer; startup order is real (`sweep_stale_sessions -> claim_owned_collections -> run_rcrt_pass -> sync_supervisor_handles`, then runtime thread/spawn bookkeeping); and tests prove fresh-heartbeat defer, stale-owner takeover over foreign residue, exact-once orphan finalize, and no leftover supervisor-ack residue. Required caveat remains explicit: `11.1b`, `11.4`, `17.12`, and any IPC/online-handshake widening are still deferred and must not be implied by this approval.
@@ -337,5 +344,15 @@ Offline CLI closure meets all gating criteria. Tx-B residue, originator identity
 - **M1b-ii implementation lane COMPLETE (Fry):** Unix precondition/CAS hardening. Real `check_fs_precondition()` helper with self-heal; separate no-side-effect pre-sentinel variant for write path to preserve sentinel-failure truth. Scope: 12.2 + 12.4aa–12.4d.
 - **Inbox decisions merged:** Bender M1b-i proof closure + Fry M1b-ii precondition split decision. Both now in canonical `decisions.md`.
 - **Status:** Awaiting final Professor + Nibbler gate approval for both M1b-i and M1b-ii before landing.
+
+## 2026-04-25 — Slice 13.6 + 17.5ddd Review (Bender revision)
+
+**VERDICT: REJECT**
+
+The implementation in `src/core/vault_sync.rs::parse_ignore_parse_errors()` silently strips every `file_stably_absent_but_clear_not_confirmed` entry, retaining only `code == "parse_error"` entries. `design.md §505` — the single authoritative schema document referenced by both task 13.6 ("returns the per-collection object documented in design.md") and 17.5ddd ("response shape matches design.md schema exactly") — explicitly states the `ignore_parse_errors` field covers **both** `"parse_error"` (line-level glob failure) **and** `"file_stably_absent_but_clear_not_confirmed"` (stateful-absence refusal). `design.md` was not modified in this diff. The test `brain_collections_surfaces_status_flags_and_terminal_precedence` (in `src/mcp/server.rs`) cements the violation: it seeds a `file_stably_absent_but_clear_not_confirmed` row and asserts `absent["ignore_parse_errors"].is_null()`, which is directly contrary to what the spec says should be surfaced.
+
+All four of Bender's other claimed fixes are correct and well-covered: `integrity_blocked` precedence is right, the 30-minute escalation default and `GBRAIN_MANIFEST_INCOMPLETE_ESCALATION_SECS` env-var are correct, `restore_in_progress` semantics match the spec, and `recovery_in_progress` queued-vs-running split is properly tested.
+
+**Minimum required fix:** Either (a) update `design.md §505` to explicitly exclude `file_stably_absent_but_clear_not_confirmed` from `brain_collections` output and document the deferral, or (b) remove the `retain(|e| e.code == "parse_error")` filter and surface both codes as the spec demands. The test must be updated to match whichever path is chosen.
 
 

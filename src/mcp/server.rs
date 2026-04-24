@@ -522,6 +522,9 @@ pub struct BrainGapsInput {
 pub struct BrainStatsInput {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainCollectionsInput {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BrainRawInput {
     /// Page slug to attach raw data to
     pub slug: String,
@@ -1279,6 +1282,18 @@ impl GigaBrainServer {
         )]))
     }
 
+    #[tool(description = "List collection status for MCP clients")]
+    pub fn brain_collections(
+        &self,
+        #[tool(aggr)] _input: BrainCollectionsInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collections = vault_sync::list_brain_collections(&db).map_err(map_vault_sync_error)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&collections).unwrap(),
+        )]))
+    }
+
     #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
     pub fn brain_raw(
         &self,
@@ -1462,6 +1477,11 @@ mod tests {
                 as fn(&GigaBrainServer, BrainSearchInput) -> Result<CallToolResult, rmcp::Error>,
             GigaBrainServer::brain_list
                 as fn(&GigaBrainServer, BrainListInput) -> Result<CallToolResult, rmcp::Error>,
+            GigaBrainServer::brain_collections
+                as fn(
+                    &GigaBrainServer,
+                    BrainCollectionsInput,
+                ) -> Result<CallToolResult, rmcp::Error>,
         );
 
         assert!(info.capabilities.tools.is_some());
@@ -3095,6 +3115,339 @@ mod tests {
         assert!(parsed["embedding_count"].is_number());
         assert!(parsed["active_model"].is_string());
         assert!(parsed["db_size_bytes"].is_number());
+    }
+
+    #[test]
+    fn brain_collections_is_read_only_and_returns_frozen_schema_fields() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "archive", false);
+        insert_collection(&conn, 3, "restore", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-page",
+            "---\ntitle: Default Page\ntype: note\n---\nDefault\n",
+        );
+
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections
+             SET ignore_parse_errors = ?2
+             WHERE id = ?1",
+            rusqlite::params![
+                1_i64,
+                r#"[{"code":"parse_error","line":2,"raw":"**]","message":"invalid glob"}]"#
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'detached',
+                 root_path = 'C:\\vaults\\archive-detached'
+             WHERE id = 2",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 watcher_released_at = '2026-04-24T00:00:00Z',
+                 restore_command_id = 'restore-1'
+             WHERE id = 3",
+            [],
+        )
+        .unwrap();
+        let snapshot_before = db
+            .prepare(
+                "SELECT id, state, root_path, needs_full_sync, ignore_parse_errors, restore_command_id, watcher_released_at
+                 FROM collections
+                 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        drop(db);
+
+        let result = server.brain_collections(BrainCollectionsInput {}).unwrap();
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+
+        let db = server.db.lock().unwrap();
+        let snapshot_after = db
+            .prepare(
+                "SELECT id, state, root_path, needs_full_sync, ignore_parse_errors, restore_command_id, watcher_released_at
+                 FROM collections
+                 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(snapshot_after, snapshot_before);
+        drop(db);
+
+        assert_eq!(rows.len(), 3);
+        let expected_keys = [
+            "name",
+            "root_path",
+            "state",
+            "writable",
+            "is_write_target",
+            "page_count",
+            "last_sync_at",
+            "embedding_queue_depth",
+            "ignore_parse_errors",
+            "needs_full_sync",
+            "recovery_in_progress",
+            "integrity_blocked",
+            "restore_in_progress",
+        ];
+        for row in &rows {
+            let mut actual_keys = row.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+            actual_keys.sort();
+            let mut expected = expected_keys
+                .iter()
+                .map(|key| key.to_string())
+                .collect::<Vec<_>>();
+            expected.sort();
+            assert_eq!(actual_keys, expected);
+        }
+
+        let default = rows.iter().find(|row| row["name"] == "default").unwrap();
+        assert!(default["root_path"].as_str().is_some());
+        assert_eq!(default["state"], "active");
+        assert!(default["writable"].as_bool().unwrap());
+        assert!(default["is_write_target"].as_bool().unwrap());
+        assert_eq!(default["page_count"], 1);
+        assert!(default["last_sync_at"].is_null());
+        assert!(default["embedding_queue_depth"].as_i64().is_some());
+        assert!(!default["needs_full_sync"].as_bool().unwrap());
+        assert!(!default["recovery_in_progress"].as_bool().unwrap());
+        assert!(default["integrity_blocked"].is_null());
+        assert!(!default["restore_in_progress"].as_bool().unwrap());
+
+        let archive = rows.iter().find(|row| row["name"] == "archive").unwrap();
+        assert!(archive["root_path"].is_null());
+        assert_eq!(archive["state"], "detached");
+        assert!(archive["ignore_parse_errors"].is_null());
+
+        let parse_errors = default["ignore_parse_errors"].as_array().unwrap();
+        assert_eq!(parse_errors.len(), 1);
+        assert_eq!(parse_errors[0]["code"].as_str(), Some("parse_error"));
+        assert_eq!(parse_errors[0]["line"].as_i64(), Some(2));
+        assert_eq!(parse_errors[0]["raw"].as_str(), Some("**]"));
+        assert_eq!(parse_errors[0]["message"].as_str(), Some("invalid glob"));
+
+        let restore = rows.iter().find(|row| row["name"] == "restore").unwrap();
+        assert!(restore["root_path"].is_null());
+        assert_eq!(restore["state"], "restoring");
+        assert!(restore["restore_in_progress"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn brain_collections_surfaces_status_flags_and_terminal_precedence() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "queued", false);
+        insert_collection(&conn, 3, "running", false);
+        insert_collection(&conn, 4, "tampered", false);
+        insert_collection(&conn, 5, "reason-only", false);
+        insert_collection(&conn, 6, "duplicate", false);
+        insert_collection(&conn, 7, "trivial", false);
+        insert_collection(&conn, 8, "restore-pending", false);
+        insert_collection(&conn, 9, "within-window", false);
+        insert_collection(&conn, 10, "escalated", false);
+        insert_collection(&conn, 11, "precedence", false);
+        insert_collection(&conn, 12, "absent", false);
+        let server = GigaBrainServer::new(conn);
+
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  needs_full_sync = 1
+              WHERE id = 2",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  needs_full_sync = 1
+             WHERE id = 3",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  integrity_failed_at = '2026-04-24T00:00:00Z'
+             WHERE id = 4",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  reconcile_halt_reason = 'duplicate_uuid',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = 6",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = 5",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  reconcile_halt_reason = 'unresolvable_trivial_content',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = 7",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  restore_command_id = 'restore-pending-1'
+             WHERE id = 8",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  pending_manifest_incomplete_at = datetime('now', '-31 seconds')
+             WHERE id = 9",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  pending_manifest_incomplete_at = datetime('now', '-31 minutes'),
+                  reconcile_halt_reason = 'duplicate_uuid',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = 10",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  integrity_failed_at = '2026-04-24T00:00:00Z',
+                  pending_manifest_incomplete_at = datetime('now', '-31 minutes'),
+                  reconcile_halt_reason = 'unresolvable_trivial_content',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = 11",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET ignore_parse_errors = ?2
+             WHERE id = ?1",
+            rusqlite::params![
+                12_i64,
+                r#"[{"code":"file_stably_absent_but_clear_not_confirmed","line":null,"raw":null,"message":"clear requires --confirm"}]"#
+            ],
+        )
+        .unwrap();
+        drop(db);
+
+        vault_sync::set_collection_recovery_in_progress_for_test(3, true);
+        let result = server.brain_collections(BrainCollectionsInput {}).unwrap();
+        vault_sync::set_collection_recovery_in_progress_for_test(3, false);
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        let queued = rows.iter().find(|row| row["name"] == "queued").unwrap();
+        assert!(queued["needs_full_sync"].as_bool().unwrap());
+        assert!(!queued["recovery_in_progress"].as_bool().unwrap());
+        assert!(queued["integrity_blocked"].is_null());
+
+        let running = rows.iter().find(|row| row["name"] == "running").unwrap();
+        assert!(running["needs_full_sync"].as_bool().unwrap());
+        assert!(running["recovery_in_progress"].as_bool().unwrap());
+        assert!(running["integrity_blocked"].is_null());
+
+        let tampered = rows.iter().find(|row| row["name"] == "tampered").unwrap();
+        assert_eq!(
+            tampered["integrity_blocked"].as_str(),
+            Some("manifest_tampering")
+        );
+
+        let reason_only = rows
+            .iter()
+            .find(|row| row["name"] == "reason-only")
+            .unwrap();
+        assert!(reason_only["integrity_blocked"].is_null());
+
+        let duplicate = rows.iter().find(|row| row["name"] == "duplicate").unwrap();
+        assert_eq!(
+            duplicate["integrity_blocked"].as_str(),
+            Some("duplicate_uuid")
+        );
+
+        let trivial = rows.iter().find(|row| row["name"] == "trivial").unwrap();
+        assert_eq!(
+            trivial["integrity_blocked"].as_str(),
+            Some("unresolvable_trivial_content")
+        );
+
+        let restore_pending = rows
+            .iter()
+            .find(|row| row["name"] == "restore-pending")
+            .unwrap();
+        assert_eq!(restore_pending["state"], "restoring");
+        assert!(!restore_pending["restore_in_progress"].as_bool().unwrap());
+
+        let within_window = rows
+            .iter()
+            .find(|row| row["name"] == "within-window")
+            .unwrap();
+        assert!(within_window["integrity_blocked"].is_null());
+
+        let escalated = rows.iter().find(|row| row["name"] == "escalated").unwrap();
+        assert_eq!(
+            escalated["integrity_blocked"].as_str(),
+            Some("manifest_incomplete_escalated")
+        );
+
+        let precedence = rows.iter().find(|row| row["name"] == "precedence").unwrap();
+        assert_eq!(
+            precedence["integrity_blocked"].as_str(),
+            Some("manifest_tampering")
+        );
+
+        let absent = rows.iter().find(|row| row["name"] == "absent").unwrap();
+        assert!(absent["ignore_parse_errors"].is_null());
     }
 
     // ── brain_raw ────────────────────────────────────────────

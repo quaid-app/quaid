@@ -43,12 +43,13 @@ const HANDSHAKE_POLL_MS: u64 = 100;
 const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFERRED_RETRY_SECS: u64 = 1;
-const MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 30;
+const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
 
 struct RuntimeRegistries {
     supervisor_handles: Mutex<HashMap<i64, SupervisorHandle>>,
     dedup: Mutex<HashSet<String>>,
     slug_writes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    recovering_collections: Mutex<HashSet<i64>>,
 }
 
 impl RuntimeRegistries {
@@ -57,6 +58,7 @@ impl RuntimeRegistries {
             supervisor_handles: Mutex::new(HashMap::new()),
             dedup: Mutex::new(HashSet::new()),
             slug_writes: Mutex::new(HashMap::new()),
+            recovering_collections: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -68,6 +70,31 @@ struct SupervisorHandle {
 }
 
 static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IgnoreParseErrorView {
+    pub code: String,
+    pub line: Option<i64>,
+    pub raw: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrainCollectionView {
+    pub name: String,
+    pub root_path: Option<String>,
+    pub state: String,
+    pub writable: bool,
+    pub is_write_target: bool,
+    pub page_count: i64,
+    pub last_sync_at: Option<String>,
+    pub embedding_queue_depth: i64,
+    pub ignore_parse_errors: Option<Vec<IgnoreParseErrorView>>,
+    pub needs_full_sync: bool,
+    pub recovery_in_progress: bool,
+    pub integrity_blocked: Option<String>,
+    pub restore_in_progress: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSlug {
@@ -602,6 +629,268 @@ fn with_supervisor_handles<T>(
                 registry: "supervisor_handles",
             })?;
     Ok(f(&mut handles))
+}
+
+fn with_recovering_collections<T>(
+    f: impl FnOnce(&mut HashSet<i64>) -> T,
+) -> Result<T, VaultSyncError> {
+    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
+    let mut recovering =
+        registries
+            .recovering_collections
+            .lock()
+            .map_err(|_| VaultSyncError::RegistryPoisoned {
+                registry: "recovering_collections",
+            })?;
+    Ok(f(&mut recovering))
+}
+
+struct RecoveryInProgressGuard {
+    collection_id: i64,
+}
+
+impl RecoveryInProgressGuard {
+    fn enter(collection_id: i64) -> Result<Self, VaultSyncError> {
+        with_recovering_collections(|recovering| {
+            recovering.insert(collection_id);
+        })?;
+        Ok(Self { collection_id })
+    }
+}
+
+impl Drop for RecoveryInProgressGuard {
+    fn drop(&mut self) {
+        if let Some(registries) = PROCESS_REGISTRIES.get() {
+            if let Ok(mut recovering) = registries.recovering_collections.lock() {
+                recovering.remove(&self.collection_id);
+            }
+        }
+    }
+}
+
+pub fn collection_recovery_in_progress(collection_id: i64) -> bool {
+    PROCESS_REGISTRIES
+        .get()
+        .and_then(|registries| {
+            registries
+                .recovering_collections
+                .lock()
+                .ok()
+                .map(|recovering| recovering.contains(&collection_id))
+        })
+        .unwrap_or(false)
+}
+
+fn parse_ignore_parse_errors(
+    raw: Option<String>,
+) -> Result<Option<Vec<IgnoreParseErrorView>>, VaultSyncError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let mut parsed: Vec<IgnoreParseErrorView> =
+        serde_json::from_str(&raw).map_err(|error| VaultSyncError::InvariantViolation {
+            message: format!("invalid ignore_parse_errors JSON: {error}"),
+        })?;
+    parsed.retain(|entry| entry.code == "parse_error");
+    Ok((!parsed.is_empty()).then_some(parsed))
+}
+
+fn manifest_incomplete_escalation_secs() -> i64 {
+    std::env::var("GBRAIN_MANIFEST_INCOMPLETE_ESCALATION_SECS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS)
+}
+
+fn integrity_blocked_label(
+    integrity_failed_at: &Option<String>,
+    manifest_incomplete_escalated: bool,
+    reconcile_halted_at: &Option<String>,
+    reconcile_halt_reason: &Option<String>,
+) -> Option<String> {
+    if integrity_failed_at.is_some() {
+        return Some("manifest_tampering".to_owned());
+    }
+    if manifest_incomplete_escalated {
+        return Some("manifest_incomplete_escalated".to_owned());
+    }
+    if reconcile_halted_at.is_none() {
+        return None;
+    }
+    match reconcile_halt_reason.as_deref() {
+        Some("duplicate_uuid") => Some("duplicate_uuid".to_owned()),
+        Some("unresolvable_trivial_content") => Some("unresolvable_trivial_content".to_owned()),
+        _ => None,
+    }
+}
+
+fn restore_in_progress(collection: &Collection) -> bool {
+    matches!(collection.state, CollectionState::Restoring)
+        && collection.restore_command_id.is_some()
+        && collection.watcher_released_at.is_some()
+}
+
+pub fn list_brain_collections(
+    conn: &Connection,
+) -> Result<Vec<BrainCollectionView>, VaultSyncError> {
+    let manifest_incomplete_escalation_secs = manifest_incomplete_escalation_secs();
+    let mut stmt = conn.prepare(
+        "SELECT
+             c.id,
+             c.name,
+             c.root_path,
+             c.state,
+             c.writable,
+             c.is_write_target,
+             c.ignore_parse_errors,
+             c.needs_full_sync,
+              c.last_sync_at,
+              c.integrity_failed_at,
+              c.pending_manifest_incomplete_at,
+              c.reconcile_halted_at,
+              c.reconcile_halt_reason,
+              c.restore_command_id,
+              c.watcher_released_at,
+             COALESCE((
+                 SELECT COUNT(*)
+                 FROM pages p
+                 WHERE p.collection_id = c.id
+                   AND p.quarantined_at IS NULL
+             ), 0) AS page_count,
+             COALESCE((
+                 SELECT COUNT(*)
+                 FROM embedding_jobs ej
+                 JOIN pages p ON p.id = ej.page_id
+                 WHERE p.collection_id = c.id
+             ), 0) AS embedding_queue_depth,
+             CASE
+                 WHEN c.pending_manifest_incomplete_at IS NOT NULL
+                  AND strftime('%s', 'now') - strftime('%s', c.pending_manifest_incomplete_at) >= ?1
+                 THEN 1
+                 ELSE 0
+             END AS manifest_incomplete_escalated
+         FROM collections c
+         ORDER BY c.name",
+    )?;
+
+    let rows = stmt
+        .query_map([manifest_incomplete_escalation_secs], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)? != 0,
+                row.get::<_, i64>(5)? != 0,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, i64>(7)? != 0,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+                row.get::<_, i64>(15)?,
+                row.get::<_, i64>(16)?,
+                row.get::<_, i64>(17)? != 0,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    rows.into_iter()
+        .map(
+            |(
+                id,
+                name,
+                root_path,
+                state_raw,
+                writable,
+                is_write_target,
+                ignore_parse_errors_raw,
+                needs_full_sync,
+                last_sync_at,
+                integrity_failed_at,
+                pending_manifest_incomplete_at,
+                reconcile_halted_at,
+                reconcile_halt_reason,
+                restore_command_id,
+                watcher_released_at,
+                page_count,
+                embedding_queue_depth,
+                manifest_incomplete_escalated,
+            )| {
+                let state = state_raw.parse()?;
+                let collection = Collection {
+                    id,
+                    name,
+                    root_path,
+                    state,
+                    writable,
+                    is_write_target,
+                    ignore_patterns: None,
+                    ignore_parse_errors: ignore_parse_errors_raw,
+                    needs_full_sync,
+                    last_sync_at,
+                    active_lease_session_id: None,
+                    restore_command_id,
+                    restore_lease_session_id: None,
+                    reload_generation: 0,
+                    watcher_released_session_id: None,
+                    watcher_released_generation: None,
+                    watcher_released_at,
+                    pending_command_heartbeat_at: None,
+                    pending_root_path: None,
+                    pending_restore_manifest: None,
+                    restore_command_pid: None,
+                    restore_command_host: None,
+                    integrity_failed_at,
+                    pending_manifest_incomplete_at,
+                    reconcile_halted_at,
+                    reconcile_halt_reason,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                };
+
+                Ok(BrainCollectionView {
+                    name: collection.name.clone(),
+                    root_path: matches!(collection.state, CollectionState::Active)
+                        .then_some(collection.root_path.clone()),
+                    state: collection.state.as_str().to_owned(),
+                    writable: collection.writable,
+                    is_write_target: collection.is_write_target,
+                    page_count,
+                    last_sync_at: collection.last_sync_at.clone(),
+                    embedding_queue_depth,
+                    ignore_parse_errors: parse_ignore_parse_errors(
+                        collection.ignore_parse_errors.clone(),
+                    )?,
+                    needs_full_sync: collection.needs_full_sync,
+                    recovery_in_progress: collection.needs_full_sync
+                        && collection_recovery_in_progress(collection.id),
+                    integrity_blocked: integrity_blocked_label(
+                        &collection.integrity_failed_at,
+                        manifest_incomplete_escalated,
+                        &collection.reconcile_halted_at,
+                        &collection.reconcile_halt_reason,
+                    ),
+                    restore_in_progress: restore_in_progress(&collection),
+                })
+            },
+        )
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn set_collection_recovery_in_progress_for_test(collection_id: i64, in_progress: bool) {
+    let _ = with_recovering_collections(|recovering| {
+        if in_progress {
+            recovering.insert(collection_id);
+        } else {
+            recovering.remove(&collection_id);
+        }
+    });
 }
 
 fn has_supervisor_handle(collection_id: i64, session_id: &str) -> Result<bool, VaultSyncError> {
@@ -1764,7 +2053,7 @@ pub fn finalize_pending_restore(
         }
         ManifestComparison::MissingFiles => {
             let age = pending_manifest_age_seconds(conn, &collection)?;
-            if age >= MANIFEST_INCOMPLETE_ESCALATION_SECS {
+            if age >= manifest_incomplete_escalation_secs() {
                 conn.execute(
                     "UPDATE collections
                      SET integrity_failed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
@@ -1935,6 +2224,7 @@ fn complete_attach(
     {
         return Ok(false);
     }
+    let _recovery_guard = RecoveryInProgressGuard::enter(collection_id)?;
     if let Err(err) = full_hash_reconcile_authorized(
         conn,
         collection_id,
@@ -4216,7 +4506,7 @@ mod tests {
                  pending_restore_manifest = ?3,
                  restore_command_id = 'restore-1',
                  pending_command_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-                 pending_manifest_incomplete_at = datetime('now', '-31 seconds')
+                 pending_manifest_incomplete_at = datetime('now', '-31 minutes')
              WHERE id = ?1",
             params![
                 collection_id,

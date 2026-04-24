@@ -31,7 +31,7 @@ Sprint 0 establishes the full repository structure before any core implementatio
 **Owner:** Fry  
 **Depends on:** Sprint 0
 
-**Release:** `v0.1.0` — tag pending. All ship gates passed; pushing the `v0.1.0` tag triggers the release workflow.
+**Release:** `v0.1.0`
 
 The smallest complete slice that proves GigaBrain's value proposition. When Phase 1 ships, a real user can import their markdown brain, search it semantically and by keyword, export without data loss, and connect any MCP-compatible agent via `gbrain serve`.
 
@@ -76,7 +76,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 **Branch:** `phase2/p2-intelligence-layer`
 **Depends on:** Phase 1 ship gate
 
-**Release:** `v0.2.0` — tag pending. All ship gates passed.
+**Release:** `v0.2.0`
 
 Phase 2 adds cross-reference traversal, temporal reasoning, and memory-consolidation capabilities that separate GigaBrain from a glorified FTS5 wrapper.
 
@@ -157,3 +157,42 @@ These are known design choices that are _not_ oversights:
 | `v0.2.0` | Phase 2 — intelligence layer |
 | `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
 | `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter; #55 remains a post-ship rerun gate) |
+
+---
+
+## vault-sync-engine — Collections, Live-Sync, and Write Safety 🔄
+
+**Status: In progress**
+**Branch:** `spec/vault-sync-engine`
+**OpenSpec:** [`openspec/changes/vault-sync-engine/`](../openspec/changes/vault-sync-engine/)
+
+Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, quarantine lifecycle, and a fully safe write-through path for `brain_put` on Unix.
+
+### What has landed
+
+- **Schema v5** — `collections`, `file_state`, `raw_imports`, `embedding_jobs`, quarantine indexes; v4 brains refuse with re-init instructions
+- **Collection management** — `gbrain collection add|list|info|sync|restore|restore-reset|reconcile-reset`
+- **Ignore patterns** — `gbrain collection ignore add|remove|list|clear --confirm`; atomic-parse `.gbrainignore` with mirror refresh; built-in defaults (`.git/**`, `node_modules/**`, etc.) always applied
+- **Quarantine lifecycle** — `gbrain collection quarantine list|export|discard`; auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30); pages with DB-only state (links, assertions, knowledge gaps, contradictions, raw_data) are quarantined rather than hard-deleted; `discard --force` or post-export discard available
+- **Reconciler** — stat-diff walk, UUID identity resolution, rename detection (native pair → UUID match → content-hash uniqueness), delete-vs-quarantine classifier, 500-file batch commit
+- **File watcher** — one `notify` watcher per active collection in `gbrain serve`; 1.5 s debounce (`GBRAIN_WATCH_DEBOUNCE_MS`); reconcile-backed flushes; path+hash self-write suppression with TTL expiry
+- **Write-through `brain_put`** *(Unix)* — full rename-before-commit sequence (recovery sentinel → tempfile → `renameat` → fsync parent dir → single SQLite tx); mandatory `expected_version` for updates; `check_fs_precondition` four-field CAS
+- **Write interlock** — `state='restoring'` or `needs_full_sync=1` blocks all mutating CLI/MCP ops with `CollectionRestoringError`
+- **Offline restore** — `gbrain collection restore <name> <target>` → Tx-A → atomic rename → Tx-B; `sync --finalize-pending` drives full-hash reconcile and reopens writes
+- **`brain_collections` MCP tool** — frozen 13-field per-collection object; truthful state, recovery, and ignore-diagnostic surfacing (17 MCP tools total)
+- **Collection filter** — `brain_search`, `brain_query`, `brain_list` accept an optional `collection` filter; default to the sole active collection when exactly one exists
+- **Collection-aware slug routing** — all slug-bearing CLI/MCP surfaces accept `<collection>::<slug>`; ambiguous bare slugs return a stable `AmbiguityError` with candidates
+
+### Explicitly deferred (not yet shipped)
+
+| Item | Why deferred |
+| ---- | ------------ |
+| `quarantine restore` | Requires crash-durable post-unlink cleanup and a no-replace install path; reopened until a safe slice lands |
+| IPC socket write proxying (`12.6*`) | Full trust-boundary design for `SO_PEERCRED` peer auth still in progress |
+| Per-event-type watcher handlers (`6.5–6.11`) | Create/Modify/Delete/Rename handlers; overflow recovery, `.gbrainignore` live reload, and watcher supervisor not yet wired |
+| Embedding job queue (`8.*`) | Async background embedding worker not yet implemented |
+| `gbrain collection remove` | Detach + optional purge not yet implemented |
+| `gbrain stats` per-collection augmentation | Per-collection row + aggregate totals pending |
+| Online restore handshake (`17.5pp/qq*`) | Live-serve ack protocol not yet implemented |
+| Opt-in UUID write-back (`5a.5`, `migrate-uuids`) | `--write-gbrain-id` and `migrate-uuids` CLI not yet implemented |
+| Legacy `gbrain import` removal (`15.*`) | Import path remains until reconciler covers all ingest use cases |

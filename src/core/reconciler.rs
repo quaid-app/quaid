@@ -1233,8 +1233,8 @@ pub fn stat_diff(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NativeRename {
-    from_path: PathBuf,
-    to_path: PathBuf,
+    pub(crate) from_path: PathBuf,
+    pub(crate) to_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -557,7 +557,7 @@ fn inspect_fs_precondition(
     };
 
     let current_stat = match parent_fd.as_ref() {
-        Some(parent_fd) => match fs_safety::stat_at_nofollow(parent_fd, target_name) {
+        Some(parent_fd) => match fs_safety::stat_at_nofollow(parent_fd, Path::new(target_name)) {
             Ok(stat) => {
                 if stat.is_symlink() {
                     return Err(io::Error::other("target path is a symlink").into());
@@ -1547,7 +1547,7 @@ fn exercise_writer_side_sentinel_crash_core(
             relative_path: relative_path.display().to_string(),
         });
     }
-    fsync(&parent_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()).into())?;
+    fsync(&parent_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
 
     if let WriterSideSentinelCrashMode::ForeignRenameBetweenRenameAndStat { foreign_bytes } = mode {
         let foreign_tempfile_name = PathBuf::from(writer_side_foreign_tempfile_name(write_id));

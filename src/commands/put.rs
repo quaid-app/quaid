@@ -792,7 +792,7 @@ fn test_hooks_snapshot() -> Option<PutTestHooks> {
 
 #[cfg(all(test, unix))]
 fn test_hooks_snapshot() -> Option<PutTestHooks> {
-    put_test_hooks().lock().unwrap().clone()
+    Some(put_test_hooks().lock().unwrap().clone())
 }
 
 #[cfg(all(test, unix))]

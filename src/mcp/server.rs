@@ -1428,7 +1428,6 @@ mod tests {
     use super::*;
     use crate::core::db;
     use serde_json::json;
-    #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
@@ -1437,6 +1436,19 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("server.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        let vault_root = dir.path().join("vault");
+        fs::create_dir_all(&vault_root).unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET root_path = ?1,
+                 writable = 1,
+                 is_write_target = 1,
+                 state = 'active',
+                 needs_full_sync = 0
+             WHERE id = 1",
+            [vault_root.display().to_string()],
+        )
+        .unwrap();
         (dir, conn)
     }
 

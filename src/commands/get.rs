@@ -8,7 +8,12 @@ use crate::core::{markdown, page_uuid, vault_sync};
 
 /// Read a page by slug and print it to stdout.
 pub fn run(db: &Connection, slug: &str, json: bool) -> Result<()> {
-    let page = get_page(db, slug)?;
+    let resolved = vault_sync::resolve_page_for_read(db, slug)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let page = canonicalize_page_for_output(
+        get_page_by_key(db, resolved.collection_id, &resolved.slug)?,
+        &resolved,
+    );
 
     if json {
         println!("{}", serde_json::to_string_pretty(&page)?);
@@ -71,6 +76,14 @@ pub fn get_page_by_key(db: &Connection, collection_id: i64, slug: &str) -> Resul
         }
         Err(e) => Err(e.into()),
     }
+}
+
+fn canonicalize_page_for_output(page: Page, resolved: &vault_sync::ResolvedSlug) -> Page {
+    let mut page = page;
+    page.slug = resolved.canonical_slug();
+    page.frontmatter
+        .insert("slug".to_string(), resolved.canonical_slug());
+    page
 }
 
 #[cfg(test)]

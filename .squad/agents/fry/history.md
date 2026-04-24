@@ -766,4 +766,17 @@ Ready for implementation and landing.
 - **Session log written:** `2026-04-24T12-55-00Z-m1b-session.md`.
 - **Status:** Awaiting final Professor + Nibbler gate approval for M1b-ii.
 
+## Learnings
+
+### 2026-04-24 16:35:00 - Vault-sync 13.3 CLI slug parity
+
+**What worked:**
+- Keeping collection-aware resolution at the command boundary was the cleanest parity move: resolve once, keep DB lookups keyed by `(collection_id, slug)`, and only canonicalize `<collection>::<slug>` on CLI output.
+- Reusing the MCP canonical-output contract for CLI read surfaces (`get`, `graph`, `links`/`backlinks`, `timeline`, `check`, `search`, `query`, `list`) closed the parity seam without widening into the deferred collection-filter/tool work.
+- Integration tests that spawn `gbrain` directly were the fastest way to prove the seam end-to-end, especially for ambiguous bare slugs and explicit collection routing.
+
+**Challenges:**
+- `check --all` and graph/backlink fixtures had hidden single-collection assumptions; once CLI outputs became canonical, older tests had to be updated to stop asserting bare slugs.
+- Slug-bound `check` only recomputes the selected page, so contradiction-output tests need either pre-seeded assertion state or an all-pages warmup pass before checking the explicit-route output.
+
 

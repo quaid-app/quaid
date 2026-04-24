@@ -164,8 +164,18 @@ fn exact_slug_result_canonical(
             collection_name,
             slug,
         }) => (collection_id, collection_name, slug),
-        Ok(SlugResolution::NotFound { .. }) | Ok(SlugResolution::Ambiguous { .. }) => {
+        Ok(SlugResolution::NotFound { .. }) => {
             return Ok(None);
+        }
+        Ok(SlugResolution::Ambiguous { slug, candidates }) => {
+            return Err(SearchError::Ambiguous {
+                slug,
+                candidates: candidates
+                    .into_iter()
+                    .map(|candidate| candidate.full_address)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            });
         }
         Err(collections::CollectionError::Sqlite(err)) => return Err(SearchError::from(err)),
         Err(_) => return Ok(None),

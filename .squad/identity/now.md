@@ -1,5 +1,5 @@
-updated_at: 2026-04-24T02:48:01Z
-focus_area: vault-sync-engine post-N1 next-slice selection
+updated_at: 2026-04-24T04:19:19Z
+focus_area: vault-sync-engine post-13.3 next-slice selection
 active_issues: []
 active_branch: spec/vault-sync-engine
 ---
@@ -8,8 +8,8 @@ active_branch: spec/vault-sync-engine
 
 **Active change (vault-sync-engine):**
 
-1. `vault-sync-engine` — Batch N1 closed (`13.1` / `13.2` / `13.4`, MCP-only); next slice not yet selected.
-   Owner lane: Fry. Reviewers: Professor, Nibbler. Test lane: Scruffy.
+1. `vault-sync-engine` — Batch 13.3 closed (CLI parity only); next slice not yet selected.
+    Owner lane: Fry. Reviewers: Professor, Nibbler. Test lane: Scruffy.
    - M1b-i closed the real write-interlock refusal seam for `17.5s2-s5`
    - M1b-ii closed Unix precondition/CAS hardening for `12.2`, `12.3`, `12.4a`, `17.5l-s`
    - M2a-prime closed the Windows platform gate for current vault-sync CLI handlers and truthfully narrowed `12.5` / `17.16a` to vault-byte entry points only
@@ -17,8 +17,9 @@ active_branch: spec/vault-sync-engine
    - M2c closed the explicit finalize-caller proof seam (`17.17b`) with a test-only invariant over production finalize helper call sites
    - M3a closed `2.4c` as a reconciler-specific wording/closure note: `ignore::WalkBuilder` enumeration with fd-relative revalidation and WARN-skip symlink behavior, not a generic `readdir` walk claim
    - N1 closed the MCP slug-routing truth seam only: slug-bearing MCP handlers now resolve collection-aware inputs first, page-referencing MCP outputs emit canonical `<collection>::<slug>` addresses, and ambiguity failures expose a stable machine-readable payload
-   - `13.3`, `13.5`, and `13.6` remain open; do not overclaim CLI parity, collection filters/defaults, or a `brain_collections` tool
-   - Pick the next truthful slice before widening into CLI routing, IPC, watcher surfaces, or broader mutator coverage
+   - 13.3 closed the CLI parity/output seam only: slug-bearing CLI commands now fail closed on ambiguous bare slugs, accept explicit `<collection>::<slug>` routing, and emit canonical page addresses on CLI outputs that reference pages, including single-page `embed`
+   - `13.5` and `13.6` remain open; do not overclaim collection filters/defaults or a `brain_collections` tool
+   - Pick the next truthful slice before widening into collection filters/defaults, IPC, watcher surfaces, or broader mutator coverage
 
 **Completed in this branch:**
 - Batch H — Phase 0-3 restore/remap safety helpers + fresh-connection full-hash activation
@@ -36,6 +37,7 @@ active_branch: spec/vault-sync-engine
 - Batch M2c — explicit finalize-caller proof
 - Batch M3a — reconciler symlink-walk wording closure
 - Batch N1 — MCP slug-routing truth (`13.1`, `13.2`, `13.4` only)
+- Batch 13.3 — CLI slug parity / canonical output closure
 
 **Explicitly deferred after M1b:**
 - Online restore handshake, IPC socket work, and the `17.5pp` / `17.5qq*` series that depend on IPC security design
@@ -45,4 +47,4 @@ active_branch: spec/vault-sync-engine
 - Live/background recovery worker, IPC/live routing, and any claim that generic startup healing or remap reopen is already complete
 - Post-landing coverage/docs/release/cleanup/issues agenda remains queued until the vault-sync branch reaches an appropriate stop point
 
-**Gate:** N1 is closed. No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes.
+**Gate:** 13.3 is closed. No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes.

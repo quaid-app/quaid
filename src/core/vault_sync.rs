@@ -76,6 +76,12 @@ pub struct ResolvedSlug {
     pub slug: String,
 }
 
+impl ResolvedSlug {
+    pub fn canonical_slug(&self) -> String {
+        format!("{}::{}", self.collection_name, self.slug)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RestoreManifestEntry {
     pub relative_path: String,

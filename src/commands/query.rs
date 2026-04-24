@@ -4,7 +4,7 @@ use crate::core::types::SearchResult;
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::core::search::hybrid_search;
+use crate::core::search::hybrid_search_canonical;
 
 /// Read `default_token_budget` from the config table, falling back to 4000.
 fn read_token_budget(db: &Connection) -> usize {
@@ -27,7 +27,7 @@ pub async fn run(
     wing: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let results = hybrid_search(query, wing.as_deref(), db, limit as usize)?;
+    let results = hybrid_search_canonical(query, wing.as_deref(), db, limit as usize)?;
 
     // Auto-log knowledge gap on weak results
     if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
@@ -144,9 +144,13 @@ mod tests {
         let conn = db::open(":memory:").expect("open db");
 
         // Query with no results should log a gap
-        let results =
-            crate::core::search::hybrid_search("nonexistent quantum socks", None, &conn, 10)
-                .unwrap();
+        let results = crate::core::search::hybrid_search_canonical(
+            "nonexistent quantum socks",
+            None,
+            &conn,
+            10,
+        )
+        .unwrap();
         assert!(results.len() < 2);
 
         // Simulate the gap logging that query::run does

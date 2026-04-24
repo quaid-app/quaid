@@ -43,19 +43,24 @@ fn list_pages(
     page_type: Option<&str>,
     limit: u32,
 ) -> Result<Vec<ListEntry>> {
-    let mut sql = String::from("SELECT slug, type, summary FROM pages WHERE 1=1");
+    let mut sql = String::from(
+        "SELECT c.name || '::' || p.slug, p.type, p.summary
+         FROM pages p
+         JOIN collections c ON c.id = p.collection_id
+         WHERE 1=1",
+    );
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
     if let Some(w) = wing {
-        sql.push_str(" AND wing = ?");
+        sql.push_str(" AND p.wing = ?");
         params.push(Box::new(w.to_owned()));
     }
     if let Some(t) = page_type {
-        sql.push_str(" AND type = ?");
+        sql.push_str(" AND p.type = ?");
         params.push(Box::new(t.to_owned()));
     }
 
-    sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
+    sql.push_str(" ORDER BY p.updated_at DESC LIMIT ?");
     params.push(Box::new(limit));
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -129,7 +134,7 @@ mod tests {
 
         let entries = list_pages(&conn, Some("people"), None, 50).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].slug, "people/alice");
+        assert_eq!(entries[0].slug, "default::people/alice");
     }
 
     #[test]
@@ -146,7 +151,7 @@ mod tests {
 
         let entries = list_pages(&conn, None, Some("concept"), 50).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].slug, "concepts/rust");
+        assert_eq!(entries[0].slug, "default::concepts/rust");
     }
 
     #[test]
@@ -175,7 +180,7 @@ mod tests {
 
         let entries = list_pages(&conn, Some("people"), Some("person"), 50).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].slug, "people/alice");
+        assert_eq!(entries[0].slug, "default::people/alice");
     }
 
     #[test]
@@ -205,7 +210,7 @@ mod tests {
         .unwrap();
 
         let entries = list_pages(&conn, None, None, 50).unwrap();
-        assert_eq!(entries[0].slug, "test/new");
-        assert_eq!(entries[1].slug, "test/old");
+        assert_eq!(entries[0].slug, "default::test/new");
+        assert_eq!(entries[1].slug, "default::test/old");
     }
 }

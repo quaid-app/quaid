@@ -161,6 +161,9 @@ pub enum SearchError {
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    #[error("ambiguous slug: {slug} ({candidates})")]
+    Ambiguous { slug: String, candidates: String },
+
     #[error("search failed: {message}")]
     Internal { message: String },
 }

@@ -230,7 +230,8 @@
   > **Closed N1 (MCP-only):** `brain_link_close` is slugless, and `brain_search` / `brain_query` / `brain_list` are covered by canonical output work rather than a parse-first slug seam.
 - [x] 13.2 MCP responses that reference a page return its canonical `<collection>::<slug>` form.
   > **Closed N1 (MCP-only):** canonical page references are now emitted on the MCP surfaces covered by this slice, including rendered `brain_get` output plus `brain_search`, `brain_query`, `brain_list`, `brain_backlinks`, `brain_graph`, `brain_timeline`, `brain_link`, and `brain_check`. CLI parity remains open in `13.3`.
-- [ ] 13.3 CLI commands accept both bare slugs and `<collection>::<slug>`; apply the same resolution rules.
+- [x] 13.3 CLI commands accept both bare slugs and `<collection>::<slug>`; apply the same resolution rules.
+  > **Closed 13.3 (CLI-only):** slug-bearing CLI commands now fail closed on ambiguous bare slugs, accept explicit `<collection>::<slug>` routing, and emit canonical `<collection>::<slug>` page references on CLI outputs that reference pages. This closure includes single-page `embed` parity only; `13.5` and `13.6` remain open.
 - [x] 13.4 `AmbiguityError` payload shape is stable (array of candidate strings + machine-readable code).
   > **Closed N1 (MCP-only):** MCP ambiguity failures now return code `ambiguous_slug` with a stable `candidates` array of canonical page addresses.
 - [ ] 13.5 `brain_search` / `brain_query` / `brain_list` accept an optional `collection` filter; default filters by write-target in single-writer setups, all collections otherwise.

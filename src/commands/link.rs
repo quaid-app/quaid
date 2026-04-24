@@ -8,8 +8,13 @@ use crate::core::vault_sync;
 
 // ── slug → page_id resolution ────────────────────────────────
 
+struct ResolvedPage {
+    resolved: vault_sync::ResolvedSlug,
+    page_id: i64,
+}
+
 /// Resolve a slug to its integer page ID. Returns an error if the page doesn't exist.
-fn resolve_page_id(db: &Connection, slug: &str, op_kind: OpKind) -> Result<(i64, i64)> {
+fn resolve_page(db: &Connection, slug: &str, op_kind: OpKind) -> Result<ResolvedPage> {
     let resolved = vault_sync::resolve_slug_for_op(db, slug, op_kind)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let page_id = db
@@ -22,7 +27,7 @@ fn resolve_page_id(db: &Connection, slug: &str, op_kind: OpKind) -> Result<(i64,
             rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
             other => anyhow::anyhow!(other),
         })?;
-    Ok((resolved.collection_id, page_id))
+    Ok(ResolvedPage { resolved, page_id })
 }
 
 // ── gbrain link ──────────────────────────────────────────────
@@ -40,14 +45,27 @@ pub fn run(
     valid_from: Option<String>,
     valid_until: Option<String>,
 ) -> Result<()> {
-    let closed = run_silent(db, from, to, relationship, valid_from, valid_until.clone())?;
+    let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
+    let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
+    let closed = run_resolved(
+        db,
+        &from_page,
+        &to_page,
+        relationship,
+        valid_from,
+        valid_until.clone(),
+    )?;
+    let from_slug = from_page.resolved.canonical_slug();
+    let to_slug = to_page.resolved.canonical_slug();
     if closed {
         println!(
-            "Closed link {from} → {to} ({relationship}) valid_until={}",
-            valid_until.unwrap()
+            "Closed link {from} → {to} ({relationship}) valid_until={valid_until}",
+            from = from_slug,
+            to = to_slug,
+            valid_until = valid_until.unwrap(),
         );
     } else {
-        println!("Linked {from} → {to} ({relationship})");
+        println!("Linked {from_slug} → {to_slug} ({relationship})");
     }
     Ok(())
 }
@@ -62,11 +80,29 @@ pub fn run_silent(
     valid_from: Option<String>,
     valid_until: Option<String>,
 ) -> Result<bool> {
-    let (from_collection_id, from_id) = resolve_page_id(db, from, OpKind::WriteUpdate)?;
-    let (to_collection_id, to_id) = resolve_page_id(db, to, OpKind::WriteUpdate)?;
-    vault_sync::ensure_collection_write_allowed(db, from_collection_id)
+    let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
+    let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
+    run_resolved(
+        db,
+        &from_page,
+        &to_page,
+        relationship,
+        valid_from,
+        valid_until,
+    )
+}
+
+fn run_resolved(
+    db: &Connection,
+    from_page: &ResolvedPage,
+    to_page: &ResolvedPage,
+    relationship: &str,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+) -> Result<bool> {
+    vault_sync::ensure_collection_write_allowed(db, from_page.resolved.collection_id)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    vault_sync::ensure_collection_write_allowed(db, to_collection_id)
+    vault_sync::ensure_collection_write_allowed(db, to_page.resolved.collection_id)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     // Close scenario: existing link + valid_until supplied → update.
@@ -75,7 +111,7 @@ pub fn run_silent(
             "UPDATE links SET valid_until = ?1 \
              WHERE from_page_id = ?2 AND to_page_id = ?3 AND relationship = ?4 \
                AND valid_until IS NULL",
-            rusqlite::params![until, from_id, to_id, relationship],
+            rusqlite::params![until, from_page.page_id, to_page.page_id, relationship],
         )?;
 
         if rows > 0 {
@@ -88,7 +124,13 @@ pub fn run_silent(
         "INSERT INTO links (
             from_page_id, to_page_id, relationship, source_kind, valid_from, valid_until
          ) VALUES (?1, ?2, ?3, 'programmatic', ?4, ?5)",
-        rusqlite::params![from_id, to_id, relationship, valid_from, valid_until],
+        rusqlite::params![
+            from_page.page_id,
+            to_page.page_id,
+            relationship,
+            valid_from,
+            valid_until
+        ],
     )?;
 
     Ok(false)
@@ -141,19 +183,30 @@ struct LinkRow {
     valid_until: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct BacklinkRow {
+    id: i64,
+    from_slug: String,
+    relationship: String,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+}
+
 /// List all outbound links for a page.
 pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool) -> Result<()> {
-    let (_, from_id) = resolve_page_id(db, slug, OpKind::Read)?;
+    let resolved = resolve_page(db, slug, OpKind::Read)?;
 
     let mut stmt = db.prepare(
-        "SELECT l.id, p.slug, l.relationship, l.valid_from, l.valid_until \
-         FROM links l JOIN pages p ON l.to_page_id = p.id \
+        "SELECT l.id, c.name || '::' || p.slug, l.relationship, l.valid_from, l.valid_until \
+         FROM links l \
+         JOIN pages p ON l.to_page_id = p.id \
+         JOIN collections c ON c.id = p.collection_id \
          WHERE l.from_page_id = ?1 \
          ORDER BY l.created_at DESC",
     )?;
 
     let rows: Vec<LinkRow> = stmt
-        .query_map([from_id], |row| {
+        .query_map([resolved.page_id], |row| {
             Ok(LinkRow {
                 id: row.get(0)?,
                 to_slug: row.get(1)?,
@@ -169,7 +222,10 @@ pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool)
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         if rows.is_empty() {
-            println!("No outbound links for {slug}");
+            println!(
+                "No outbound links for {}",
+                resolved.resolved.canonical_slug()
+            );
         }
         for r in &rows {
             let validity = format_validity(&r.valid_from, &r.valid_until);
@@ -187,30 +243,38 @@ pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool)
 
 /// Remove a cross-reference entirely.
 pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String>) -> Result<()> {
-    let (from_collection_id, from_id) = resolve_page_id(db, from, OpKind::WriteUpdate)?;
-    let (to_collection_id, to_id) = resolve_page_id(db, to, OpKind::WriteUpdate)?;
-    vault_sync::ensure_collection_write_allowed(db, from_collection_id)
+    let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
+    let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
+    vault_sync::ensure_collection_write_allowed(db, from_page.resolved.collection_id)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    vault_sync::ensure_collection_write_allowed(db, to_collection_id)
+    vault_sync::ensure_collection_write_allowed(db, to_page.resolved.collection_id)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     let rows = if let Some(ref rel) = relationship {
         db.execute(
             "DELETE FROM links WHERE from_page_id = ?1 AND to_page_id = ?2 AND relationship = ?3",
-            rusqlite::params![from_id, to_id, rel],
+            rusqlite::params![from_page.page_id, to_page.page_id, rel],
         )?
     } else {
         db.execute(
             "DELETE FROM links WHERE from_page_id = ?1 AND to_page_id = ?2",
-            rusqlite::params![from_id, to_id],
+            rusqlite::params![from_page.page_id, to_page.page_id],
         )?
     };
 
     if rows == 0 {
-        bail!("no matching link found between {from} and {to}");
+        bail!(
+            "no matching link found between {} and {}",
+            from_page.resolved.canonical_slug(),
+            to_page.resolved.canonical_slug()
+        );
     }
 
-    println!("Removed {rows} link(s) {from} → {to}");
+    println!(
+        "Removed {rows} link(s) {} → {}",
+        from_page.resolved.canonical_slug(),
+        to_page.resolved.canonical_slug()
+    );
     Ok(())
 }
 
@@ -218,20 +282,22 @@ pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String
 
 /// List backlinks (inbound links) for a page.
 pub fn backlinks(db: &Connection, slug: &str, _temporal: Option<String>, json: bool) -> Result<()> {
-    let (_, to_id) = resolve_page_id(db, slug, OpKind::Read)?;
+    let resolved = resolve_page(db, slug, OpKind::Read)?;
 
     let mut stmt = db.prepare(
-        "SELECT l.id, p.slug, l.relationship, l.valid_from, l.valid_until \
-         FROM links l JOIN pages p ON l.from_page_id = p.id \
+        "SELECT l.id, c.name || '::' || p.slug, l.relationship, l.valid_from, l.valid_until \
+         FROM links l \
+         JOIN pages p ON l.from_page_id = p.id \
+         JOIN collections c ON c.id = p.collection_id \
          WHERE l.to_page_id = ?1 \
          ORDER BY l.created_at DESC",
     )?;
 
-    let rows: Vec<LinkRow> = stmt
-        .query_map([to_id], |row| {
-            Ok(LinkRow {
+    let rows: Vec<BacklinkRow> = stmt
+        .query_map([resolved.page_id], |row| {
+            Ok(BacklinkRow {
                 id: row.get(0)?,
-                to_slug: row.get(1)?,
+                from_slug: row.get(1)?,
                 relationship: row.get(2)?,
                 valid_from: row.get(3)?,
                 valid_until: row.get(4)?,
@@ -244,13 +310,13 @@ pub fn backlinks(db: &Connection, slug: &str, _temporal: Option<String>, json: b
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         if rows.is_empty() {
-            println!("No backlinks for {slug}");
+            println!("No backlinks for {}", resolved.resolved.canonical_slug());
         }
         for r in &rows {
             let validity = format_validity(&r.valid_from, &r.valid_until);
             println!(
                 "[{}] ← {} ({}){}",
-                r.id, r.to_slug, r.relationship, validity
+                r.id, r.from_slug, r.relationship, validity
             );
         }
     }
@@ -274,12 +340,14 @@ fn format_validity(from: &Option<String>, until: &Option<String>) -> String {
 #[allow(dead_code)]
 pub fn get_link(db: &Connection, link_id: i64) -> Result<Link> {
     let link = db.query_row(
-        "SELECT l.id, pf.slug, pt.slug, l.relationship, l.context, \
+        "SELECT l.id, cf.name || '::' || pf.slug, ct.name || '::' || pt.slug, l.relationship, l.context, \
                 l.valid_from, l.valid_until, l.created_at \
-         FROM links l \
-         JOIN pages pf ON l.from_page_id = pf.id \
-         JOIN pages pt ON l.to_page_id = pt.id \
-         WHERE l.id = ?1",
+          FROM links l \
+          JOIN pages pf ON l.from_page_id = pf.id \
+          JOIN collections cf ON cf.id = pf.collection_id \
+          JOIN pages pt ON l.to_page_id = pt.id \
+          JOIN collections ct ON ct.id = pt.collection_id \
+          WHERE l.id = ?1",
         [link_id],
         |row| {
             Ok(Link {
@@ -344,8 +412,8 @@ mod tests {
         assert_eq!(count, 1);
 
         let link = get_link(&conn, 1).unwrap();
-        assert_eq!(link.from_slug, "people/alice");
-        assert_eq!(link.to_slug, "companies/acme");
+        assert_eq!(link.from_slug, "default::people/alice");
+        assert_eq!(link.to_slug, "default::companies/acme");
         assert_eq!(link.relationship, "works_at");
         assert_eq!(link.valid_from.as_deref(), Some("2024-01"));
         assert!(link.valid_until.is_none());

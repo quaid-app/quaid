@@ -5,6 +5,7 @@ use anyhow::{bail, Result};
 use rusqlite::Connection;
 
 use crate::core::graph::{self, GraphError, TemporalFilter};
+use crate::core::vault_sync;
 
 /// Run the `gbrain graph` command, writing output to stdout.
 pub fn run(db: &Connection, slug: &str, depth: u32, temporal: &str, json: bool) -> Result<()> {
@@ -27,7 +28,30 @@ pub fn run_to<W: Write>(
         _ => TemporalFilter::Active,
     };
 
-    let result = match graph::neighborhood_graph(slug, depth, filter, db) {
+    let resolved = vault_sync::resolve_page_for_read(db, slug)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let page_id: i64 = db
+        .query_row(
+            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+            rusqlite::params![resolved.collection_id, &resolved.slug],
+            |row| row.get(0),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => {
+                anyhow::anyhow!("page not found: {}", resolved.canonical_slug())
+            }
+            other => anyhow::anyhow!(other),
+        })?;
+
+    let root_slug = resolved.canonical_slug();
+    let result = match graph::neighborhood_graph_for_page(
+        page_id,
+        &resolved.collection_name,
+        &resolved.slug,
+        depth,
+        filter,
+        db,
+    ) {
         Ok(r) => r,
         Err(GraphError::PageNotFound { slug }) => {
             bail!("page not found: {slug}");
@@ -40,7 +64,7 @@ pub fn run_to<W: Write>(
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&result)?)?;
     } else {
-        render_text_graph(out, slug, &result)?;
+        render_text_graph(out, &root_slug, &result)?;
     }
 
     Ok(())

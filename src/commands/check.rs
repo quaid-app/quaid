@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use rusqlite::Connection;
 
-use crate::commands::get::get_page;
+use crate::commands::get::get_page_by_key;
 use crate::core::assertions::{self, Contradiction};
 use crate::core::collections::OpKind;
 use crate::core::vault_sync;
@@ -10,6 +10,11 @@ use crate::core::vault_sync;
 pub struct CheckReport {
     contradictions: Vec<Contradiction>,
     processed_pages: usize,
+}
+
+struct CheckTarget {
+    resolved: vault_sync::ResolvedSlug,
+    page_id: i64,
 }
 
 pub fn run(
@@ -34,91 +39,132 @@ pub fn execute_check(
     all: bool,
     check_type: Option<&str>,
 ) -> Result<CheckReport> {
-    if let Some(page_slug) = slug {
-        let resolved = vault_sync::resolve_slug_for_op(db, page_slug, OpKind::WriteUpdate)
+    let selected_target = if let Some(page_slug) = slug {
+        let target = resolve_target(db, page_slug)?;
+        vault_sync::ensure_collection_write_allowed(db, target.resolved.collection_id)
             .map_err(|err| anyhow!(err.to_string()))?;
-        vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
-            .map_err(|err| anyhow!(err.to_string()))?;
+        Some(target)
     } else if all {
         vault_sync::ensure_all_collections_write_allowed(db)
             .map_err(|err| anyhow!(err.to_string()))?;
-    }
-    let slugs = resolve_targets(db, slug, all)?;
+        None
+    } else {
+        None
+    };
+    let targets = resolve_targets(db, selected_target, all)?;
 
-    for page_slug in &slugs {
-        let page = get_page(db, page_slug)?;
+    for target in &targets {
+        let page = get_page_by_key(db, target.resolved.collection_id, &target.resolved.slug)?;
         assertions::extract_assertions(&page, db)?;
-        assertions::check_assertions(page_slug, db)?;
+        assertions::check_assertions_for_page_id(target.page_id, db)?;
     }
 
-    let contradictions = fetch_unresolved_contradictions(db, slug, all, check_type)?;
+    let contradictions = fetch_unresolved_contradictions(
+        db,
+        targets.first().map(|target| target.page_id),
+        all,
+        check_type,
+    )?;
 
     Ok(CheckReport {
         contradictions,
-        processed_pages: slugs.len(),
+        processed_pages: targets.len(),
     })
 }
 
-fn resolve_targets(db: &Connection, slug: Option<&str>, all: bool) -> Result<Vec<String>> {
+fn resolve_target(db: &Connection, slug: &str) -> Result<CheckTarget> {
+    let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    let page_id = db
+        .query_row(
+            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+            rusqlite::params![resolved.collection_id, &resolved.slug],
+            |row| row.get(0),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => anyhow!("page not found: {slug}"),
+            other => anyhow!(other),
+        })?;
+    Ok(CheckTarget { resolved, page_id })
+}
+
+fn resolve_targets(
+    db: &Connection,
+    selected_target: Option<CheckTarget>,
+    all: bool,
+) -> Result<Vec<CheckTarget>> {
     if all {
-        let mut statement = db.prepare("SELECT slug FROM pages ORDER BY slug")?;
-        let slugs = statement
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<String>, _>>()?;
-        return Ok(slugs);
+        let mut statement = db.prepare(
+            "SELECT p.id, p.collection_id, c.name, p.slug
+             FROM pages p
+             JOIN collections c ON c.id = p.collection_id
+             ORDER BY c.name, p.slug",
+        )?;
+        let targets = statement
+            .query_map([], |row| {
+                Ok(CheckTarget {
+                    resolved: vault_sync::ResolvedSlug {
+                        collection_id: row.get(1)?,
+                        collection_name: row.get(2)?,
+                        slug: row.get(3)?,
+                    },
+                    page_id: row.get(0)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<CheckTarget>, _>>()?;
+        return Ok(targets);
     }
 
-    match slug {
-        Some(page_slug) => {
-            get_page(db, page_slug)?;
-            Ok(vec![page_slug.to_string()])
-        }
+    match selected_target {
+        Some(target) => Ok(vec![target]),
         None => Err(anyhow!("provide a slug or pass --all")),
     }
 }
 
 fn fetch_unresolved_contradictions(
     db: &Connection,
-    slug: Option<&str>,
+    page_id: Option<i64>,
     all: bool,
     check_type: Option<&str>,
 ) -> Result<Vec<Contradiction>> {
-    let base_sql = "SELECT p.slug,
-                           COALESCE(other.slug, p.slug),
+    let base_sql = "SELECT cp.name || '::' || p.slug,
+                           COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug),
                            c.type,
                            c.description,
                            c.detected_at
-                    FROM contradictions c
-                    JOIN pages p ON p.id = c.page_id
-                    LEFT JOIN pages other ON other.id = c.other_page_id
-                    WHERE c.resolved_at IS NULL";
+                     FROM contradictions c
+                     JOIN pages p ON p.id = c.page_id
+                     JOIN collections cp ON cp.id = p.collection_id
+                     LEFT JOIN pages other ON other.id = c.other_page_id
+                     LEFT JOIN collections co ON co.id = other.collection_id
+                     WHERE c.resolved_at IS NULL";
 
-    let contradictions = match (all, slug, check_type) {
+    let contradictions = match (all, page_id, check_type) {
         (true, _, Some(check_kind)) => query_contradictions(
             db,
-            format!("{base_sql} AND c.type = ?1 ORDER BY c.detected_at, p.slug, other.slug"),
+            format!("{base_sql} AND c.type = ?1 ORDER BY c.detected_at, cp.name, p.slug, co.name, other.slug"),
             rusqlite::params![check_kind],
         )?,
         (true, _, None) => query_contradictions(
             db,
-            format!("{base_sql} ORDER BY c.detected_at, p.slug, other.slug"),
+            format!("{base_sql} ORDER BY c.detected_at, cp.name, p.slug, co.name, other.slug"),
             [],
         )?,
-        (false, Some(page_slug), Some(check_kind)) => query_contradictions(
+        (false, Some(page_id), Some(check_kind)) => query_contradictions(
             db,
             format!(
-                "{base_sql} AND (p.slug = ?1 OR other.slug = ?1) AND c.type = ?2 \
-                 ORDER BY c.detected_at, p.slug, other.slug"
+                "{base_sql} AND (c.page_id = ?1 OR c.other_page_id = ?1) AND c.type = ?2 \
+                 ORDER BY c.detected_at, cp.name, p.slug, co.name, other.slug"
             ),
-            rusqlite::params![page_slug, check_kind],
+            rusqlite::params![page_id, check_kind],
         )?,
-        (false, Some(page_slug), None) => query_contradictions(
+        (false, Some(page_id), None) => query_contradictions(
             db,
             format!(
-                "{base_sql} AND (p.slug = ?1 OR other.slug = ?1) \
-                 ORDER BY c.detected_at, p.slug, other.slug"
+                "{base_sql} AND (c.page_id = ?1 OR c.other_page_id = ?1) \
+                 ORDER BY c.detected_at, cp.name, p.slug, co.name, other.slug"
             ),
-            [page_slug],
+            [page_id],
         )?,
         (false, None, _) => Vec::new(),
     };
@@ -255,7 +301,7 @@ mod tests {
 
         assert_eq!(report.processed_pages, 1);
         assert_eq!(report.contradictions.len(), 1);
-        assert_eq!(report.contradictions[0].page_slug, "people/alice");
+        assert_eq!(report.contradictions[0].page_slug, "default::people/alice");
     }
 
     #[test]
@@ -278,7 +324,7 @@ mod tests {
         assert_eq!(report.contradictions.len(), 1);
         assert_eq!(
             report.contradictions[0].other_page_slug,
-            "sources/alice-profile"
+            "default::sources/alice-profile"
         );
     }
 
@@ -301,8 +347,11 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert!(value.is_array());
-        assert_eq!(value[0]["page_slug"], "people/alice");
-        assert_eq!(value[0]["other_page_slug"], "sources/alice-profile");
+        assert_eq!(value[0]["page_slug"], "default::people/alice");
+        assert_eq!(
+            value[0]["other_page_slug"],
+            "default::sources/alice-profile"
+        );
         assert_eq!(value[0]["type"], "assertion_conflict");
     }
 
@@ -332,7 +381,7 @@ mod tests {
 
         let output = render_output(&report, false).unwrap();
 
-        assert!(output.contains("[people/alice] ↔ [sources/alice-profile]"));
+        assert!(output.contains("[default::people/alice] ↔ [default::sources/alice-profile]"));
         assert!(output.contains("1 contradiction(s) found across 2 pages."));
     }
 

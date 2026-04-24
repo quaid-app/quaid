@@ -14,15 +14,15 @@ struct TimelineOutput {
 /// Show timeline entries for a page from the `timeline_entries` table,
 /// with legacy fallback to the page's `timeline` markdown field.
 pub fn run(db: &Connection, slug: &str, limit: u32, json: bool) -> Result<()> {
-    // Verify page exists
-    let page = crate::commands::get::get_page(db, slug)?;
     let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::Read)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let canonical_slug = resolved.canonical_slug();
+    let page = crate::commands::get::get_page_by_key(db, resolved.collection_id, &resolved.slug)?;
 
     let page_id: i64 = db
         .query_row(
             "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-            rusqlite::params![resolved.collection_id, resolved.slug],
+            rusqlite::params![resolved.collection_id, &resolved.slug],
             |row| row.get(0),
         )
         .map_err(|e| match e {
@@ -69,19 +69,19 @@ pub fn run(db: &Connection, slug: &str, limit: u32, json: bool) -> Result<()> {
     if entries.is_empty() {
         if json {
             let output = TimelineOutput {
-                slug: slug.to_string(),
+                slug: canonical_slug,
                 entries: Vec::new(),
             };
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
-            println!("No timeline entries for {slug}");
+            println!("No timeline entries for {canonical_slug}");
         }
         return Ok(());
     }
 
     if json {
         let output = TimelineOutput {
-            slug: slug.to_string(),
+            slug: canonical_slug,
             entries,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -105,12 +105,13 @@ pub fn add(
 ) -> Result<()> {
     let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let canonical_slug = resolved.canonical_slug();
     vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let page_id: i64 = db
         .query_row(
             "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-            rusqlite::params![resolved.collection_id, resolved.slug],
+            rusqlite::params![resolved.collection_id, &resolved.slug],
             |row| row.get(0),
         )
         .map_err(|e| match e {
@@ -137,7 +138,7 @@ pub fn add(
         ],
     )?;
 
-    println!("Added timeline entry for {slug}");
+    println!("Added timeline entry for {canonical_slug}");
     Ok(())
 }
 

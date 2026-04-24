@@ -61,7 +61,7 @@ struct AssertionRow {
 
 /// Replace heuristic assertions for a page and return the number of inserted triples.
 pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, AssertionError> {
-    let page_id = resolve_page_id(conn, &page.slug)?;
+    let page_id = resolve_page_id_for_page(conn, page)?;
     let subject = assertion_subject(page);
     let mut extracted = extract_from_frontmatter(subject, &page.frontmatter);
     let mut seen: HashSet<Triple> = extracted
@@ -194,6 +194,18 @@ fn resolve_page_id(conn: &Connection, slug: &str) -> Result<i64, AssertionError>
         },
         other => AssertionError::Sqlite(other),
     })
+}
+
+fn resolve_page_id_for_page(conn: &Connection, page: &Page) -> Result<i64, AssertionError> {
+    match conn.query_row(
+        "SELECT id FROM pages WHERE uuid = ?1",
+        [&page.uuid],
+        |row| row.get(0),
+    ) {
+        Ok(page_id) => Ok(page_id),
+        Err(rusqlite::Error::QueryReturnedNoRows) => resolve_page_id(conn, &page.slug),
+        Err(other) => Err(AssertionError::Sqlite(other)),
+    }
 }
 
 fn load_subjects_for_page(conn: &Connection, page_id: i64) -> Result<Vec<String>, AssertionError> {
@@ -711,6 +723,53 @@ mod tests {
                     ),
                 ]
             );
+        }
+
+        #[test]
+        fn duplicate_bare_slugs_across_collections_use_page_uuid_for_import_assertions() {
+            let conn = open_test_db();
+            conn.execute(
+                "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+                 VALUES ('memory', 'C:\\vaults\\memory', 'active', 1, 0)",
+                [],
+            )
+            .unwrap();
+            let memory_id = conn.last_insert_rowid();
+
+            conn.execute(
+                "INSERT INTO pages (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+                 VALUES (1, 'people/alice', '11111111-1111-7111-8111-111111111111', 'person', 'Default Alice', '', '## Assertions\nAlice works at Acme Corp.\n', '', '{}', 'people', '', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO pages (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+                 VALUES (?1, 'people/alice', '22222222-2222-7222-8222-222222222222', 'person', 'Memory Alice', '', '## Assertions\nAlice works at Beta Corp.\n', '', '{}', 'people', '', 1)",
+                [memory_id],
+            )
+            .unwrap();
+            let memory_page_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM pages WHERE collection_id = ?1 AND slug = 'people/alice'",
+                    [memory_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+
+            let page =
+                crate::commands::get::get_page_by_key(&conn, memory_id, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+            let rows: Vec<(i64, String)> = conn
+                .prepare("SELECT page_id, object FROM assertions ORDER BY object")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(inserted, 1);
+            assert_eq!(rows, vec![(memory_page_id, "Beta Corp".to_string())]);
         }
 
         #[test]

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::core::fts::{sanitize_fts_query, search_fts};
+use crate::core::fts::{sanitize_fts_query, search_fts_canonical};
 
 pub fn run(
     db: &Connection,
@@ -16,7 +16,7 @@ pub fn run(
     } else {
         sanitize_fts_query(query)
     };
-    let results = search_fts(&effective_query, wing.as_deref(), db, limit as usize);
+    let results = search_fts_canonical(&effective_query, wing.as_deref(), db, limit as usize);
 
     let results = match results {
         Ok(r) => r,

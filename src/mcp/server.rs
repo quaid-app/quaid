@@ -304,6 +304,13 @@ fn map_db_error(e: rusqlite::Error) -> rmcp::Error {
 fn map_search_error(e: SearchError) -> rmcp::Error {
     match e {
         SearchError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
+        SearchError::Ambiguous { slug, candidates } => ambiguous_slug_error(
+            &slug,
+            candidates
+                .split(", ")
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        ),
         SearchError::Internal { message } => {
             rmcp::Error::new(ErrorCode(-32003), format!("search error: {message}"), None)
         }

@@ -1,9 +1,11 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::commands::get::get_page;
+use crate::commands::get::{get_page, get_page_by_key};
 use crate::core::chunking::chunk_page;
+use crate::core::collections::OpKind;
 use crate::core::inference::{embed, embedding_to_blob};
+use crate::core::vault_sync;
 
 pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Result<()> {
     // Modes are mutually exclusive: exactly one of <SLUG>, --all, or --stale.
@@ -22,75 +24,75 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
         "unsafe vec table name: {vec_table}"
     );
 
-    let single_slug = slug.is_some();
-
-    let slugs = match slug {
-        Some(ref s) => {
-            // Verify the page exists before embedding
-            let _page = get_page(db, s)?;
-            vec![s.clone()]
-        }
-        None => page_slugs(db)?,
-    };
-
-    let mut embedded_pages = 0_usize;
-    let mut embedded_chunks = 0_usize;
-
-    for s in &slugs {
-        let page = match get_page(db, s) {
-            Ok(p) => p,
-            Err(e) => {
-                if single_slug {
-                    return Err(e);
-                }
-                eprintln!(
-                    "{}",
-                    format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e)
-                );
-                continue;
-            }
-        };
-        let pid = match page_id(db, s) {
-            Ok(id) => id,
-            Err(e) => {
-                if single_slug {
-                    return Err(e);
-                }
-                eprintln!(
-                    "{}",
-                    format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e)
-                );
-                continue;
-            }
-        };
+    let (embedded_pages, embedded_chunks) = if let Some(slug) = slug.as_deref() {
+        let (page, page_id) = resolve_single_page(db, slug)?;
         let chunks = chunk_page(&page);
 
         if chunks.is_empty() {
-            continue;
+            (0, 0)
+        } else {
+            replace_page_embeddings(db, page_id, &model_name, &vec_table, &chunks)?;
+            (1, chunks.len())
         }
+    } else {
+        let mut embedded_pages = 0_usize;
+        let mut embedded_chunks = 0_usize;
 
-        // Explicit slug: always re-embed (no stale check).
-        // --all / --stale: skip pages whose content_hash is unchanged.
-        if !single_slug && !page_needs_refresh(db, pid, &model_name, &chunks)? {
-            continue;
-        }
+        for slug in page_slugs(db)? {
+            let page = match get_page(db, &slug) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        format_embed_warning(&slug, lookup_source_path(db, &slug).as_deref(), &e)
+                    );
+                    continue;
+                }
+            };
+            let page_id = match page_id(db, &slug) {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        format_embed_warning(&slug, lookup_source_path(db, &slug).as_deref(), &e)
+                    );
+                    continue;
+                }
+            };
+            let chunks = chunk_page(&page);
 
-        if let Err(e) = replace_page_embeddings(db, pid, &model_name, &vec_table, &chunks) {
-            if single_slug {
-                return Err(e);
+            if chunks.is_empty() {
+                continue;
             }
-            eprintln!(
-                "{}",
-                format_embed_warning(s, lookup_source_path(db, s).as_deref(), &e)
-            );
-            continue;
+
+            if !page_needs_refresh(db, page_id, &model_name, &chunks)? {
+                continue;
+            }
+
+            if let Err(e) = replace_page_embeddings(db, page_id, &model_name, &vec_table, &chunks) {
+                eprintln!(
+                    "{}",
+                    format_embed_warning(&slug, lookup_source_path(db, &slug).as_deref(), &e)
+                );
+                continue;
+            }
+            embedded_pages += 1;
+            embedded_chunks += chunks.len();
         }
-        embedded_pages += 1;
-        embedded_chunks += chunks.len();
-    }
+
+        (embedded_pages, embedded_chunks)
+    };
 
     println!("Embedded {embedded_chunks} chunks across {embedded_pages} page(s).");
     Ok(())
+}
+
+fn resolve_single_page(db: &Connection, slug: &str) -> Result<(crate::core::types::Page, i64)> {
+    let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::Read)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let page = get_page_by_key(db, resolved.collection_id, &resolved.slug)?;
+    let page_id = page_id_by_key(db, resolved.collection_id, &resolved.slug)?;
+    Ok((page, page_id))
 }
 
 fn active_model(db: &Connection) -> Result<(String, String)> {
@@ -118,6 +120,18 @@ fn page_id(db: &Connection, slug: &str) -> Result<i64> {
         row.get(0)
     })
     .map_err(Into::into)
+}
+
+fn page_id_by_key(db: &Connection, collection_id: i64, slug: &str) -> Result<i64> {
+    db.query_row(
+        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+        rusqlite::params![collection_id, slug],
+        |row| row.get(0),
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
+        other => other.into(),
+    })
 }
 
 fn page_needs_refresh(
@@ -306,6 +320,37 @@ mod tests {
         .expect("insert page");
     }
 
+    fn insert_collection(conn: &Connection, name: &str, root_path: &std::path::Path) -> i64 {
+        conn.execute(
+            "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+             VALUES (?1, ?2, 'active', 1, 0)",
+            rusqlite::params![name, root_path.display().to_string()],
+        )
+        .expect("insert collection");
+        conn.last_insert_rowid()
+    }
+
+    fn insert_test_page_in_collection(
+        conn: &Connection,
+        collection_id: i64,
+        slug: &str,
+        compiled_truth: &str,
+        timeline: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO pages (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, ?3, 'person', 'Alice', 'Founder', ?4, ?5, '{}', 'people', '', 1)",
+            rusqlite::params![
+                collection_id,
+                slug,
+                test_uuid(&format!("{collection_id}:{slug}")),
+                compiled_truth,
+                timeline
+            ],
+        )
+        .expect("insert page");
+    }
+
     #[test]
     fn run_embeds_chunks_for_all_pages() {
         let conn = open_test_db();
@@ -457,6 +502,57 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
             .expect("count");
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn run_embeds_single_page_by_explicit_collection_slug() {
+        let conn = open_test_db();
+        let roots = tempfile::TempDir::new().expect("create roots dir");
+        let work_root = roots.path().join("work");
+        let memory_root = roots.path().join("memory");
+        std::fs::create_dir_all(&work_root).expect("create work root");
+        std::fs::create_dir_all(&memory_root).expect("create memory root");
+        let work_id = insert_collection(&conn, "work", &work_root);
+        let memory_id = insert_collection(&conn, "memory", &memory_root);
+        insert_test_page_in_collection(
+            &conn,
+            work_id,
+            "people/alice",
+            "## State\nWork Alice is investing.",
+            "",
+        );
+        insert_test_page_in_collection(
+            &conn,
+            memory_id,
+            "people/alice",
+            "## State\nMemory Alice is reflecting.",
+            "",
+        );
+
+        run(&conn, Some("work::people/alice".to_owned()), false, false)
+            .expect("embed explicit collection slug");
+
+        let work_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings pe
+                 JOIN pages p ON p.id = pe.page_id
+                 WHERE p.collection_id = ?1 AND p.slug = 'people/alice'",
+                [work_id],
+                |row| row.get(0),
+            )
+            .expect("work embedding count");
+        let memory_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings pe
+                 JOIN pages p ON p.id = pe.page_id
+                 WHERE p.collection_id = ?1 AND p.slug = 'people/alice'",
+                [memory_id],
+                |row| row.get(0),
+            )
+            .expect("memory embedding count");
+
+        assert_eq!(work_count, 1);
+        assert_eq!(memory_count, 0);
     }
 
     /// Batch embed (`--all`) must return Ok even when individual pages fail

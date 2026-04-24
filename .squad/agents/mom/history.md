@@ -78,3 +78,14 @@
 **Architecture note:**
 - `chunk_page()` in current code cannot produce empty-content chunks (all code paths guard against it), so the "input text is empty" error the user saw was likely a transient or historical condition. The fix is still correct and valuable as a defensive guardrail.
 - Naming convention for ImportStats fields: each skip reason gets its own named field — never fold multiple reasons into a catch-all counter.
+
+### 2026-04-24 Vault Sync 13.3 Third Revision
+
+**What happened:**
+- Closed the remaining `embed` explicit-routing hole without widening beyond `13.3`: single-page embed now resolves `<collection>::<slug>` first and binds the embedding write by `(collection_id, slug)` instead of falling back to a bare `pages.slug = ?` lookup.
+- Added direct subprocess proofs for the two missing CLI surfaces Scruffy flagged: `query work::notes/meeting` now succeeds even when bare `notes/meeting` is ambiguous, and `unlink work::notes/a memory::notes/b --relationship relates` removes only the explicitly addressed edge.
+- Added a focused embed regression test covering duplicate slugs across collections so explicit embed cannot silently drift back to bare-slug page-id binding.
+- Validation: targeted embed/query/unlink tests passed, then full `cargo test --locked` passed.
+
+**Lesson:**
+- For CLI slug parity, resolving the page and then doing any later raw `WHERE slug = ?` lookup is not a harmless shortcut — it reopens the duplicate-slug bug through a second, quieter path. The safe pattern is resolve once, then carry `(collection_id, slug)` all the way through every downstream lookup and proof.

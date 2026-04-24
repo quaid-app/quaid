@@ -184,3 +184,8 @@ This dual-release cycle validated the full team workflow:
 - **Session log written:** `2026-04-24T12-55-00Z-m1b-session.md`.
 - **Status:** Awaiting final Professor + Nibbler gate approval for both M1b-i and M1b-ii.
 
+## Learnings
+
+- **Exact-slug shortcuts must fail closed before generic search fallback.** If a hybrid-query path recognizes a bare slug or `[[slug]]`, ambiguity is a routing failure, not a "no results" case. Returning `None` from the exact-slug fast path silently lies about the seam and hides duplicate-slug defects.
+- **For CLI parity claims, prove every slug-bearing entry point directly.** One `get` ambiguity test is not evidence for `graph`, `timeline`, `check`, `link`, `links`, `backlinks`, `unlink`, or exact-slug `query`. Build the command matrix first, then add one direct refusal assertion per command family so the task text stays truthful.
+

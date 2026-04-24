@@ -216,6 +216,70 @@ on 5 consolidated blockers. Mom assigned as second revision author.
 
 ---
 
+### 2026-04-25 Vault Sync CI Fix — 6 Failing Tests (spec/vault-sync-engine lane)
+
+**Context:** 6 tests were failing in CI run 24892249558 at HEAD `7804234`. Off-limits files:
+`src/commands/put.rs`, `src/core/reconciler.rs`, `src/core/fs_safety.rs`,
+`tests/concurrency_stress.rs`, `src/mcp/server.rs`. Four distinct root causes required
+surgical fixes in `src/core/vault_sync.rs` and `src/core/raw_imports.rs`.
+
+**What happened:**
+
+1. **Global registry state leak** (`run_rcrt_pass_*` family, `start_serve_runtime_*`):
+   `run_rcrt_pass_clears_needs_full_sync_after_tx_b` registers `supervisor_handles[2] = "serve-1"`.
+   Subsequent tests calling `run_rcrt_pass(&conn, "serve-1")` short-circuit at
+   `has_supervisor_handle(collection_id, session_id)` with `"work:supervised"` — never
+   executing the body. Fix: added `init_process_registries().unwrap()` to 4 test bodies
+   (`run_rcrt_pass_preserves_pending_root_path_when_manifest_is_incomplete`,
+   `run_rcrt_pass_skips_reconcile_halted_collections`,
+   `start_serve_runtime_recovers_owned_sentinel_dirty_collection_and_unlinks_all_sentinels`,
+   and the poison-source test itself).
+
+2. **Frontmatter mismatch in uuid_migration_preflight** (`start_serve_runtime_recovers_*`,
+   `writer_side_foreign_rename_*`, `restore_safety_pipeline_aborts_on_fresh_connection_*`):
+   `insert_page_with_raw_import` hardcoded `frontmatter = '{}'`. Raw bytes contained YAML
+   with `gbrain_id`. `uuid_migration_preflight` found non-matching uuid+frontmatter+trivial-body
+   (`< MIN_CANONICAL_BODY_BYTES = 64`) and returned `UuidMigrationRequiredError`, blocking
+   `complete_attach`. Fix: `insert_page_with_raw_import` now parses frontmatter from
+   `raw_bytes` via `markdown::parse_frontmatter` and stores correct JSON in `pages.frontmatter`.
+
+3. **`rotate_active_raw_import` doesn't sync frontmatter** (`restore_safety_pipeline_aborts_*`):
+   The off-limits reconciler test calls `seed_page_with_identity` (empty frontmatter) then
+   `rotate_active_raw_import` with YAML containing `gbrain_id`. But `rotate_active_raw_import`
+   did not update `pages.frontmatter`. Fix: after inserting the raw_import row, parse the
+   UTF-8 frontmatter and UPDATE pages.frontmatter to match.
+
+4. **OCC conflict error format missing "Conflict:" prefix** (`brain_put_returns_occ_conflict_*`):
+   Old format: `"ConflictError: ... reason=StaleExpectedVersion ... current_version=N"`.
+   `server.rs` handler gates on `message.contains("Conflict:")` — old format has no colon.
+   Another agent (put.rs change) expects `"current version: 2"` (space + colon).
+   Fix: new format: `"Conflict: ConflictError StaleExpectedVersion ... current version: N"` —
+   satisfies all four checks: "Conflict:", "Conflict", "ConflictError", "StaleExpectedVersion",
+   "current version: 2".
+
+**Outcome:** 591 tests pass. 2 pre-existing Windows-only failures confirmed unrelated
+(`init_rejects_nonexistent_parent_directory`, `open_rejects_nonexistent_parent_dir` —
+SQLite on Windows resolves `/nonexistent/dir/brain.db` as a valid drive-rooted path).
+Pushed as commit `56e44ce` on `spec/vault-sync-engine`.
+
+**Decision record:** `.squad/decisions/inbox/mom-vault-sync-lane.md`
+
+**Lessons:**
+- `init_process_registries()` clears ALL registries — safe to call as first line of any test
+  that exercises code paths using global handles. Make it a standard first-line in affected tests.
+- `uuid_migration_preflight` blocks on trivial-body pages where `frontmatter.gbrain_id ≠ page.uuid`.
+  Any test helper that inserts pages with uuid AND raw bytes containing `gbrain_id` must
+  ensure `pages.frontmatter` is populated from the raw bytes, not left as `'{}'`.
+- Error string contracts are bidirectional: both the format producer (vault_sync.rs) and all
+  format consumers (server.rs handler, put.rs tests, mcp/server.rs tests) must agree. When
+  multiple consumers exist with different substring expectations, enumerate all expectations
+  before choosing the format.
+- On Windows, unix-style paths like `/nonexistent/dir/brain.db` are NOT invalid — SQLite
+  opens them relative to the drive root. Tests asserting on path-nonexistence must be
+  platform-conditioned (`#[cfg(unix)]`) or use a truly nonexistent platform-native path.
+
+---
+
 ### 2026-04-25 Restore Artifact Reconciliation (mixed-author cleanup)
 
 **Context:** Fry's restore artifact was rejected and Fry locked out. My prior commit

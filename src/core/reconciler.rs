@@ -381,7 +381,8 @@ pub fn full_hash_reconcile_authorized(
         let walked = walk_collection(conn, &root_fd, &collection)?;
         detect_duplicate_uuids_in_tree(root_path, &walked.files)?;
         let plan = build_full_hash_plan(conn, collection.id, root_path, &walked.files)?;
-        let rename_resolution = resolve_rename_resolution(conn, collection.id, root_path, &plan.diff, &[])?;
+        let rename_resolution =
+            resolve_rename_resolution(conn, collection.id, root_path, &plan.diff, &[])?;
 
         assert_full_hash_raw_import_invariants(conn, collection.id)?;
         apply_full_hash_metadata_self_heal(conn, collection.id, &plan.unchanged)?;
@@ -4164,7 +4165,8 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let resolution = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
+        let resolution =
+            resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
         assert_eq!(
             resolution.matches,
             vec![RenameMatch {
@@ -4203,7 +4205,8 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let resolution = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
+        let resolution =
+            resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
 
         assert_eq!(resolution.hash_renamed, 1);
         assert_eq!(
@@ -4245,7 +4248,8 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let resolution = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
+        let resolution =
+            resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
 
         assert_eq!(resolution.hash_renamed, 0);
         assert_eq!(resolution.quarantined_ambiguous, 1);
@@ -4309,7 +4313,8 @@ mod tests {
         );
 
         let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-        let error = resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap_err();
+        let error =
+            resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap_err();
 
         assert!(matches!(
             error,

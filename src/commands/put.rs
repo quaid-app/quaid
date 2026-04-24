@@ -16,6 +16,8 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use uuid::Uuid;
 
+#[cfg(unix)]
+use crate::core::fs_safety;
 use crate::core::{file_state, markdown, page_uuid, palace, raw_imports, vault_sync};
 
 #[derive(Debug, Clone)]

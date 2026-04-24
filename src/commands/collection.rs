@@ -13,6 +13,7 @@ use crate::core::collections;
 #[cfg(unix)]
 use crate::core::fs_safety;
 use crate::core::ignore_patterns::{self, ParseResult};
+use crate::core::quarantine;
 use crate::core::vault_sync;
 
 #[derive(Subcommand, Debug)]
@@ -27,6 +28,11 @@ pub enum CollectionAction {
     Ignore {
         #[command(subcommand)]
         action: CollectionIgnoreAction,
+    },
+    /// Manage quarantined pages
+    Quarantine {
+        #[command(subcommand)]
+        action: CollectionQuarantineAction,
     },
     /// Reconcile a collection or adopt a new root
     Sync(CollectionSyncArgs),
@@ -97,6 +103,22 @@ pub enum CollectionIgnoreAction {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum CollectionQuarantineAction {
+    /// List quarantined pages for a collection
+    List { name: String },
+    /// Export a quarantined page's preserved state as JSON
+    Export { slug: String, output: PathBuf },
+    /// Discard a quarantined page
+    Discard {
+        slug: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Deferred in this batch; currently refuses immediately
+    Restore { slug: String, relative_path: String },
+}
+
 #[derive(Debug, Serialize)]
 struct CollectionInfoOutput {
     name: String,
@@ -109,6 +131,7 @@ struct CollectionInfoOutput {
     last_sync_at: Option<String>,
     page_count: i64,
     queue_depth: i64,
+    quarantined_pages_awaiting_action: i64,
     ignore_parse_errors: Option<String>,
     pending_root_path: Option<String>,
     restore_command_id: Option<String>,
@@ -152,6 +175,7 @@ struct CollectionStatusSummary {
 struct CollectionMetrics {
     page_count: i64,
     queue_depth: i64,
+    quarantined_pages_awaiting_action: i64,
 }
 
 pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> {
@@ -163,6 +187,7 @@ pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> 
         CollectionAction::List => list(db, json),
         CollectionAction::Info { name } => info(db, &name, json),
         CollectionAction::Ignore { action } => ignore(db, action, json),
+        CollectionAction::Quarantine { action } => quarantine_action(db, action, json),
         CollectionAction::Sync(args) => {
             ensure_unix_collection_command("gbrain collection sync")?;
             sync(db, args, json)
@@ -366,6 +391,7 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
         last_sync_at: collection.last_sync_at,
         page_count: metrics.page_count,
         queue_depth: metrics.queue_depth,
+        quarantined_pages_awaiting_action: metrics.quarantined_pages_awaiting_action,
         ignore_parse_errors: collection.ignore_parse_errors,
         pending_root_path: collection.pending_root_path,
         restore_command_id: collection.restore_command_id,
@@ -392,9 +418,10 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
             output.name, output.state, output.writable_mode, output.write_target, output.root_path
         );
         println!(
-            "page_count={} queue_depth={} needs_full_sync={} last_sync_at={}",
+            "page_count={} queue_depth={} quarantined_pages_awaiting_action={} needs_full_sync={} last_sync_at={}",
             output.page_count,
             output.queue_depth,
+            output.quarantined_pages_awaiting_action,
             output.needs_full_sync,
             output.last_sync_at.as_deref().unwrap_or("null")
         );
@@ -434,6 +461,28 @@ fn ignore(db: &Connection, action: CollectionIgnoreAction, json: bool) -> Result
             }
             ignore_clear(db, &name, json)
         }
+    }
+}
+
+fn quarantine_action(
+    db: &Connection,
+    action: CollectionQuarantineAction,
+    json: bool,
+) -> Result<()> {
+    match action {
+        CollectionQuarantineAction::List { name } => quarantine_list(db, &name, json),
+        CollectionQuarantineAction::Export { slug, output } => {
+            quarantine_export(db, &slug, &output, json)
+        }
+        CollectionQuarantineAction::Discard { slug, force } => {
+            quarantine_discard(db, &slug, force, json)
+        }
+        CollectionQuarantineAction::Restore {
+            slug: _,
+            relative_path: _,
+        } => bail!(
+            "quarantine restore is deferred in this batch until crash-durable cleanup and no-replace install land; use quarantine list/export/discard for now"
+        ),
     }
 }
 
@@ -727,6 +776,54 @@ fn ignore_clear(db: &Connection, name: &str, json: bool) -> Result<()> {
     )
 }
 
+fn quarantine_list(db: &Connection, name: &str, json: bool) -> Result<()> {
+    let pages =
+        quarantine::list_collection_quarantine(db, name).map_err(|err| anyhow!(err.to_string()))?;
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "quarantine-list",
+            "collection": name,
+            "pages": pages
+        }),
+    )
+}
+
+fn quarantine_export(db: &Connection, slug: &str, output: &Path, json: bool) -> Result<()> {
+    let receipt = quarantine::export_quarantined_page(db, slug, output)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "quarantine-export",
+            "collection": receipt.collection,
+            "slug": receipt.slug,
+            "quarantined_at": receipt.quarantined_at,
+            "exported_at": receipt.exported_at,
+            "output_path": receipt.output_path
+        }),
+    )
+}
+
+fn quarantine_discard(db: &Connection, slug: &str, force: bool, json: bool) -> Result<()> {
+    let receipt = quarantine::discard_quarantined_page(db, slug, force)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "quarantine-discard",
+            "collection": receipt.collection,
+            "slug": receipt.slug,
+            "quarantined_at": receipt.quarantined_at,
+            "force": receipt.forced,
+            "exported_before_discard": receipt.exported_before_discard
+        }),
+    )
+}
+
 fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionMetrics> {
     db.query_row(
         "SELECT COALESCE((
@@ -734,6 +831,11 @@ fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionM
                  FROM pages
                  WHERE collection_id = ?1 AND quarantined_at IS NULL
              ), 0),
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM pages
+                    WHERE collection_id = ?1 AND quarantined_at IS NOT NULL
+                ), 0),
                 COALESCE((
                     SELECT COUNT(*)
                     FROM embedding_jobs ej
@@ -744,7 +846,8 @@ fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionM
         |row| {
             Ok(CollectionMetrics {
                 page_count: row.get(0)?,
-                queue_depth: row.get(1)?,
+                quarantined_pages_awaiting_action: row.get(1)?,
+                queue_depth: row.get(2)?,
             })
         },
     )

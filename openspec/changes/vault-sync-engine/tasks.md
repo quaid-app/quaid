@@ -143,7 +143,8 @@
 - [x] 7.2 Dedup entry inserted at step 8 of the rename-before-commit sequence (AFTER tempfile+fsync, BEFORE `renameat`).
 - [x] 7.3 Watcher consults dedup set before emitting: if path + hash match an entry younger than 5s, drop the event.
 - [x] 7.4 Background sweeper removes expired entries every 10s.
-- [ ] 7.5 Failure handlers remove the entry: rename failure unlinks tempfile + sentinel + removes dedup; post-rename failures remove dedup so reconciler can observe the new bytes.
+- [x] 7.5 Failure handlers remove the entry: rename failure unlinks tempfile + sentinel + removes dedup; post-rename failures remove dedup so reconciler can observe the new bytes.
+  > **Closed (narrow dedup-cleanup seam):** the writer failure paths now share one explicit cleanup helper for dedup+path tracking, and Unix proofs cover pre-rename failure, rename failure, post-rename fsync failure, concurrent-rename detection, and commit failure leaving no stale dedup entry behind.
 - [x] 7.6 Unit tests: echo suppression; path-only match rejects; expired entries no longer suppress; external edit after TTL ingests normally.
 
 ## 8. Embedding queue and worker
@@ -175,9 +176,10 @@
 - [x] 9.7d **Restoring-Collection Retry Task (RCRT)** at `gbrain serve` startup and on a continuous sweep: observe owned collections with no live `supervisor_handles` entry and drive recovery. Actions: finalize pending restores (`FinalizeCaller::StartupRecovery`), orphan-recovery for dead originators, single-flight attach handoff (open new `root_fd`, run `full_hash_reconcile`, then in attach-completion tx flip `state='active'` and clear `needs_full_sync`, THEN spawn supervisor). Skip any collection where `reconcile_halted_at IS NOT NULL`.
 - [x] 9.7e `gbrain collection restore-reset <name> --confirm`: clears terminal integrity-blocked state (`integrity_failed_at`, escalated `pending_manifest_incomplete_at`, restore-command identity tuple, `pending_root_path`, `pending_restore_manifest`).
 - [x] 9.7f `gbrain collection reconcile-reset <name> --confirm`: clears `reconcile_halted_at` + `reconcile_halt_reason` after operator has manually resolved the offending vault state.
-- [ ] 9.8 `gbrain collection quarantine {list,restore,discard,export,audit}`. `discard` on a page with DB-only state requires `--force` OR a prior `export` (which dumps all five DB-only-state categories as JSON).
-- [ ] 9.9 Auto-sweep TTL: `GBRAIN_QUARANTINE_TTL_DAYS` (default 30) auto-discards ONLY pages where `has_db_only_state` is false; log each discard and DEBUG-log each skip.
-- [ ] 9.9b `gbrain collection info` surfaces count of "quarantined pages awaiting user action".
+- [ ] 9.8 `gbrain collection quarantine {list,discard,export}` default surface only. `discard` on a page with DB-only state requires `--force` OR a prior successful `export` (which dumps all five DB-only-state categories as JSON). `export` records the export timestamp only after the filesystem write succeeds, blocking premature discard relaxation. `restore`, `audit`, and restore overwrite/export-conflict policy remain deferred.
+  > **Truth repair (Bender, fifth author):** `list|export|discard`, same-epoch export tracking, TTL sweep, info count, and dedup cleanup remain landed. `quarantine restore` has been backed out of the live CLI surface for now because the current implementation is not yet truthful on two reviewer-blocking seams: post-rename cleanup is not crash-durable after unlink, and the install step can overwrite a concurrently-created target. The command now refuses immediately until a smaller no-replace, crash-durable restore batch lands.
+- [x] 9.9 Auto-sweep TTL: `GBRAIN_QUARANTINE_TTL_DAYS` (default 30) auto-discards ONLY pages where `has_db_only_state` is false; log each discard and DEBUG-log each skip.
+- [x] 9.9b `gbrain collection info` surfaces count of "quarantined pages awaiting user action".
 - [x] 9.10 `gbrain collection ignore add|remove|list|clear --confirm` per §3.
   > **Closed 9.10 (CLI ignore-only):** `gbrain collection ignore add|remove|list|clear --confirm` now wraps `.gbrainignore` with dry-run-first validation, canonical restore/needs-full-sync interlocks, explicit clear semantics, mirror refresh via `reload_patterns()` / `clear_patterns()`, and active-collection reconcile proofs. Watcher-driven reload (`17.5y`/`17.5z`) and broader MCP ignore-diagnostic widening (`17.5aa5`) remain open.
 - [x] 9.11 All `collection` subcommands produce stable machine-parseable summaries on success and non-zero exit on any error.
@@ -291,10 +293,12 @@
 - [x] 17.5g4 Quarantine: `raw_data` preserves.
 - [x] 17.5g5 Quarantine: contradictions (either side) preserves.
 - [x] 17.5g6 Quarantine: knowledge_gap with `page_id` preserves; without `page_id` does not.
-- [ ] 17.5g7 `quarantine export` dumps all five categories as JSON.
-- [ ] 17.5h Auto-sweep TTL: discard clean pages; never discard DB-only-state pages.
-- [ ] 17.5i Quarantine `discard --force` on DB-only-state page requires exported JSON.
+- [x] 17.5g7 `quarantine export` dumps all five categories as JSON.
+- [x] 17.5h Auto-sweep TTL: discard clean pages; never discard DB-only-state pages.
+- [x] 17.5i Quarantine `discard --force` on DB-only-state page requires exported JSON.
+  > **Closure note:** implemented per the design/spec contract: a DB-only-state page may be discarded immediately with `--force`, or without `--force` after a successful same-quarantine-epoch export recorded in `quarantine_exports`. The older task wording mentioning `--force` + exported JSON was treated as stale.
 - [ ] 17.5j Quarantine `restore` re-ingests the page and reactivates the `file_state` row.
+  > **Truth repair (Bender):** Reopened. The previously claimed default restore seam has been withdrawn from the live CLI surface because it still lacks crash-durable post-unlink cleanup and a no-replace install step. No current release claim should rely on quarantine restore until a safe restore implementation lands.
 - [x] 17.5k `brain_put` happy path: tempfile → rename → single-tx commit. **Closure note:** narrow mechanical proof only for the vault-byte entry path; dedup echo suppression remains deferred.
 - [x] 17.5l `brain_put` rejects stale `expected_version` with `ConflictError` before any FS mutation. **Unix proof only.**
 - [x] 17.5m Filesystem precondition fast path when all four stat fields match. **Unix proof only.**

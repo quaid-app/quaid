@@ -16,6 +16,7 @@ pub mod novelty;
 pub mod page_uuid;
 pub mod palace;
 pub mod progressive;
+pub mod quarantine;
 pub mod raw_imports;
 pub mod reconciler;
 pub mod search;

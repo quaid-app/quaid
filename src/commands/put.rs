@@ -579,8 +579,7 @@ fn persist_with_vault_write(
         || post_rename_stat.inode != Some(temp_identity.inode)
         || final_hash != prepared.sha256
     {
-        let _ = vault_sync::remove_write_dedup(&dedup_key);
-        let _ = vault_sync::forget_self_write_path(&target_path);
+        clear_failure_tracking(&target_path, &dedup_key);
         let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
             db,
             prepared.collection_id,
@@ -730,8 +729,7 @@ fn cleanup_pre_rename(
     sentinel_name: &str,
 ) -> Result<(), vault_sync::VaultSyncError> {
     let _ = fs_safety::unlinkat_parent_fd(parent_fd, temp_name);
-    let _ = vault_sync::remove_write_dedup(dedup_key);
-    let _ = vault_sync::forget_self_write_path(target_path);
+    clear_failure_tracking(target_path, dedup_key);
     let _ = remove_recovery_sentinel(recovery_dir, sentinel_name);
     Ok(())
 }
@@ -758,8 +756,7 @@ fn handle_post_rename_failure(
     stage: &'static str,
     reason: String,
 ) -> vault_sync::VaultSyncError {
-    let _ = vault_sync::remove_write_dedup(dedup_key);
-    let _ = vault_sync::forget_self_write_path(target_path);
+    clear_failure_tracking(target_path, dedup_key);
     let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
         db,
         prepared.collection_id,
@@ -771,6 +768,12 @@ fn handle_post_rename_failure(
         stage,
         reason,
     }
+}
+
+#[cfg(unix)]
+fn clear_failure_tracking(target_path: &Path, dedup_key: &str) {
+    let _ = vault_sync::remove_write_dedup(dedup_key);
+    let _ = vault_sync::forget_self_write_path(target_path);
 }
 
 #[cfg(unix)]
@@ -1512,12 +1515,18 @@ mod tests {
         assert!(error.to_string().contains("PostRenameRecoveryPendingError"));
         assert!(error.to_string().contains("stage=fsync-parent"));
         assert_eq!(collection_needs_full_sync(&conn, 1), 1);
+        let dedup_key = format!(
+            "1:{}:{}",
+            "notes/fsync-parent.md",
+            sha256_hex(b"---\ntitle: Parent Fsync\ntype: note\n---\nNew body\n")
+        );
         assert_eq!(
             read_page(&conn, "notes/fsync-parent").unwrap().3,
             "Old body"
         );
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
         assert!(vault_root.join("notes").join("fsync-parent.md").exists());
+        assert!(!vault_sync::has_write_dedup(&dedup_key).unwrap());
     }
 
     #[cfg(unix)]
@@ -1550,6 +1559,12 @@ mod tests {
         assert_eq!(collection_needs_full_sync(&conn, 1), 1);
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
         assert!(vault_root.join("notes").join("concurrent.md").exists());
+        assert!(!vault_sync::has_write_dedup(&format!(
+            "1:{}:{}",
+            "notes/concurrent.md",
+            sha256_hex(b"---\ntitle: Concurrent\ntype: note\n---\nLocal body\n")
+        ))
+        .unwrap());
     }
 
     #[cfg(unix)]
@@ -1582,6 +1597,12 @@ mod tests {
         assert!(error.to_string().contains("PostRenameRecoveryPendingError"));
         assert!(error.to_string().contains("stage=commit"));
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
+        assert!(!vault_sync::has_write_dedup(&format!(
+            "1:{}:{}",
+            "notes/busy.md",
+            sha256_hex(b"---\ntitle: Busy\ntype: note\n---\nNew body on disk\n")
+        ))
+        .unwrap());
         drop(blocker);
 
         let runtime = vault_sync::start_serve_runtime(db_path.clone()).unwrap();

@@ -1,5 +1,4 @@
 use gbrain::core::db;
-#[cfg(unix)]
 use gbrain::core::vault_sync;
 use rusqlite::{params, Connection};
 use serde_json::Value;
@@ -129,7 +128,32 @@ fn insert_timeline_entry(conn: &Connection, page_id: i64, date: &str, summary: &
     .expect("insert timeline entry");
 }
 
-#[cfg(unix)]
+fn quarantine_page(conn: &Connection, page_id: i64, quarantined_at: &str) {
+    conn.execute(
+        "UPDATE pages SET quarantined_at = ?2 WHERE id = ?1",
+        params![page_id, quarantined_at],
+    )
+    .expect("quarantine page");
+}
+
+fn insert_programmatic_link(conn: &Connection, from_page_id: i64, to_page_id: i64) {
+    conn.execute(
+        "INSERT INTO links (from_page_id, to_page_id, relationship, context, source_kind)
+         VALUES (?1, ?2, 'related', '', 'programmatic')",
+        params![from_page_id, to_page_id],
+    )
+    .expect("insert programmatic link");
+}
+
+fn insert_knowledge_gap(conn: &Connection, page_id: i64, hash: &str) {
+    conn.execute(
+        "INSERT INTO knowledge_gaps (page_id, query_hash, context)
+         VALUES (?1, ?2, 'gap context')",
+        params![page_id, hash],
+    )
+    .expect("insert knowledge gap");
+}
+
 fn insert_page_with_raw_import(
     conn: &Connection,
     collection_id: i64,
@@ -849,6 +873,36 @@ fn collection_info_json_reports_read_only_truthfully() {
 }
 
 #[test]
+fn collection_info_json_reports_quarantine_backlog_count() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "collection-info-quarantine.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    let collection_id = insert_collection(&conn, "work", &root);
+    insert_page(&conn, collection_id, "notes/active");
+    insert_page(&conn, collection_id, "notes/quarantined");
+    quarantine_page(
+        &conn,
+        page_id(&conn, collection_id, "notes/quarantined"),
+        "2026-04-25T00:00:00Z",
+    );
+    drop(conn);
+
+    let output = run_gbrain(&db_path, &["--json", "collection", "info", "work"]);
+
+    assert!(
+        output.status.success(),
+        "collection info should succeed: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(
+        parsed["quarantined_pages_awaiting_action"].as_i64(),
+        Some(1)
+    );
+}
+
+#[test]
 fn collection_list_json_reports_k1_columns_truthfully() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = test_db_path(&dir, "collection-list.db");
@@ -889,6 +943,262 @@ fn collection_list_json_reports_k1_columns_truthfully() {
     assert_eq!(row["page_count"].as_i64(), Some(1));
     assert_eq!(row["last_sync_at"].as_str(), Some("2026-04-23T00:20:00Z"));
     assert_eq!(row["queue_depth"].as_i64(), Some(0));
+}
+
+#[test]
+fn quarantine_export_then_discard_without_force_succeeds_after_export() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "quarantine-export-discard.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    let collection_id = insert_collection(&conn, "work", &root);
+    insert_page_with_truth(&conn, collection_id, "notes/quarantined", "truth");
+    insert_page_with_truth(&conn, collection_id, "notes/target", "target");
+    let quarantined_page_id = page_id(&conn, collection_id, "notes/quarantined");
+    let target_page_id = page_id(&conn, collection_id, "notes/target");
+    quarantine_page(&conn, quarantined_page_id, "2026-04-25T00:00:00Z");
+    insert_programmatic_link(&conn, quarantined_page_id, target_page_id);
+    insert_knowledge_gap(&conn, quarantined_page_id, "gap-quarantine-export");
+    drop(conn);
+
+    let discard_before_export = run_gbrain(
+        &db_path,
+        &[
+            "collection",
+            "quarantine",
+            "discard",
+            "work::notes/quarantined",
+        ],
+    );
+    assert!(
+        !discard_before_export.status.success(),
+        "discard without force/export must fail: {discard_before_export:?}"
+    );
+    assert!(
+        combined_output(&discard_before_export).contains("QuarantineDiscardExportRequiredError"),
+        "discard failure must explain export requirement: {discard_before_export:?}"
+    );
+
+    let export_path = dir.path().join("quarantine-export.json");
+    let export_output = run_gbrain(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "quarantine",
+            "export",
+            "work::notes/quarantined",
+            export_path.to_str().expect("utf-8 export path"),
+        ],
+    );
+    assert!(
+        export_output.status.success(),
+        "quarantine export should succeed: {export_output:?}"
+    );
+    let export_json = parse_stdout_json(&export_output);
+    assert_eq!(export_json["command"].as_str(), Some("quarantine-export"));
+    let exported_payload: Value = serde_json::from_slice(
+        &std::fs::read(&export_path).expect("read exported quarantine json"),
+    )
+    .expect("export payload json");
+    assert_eq!(
+        export_json["exported_at"].as_str(),
+        exported_payload["exported_at"].as_str()
+    );
+    assert_eq!(
+        exported_payload["knowledge_gaps"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        exported_payload["programmatic_links"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let verify_export = open_test_db(&db_path);
+    let stored_exported_at: String = verify_export
+        .query_row(
+            "SELECT exported_at
+             FROM quarantine_exports
+             WHERE page_id = ?1 AND quarantined_at = '2026-04-25T00:00:00Z'",
+            [quarantined_page_id],
+            |row| row.get(0),
+        )
+        .expect("load stored export timestamp");
+    assert_eq!(
+        export_json["exported_at"].as_str(),
+        Some(stored_exported_at.as_str())
+    );
+    drop(verify_export);
+
+    let discard_output = run_gbrain(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "quarantine",
+            "discard",
+            "work::notes/quarantined",
+        ],
+    );
+    assert!(
+        discard_output.status.success(),
+        "discard should succeed after export: {discard_output:?}"
+    );
+    let discard_json = parse_stdout_json(&discard_output);
+    assert_eq!(discard_json["command"].as_str(), Some("quarantine-discard"));
+    assert_eq!(
+        discard_json["exported_before_discard"].as_bool(),
+        Some(true)
+    );
+
+    let verify = open_test_db(&db_path);
+    let remaining: i64 = verify
+        .query_row(
+            "SELECT COUNT(*) FROM pages WHERE collection_id = ?1 AND slug = 'notes/quarantined'",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .expect("count remaining quarantined page");
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn quarantine_list_missing_collection_reports_collection_specific_error() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "quarantine-list-missing-collection.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    insert_collection(&conn, "work", &root);
+    drop(conn);
+
+    let output = run_gbrain(&db_path, &["collection", "quarantine", "list", "missing"]);
+
+    assert!(
+        !output.status.success(),
+        "missing collection list must fail: {output:?}"
+    );
+    let text = combined_output(&output);
+    assert!(
+        text.contains("quarantine collection not found: missing"),
+        "missing collection list must surface the collection-specific error: {text}"
+    );
+    assert!(
+        !text.contains("quarantined page not found"),
+        "missing collection list must not report a page-not-found error: {text}"
+    );
+}
+
+#[test]
+fn quarantine_restore_surface_is_deferred_and_leaves_page_quarantined() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "quarantine-restore.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(root.join("notes")).expect("create notes dir");
+    let collection_id = insert_collection(&conn, "work", &root);
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/quarantined",
+        "11111111-1111-7111-8111-111111111111",
+        b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n",
+        "notes/original.md",
+    );
+    let quarantined_page_id = page_id(&conn, collection_id, "notes/quarantined");
+    quarantine_page(&conn, quarantined_page_id, "2026-04-25T00:00:00Z");
+    conn.execute(
+        "DELETE FROM file_state WHERE page_id = ?1",
+        [quarantined_page_id],
+    )
+    .expect("remove file_state");
+    drop(conn);
+
+    let output = run_gbrain(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "quarantine",
+            "restore",
+            "work::notes/quarantined",
+            "notes/restored",
+        ],
+    );
+
+    assert!(
+        !output.status.success(),
+        "quarantine restore should be disabled for now: {output:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("quarantine restore is deferred in this batch"),
+        "restore refusal should explain the narrowed seam: {stderr}"
+    );
+
+    let verify = open_test_db(&db_path);
+    let row: (Option<String>, Option<String>) = verify
+        .query_row(
+            "SELECT quarantined_at,
+                    (SELECT relative_path FROM file_state WHERE page_id = ?1 LIMIT 1)
+             FROM pages
+             WHERE id = ?1",
+            [quarantined_page_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load restored page");
+    assert!(
+        row.0.is_some(),
+        "page must remain quarantined while restore is deferred"
+    );
+    assert_eq!(row.1, None);
+    assert!(
+        !root.join("notes").join("restored.md").exists(),
+        "disabled restore must not write any vault bytes"
+    );
+}
+
+#[test]
+fn start_serve_runtime_sweeps_expired_clean_quarantines_but_keeps_db_only_state_pages() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "quarantine-startup-sweep.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    let collection_id = insert_collection(&conn, "work", &root);
+    insert_page(&conn, collection_id, "notes/clean");
+    insert_page(&conn, collection_id, "notes/kept");
+    let clean_page_id = page_id(&conn, collection_id, "notes/clean");
+    let kept_page_id = page_id(&conn, collection_id, "notes/kept");
+    quarantine_page(&conn, clean_page_id, "2026-01-01T00:00:00Z");
+    quarantine_page(&conn, kept_page_id, "2026-01-01T00:00:00Z");
+    insert_knowledge_gap(&conn, kept_page_id, "gap-startup-sweep");
+    drop(conn);
+
+    let runtime =
+        vault_sync::start_serve_runtime(db_path.to_str().expect("utf-8 db path").to_owned())
+            .expect("start serve runtime");
+    drop(runtime);
+
+    let verify = open_test_db(&db_path);
+    let clean_exists: i64 = verify
+        .query_row(
+            "SELECT COUNT(*) FROM pages WHERE id = ?1",
+            [clean_page_id],
+            |row| row.get(0),
+        )
+        .expect("count clean page");
+    let kept_quarantined_at: Option<String> = verify
+        .query_row(
+            "SELECT quarantined_at FROM pages WHERE id = ?1",
+            [kept_page_id],
+            |row| row.get(0),
+        )
+        .expect("load kept page");
+    assert_eq!(clean_exists, 0);
+    assert_eq!(kept_quarantined_at.as_deref(), Some("2026-01-01T00:00:00Z"));
 }
 
 #[test]

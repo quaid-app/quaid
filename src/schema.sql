@@ -118,6 +118,17 @@ CREATE INDEX IF NOT EXISTS idx_pages_wing     ON pages(wing);
 CREATE INDEX IF NOT EXISTS idx_pages_wing_room ON pages(wing, room);
 CREATE INDEX IF NOT EXISTS idx_pages_quarantined ON pages(quarantined_at) WHERE quarantined_at IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS quarantine_exports (
+    page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    quarantined_at  TEXT    NOT NULL,
+    exported_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    output_path     TEXT    NOT NULL,
+    PRIMARY KEY (page_id, quarantined_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quarantine_exports_exported
+    ON quarantine_exports(exported_at);
+
 -- ============================================================
 -- page_fts: full-text search over compiled_truth + timeline
 -- ============================================================
@@ -137,9 +148,11 @@ CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
     WHERE new.quarantined_at IS NULL;
 END;
 
-CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
+DROP TRIGGER IF EXISTS pages_ad;
+CREATE TRIGGER pages_ad AFTER DELETE ON pages BEGIN
     INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
-    VALUES ('delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline);
+    SELECT 'delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline
+    WHERE old.quarantined_at IS NULL;
 END;
 
 CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN

@@ -40,6 +40,7 @@ use crate::core::file_state;
 #[cfg(unix)]
 use crate::core::fs_safety;
 use crate::core::markdown;
+use crate::core::quarantine;
 use crate::core::reconciler::{
     fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, reconcile,
     FullHashReconcileAuthorization, FullHashReconcileMode, ReconcileError, ReconcileStats,
@@ -51,6 +52,7 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFERRED_RETRY_SECS: u64 = 1;
 const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
+const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 #[cfg(unix)]
 const WATCH_CHANNEL_CAPACITY: usize = 4096;
 #[cfg(unix)]
@@ -1642,6 +1644,7 @@ fn run_startup_sequence(
     sweep_stale_sessions(conn)?;
     claim_owned_collections(conn, session_id)?;
     recover_owned_collection_sentinels(conn, &recovery_root_for_db_path(db_path), session_id)?;
+    let _ = quarantine::sweep_expired_quarantined_pages(conn);
     let _ = run_rcrt_pass(conn, session_id);
     sync_supervisor_handles(conn, session_id)?;
     Ok(())
@@ -1944,7 +1947,10 @@ fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn should_suppress_self_write_rename(root_path: &Path, event_paths: &[PathBuf]) -> Result<bool, VaultSyncError> {
+fn should_suppress_self_write_rename(
+    root_path: &Path,
+    event_paths: &[PathBuf],
+) -> Result<bool, VaultSyncError> {
     let Some(target_path) = event_paths.get(1) else {
         return Ok(false);
     };
@@ -2767,6 +2773,7 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let session_id_for_thread = session_id.clone();
     let handle = thread::spawn(move || {
         let mut last_heartbeat = Instant::now();
+        let mut last_quarantine_sweep = Instant::now();
         let mut last_generations = initial_generations;
         #[cfg(unix)]
         let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
@@ -2778,6 +2785,12 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                     let _ = sweep_stale_sessions(&conn);
                     let _ = heartbeat_session(&conn, &session_id_for_thread);
                     last_heartbeat = Instant::now();
+                }
+                if last_quarantine_sweep.elapsed()
+                    >= Duration::from_secs(QUARANTINE_SWEEP_INTERVAL_SECS)
+                {
+                    let _ = quarantine::sweep_expired_quarantined_pages(&conn);
+                    last_quarantine_sweep = Instant::now();
                 }
                 #[cfg(unix)]
                 {

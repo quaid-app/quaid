@@ -9732,3 +9732,28 @@ Without that seam, integration tests can only prove the current non-mutation/def
 - npm public publication remains blocked (NPM_TOKEN gate)
 
 
+
+### 2026-04-25: macOS preflight cache-key sanitization — Issue #79/#80 workflow unblocker
+**By:** Mom
+# Mom — issue #79 / #80 macOS preflight readout
+
+Date: 2026-04-25
+
+## Findings
+
+- The four failed PR #83 macOS preflight jobs (`72986784880`, `72986784883`, `72986784888`, `72986784898`) all die at the same place: **`actions/cache@v4` rejects the cache key before `cargo check` starts**.
+- Root cause is not `fs_safety.rs` in those jobs. The cache key in `.github/workflows/ci.yml:78` embeds `matrix.features`, and values like `bundled,online-model` / `bundled,embedded-model` contain commas. `actions/cache` hard-fails with `Key Validation Error ... cannot contain commas.`
+- This is still live on current PR head `db851e5`: the rerun macOS preflight jobs (`72986952241`, `72986952246`, `72986952248`, `72986952250`) failed the same way.
+
+## Issue #80 status
+
+- `src/core/fs_safety.rs:199` **does** contain the widening cast now: `mode_bits: stat.st_mode as u32`.
+- But issue #80 is still **operationally open on this branch** because the new macOS proof job never reaches compilation. There is no fresh evidence yet that macOS `cargo check` actually passes on PR #83.
+- I do **not** see evidence of a second macOS compiler seam in the failed logs; the branch is blocked earlier by workflow validation.
+
+## Minimum fix
+
+- Exact seam: `.github/workflows/ci.yml:78`
+- Minimum repair: stop using raw comma-joined feature strings in the cache key. Sanitize that field (for example, replace `,` with `-`) or add an explicit matrix-safe cache-key token such as `bundled-online-model`.
+- No product-code change is indicated by these failures; this is a workflow-only unblocker.
+

@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- Issue #79 / #80 macOS preflight audit (2026-04-25): PR #83's four macOS preflight jobs were not failing in `src/core/fs_safety.rs` anymore; they all died earlier in `.github/workflows/ci.yml` because `actions/cache` rejects cache keys containing commas from raw `matrix.features` values like `bundled,online-model`. The `stat.st_mode as u32` cast is present, but issue #80 stays operationally open until macOS preflight actually reaches `cargo check`.
 - Vault-sync CI burndown lane closeout (2026-04-25): Mom's edge-case fix lane landed in commits 56e44ce and 18ac3d7. Four targeted decisions (D-V1 through D-V4) fixed 6 failing CI tests constrained to `src/core/vault_sync.rs` and `src/core/raw_imports.rs`. Orchestration log at `.squad/orchestration-log/2026-04-25T15-48-57Z-mom.md` documents all decisions and test results (591 pass, 2 pre-existing Windows failures unrelated).
 - Quarantine restore artifact reconciliation (2026-04-25): Mom audited leftover restore glue from rejected Fry artifact, kept required pieces (fs_safety linkat, vault_sync leases, collection routing), dropped permanently-excluded `walk_to_parent_create_dirs`. Decisions D-MR1 and D-MR2 recorded in `.squad/decisions.md`. Commit 6a3d54c is wholly Mom-authored.
 - Quarantine restore second revision — 5-blocker fix (2026-04-25): Mom fixed all 5 consolidated blockers (tempfile cleanup, post-install rollback, absent-parent refusal, task wording, contract narrowness). Decisions D-R1 through D-R5 merged into `.squad/decisions.md`. All tests pass (591 total, 0 new failures).
@@ -311,3 +312,26 @@ containing a mix of required glue and a dropped Fry artifact piece.
   any live path — it was dead code that would have silently re-opened the Fry design.
   The test for it would have falsely green-lit the pattern as accepted behavior.
 
+---
+
+## 2026-04-25 macOS Preflight Diagnostics — Issue #79/#80 Root Cause
+
+**Session:** mom-issue79-80-macos (2026-04-25T12:37:39Z)  
+
+**Status:** Diagnostic phase complete. Root cause identified; minimum workflow-only fix specified.
+
+**Finding:** PR #83 four macOS preflight jobs (72986784880, 72986784883, 72986784888, 72986784898) all fail at the same point: .github/workflows/ci.yml:78 cache-key construction. The cache key embeds raw matrix.features with comma-joined values (e.g., undled,online-model, undled,embedded-model). ctions/cache@v4 hard-fails with Key Validation Error ... cannot contain commas before cargo check starts.
+
+**Issue #80 Status:** src/core/fs_safety.rs:199 now contains the widening cast (mode_bits: stat.st_mode as u32), but issue #80 remains operationally open on this branch because the macOS proof job never reaches compilation. No fresh evidence that macOS cargo check passes with the fix.
+
+**Minimum Fix:** Workflow-only change. Sanitize cache-key field:
+- Option 1: Replace commas with dashes in cache key
+- Option 2: Use explicit matrix-safe token (e.g., undled-online-model)
+
+**Decision Recorded:** .squad/decisions.md entry "2026-04-25: macOS preflight cache-key sanitization — Issue #79/#80 workflow unblocker" (D-M1 through D-M3 decisions for future workflow safety).
+
+**Skill Added:** .squad/skills/github-actions-cache-key-sanitization/SKILL.md for reference in future workflow maintenance.
+
+**Artifact:** Orchestration log at .squad/orchestration-log/20260425T123739Z-mom-issue79-80-macos.md. Session log at .squad/log/20260425T123739Z-issue79-80-macos.md.
+
+**Lesson:** Workflow parameter constraints (cache-key format, matrix safety) are not obvious from CI failure output alone. Log inspection needed to find the ctions/cache validation error earlier in the job lifecycle.

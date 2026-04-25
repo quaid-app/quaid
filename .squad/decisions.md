@@ -2,6 +2,20 @@
 
 ## Active Decisions
 
+### 2026-04-25: Release contract failure — Issue #79 installer/macOS seam
+**By:** Professor  
+**What:** Rejected narrow installer-only 404 fix; required approval bar is repaired macOS release build plus one canonical `gbrain-<platform>-<channel>` manifest shared across installer, workflow, docs, and release checks.  
+**Why:** Issue #79 (404 for `gbrain-darwin-x86_64-airgapped`) maps to root cause: `v0.9.6` release workflow failed on all macOS jobs due to `src/core/fs_safety.rs` type mismatch (`stat.st_mode` u32 vs macOS u16). The problem is incomplete shipped releases, not name drift.  
+**Decisions:**
+- **D-R79-1:** Canonical public asset schema: `gbrain-<platform>-<channel>` where platform ∈ {darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64} and channel ∈ {airgapped, online}. No unsuffixed public binary names.
+- **D-R79-2:** One source of truth: release matrix is authoritative; installer resolution derives from that same manifest logic (no independent handwritten table).
+- **D-R79-3:** Manifest-closed releases only: tagged release shippable iff all 8 binaries + 8 `.sha256` files + `install.sh` present and checksums valid. Partial release success is invalid public state.
+- **D-R79-4:** Docs/checklists must name the same contract (RELEASE_CHECKLIST.md, README, release notes all use channel-suffixed asset names).
+- **D-R79-5:** Reject installer-only fallbacks, manual asset upload, or checklist-only wording repair.
+- **D-R79-6:** Merge bar for v0.9.7: macOS build fixed + contract centralized + manifest proof exists + installer proof exists + reviewer surfaces truthful + real release evidence.
+**Skill:** `.squad/skills/release-asset-contract/SKILL.md` (future releases).
+**Result:** Explicit 6-criteria approval gate for v0.9.7 shipment recorded.
+
 ### 2026-04-25: Vault-sync CI burndown — 6 test failures fixed
 **By:** Mom  
 **What:** Fixed 6 failing CI tests in `src/core/vault_sync.rs` and `src/core/raw_imports.rs` with four targeted decisions (D-V1 through D-V4).  

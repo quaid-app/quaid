@@ -1,6 +1,6 @@
 [package]
 name = "gbrain"
-version = "0.9.6"
+version = "0.9.7"
 edition = "2021"
 description = "Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One static binary."
 license = "MIT"

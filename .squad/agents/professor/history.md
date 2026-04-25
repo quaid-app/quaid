@@ -5,11 +5,27 @@
 - **Stack:** Rust, rusqlite, SQLite FTS5, sqlite-vec, candle + BGE-small-en-v1.5, clap, rmcp
 - **Created:** 2026-04-13T14:22:20Z
 
+## 2026-04-25 — Issue #79 installer/release seam early review
+
+**VERDICT: REJECT FOR SHIP until all 6 merge-bar criteria met**
+
+Issue #79 (404 for `gbrain-darwin-x86_64-airgapped`) is not a naming mismatch. The root cause is a failed v0.9.6 release workflow on macOS due to `stat.st_mode` type mismatch in `src/core/fs_safety.rs`. Installer and release naming are already aligned in source. The problem is incomplete shipped releases; a narrow installer fallback would hide the broken release contract.
+
+**Explicit rejection of installer-only 404 patches, manual asset upload, or checklist-only rewording.** The 6-criteria approval bar for v0.9.7:
+1. macOS build break fixed + proven on both darwin-x86_64 and darwin-arm64
+2. Asset names centralized (mechanically coupled, no drift)
+3. Full manifest proof in CI (fail closed unless all 8 binaries + 8 .sha256 present + checksums match)
+4. Installer real-release proof (not mocked; exact darwin-x86_64-airgapped seam tested)
+5. Review surfaces truthful (RELEASE_CHECKLIST.md and docs use same channel-suffixed names)
+6. v0.9.7 tag build completes + GitHub Release has full manifest before announcement
+
+Deliverable: canonicalized release-asset-contract skill at `.squad/skills/release-asset-contract/SKILL.md` for future releases.
+
 ## 2026-04-25 — Vault-sync 13.5 read-filter slice
 
 **VERDICT: APPROVE**
 
-All five contract points are closed by the uncommitted diff. `BrainQueryInput`, `BrainSearchInput`, and `BrainListInput` each gain `collection: Option<String>`. All three MCP handlers call a single thin `resolve_read_collection_filter_for_mcp` → `collections::resolve_read_collection_filter`, which correctly implements the default rule: explicit name → `NotFound` error if absent; exactly one `state = 'active'` row (fetched with `LIMIT 2` to short-circuit correctly) → use it; otherwise → write-target via `is_write_target = 1`. Unknown-collection error is code `-32001` with message `"collection not found: X"`, tested for all three tools in one combined test. Explicit-filter isolation is tested independently per tool. Default-rule behavior is proven by two direct-evidence tests (`brain_search_defaults_to_single_active_collection` for the sole-active branch; `brain_query_defaults_to_write_target...` + `brain_list_defaults_to_write_target...` for the write-target fallback). The `collection_filter: Option<i64>` parameter is threaded all the way through `fts.rs`, `inference.rs`, and `search.rs` without introducing a new CLI surface: both `commands/query.rs` and `commands/search.rs` pass hard-coded `None`. No write-path changes, no 17.5aa5 widening, no slug-resolution cluster claims.
+All five contract points are closed by the uncommitted diff.`BrainQueryInput`, `BrainSearchInput`, and `BrainListInput` each gain `collection: Option<String>`. All three MCP handlers call a single thin `resolve_read_collection_filter_for_mcp` → `collections::resolve_read_collection_filter`, which correctly implements the default rule: explicit name → `NotFound` error if absent; exactly one `state = 'active'` row (fetched with `LIMIT 2` to short-circuit correctly) → use it; otherwise → write-target via `is_write_target = 1`. Unknown-collection error is code `-32001` with message `"collection not found: X"`, tested for all three tools in one combined test. Explicit-filter isolation is tested independently per tool. Default-rule behavior is proven by two direct-evidence tests (`brain_search_defaults_to_single_active_collection` for the sole-active branch; `brain_query_defaults_to_write_target...` + `brain_list_defaults_to_write_target...` for the write-target fallback). The `collection_filter: Option<i64>` parameter is threaded all the way through `fts.rs`, `inference.rs`, and `search.rs` without introducing a new CLI surface: both `commands/query.rs` and `commands/search.rs` pass hard-coded `None`. No write-path changes, no 17.5aa5 widening, no slug-resolution cluster claims.
 
 ## 2026-04-25 — Vault-sync 13.6 + 17.5ddd re-review (spec-boundary correction)
 
@@ -19,6 +35,7 @@ The spec boundary correction is sufficient. `parse_ignore_parse_errors` (vault_s
 
 ## Learnings
 
+- Issue #79 installer/release seam (2026-04-25): **REJECT any installer-only 404 patch.** When `install.sh` and `release.yml` already agree on channel-suffixed names, a missing asset is usually a failed release-manifest closure, not a naming typo. The approval bar is one canonical asset manifest, exact release-manifest verification, and a real tagged release proving every promised platform/channel asset exists before calling the version shippable.
 - PR #77 feedback collapse (2026-04-25): repeated review noise around one branch can hide the real merge bar. Separate comments into (1) doc-truth drift that is satisfiable in prose, (2) genuine code defects like active/read-surface leaks, and (3) policy disputes already closed by prior gate decisions such as the intentional Unix gate on `gbrain serve`.
 - Vault-sync quarantine-restore pre-gate (2026-04-25): re-enabling a deferred destructive surface is landable only when the reopened contract names both stable end states and proves the hard parts directly — install-time no-replace semantics plus parent-fsynced post-unlink cleanup. Converting deferred-surface tests into precise happy/failure contract proofs is mandatory; retaining only broad "restore failed" coverage is not enough.
 - Vault-sync Batch 13.6 / 17.5ddd review (2026-04-24): **REJECT for landing** when `brain_collections` computes terminal `integrity_blocked` from `reconcile_halt_reason` alone instead of the frozen `reconcile_halted_at IS NOT NULL AND reason` predicate. Read-only shape work is not enough if the presentation can overstate a terminal halt from stale metadata; schema-fidelity reviews must verify the exact truth predicate, not just field names.

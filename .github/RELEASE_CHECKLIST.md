@@ -6,18 +6,41 @@ Zapp must review and sign off on every item before a public release ships.
 
 ## Asset names
 
-Verify the following artifacts are attached to the GitHub Release:
+Every release publishes **8 channel-suffixed binaries** (`airgapped` + `online` × 4 platforms)
+plus **8 matching checksums** and `install.sh`. Verify every artifact is attached:
 
-- [ ] `gbrain-darwin-arm64` — macOS Apple Silicon binary
-- [ ] `gbrain-darwin-arm64.sha256` — SHA-256 checksum for macOS Apple Silicon binary
-- [ ] `gbrain-darwin-x86_64` — macOS Intel binary
-- [ ] `gbrain-darwin-x86_64.sha256` — SHA-256 checksum for macOS Intel binary
-- [ ] `gbrain-linux-x86_64` — Linux x86_64 static binary
-- [ ] `gbrain-linux-x86_64.sha256` — SHA-256 checksum for Linux x86_64 binary
-- [ ] `gbrain-linux-aarch64` — Linux ARM64 static binary
-- [ ] `gbrain-linux-aarch64.sha256` — SHA-256 checksum for Linux ARM64 binary
+### airgapped channel (embedded BGE-small, no network required)
+- [ ] `gbrain-darwin-arm64-airgapped` — macOS Apple Silicon binary
+- [ ] `gbrain-darwin-arm64-airgapped.sha256`
+- [ ] `gbrain-darwin-x86_64-airgapped` — macOS Intel binary
+- [ ] `gbrain-darwin-x86_64-airgapped.sha256`
+- [ ] `gbrain-linux-x86_64-airgapped` — Linux x86_64 static binary
+- [ ] `gbrain-linux-x86_64-airgapped.sha256`
+- [ ] `gbrain-linux-aarch64-airgapped` — Linux ARM64 static binary
+- [ ] `gbrain-linux-aarch64-airgapped.sha256`
 
-No other binary names are covered by public install docs. If names in the workflow diverge, fix the docs before shipping.
+### online channel (downloads/caches BGE model on first semantic use)
+- [ ] `gbrain-darwin-arm64-online`
+- [ ] `gbrain-darwin-arm64-online.sha256`
+- [ ] `gbrain-darwin-x86_64-online`
+- [ ] `gbrain-darwin-x86_64-online.sha256`
+- [ ] `gbrain-linux-x86_64-online`
+- [ ] `gbrain-linux-x86_64-online.sha256`
+- [ ] `gbrain-linux-aarch64-online`
+- [ ] `gbrain-linux-aarch64-online.sha256`
+
+### installer
+- [ ] `install.sh`
+
+**Total: 17 files (8 binaries + 8 checksums + install.sh).** The release workflow enforces
+this count and fails closed if any asset is missing. A release is not shippable if the
+workflow did not complete successfully — do not hand-patch partial releases.
+
+The public asset schema is `gbrain-<platform>-<channel>` where `<platform>` ∈
+`{darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64}` and `<channel>` ∈
+`{airgapped, online}`. `.github/release-assets.txt` is the canonical manifest shared by
+`install.sh` validation, the release workflow, and release-check tests. Do not approve a
+release whose checklist, docs, or workflow diverge from this schema.
 
 ---
 
@@ -26,7 +49,7 @@ No other binary names are covered by public install docs. If names in the workfl
 - [ ] Each `.sha256` file uses standard format: `<hex-digest>  <filename>` (two-space separator)
 - [ ] The public verification command matches the file format exactly:
   ```bash
-  shasum -a 256 --check "gbrain-<platform>.sha256"
+  shasum -a 256 --check "gbrain-<platform>-<channel>.sha256"
   ```
 - [ ] Checksum verification is presented as required, not optional
 
@@ -34,8 +57,8 @@ No other binary names are covered by public install docs. If names in the workfl
 
 ## Install guidance
 
-- [ ] GitHub Releases binaries and build-from-source are the **only** supported install paths in this release
-- [ ] Install docs reference artifact names that match the release workflow exactly (`gbrain-<platform>`)
+- [ ] GitHub Releases binaries and `install.sh` are the **only** supported install paths in this release
+- [ ] Install docs reference artifact names that match the release workflow exactly (`gbrain-<platform>-<channel>`)
 - [ ] Build-from-source instructions list the current stable Rust toolchain requirement and no other system dependencies
 - [ ] No install command that is not yet implemented appears anywhere in README or the docs site without a clear **planned — not available yet** label
 

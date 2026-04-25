@@ -2087,8 +2087,9 @@ If anything goes wrong:
 ## CI release requirements
 
 Every GitHub release MUST publish:
-- Platform binaries: `gbrain-linux-x86_64`, `gbrain-darwin-arm64`, etc.
-- SHA-256 checksums: `gbrain-linux-x86_64.sha256`, `gbrain-darwin-arm64.sha256`, etc.
+- Platform binaries: `gbrain-<platform>-<channel>` where `<platform>` ∈ `{darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64}` and `<channel>` ∈ `{airgapped, online}`.
+- SHA-256 checksums: `gbrain-<platform>-<channel>.sha256`.
+- `.github/release-assets.txt` is the canonical manifest consumed by release validation and release-check tests.
 - Each `.sha256` file contains standard `shasum -a 256` output: `<hex-digest>  <filename>`, one line.
 - The release workflow generates checksums in CI, not locally, to prevent tampering.
 ```
@@ -2107,9 +2108,14 @@ gbrain/
 ├── Cargo.lock
 │
 ├── bin/                    # Compiled binaries (gitignored, built in CI)
-│   ├── gbrain-darwin-arm64
-│   ├── gbrain-darwin-x86_64
-│   └── gbrain-linux-x86_64
+│   ├── gbrain-darwin-arm64-airgapped
+│   ├── gbrain-darwin-arm64-online
+│   ├── gbrain-darwin-x86_64-airgapped
+│   ├── gbrain-darwin-x86_64-online
+│   ├── gbrain-linux-aarch64-airgapped
+│   ├── gbrain-linux-aarch64-online
+│   ├── gbrain-linux-x86_64-airgapped
+│   └── gbrain-linux-x86_64-online
 │
 ├── src/
 │   ├── main.rs             # Entry point: arg parsing + command dispatch (clap)

@@ -635,6 +635,7 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - `compile_error!` macro in inference.rs prevents both `embedded-model` and `online-model` features being enabled simultaneously — enforces the mutual exclusivity at compile time.
 - Release workflow uses `--no-default-features --features ${{ matrix.features }}` so it doesn't depend on Cargo.toml defaults. The default features only affect `cargo build` developer experience.
 - stale OpenSpec directories (superseded by a renamed/re-scoped change) should be deleted or archived to prevent naming drift from old contract terms leaking into implementation work.
+- v0.9.7 release contract repair (2026-04-25): keep one checked-in manifest file (`.github/release-assets.txt`) as the public release truth, then make workflow verification, installer seam tests, checklist wording, and spec docs read or point at that same manifest. On Windows hosts, validate shell release checks with Git-for-Windows `sh.exe`; leave macOS target proof to GitHub Actions when local cross-target C toolchains are unavailable.
 
 ## 2026-04-18: Dual Release v0.9.1 Full Implementation
 

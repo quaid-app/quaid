@@ -116,7 +116,7 @@ cross build --release --target aarch64-unknown-linux-musl`}
 
 <CodePanel
   label={"GitHub Releases"}
-  code={`VERSION='v0.9.6'
+  code={`VERSION='v0.9.7'
 PLATFORM='linux-x86_64'   # linux-x86_64 | linux-aarch64 | darwin-arm64 | darwin-x86_64
 ASSET='gbrain-\${PLATFORM}-airgapped'   # or: gbrain-\${PLATFORM}-online
 curl -fsSL 'https://github.com/macro88/gigabrain/releases/download/\${VERSION}/\${ASSET}' -o '\${ASSET}'
@@ -150,13 +150,13 @@ sudo install -m 755 '\${ASSET}' /usr/local/bin/gbrain`}
   code={`curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
- | GBRAIN_VERSION=v0.9.6 sh
+ | GBRAIN_VERSION=v0.9.7 sh
 
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
- | GBRAIN_VERSION=v0.9.6 GBRAIN_CHANNEL=online sh
+ | GBRAIN_VERSION=v0.9.7 GBRAIN_CHANNEL=online sh
 
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
- | GBRAIN_VERSION=v0.9.6 GBRAIN_INSTALL_DIR="$HOME/.local/bin" sh`}
+ | GBRAIN_VERSION=v0.9.7 GBRAIN_INSTALL_DIR="$HOME/.local/bin" sh`}
 />
 
 <div class="gb-guide-note">

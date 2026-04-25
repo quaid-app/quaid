@@ -136,25 +136,7 @@ jobs:
 
       - name: Verify release manifest
         run: |
-          expected=(
-            gbrain-darwin-arm64-airgapped
-            gbrain-darwin-arm64-airgapped.sha256
-            gbrain-darwin-arm64-online
-            gbrain-darwin-arm64-online.sha256
-            gbrain-darwin-x86_64-airgapped
-            gbrain-darwin-x86_64-airgapped.sha256
-            gbrain-darwin-x86_64-online
-            gbrain-darwin-x86_64-online.sha256
-            gbrain-linux-x86_64-airgapped
-            gbrain-linux-x86_64-airgapped.sha256
-            gbrain-linux-x86_64-online
-            gbrain-linux-x86_64-online.sha256
-            gbrain-linux-aarch64-airgapped
-            gbrain-linux-aarch64-airgapped.sha256
-            gbrain-linux-aarch64-online
-            gbrain-linux-aarch64-online.sha256
-            install.sh
-          )
+          mapfile -t expected < <(grep -Ev '^(#|$)' .github/release-assets.txt)
           missing=0
           for f in "${expected[@]}"; do
             if [ ! -f "artifacts/$f" ]; then
@@ -170,20 +152,16 @@ jobs:
             find artifacts -maxdepth 1 -type f -printf '%f\n' | sort
             exit 1
           fi
-          echo "Verified ${expected_count} release files (8 binaries + 8 checksums + install.sh)"
+          binary_count=$(printf '%s\n' "${expected[@]}" | grep -Evc '(\.sha256$|^install\.sh$)')
+          echo "Verified ${expected_count} release files (${binary_count} binaries + ${binary_count} checksums + install.sh)"
 
       - name: Re-verify checksums after download
         run: |
           cd artifacts
-          for bin in \
-            gbrain-darwin-arm64-airgapped gbrain-darwin-arm64-online \
-            gbrain-darwin-x86_64-airgapped gbrain-darwin-x86_64-online \
-            gbrain-linux-x86_64-airgapped gbrain-linux-x86_64-online \
-            gbrain-linux-aarch64-airgapped gbrain-linux-aarch64-online
-          do
+          while IFS= read -r bin; do
             echo "Verifying $bin..."
             shasum -a 256 --check "$bin.sha256"
-          done
+          done < <(grep -Ev '^(#|$|install\.sh$|.*\.sha256$)' ../.github/release-assets.txt)
           echo "All checksums verified"
 
       - name: Create release
@@ -232,7 +210,7 @@ jobs:
             cargo build --release --no-default-features --features bundled,online-model
             ```
 
-            **v0.9.6** ships the first vault-sync slice: collections, Unix-gated `gbrain serve`, live watcher sync, quarantine tooling, `brain_collections`, and narrow Unix quarantine restore. The `online` build still supports configurable BGE models via `GBRAIN_MODEL` / `--model`; `airgapped` embeds BGE-small-en-v1.5. npm installs the `online` channel; the shell installer defaults to `airgapped`.
+            This release preserves the current vault-sync surface while fixing the macOS release build and enforcing one canonical public release-asset contract across the installer, workflow, and release checks. The `online` build still supports configurable BGE models via `GBRAIN_MODEL` / `--model`; `airgapped` embeds BGE-small-en-v1.5. npm installs the `online` channel; the shell installer defaults to `airgapped`.
 
             ---
           draft: false

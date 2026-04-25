@@ -922,3 +922,17 @@ DEFER: `17.5aa5` (stable-absence `ignore_parse_errors` expansion — requires `1
 
 - **Post-quarantine-batch sequencing (2026-04-25):** After Bender's quarantine truth repair backed out `quarantine restore`, the next truthful stop-point is a narrow quarantine-restore fix (two Nibbler blockers only: parent-fsync after unlink in the restore path + no-replace install semantics at renameat time). Coverage backfill (`17.17c`, `17.17d`, `17.5rr`, `17.5ss–vv6`, `17.4`) and section-16 docs are independent and run in parallel — they should NOT block or wait on the restore slice. The decision: quarantine seam takes Fry + Professor pre-gate + Nibbler review; coverage takes Scruffy + Professor + Nibbler; docs can go to any available agent. Do NOT open watcher mutation handlers, IPC, embedding queue, or UUID write-back until quarantine restore is fully closed and coverage is done. Key invariant: named invariant tests (`17.17c` raw_imports_active_singular, `17.17d` quarantine_db_state_predicate_complete) cover already-live data-loss surfaces and should never queue behind an implementation slice.
 - **Restore re-enable slice narrowing and contract (2026-04-25):** The quarantine restore seam has two mandatory blockers before re-enable is safe: (1) post-unlink cleanup must fsync the parent directory after every unlink, and (2) install-time target absence checks must use no-replace semantics (renameat must fail if target exists at install time, not just at pre-check time). A concurrent-creation race that clobbers after pre-check but before install is a data loss surface. The gate is hard: both must be provable in code + tests before restore reopens.
+
+### 2026-04-25: Issues #79 + #80 combined fix — v0.9.7 release routing
+
+**What:** Routed issues #79 (install.sh 404 on darwin-x86_64-airgapped) and #80 (fs_safety.rs macOS compile error) as a single release lane. Both issues had a shared root cause: all macOS builds failed in v0.9.6 due to stat.st_mode type mismatch, so no macOS assets were ever uploaded.
+
+**Execution:**
+- Code fix (stat.st_mode as u32) and Cargo version bump were already committed on release/v0.9.7
+- Committed contract centralization: canonical gbrain-platform-channel schema in release.yml, install.sh, RELEASE_CHECKLIST.md; macOS CI preflight job; two new test scripts
+- Pushed release/v0.9.7 branch and opened PR #83
+
+**Routing memo:** .squad/decisions/inbox/leela-issue79-80-routing.md
+
+**Lesson:** When an installer 404 follows a release, audit the build matrix first — a compile failure upstream is more likely than an asset naming mistake. Professor's D-R79-6 gate (6 criteria) was the correct bar; only gate 6 (real release evidence) remains pending CI.
+

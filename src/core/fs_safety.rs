@@ -196,7 +196,7 @@ pub fn stat_at_nofollow<Fd: AsFd>(parent_fd: Fd, name: &Path) -> io::Result<File
         ctime_ns,
         size_bytes,
         inode,
-        mode_bits: stat.st_mode,
+        mode_bits: stat.st_mode as u32,
     })
 }
 

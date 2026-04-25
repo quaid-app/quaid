@@ -14,6 +14,7 @@ Use this when a shell installer, GitHub release workflow, and public docs all re
 ### Make one manifest authoritative
 - Define the public asset schema once: platform set, channel set, binary names, checksum names.
 - Derive installer lookup, release verification, and docs/checklist wording from that same contract whenever possible.
+- Prefer a checked-in plain-text manifest (for example `.github/release-assets.txt`) so bash tests and GitHub Actions can consume the exact same file without code generation.
 
 ### Fail closed on incomplete releases
 - A tag is not shippable if any promised asset is missing, even when other platform jobs succeeded.

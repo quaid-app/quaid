@@ -2155,6 +2155,8 @@ gbrain/
 │   ├── gbrain-darwin-arm64-online
 │   ├── gbrain-darwin-x86_64-airgapped
 │   ├── gbrain-darwin-x86_64-online
+│   ├── gbrain-linux-aarch64-airgapped
+│   ├── gbrain-linux-aarch64-online
 │   ├── gbrain-linux-x86_64-airgapped
 │   └── gbrain-linux-x86_64-online
 │

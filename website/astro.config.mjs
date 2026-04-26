@@ -2,8 +2,8 @@ import { defineConfig } from "astro/config";
 import mdx from "@astrojs/mdx";
 import starlight from "@astrojs/starlight";
 
-const repo = process.env.GITHUB_REPOSITORY?.split("/")?.[1] ?? "gigabrain";
-const owner = process.env.GITHUB_REPOSITORY_OWNER ?? "macro88";
+const repo = process.env.GITHUB_REPOSITORY?.split("/")?.[1] ?? "quaid";
+const owner = process.env.GITHUB_REPOSITORY_OWNER ?? "quaid-app";
 const isGitHubActions = process.env.GITHUB_ACTIONS === "true";
 
 export default defineConfig({
@@ -12,7 +12,7 @@ export default defineConfig({
   trailingSlash: "always",
   integrations: [
     starlight({
-      title: "GigaBrain",
+      title: "Quaid",
       description:
         "The personal knowledge brain. SQLite + FTS5 + vector embeddings in one file.",
       customCss: ["./src/styles/custom.css"],
@@ -24,13 +24,13 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/macro88/gigabrain",
+          href: "https://github.com/quaid-app/quaid",
         },
       ],
       sidebar: [
         {
           label: "Start here",
-          items: ["start-here/welcome", "why-gigabrain"],
+          items: ["start-here/welcome", "why-quaid"],
         },
         {
           label: "Tutorials",

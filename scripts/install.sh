@@ -118,13 +118,24 @@ detect_profile() {
 
   # Create the profile file if it does not exist
   if [ ! -f "$PROFILE_FILE" ]; then
-    if [ ! -d "$profile_dir" ] || [ ! -w "$profile_dir" ]; then
+    if [ ! -d "$profile_dir" ]; then
       printf '%s\n' "Warning: Cannot create shell profile ${PROFILE_FILE}; ${profile_dir} is not writable." >&2
       return 1
     fi
 
+    # Probe actual write access: `[ -w dir ]` is unreliable on platforms where
+    # chmod does not enforce directory write-access (e.g. Windows NTFS via Git
+    # Bash), so a real I/O probe is the only portable gate.
+    _probe="${profile_dir}/.quaid_install_probe_$$"
+    if ! printf '' > "$_probe" 2>/dev/null; then
+      rm -f "$_probe" 2>/dev/null || true
+      printf '%s\n' "Warning: Cannot create shell profile ${PROFILE_FILE}; ${profile_dir} is not writable." >&2
+      return 1
+    fi
+    rm -f "$_probe" 2>/dev/null || true
+
     if ! touch "$PROFILE_FILE" 2>/dev/null; then
-      printf '%s\n' "Warning: Failed to create shell profile ${PROFILE_FILE}." >&2
+      printf '%s\n' "Warning: Cannot create shell profile ${PROFILE_FILE}; ${profile_dir} is not writable." >&2
       return 1
     fi
   fi

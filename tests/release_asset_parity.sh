@@ -143,7 +143,7 @@ fi
 
 # ── T8: spec docs describe the channel-suffixed schema ──
 if grep -Fq 'gbrain-<platform>-<channel>' "$SCRIPT_DIR/docs/spec.md" && \
-   grep -Fq 'gbrain-<platform>-<channel>' "$SCRIPT_DIR/website/src/content/docs/reference/spec.md"; then
+   grep -Fq 'gbrain-<platform>-<channel>' "$SCRIPT_DIR/website/src/content/docs/contributing/specification.md"; then
   ok "T8: spec docs describe the channel-suffixed release asset schema"
 else
   not_ok "T8: spec docs are missing the channel-suffixed release asset schema"

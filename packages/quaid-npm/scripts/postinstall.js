@@ -7,32 +7,32 @@ const packageJson = require("../package.json");
 
 const version = packageJson.version;
 const tag = `v${version}`;
-const repo = process.env.GBRAIN_REPO || "macro88/gigabrain";
-const releaseBaseUrl = process.env.GBRAIN_RELEASE_BASE_URL || `https://github.com/${repo}/releases/download`;
+const repo = process.env.QUAID_REPO || "quaid-app/quaid";
+const releaseBaseUrl = process.env.QUAID_RELEASE_BASE_URL || `https://github.com/${repo}/releases/download`;
 const releaseTagUrl =
-  process.env.GBRAIN_RELEASE_TAG_URL || `https://github.com/${repo}/releases/tag/${tag}`;
+  process.env.QUAID_RELEASE_TAG_URL || `https://github.com/${repo}/releases/tag/${tag}`;
 
 function platformToAsset() {
   if (process.platform === "darwin" && process.arch === "arm64") {
-    return "gbrain-darwin-arm64-online";
+    return "quaid-darwin-arm64-online";
   }
   if (process.platform === "darwin" && process.arch === "x64") {
-    return "gbrain-darwin-x86_64-online";
+    return "quaid-darwin-x86_64-online";
   }
   if (process.platform === "linux" && process.arch === "x64") {
-    return "gbrain-linux-x86_64-online";
+    return "quaid-linux-x86_64-online";
   }
   if (process.platform === "linux" && process.arch === "arm64") {
-    return "gbrain-linux-aarch64-online";
+    return "quaid-linux-aarch64-online";
   }
   return null;
 }
 
 function manualInstallMessage(reason) {
-  console.warn(`[gbrain] ${reason}`);
-  console.warn("[gbrain] npm installs the online BGE-small channel only.");
-  console.warn(`[gbrain] Install manually from ${releaseTagUrl}`);
-  console.warn("[gbrain] Need an offline-safe build? Download the airgapped release asset or use the shell installer.");
+  console.warn(`[quaid] ${reason}`);
+  console.warn("[quaid] npm installs the online BGE-small channel only.");
+  console.warn(`[quaid] Install manually from ${releaseTagUrl}`);
+  console.warn("[quaid] Need an offline-safe build? Download the airgapped release asset or use the shell installer.");
 }
 
 function gracefulSkip(reason) {
@@ -47,7 +47,7 @@ function request(url, redirectCount = 0) {
       url,
       {
         headers: {
-          "user-agent": "gbrain-npm-postinstall"
+          "user-agent": "quaid-npm-postinstall"
         },
         timeout: timeoutMs
       },
@@ -131,10 +131,10 @@ async function sha256(filePath) {
 
 function printDbTip() {
   console.log("");
-  console.log("Tip: Set GBRAIN_DB in your shell profile to avoid passing --db on every command:");
-  console.log('  export GBRAIN_DB="$HOME/brain.db"');
+  console.log("Tip: Set QUAID_DB in your shell profile to avoid passing --db on every command:");
+  console.log('  export QUAID_DB="$HOME/.quaid/memory.db"');
   console.log("");
-  console.log("The shell installer (scripts/install.sh) writes PATH and GBRAIN_DB to your");
+  console.log("The shell installer (scripts/install.sh) writes PATH and QUAID_DB to your");
   console.log("shell profile automatically. If you installed via npm, add the line above to");
   console.log("your ~/.zshrc, ~/.bashrc, or ~/.profile manually.");
 }
@@ -149,8 +149,8 @@ async function main() {
   const binaryUrl = `${releaseBaseUrl}/${tag}/${assetName}`;
   const checksumUrl = `${binaryUrl}.sha256`;
   const binDir = path.join(__dirname, "..", "bin");
-  const binaryPath = path.join(binDir, "gbrain.bin");
-  const tempBinaryPath = path.join(binDir, "gbrain.download");
+  const binaryPath = path.join(binDir, "quaid.bin");
+  const tempBinaryPath = path.join(binDir, "quaid.download");
 
   try {
     const [checksumText] = await Promise.all([
@@ -171,7 +171,7 @@ async function main() {
     await fs.promises.rename(tempBinaryPath, binaryPath);
     fs.chmodSync(binaryPath, 0o755);
 
-    console.log(`[gbrain] Installed ${assetName} (online channel) from GitHub Releases.`);
+    console.log(`[quaid] Installed ${assetName} (online channel) from GitHub Releases.`);
     printDbTip();
   } catch (error) {
     await fs.promises.rm(tempBinaryPath, { force: true }).catch(() => {});
@@ -182,7 +182,7 @@ async function main() {
       return;
     }
 
-    console.error(`[gbrain] ${message}`);
+    console.error(`[quaid] ${message}`);
     process.exitCode = 1;
   }
 }

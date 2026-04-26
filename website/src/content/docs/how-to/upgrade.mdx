@@ -6,7 +6,39 @@ guide:
   accentBar: true
 ---
 
+import { Aside } from '@astrojs/starlight/components';
+
 The `upgrade` skill walks an agent through this; this page is the same workflow for humans. It covers the version check, the safe-replace, and the post-upgrade validation.
+
+<Aside type="danger" title="Hard-breaking rename — manual migration required">
+**If you are upgrading from any pre-rename version** (any release built before the `quaid-hard-rename` change landed), this is not a routine patch. Every user-facing surface changed at once:
+
+| Surface | Before | After |
+|---------|--------|-------|
+| Binary | *(legacy name)* | `quaid` |
+| MCP tools | *(legacy prefix)*`_*` | `memory_*` (all 17 tools) |
+| Env vars | *(legacy prefix)*`_*` | `QUAID_*` |
+| Default DB path | *(legacy path)* | `~/.quaid/memory.db` |
+| npm package | *(legacy name)* | `quaid` |
+
+**Required manual steps — the new binary will not do these for you:**
+
+1. **Uninstall the old binary** and install `quaid` via the shell installer or GitHub Releases.
+2. **Update every MCP client config** (Claude Code `.mcp.json`, Cursor, or any other client) to use the new binary path and the `memory_*` tool names. Clients will silently see zero tools until this is done.
+3. **Update shell profile exports**: replace any old-prefix env vars with `QUAID_DB`, `QUAID_MODEL`, `QUAID_CHANNEL`, etc.
+4. **Migrate your database** — existing databases are incompatible with `quaid`:
+   ```bash
+   # Export with the old binary (while it is still installed)
+   <old-binary> export > backup/
+
+   # Install quaid, then re-init and import
+   quaid init ~/.quaid/memory.db
+   quaid import backup/
+   ```
+5. **Uninstall the old npm package** if you installed via npm: `npm uninstall -g <old-package-name>`, then `npm install -g quaid`.
+
+No shims, no aliases, no automatic migration. See the full migration reference in `MIGRATION.md` at the repository root.
+</Aside>
 
 ## Check what you have
 
@@ -15,7 +47,7 @@ quaid version
 quaid stats
 ```
 
-Note the binary version and the schema version on the memory (`schema_version` in `brain_config`, currently `5`).
+Note the binary version and the schema version on the memory (`schema_version` in `quaid_config`, currently `5`).
 
 ## Find the new release
 

@@ -1,7 +1,11 @@
 # Rust build artifacts
 /target/
 
-# Local SQLite working data
+# Local SQLite working data (current default: memory.db; legacy default: brain.db — both ignored)
+/memory.db
+/memory.db-journal
+/memory.db-shm
+/memory.db-wal
 /brain.db
 /brain.db-journal
 /brain.db-shm
@@ -26,6 +30,6 @@ Thumbs.db
 # Benchmark datasets (downloaded by prep_datasets.sh — never committed)
 benchmarks/datasets/
 
-# npm postinstall downloaded binary
-packages/gbrain-npm/bin/gbrain.bin
-packages/gbrain-npm/bin/gbrain.download
+# npm postinstall downloaded binary (quaid-npm)
+packages/quaid-npm/bin/quaid.bin
+packages/quaid-npm/bin/quaid.download

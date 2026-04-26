@@ -1,9 +1,9 @@
 {
-  "name": "gbrain",
+  "name": "quaid",
   "version": "0.9.8",
-  "description": "GigaBrain personal knowledge brain CLI (online BGE-small channel)",
+  "description": "Quaid personal memory CLI (online BGE-small channel)",
   "bin": {
-    "gbrain": "bin/gbrain"
+    "quaid": "bin/quaid"
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js"
@@ -20,12 +20,12 @@
     "arm64"
   ],
   "files": [
-    "bin/gbrain",
+    "bin/quaid",
     "scripts/postinstall.js",
     "README.md"
   ],
   "keywords": [
-    "gigabrain",
+    "quaid",
     "sqlite",
     "mcp",
     "knowledge-base"
@@ -33,6 +33,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/macro88/gigabrain.git"
+    "url": "git+https://github.com/quaid-app/quaid.git"
   }
 }

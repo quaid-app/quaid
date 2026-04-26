@@ -1,23 +1,23 @@
 #!/usr/bin/env sh
-# Wrapper shipped with the gbrain npm package.
-# postinstall.js downloads the native binary as gbrain.bin alongside this script.
+# Wrapper shipped with the quaid npm package.
+# postinstall.js downloads the native binary as quaid.bin alongside this script.
 # If the binary wasn't downloaded (unsupported platform, network failure, CI skip),
 # print guidance instead of failing silently.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-NATIVE_BIN="${SCRIPT_DIR}/gbrain.bin"
+NATIVE_BIN="${SCRIPT_DIR}/quaid.bin"
 
 if [ -x "$NATIVE_BIN" ]; then
   exec "$NATIVE_BIN" "$@"
 fi
 
-echo "gbrain: native binary not found at ${NATIVE_BIN}" >&2
+echo "quaid: native binary not found at ${NATIVE_BIN}" >&2
 echo "" >&2
 echo "The postinstall download may have been skipped (unsupported platform, network" >&2
 echo "failure, or CI environment). Install manually:" >&2
 echo "" >&2
-echo "  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh" >&2
+echo "  curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh" >&2
 echo "" >&2
 echo "npm installs the online channel only. For an offline-safe build, download an" >&2
-echo "airgapped asset from: https://github.com/macro88/gigabrain/releases" >&2
+echo "airgapped asset from: https://github.com/quaid-app/quaid/releases" >&2
 exit 1

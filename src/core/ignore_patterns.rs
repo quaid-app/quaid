@@ -1,6 +1,6 @@
 // Ignore pattern handling for vault sync.
 //
-// The `.gbrainignore` file on disk is authoritative. The `collections.ignore_patterns`
+// The `.quaidignore` file on disk is authoritative. The `collections.ignore_patterns`
 // DB column is a cached mirror. Atomic parsing ensures the mirror is only updated
 // when the entire file is valid.
 
@@ -15,7 +15,7 @@ use std::path::Path;
 // ── Built-in Defaults ─────────────────────────────────────────
 
 /// Built-in ignore patterns applied to every collection.
-/// User patterns in `.gbrainignore` are layered on top.
+/// User patterns in `.quaidignore` are layered on top.
 pub fn builtin_patterns() -> &'static [&'static str] {
     &[
         ".obsidian/**",
@@ -28,7 +28,7 @@ pub fn builtin_patterns() -> &'static [&'static str] {
 
 // ── Parse Error ───────────────────────────────────────────────
 
-/// Structured parse error for a single line in `.gbrainignore`.
+/// Structured parse error for a single line in `.quaidignore`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IgnoreParseError {
     pub code: String,
@@ -52,7 +52,7 @@ impl IgnoreParseError {
             code: "file_stably_absent_but_clear_not_confirmed".to_owned(),
             line: 0,
             raw: String::new(),
-            message: ".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly".to_owned(),
+            message: ".quaidignore absent but prior mirror exists; use `quaid collection ignore clear <name> --confirm` to clear explicitly".to_owned(),
         }
     }
 }
@@ -72,7 +72,7 @@ enum MissingFileMode {
     ClearMirror,
 }
 
-/// Atomic parse of `.gbrainignore`: validate every non-comment line before any effect.
+/// Atomic parse of `.quaidignore`: validate every non-comment line before any effect.
 ///
 /// Returns `Valid(patterns)` if all lines are valid or comment/blank.
 /// Returns `Invalid(errors)` if any line fails `globset::Glob::new`.
@@ -108,12 +108,12 @@ pub fn parse_ignore_file(content: &str) -> ParseResult {
 
 // ── Reload Patterns (sole writer of collections.ignore_patterns) ──
 
-/// Reload patterns from `.gbrainignore` and update the DB mirror.
+/// Reload patterns from `.quaidignore` and update the DB mirror.
 ///
 /// This is the SOLE writer of `collections.ignore_patterns`. Invoked by:
-/// - The watcher on `.gbrainignore` events
-/// - `gbrain serve` startup
-/// - `gbrain collection ignore add|remove|clear` (after file write)
+/// - The watcher on `.quaidignore` events
+/// - `quaid serve` startup
+/// - `quaid collection ignore add|remove|clear` (after file write)
 ///
 /// # Behavior
 ///
@@ -150,7 +150,7 @@ fn reload_patterns_with_mode(
     root_path: &Path,
     missing_file_mode: MissingFileMode,
 ) -> Result<(), ReloadError> {
-    let ignore_path = root_path.join(".gbrainignore");
+    let ignore_path = root_path.join(".quaidignore");
     let file_exists = ignore_path.exists();
 
     // Check if there's a prior mirror
@@ -191,7 +191,7 @@ fn reload_patterns_with_mode(
 
     // File exists → parse it
     let content = fs::read_to_string(&ignore_path)
-        .map_err(|e| ReloadError::IoError(format!("Failed to read .gbrainignore: {}", e)))?;
+        .map_err(|e| ReloadError::IoError(format!("Failed to read .quaidignore: {}", e)))?;
 
     match parse_ignore_file(&content) {
         ParseResult::Valid(patterns) => {
@@ -229,7 +229,7 @@ impl std::fmt::Display for ReloadError {
             Self::DbError(msg) => write!(f, "Database error: {}", msg),
             Self::IoError(msg) => write!(f, "I/O error: {}", msg),
             Self::ParseErrors(errors) => {
-                write!(f, "Parse errors in .gbrainignore ({} lines):", errors.len())?;
+                write!(f, "Parse errors in .quaidignore ({} lines):", errors.len())?;
                 for e in errors {
                     write!(f, "\n  Line {}: {}", e.line, e.message)?;
                 }
@@ -262,7 +262,7 @@ pub fn build_globset(conn: &Connection, collection_id: i64) -> Result<GlobSet, S
 
 /// Build a `GlobSet` from built-ins plus a serialized ignore mirror payload.
 ///
-/// This is used by the reconciler after `.gbrainignore` has been atomically
+/// This is used by the reconciler after `.quaidignore` has been atomically
 /// reloaded into `collections.ignore_patterns`.
 pub fn build_globset_from_patterns(user_patterns_json: Option<&str>) -> Result<GlobSet, String> {
     let mut builder = GlobSetBuilder::new();
@@ -414,7 +414,7 @@ mod tests {
         let conn = open_collection_db();
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let ignore_file = temp_dir.path().join(".gbrainignore");
+        let ignore_file = temp_dir.path().join(".quaidignore");
         fs::write(&ignore_file, "*.tmp\n*.bak\n").unwrap();
 
         insert_collection_with_mirror(&conn, temp_dir.path(), None, None);
@@ -433,7 +433,7 @@ mod tests {
         let conn = open_collection_db();
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let ignore_file = temp_dir.path().join(".gbrainignore");
+        let ignore_file = temp_dir.path().join(".quaidignore");
         fs::write(&ignore_file, "[invalid\n").unwrap();
 
         insert_collection_with_mirror(
@@ -505,7 +505,7 @@ mod tests {
     fn reload_patterns_valid_file_clears_prior_parse_errors() {
         let conn = open_collection_db();
         let temp_dir = tempfile::tempdir().unwrap();
-        let ignore_file = temp_dir.path().join(".gbrainignore");
+        let ignore_file = temp_dir.path().join(".quaidignore");
         fs::write(&ignore_file, "archive/**\n").unwrap();
         let prior_errors = serde_json::to_string(&vec![IgnoreParseError {
             code: "parse_error".to_owned(),

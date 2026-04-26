@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use gbrain::core::db;
-use gbrain::core::migrate::{export_dir, import_dir};
+use quaid::core::db;
+use quaid::core::migrate::{export_dir, import_dir};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 

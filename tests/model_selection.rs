@@ -1,11 +1,11 @@
 #![cfg(feature = "online-model")]
 
-use gbrain::core::{db, inference};
+use quaid::core::{db, inference};
 
 #[test]
 fn init_small_open_large_returns_model_mismatch() {
     let dir = tempfile::TempDir::new().expect("create temp dir");
-    let db_path = dir.path().join("brain.db");
+    let db_path = dir.path().join("memory.db");
     let path = db_path.to_str().expect("utf8 path");
 
     db::init(path, &inference::resolve_model("small")).expect("init small db");
@@ -21,7 +21,7 @@ fn init_small_open_large_returns_model_mismatch() {
 #[test]
 fn init_large_open_large_succeeds() {
     let dir = tempfile::TempDir::new().expect("create temp dir");
-    let db_path = dir.path().join("brain.db");
+    let db_path = dir.path().join("memory.db");
     let path = db_path.to_str().expect("utf8 path");
 
     db::init(path, &inference::resolve_model("large")).expect("init large db");

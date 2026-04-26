@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Creates GitHub labels and Sprint 0 / Phase 1-3 issues for GigaBrain.
+    Creates GitHub labels and Sprint 0 / Phase 1-3 issues for Quaid.
 
 .DESCRIPTION
-    Requires: gh CLI (https://cli.github.com) authenticated against macro88/gigabrain.
+    Requires: gh CLI (https://cli.github.com) authenticated against quaid-app/quaid.
     Run from the repo root:
         powershell -ExecutionPolicy Bypass -File .\scripts\create-labels-and-issues.ps1
 
@@ -23,12 +23,12 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
 
 $repoRoot = git rev-parse --show-toplevel 2>$null
 if (-not $repoRoot) {
-    Write-Error "Not inside a Git repository. Run this from the gigabrain repo root."
+    Write-Error "Not inside a Git repository. Run this from the quaid repo root."
     exit 1
 }
 
 Write-Host ""
-Write-Host "=== GigaBrain: Create Labels & Issues ===" -ForegroundColor Cyan
+Write-Host "=== Quaid: Create Labels & Issues ===" -ForegroundColor Cyan
 
 # ── Labels ───────────────────────────────────────────────────────────────────
 Write-Host ""

@@ -88,7 +88,7 @@ impl PutTestHooks {
 ///   `--expected-version`; omission fails closed before sentinel creation.
 /// - Non-Unix paths fail closed with `UnsupportedPlatformError`.
 pub fn run(db: &Connection, slug: &str, expected_version: Option<i64>) -> anyhow::Result<()> {
-    vault_sync::ensure_unix_platform("gbrain put")
+    vault_sync::ensure_unix_platform("quaid put")
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
@@ -420,7 +420,7 @@ fn persist_with_vault_write(
         }
     };
     let target_name = Path::new(target_name_os);
-    let temp_name = PathBuf::from(format!(".gbrain-write-{write_id}.tmp"));
+    let temp_name = PathBuf::from(format!(".quaid-write-{write_id}.tmp"));
     let temp_file = match create_tempfile(&parent_fd, &temp_name, raw_bytes) {
         Ok(temp_file) => temp_file,
         Err(error) => {
@@ -865,7 +865,7 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         let vault_root = dir.path().join("vault");
         std::fs::create_dir_all(&vault_root).unwrap();
@@ -887,7 +887,7 @@ mod tests {
     #[cfg(unix)]
     fn open_test_db_with_vault() -> (tempfile::TempDir, String, Connection, PathBuf) {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         conn.busy_timeout(Duration::from_millis(0)).unwrap();
         let vault_root = dir.path().join("vault");
@@ -1138,9 +1138,9 @@ mod tests {
     }
 
     #[test]
-    fn update_without_gbrain_id_frontmatter_keeps_existing_page_uuid() {
+    fn update_without_memory_id_frontmatter_keeps_existing_page_uuid() {
         let conn = open_test_db();
-        let original = "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\nOriginal.\n";
+        let original = "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\nOriginal.\n";
         put_from_string(&conn, "people/alice", original, None).unwrap();
 
         let updated = "---\ntitle: Alice\ntype: person\n---\nUpdated.\n";
@@ -1804,7 +1804,7 @@ mod tests {
         // Read back through get path
         let page = crate::commands::get::get_page(&conn, "people/carol").unwrap();
         let rendered = markdown::render_page(&page);
-        assert!(rendered.contains("gbrain_id: "));
+        assert!(rendered.contains("memory_id: "));
         assert!(rendered.contains("title: Carol"));
         assert!(rendered.contains("type: person"));
         assert!(rendered.contains("# Carol\n\nCarol builds things."));
@@ -1812,9 +1812,9 @@ mod tests {
     }
 
     #[test]
-    fn put_render_cannot_strip_existing_gbrain_id_when_update_omits_it() {
+    fn put_render_cannot_strip_existing_memory_id_when_update_omits_it() {
         let conn = open_test_db();
-        let original = "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Carol\ntype: person\n---\n# Carol\n\nOriginal.\n";
+        let original = "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Carol\ntype: person\n---\n# Carol\n\nOriginal.\n";
         put_from_string(&conn, "people/carol", original, None).unwrap();
 
         let updated = "---\ntitle: Carol\ntype: person\n---\n# Carol\n\nUpdated.\n";
@@ -1824,8 +1824,8 @@ mod tests {
         let rendered = markdown::render_page(&page);
 
         assert!(
-            rendered.contains("gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
-            "brain_put must not let a UUID-bearing page render back out without gbrain_id"
+            rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
+            "memory_put must not let a UUID-bearing page render back out without memory_id"
         );
     }
 

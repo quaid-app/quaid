@@ -10,34 +10,20 @@ import { Aside } from '@astrojs/starlight/components';
 
 The `upgrade` skill walks an agent through this; this page is the same workflow for humans. It covers the version check, the safe-replace, and the post-upgrade validation.
 
-<Aside type="danger" title="Hard-breaking rename — manual migration required">
-**If you are upgrading from any pre-rename version** (any release built before the `quaid-hard-rename` change landed), this is not a routine patch. Every user-facing surface changed at once:
+<Aside type="danger" title="Hard break — no in-place upgrade path from pre-rename releases">
+**If you are on any pre-rename release, this is not a routine patch.** Every user-facing
+surface changed at once: the binary name, all environment variables, all MCP tool names,
+the default database path, and the internal schema configuration table. There are no shims,
+no aliases, and no automatic migration.
 
-| Surface | Before | After |
-|---------|--------|-------|
-| Binary | *(legacy name)* | `quaid` |
-| MCP tools | *(legacy prefix)*`_*` | `memory_*` (all 17 tools) |
-| Env vars | *(legacy prefix)*`_*` | `QUAID_*` |
-| Default DB path | *(legacy path)* | `~/.quaid/memory.db` |
-| npm package | *(legacy name)* | `quaid` |
+**You cannot upgrade in place. You must start fresh:**
 
-**Required manual steps — the new binary will not do these for you:**
+1. Install `quaid` via the shell installer or GitHub Releases.
+2. Rebuild every MCP client config (`command: quaid`, `args: ["serve"]`, `memory_*` tool prefix). Clients silently expose zero tools until this is done.
+3. Update shell profile exports to `QUAID_DB`, `QUAID_MODEL`, `QUAID_CHANNEL`, etc.
+4. Pre-rename databases are schema-incompatible with `quaid` (`SCHEMA_VERSION` is now `6`). To recover data, use your pre-rename binary to export pages, then run `quaid init` and `quaid import`. If you no longer have that binary, consult the GitHub Release history for that project — this repository does not carry a migration tool.
 
-1. **Uninstall the old binary** and install `quaid` via the shell installer or GitHub Releases.
-2. **Update every MCP client config** (Claude Code `.mcp.json`, Cursor, or any other client) to use the new binary path and the `memory_*` tool names. Clients will silently see zero tools until this is done.
-3. **Update shell profile exports**: replace any old-prefix env vars with `QUAID_DB`, `QUAID_MODEL`, `QUAID_CHANNEL`, etc.
-4. **Migrate your database** — existing databases are incompatible with `quaid`:
-   ```bash
-   # Export with the old binary (while it is still installed)
-   <old-binary> export > backup/
-
-   # Install quaid, then re-init and import
-   quaid init ~/.quaid/memory.db
-   quaid import backup/
-   ```
-5. **Uninstall the old npm package** if you installed via npm: `npm uninstall -g <old-package-name>`, then `npm install -g quaid`.
-
-No shims, no aliases, no automatic migration. See the full migration reference in `MIGRATION.md` at the repository root.
+No shims, no aliases, no automatic migration. Full surface reference: [`MIGRATION.md`](https://github.com/quaid-app/quaid/blob/main/MIGRATION.md).
 </Aside>
 
 ## Check what you have
@@ -47,7 +33,7 @@ quaid version
 quaid stats
 ```
 
-Note the binary version and the schema version on the memory (`schema_version` in `quaid_config`, currently `5`).
+Note the binary version and the schema version on the memory (`schema_version` in `quaid_config`, currently `6`).
 
 ## Find the new release
 
@@ -103,10 +89,10 @@ The atomic `mv` is safe even with the binary in use, but the running process kee
 
 ```bash
 quaid version                                # should show new version
-quaid validate --db ~/memory.db               # all integrity checks
-quaid stats --db ~/memory.db                  # confirm schema_version
+quaid validate --db ~/.quaid/memory.db        # all integrity checks
+quaid stats --db ~/.quaid/memory.db           # confirm schema_version
 quaid skills doctor                          # confirm embedded skills updated correctly
-quaid query "any test query" --db ~/memory.db  # smoke test
+quaid query "any test query" --db ~/.quaid/memory.db  # smoke test
 ```
 
 If any check fails, **stop and roll back.** Don't try to fix forward; the release notes will tell you whether the failure is expected (e.g. a schema migration that needs manual approval) or a regression.
@@ -123,7 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/instal
 quaid version    # confirm
 ```
 
-Memory databases written by a newer version may carry forward-incompatible state (a future schema, an unrecognized config row). Rolling back works cleanly if no migration ran; if a migration did run, restore your `memory.db` from backup.
+Memory databases written by a newer version may carry forward-incompatible state (a future schema, an unrecognized config row). Rolling back works cleanly if no migration ran; if a migration did run, restore your `~/.quaid/memory.db` backup (or the custom path from `QUAID_DB` / `--db`).
 
 ## Schema migrations
 

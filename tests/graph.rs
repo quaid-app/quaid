@@ -1,7 +1,7 @@
-//! Integration tests for `gbrain graph` (tasks 2.5).
+//! Integration tests for `quaid graph` (tasks 2.5).
 
-use gbrain::core::db;
-use gbrain::core::graph::{self, TemporalFilter};
+use quaid::core::db;
+use quaid::core::graph::{self, TemporalFilter};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -75,7 +75,7 @@ fn graph_cli_human_output_nests_depth_two_edges_under_their_parent() {
     );
 
     let mut out = Vec::<u8>::new();
-    gbrain::commands::graph::run_to(&conn, "people/alice", 2, "current", false, &mut out).unwrap();
+    quaid::commands::graph::run_to(&conn, "people/alice", 2, "current", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
     let lines: Vec<_> = output.lines().collect();
 
@@ -100,7 +100,7 @@ fn graph_cli_human_output_skips_self_link_back_to_root() {
     insert_link(&conn, "people/alice", "people/alice", "knows", None, None);
 
     let mut out = Vec::<u8>::new();
-    gbrain::commands::graph::run_to(&conn, "people/alice", 1, "current", false, &mut out).unwrap();
+    quaid::commands::graph::run_to(&conn, "people/alice", 1, "current", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
 
     assert_eq!(
@@ -133,7 +133,7 @@ fn graph_cli_human_self_link_plus_real_neighbour_renders_only_neighbour() {
     );
 
     let mut out = Vec::<u8>::new();
-    gbrain::commands::graph::run_to(&conn, "people/alice", 1, "current", false, &mut out).unwrap();
+    quaid::commands::graph::run_to(&conn, "people/alice", 1, "current", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
     let lines: Vec<_> = output.lines().collect();
 
@@ -163,7 +163,7 @@ fn graph_cli_human_output_skips_cycle_back_to_root() {
     insert_link(&conn, "b", "a", "related", None, None);
 
     let mut out = Vec::<u8>::new();
-    gbrain::commands::graph::run_to(&conn, "a", 2, "all", false, &mut out).unwrap();
+    quaid::commands::graph::run_to(&conn, "a", 2, "all", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
 
     assert_eq!(
@@ -193,7 +193,7 @@ fn graph_cli_json_output_has_nodes_and_edges() {
     );
 
     let mut out = Vec::<u8>::new();
-    gbrain::commands::graph::run_to(&conn, "people/alice", 2, "current", true, &mut out).unwrap();
+    quaid::commands::graph::run_to(&conn, "people/alice", 2, "current", true, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
 
     let parsed: serde_json::Value =
@@ -242,7 +242,7 @@ fn graph_cli_unknown_slug_returns_error() {
 
     let mut out = Vec::<u8>::new();
     let result =
-        gbrain::commands::graph::run_to(&conn, "nobody/ghost", 1, "current", false, &mut out);
+        quaid::commands::graph::run_to(&conn, "nobody/ghost", 1, "current", false, &mut out);
     assert!(result.is_err());
     assert!(
         result.unwrap_err().to_string().contains("page not found"),

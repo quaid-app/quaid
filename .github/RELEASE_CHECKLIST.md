@@ -64,14 +64,21 @@ release whose checklist, docs, or workflow diverge from this schema.
 
 ---
 
+## Supported install paths for this release
+
+The following install paths are **live and supported**:
+
+- GitHub Releases binaries (`quaid-<platform>-<channel>`) — airgapped + online, all 4 platforms
+- Shell installer (`install.sh`) — `curl -fsSL <url>/install.sh | sh` (airgapped default) or `| QUAID_CHANNEL=online sh`
+- Build from source (`cargo build --release`)
+
 ## Deferred distribution channels
 
 The following channels are **not supported** in this release. Confirm none appear as current options:
 
-- [ ] `npm install -g quaid` — not available; label as planned follow-on if mentioned
-- [ ] `curl | sh` one-command installer — not available; label as planned follow-on if mentioned
+- [ ] `npm install -g quaid` — not available; label as **planned follow-on, not yet live** if mentioned anywhere
 - [ ] Homebrew tap, winget, or any other package manager entry — not available; label as planned follow-on if mentioned
-- [ ] Release notes do not promise npm publishing or a simplified installer in this version
+- [ ] Release notes do not promise npm publishing in this version
 
 ---
 
@@ -92,10 +99,7 @@ notes and the upgrade guide before shipping:
 - [ ] DB migration path documented: existing databases are incompatible. Users must export with
   the old binary, run `quaid init ~/.quaid/memory.db`, then `quaid import <backup/>`.
   No automatic migration is provided.
-- [ ] npm package name change documented: the npm package is now `quaid` (not the legacy name).
-  Existing global installs of the old package must be uninstalled separately.
-- [ ] `packages/quaid-npm/` is committed and tracked; `packages/gbrain-npm/` is fully removed
-  from the tree. The publish workflow will fail if `packages/quaid-npm/` is absent.
+- [ ] npm package name change noted: `quaid` on npm is staged but **not yet in the public registry**. If a user previously installed under the pre-rename name, they should uninstall that package using npm, then install via the shell installer or GitHub Releases binary until npm is live. No `packages/quaid-npm/` gate applies to this release — npm publishing is a follow-on.
 
 ---
 

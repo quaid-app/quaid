@@ -27,7 +27,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
 | GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.8` airgapped + online assets |
-| `npm install -g quaid` | 🚧 Staged — online channel by default once published |
+| `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
 > **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
@@ -65,7 +65,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
 > export PATH="$HOME/.local/bin:$PATH"
-> export QUAID_DB="$HOME/memory.db"
+> export QUAID_DB="$HOME/.quaid/memory.db"
 > ```
 > For CI/agent environments that manage PATH externally, skip profile writes with `QUAID_NO_PROFILE=1`.
 
@@ -75,12 +75,12 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 quaid init ~/.quaid/memory.db
 ```
 
-This creates a new `memory.db` file with the full v5 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (in `v0.9.6`) collections, file_state, and raw_imports tables.
+This creates a new `memory.db` file with the full v6 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (in `v0.9.6`) collections, file_state, and raw_imports tables.
 
 ### 2. Import or attach an existing markdown directory
 
 ```bash
-quaid import /path/to/notes/ --db ~/memory.db
+quaid import /path/to/notes/ --db ~/.quaid/memory.db
 ```
 
 Quaid ingests each markdown file, parses frontmatter, splits compiled-truth from timeline, generates embeddings, and writes to the database. Ingest is idempotent — re-running the same file is safe.
@@ -248,7 +248,7 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
-| `QUAID_DB` | `./memory.db` | Path to the active brain database |
+| `QUAID_DB` | `~/.quaid/memory.db` | Path to the active memory database |
 | `QUAID_NO_PROFILE` | `0` | Set to `1` to skip shell profile writes during install |
 
 ---
@@ -364,12 +364,13 @@ Exit 0 means clean; exit 1 means violations were found.
 
 ### Raw MCP tool invocation
 
-Call any MCP tool directly from the CLI without starting the server:
+Call MCP tools directly from the CLI without starting the server. The dispatcher covers all 17 shipped MCP tools, including `memory_collections`.
 
 ```bash
 quaid call memory_stats '{}'
 quaid call memory_get '{"slug": "people/alice"}'
 quaid call memory_gap '{"query": "who founded acme corp"}'
+quaid call memory_collections '{}'
 ```
 
 ### JSONL pipeline mode
@@ -392,7 +393,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands are shipped in `v0.9.6`. The current release line exposes the landed vault-sync slice while keeping Windows `serve`/restore hosting and IPC follow-ons explicitly deferred.
+> These commands are shipped in `v0.9.6`. The current release line exposes the landed vault-sync slice while keeping Windows `serve` hosting and IPC follow-ons explicitly deferred.
 
 ### Attach a vault
 
@@ -448,13 +449,7 @@ quaid collection quarantine export work --out quarantine.json
 quaid collection quarantine discard work <page-slug>
 ```
 
-> **Unix only.** `quaid collection quarantine restore` is implemented and available on Unix (macOS/Linux). On Windows it returns `UnsupportedPlatformError`. Restore moves a quarantined page back to active status, refuses occupied targets, and requires the destination parent directories to already exist:
->
-> ```bash
-> quaid collection quarantine restore work <page-slug> <relative-path>
-> ```
->
-> The IPC/online-handshake path (automatic restore on watcher reconnect) and Windows restore host support remain deferred and are not yet wired.
+> Quarantine restore is deferred in the current release. The safe landed surface is `list`, `export`, and `discard` only.
 
 Auto-sweep TTL (`QUAID_QUARANTINE_TTL_DAYS`, default 30) silently discards clean quarantined pages only — pages with DB-only state are never auto-discarded.
 

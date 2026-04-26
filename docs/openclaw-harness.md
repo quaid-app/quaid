@@ -30,7 +30,7 @@ For ongoing sync with Obsidian or any markdown vault, attach the directory as a 
 quaid collection add notes ~/Documents/Obsidian
 ```
 
-This creates the collection metadata in the v5 schema and performs the initial reconcile. In `v0.9.6`, the benchmark on a 350-page vault is about 5 seconds for `collection add`.
+This creates the collection metadata in the v6 schema and performs the initial reconcile. In `v0.9.6`, the benchmark on a 350-page vault is about 5 seconds for `collection add`.
 
 Collections are backed by the new schema tables introduced in `v0.9.6`:
 
@@ -184,4 +184,3 @@ If `ignore_parse_errors` is non-null, fix the `.quaidignore` file. If `needs_ful
 - Run `memory_query` first for agent reasoning, then fall back to `memory_search` for exact recall.
 - Use `memory_put` only for durable page updates.
 - Poll `memory_collections` during startup or incident diagnosis.
-

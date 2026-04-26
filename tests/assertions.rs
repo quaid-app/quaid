@@ -1,9 +1,9 @@
 //! Integration tests for assertions/check slice (tasks 3.5, 4.5).
 
-use gbrain::commands::check;
-use gbrain::commands::get::get_page;
-use gbrain::core::assertions::{self, AssertionError};
-use gbrain::core::db;
+use quaid::commands::check;
+use quaid::commands::get::get_page;
+use quaid::core::assertions::{self, AssertionError};
+use quaid::core::db;
 use rusqlite::Connection;
 
 fn open_test_db() -> Connection {
@@ -89,7 +89,7 @@ fn check_on_clean_page_returns_no_contradictions() {
 #[test]
 fn extract_on_missing_page_returns_page_not_found() {
     let conn = open_test_db();
-    let page = gbrain::core::types::Page {
+    let page = quaid::core::types::Page {
         slug: "people/ghost".to_string(),
         uuid: "01969f11-9448-7d79-8d3f-c68f54761299".to_string(),
         page_type: "person".to_string(),

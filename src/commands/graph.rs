@@ -7,12 +7,12 @@ use rusqlite::Connection;
 use crate::core::graph::{self, GraphError, TemporalFilter};
 use crate::core::vault_sync;
 
-/// Run the `gbrain graph` command, writing output to stdout.
+/// Run the `quaid graph` command, writing output to stdout.
 pub fn run(db: &Connection, slug: &str, depth: u32, temporal: &str, json: bool) -> Result<()> {
     run_to(db, slug, depth, temporal, json, &mut io::stdout())
 }
 
-/// Run the `gbrain graph` command, writing output to `out`.
+/// Run the `quaid graph` command, writing output to `out`.
 ///
 /// Separated from `run` so tests can capture output without spawning a subprocess.
 pub fn run_to<W: Write>(

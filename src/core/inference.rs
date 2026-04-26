@@ -196,7 +196,7 @@ pub fn coerce_model_for_build(requested: &ModelConfig) -> ModelConfig {
     {
         if !requested.is_small() {
             eprintln!(
-                "Warning: --model / GBRAIN_MODEL is only configurable in the online-model build; continuing with BAAI/bge-small-en-v1.5."
+                "Warning: --model / QUAID_MODEL is only configurable in the online-model build; continuing with BAAI/bge-small-en-v1.5."
             );
             return default_model();
         }
@@ -322,7 +322,7 @@ impl EmbeddingModel {
             },
             Err(err) => {
                 eprintln!(
-                    "Warning: embedding model {} not available ({err}), using hash-based embeddings. Rebuild the airgapped channel with `cargo build --release` or the online channel with `cargo build --release --no-default-features --features bundled,online-model`, then run `gbrain embed --all`.",
+                    "Warning: embedding model {} not available ({err}), using hash-based embeddings. Rebuild the airgapped channel with `cargo build --release` or the online channel with `cargo build --release --no-default-features --features bundled,online-model`, then run `quaid embed --all`.",
                     hydrated.model_id
                 );
                 Self {
@@ -377,13 +377,13 @@ fn load_embedded_backend(config: &ModelConfig) -> Result<EmbeddingBackend, Strin
     }
 
     let config: BertConfig =
-        serde_json::from_slice(include_bytes!(env!("GBRAIN_EMBEDDED_CONFIG_PATH")))
+        serde_json::from_slice(include_bytes!(env!("QUAID_EMBEDDED_CONFIG_PATH")))
             .map_err(|e| format!("parse embedded config.json: {e}"))?;
-    let tokenizer = Tokenizer::from_bytes(include_bytes!(env!("GBRAIN_EMBEDDED_TOKENIZER_PATH")))
+    let tokenizer = Tokenizer::from_bytes(include_bytes!(env!("QUAID_EMBEDDED_TOKENIZER_PATH")))
         .map_err(|e| format!("load embedded tokenizer: {e}"))?;
     let device = Device::Cpu;
     let vb = VarBuilder::from_slice_safetensors(
-        include_bytes!(env!("GBRAIN_EMBEDDED_MODEL_PATH")),
+        include_bytes!(env!("QUAID_EMBEDDED_MODEL_PATH")),
         DType::F32,
         &device,
     )
@@ -399,11 +399,11 @@ fn load_embedded_backend(config: &ModelConfig) -> Result<EmbeddingBackend, Strin
 
 #[cfg(feature = "online-model")]
 fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
-    // In tests, set GBRAIN_FORCE_HASH_SHIM=1 to skip the 300s download
+    // In tests, set QUAID_FORCE_HASH_SHIM=1 to skip the 300s download
     // attempt and use the deterministic hash-based shim instead.  This keeps
     // tests fast and avoids real network calls.
-    if std::env::var("GBRAIN_FORCE_HASH_SHIM").as_deref() == Ok("1") {
-        return Err("GBRAIN_FORCE_HASH_SHIM=1: skipping model download in test mode".to_owned());
+    if std::env::var("QUAID_FORCE_HASH_SHIM").as_deref() == Ok("1") {
+        return Err("QUAID_FORCE_HASH_SHIM=1: skipping model download in test mode".to_owned());
     }
     let (config_path, tokenizer_path, model_path) = download_model_files(config)?;
     let model_type = read_model_type_from_config(&config_path)?;
@@ -638,7 +638,7 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
-        .user_agent("gigabrain-runtime/0.9.8")
+        .user_agent("quaid-runtime/0.9.8")
         .build()
         .map_err(|e| format!("build download client: {e}"))?;
 
@@ -789,18 +789,18 @@ fn verify_cached_model_integrity(model: &ModelConfig, cache_dir: &Path) -> Resul
 
 #[cfg(feature = "online-model")]
 fn huggingface_base_url() -> String {
-    std::env::var("GBRAIN_HF_BASE_URL").unwrap_or_else(|_| "https://huggingface.co".to_owned())
+    std::env::var("QUAID_HF_BASE_URL").unwrap_or_else(|_| "https://huggingface.co".to_owned())
 }
 
 #[cfg(feature = "online-model")]
 fn model_cache_dir(model: &ModelConfig) -> Result<PathBuf, String> {
-    if let Ok(cache_root) = std::env::var("GBRAIN_MODEL_CACHE_DIR") {
+    if let Ok(cache_root) = std::env::var("QUAID_MODEL_CACHE_DIR") {
         return Ok(PathBuf::from(cache_root).join(cache_dir_name(model)));
     }
 
     dirs::home_dir()
         .map(|home| {
-            home.join(".gbrain")
+            home.join(".quaid")
                 .join("models")
                 .join(cache_dir_name(model))
         })
@@ -1014,7 +1014,7 @@ pub fn ensure_model() {
     let configured = runtime_model_config();
 
     // Check under lock whether a reload is needed, then release before doing
-    // the expensive download/mmap so concurrent callers (e.g. `gbrain serve`)
+    // the expensive download/mmap so concurrent callers (e.g. `quaid serve`)
     // are not blocked for the full model-load duration.
     let needs_reload = {
         let runtime = model_runtime().lock().expect("model runtime lock poisoned");
@@ -1226,8 +1226,8 @@ mod tests {
     #[cfg(feature = "online-model")]
     use std::thread;
 
-    // Guard for tests that mutate process-global env vars (GBRAIN_HF_BASE_URL,
-    // GBRAIN_MODEL_CACHE_DIR). Rust tests run in parallel by default; without
+    // Guard for tests that mutate process-global env vars (QUAID_HF_BASE_URL,
+    // QUAID_MODEL_CACHE_DIR). Rust tests run in parallel by default; without
     // this mutex those tests can observe each other's env-var changes and flake.
     static ENV_MUTATION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
         std::sync::OnceLock::new();
@@ -1261,7 +1261,7 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().expect("create temp dir");
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().expect("utf8 path")).expect("open db");
         std::mem::forget(dir);
         conn
@@ -1357,7 +1357,7 @@ mod tests {
         let _env_guard = env_mutation_lock()
             .lock()
             .expect("env mutation lock poisoned");
-        let _force_hash_shim = EnvVarGuard::set("GBRAIN_FORCE_HASH_SHIM", "1");
+        let _force_hash_shim = EnvVarGuard::set("QUAID_FORCE_HASH_SHIM", "1");
         configure_runtime_model(default_model());
         // Reset loaded model so the env var is respected.
         model_runtime().lock().expect("lock").loaded = None;
@@ -1605,13 +1605,13 @@ mod tests {
         let cache_dir = tempfile::TempDir::new().expect("create cache dir");
 
         // Hold the env-mutation lock for the duration of the test so parallel
-        // tests cannot observe our GBRAIN_HF_BASE_URL / GBRAIN_MODEL_CACHE_DIR
+        // tests cannot observe our QUAID_HF_BASE_URL / QUAID_MODEL_CACHE_DIR
         // changes. Restore previous values (if any) on drop.
         let _env_guard = env_mutation_lock()
             .lock()
             .expect("env mutation lock poisoned");
-        let _base_url = EnvVarGuard::set("GBRAIN_HF_BASE_URL", format!("http://{}", address));
-        let _cache_dir = EnvVarGuard::set("GBRAIN_MODEL_CACHE_DIR", cache_dir.path());
+        let _base_url = EnvVarGuard::set("QUAID_HF_BASE_URL", format!("http://{}", address));
+        let _cache_dir = EnvVarGuard::set("QUAID_MODEL_CACHE_DIR", cache_dir.path());
 
         let model = resolve_model("org/custom-model");
         let hydrated = hydrate_model_config(&model).expect("hydrate custom model");

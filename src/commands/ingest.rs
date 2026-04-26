@@ -152,7 +152,7 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         std::mem::forget(dir);
         conn
@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn ingest_without_gbrain_id_keeps_source_file_bytes_unchanged() {
+    fn ingest_without_memory_id_keeps_source_file_bytes_unchanged() {
         let conn = open_test_db();
         let dir = tempfile::TempDir::new().unwrap();
         let file_path = dir.path().join("no-id.md");
@@ -529,13 +529,13 @@ mod tests {
     }
 
     #[test]
-    fn ingest_preserves_existing_gbrain_id_in_stored_frontmatter() {
+    fn ingest_preserves_existing_memory_id_in_stored_frontmatter() {
         let conn = open_test_db();
         let dir = tempfile::TempDir::new().unwrap();
         let file_path = dir.path().join("with-id.md");
         fs::write(
             &file_path,
-            "---\ngbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+            "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
         )
         .unwrap();
 
@@ -552,19 +552,19 @@ mod tests {
             serde_json::from_str(&frontmatter_json).unwrap();
 
         assert_eq!(
-            frontmatter.get("gbrain_id").map(String::as_str),
+            frontmatter.get("memory_id").map(String::as_str),
             Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
     }
 
     #[test]
-    fn ingest_adopts_frontmatter_gbrain_id_as_page_uuid() {
+    fn ingest_adopts_frontmatter_memory_id_as_page_uuid() {
         let conn = open_test_db();
         let dir = tempfile::TempDir::new().unwrap();
         let file_path = dir.path().join("with-id.md");
         fs::write(
             &file_path,
-            "---\ngbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+            "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
         )
         .unwrap();
 
@@ -625,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn ingest_without_gbrain_id_generates_uuid_and_keeps_git_clean() {
+    fn ingest_without_memory_id_generates_uuid_and_keeps_git_clean() {
         let conn = open_test_db();
         let repo_dir = tempfile::TempDir::new().unwrap();
         let file_path = repo_dir.path().join("note.md");

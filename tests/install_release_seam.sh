@@ -29,21 +29,21 @@ mkdir -p "$STUBS_DIR"
 cat > "$STUBS_DIR/uname" <<'EOF'
 #!/usr/bin/env sh
 case "${1:-}" in
-  -s) printf '%s\n' "${GBRAIN_TEST_UNAME_S:?}" ;;
-  -m) printf '%s\n' "${GBRAIN_TEST_UNAME_M:?}" ;;
+  -s) printf '%s\n' "${QUAID_TEST_UNAME_S:?}" ;;
+  -m) printf '%s\n' "${QUAID_TEST_UNAME_M:?}" ;;
   *) exec /usr/bin/uname "$@" ;;
 esac
 EOF
 chmod +x "$STUBS_DIR/uname"
 
-GBRAIN_TEST_MODE=1
-GBRAIN_RELEASE_API_URL="https://example.invalid"
-GBRAIN_RELEASE_BASE_URL="https://example.invalid"
-GBRAIN_INSTALL_DIR="$TEST_ROOT/bin"
-GBRAIN_CHANNEL="airgapped"
-GBRAIN_VERSION="v0.0.0-test"
+QUAID_TEST_MODE=1
+QUAID_RELEASE_API_URL="https://example.invalid"
+QUAID_RELEASE_BASE_URL="https://example.invalid"
+QUAID_INSTALL_DIR="$TEST_ROOT/bin"
+QUAID_CHANNEL="airgapped"
+QUAID_VERSION="v0.0.0-test"
 HOME="$TEST_ROOT/home"
-mkdir -p "$GBRAIN_INSTALL_DIR" "$HOME"
+mkdir -p "$QUAID_INSTALL_DIR" "$HOME"
 
 # shellcheck source=../scripts/install.sh
 . "$INSTALL_SH"
@@ -58,13 +58,13 @@ check_case() {
   expected_asset="$5"
 
   PATH="$STUBS_DIR:$ORIGINAL_PATH"
-  export GBRAIN_TEST_UNAME_S="$uname_s"
-  export GBRAIN_TEST_UNAME_M="$uname_m"
-  GBRAIN_CHANNEL="$channel"
+  export QUAID_TEST_UNAME_S="$uname_s"
+  export QUAID_TEST_UNAME_M="$uname_m"
+  QUAID_CHANNEL="$channel"
 
   resolve_platform
   resolve_channel
-  asset_name="gbrain-${PLATFORM}-${CHANNEL}"
+  asset_name="quaid-${PLATFORM}-${CHANNEL}"
   checksum_name="${asset_name}.sha256"
 
   if [ "$asset_name" = "$expected_asset" ]; then
@@ -100,14 +100,14 @@ check_case() {
 
 printf '\nRunning install/release seam tests...\n\n'
 
-check_case "T1 darwin x86_64 airgapped" Darwin x86_64 airgapped gbrain-darwin-x86_64-airgapped
-check_case "T2 darwin x86_64 online" Darwin x86_64 online gbrain-darwin-x86_64-online
-check_case "T3 darwin arm64 airgapped" Darwin arm64 airgapped gbrain-darwin-arm64-airgapped
-check_case "T4 darwin arm64 online" Darwin arm64 online gbrain-darwin-arm64-online
-check_case "T5 linux x86_64 airgapped" Linux x86_64 airgapped gbrain-linux-x86_64-airgapped
-check_case "T6 linux x86_64 online" Linux x86_64 online gbrain-linux-x86_64-online
-check_case "T7 linux aarch64 airgapped" Linux aarch64 airgapped gbrain-linux-aarch64-airgapped
-check_case "T8 linux aarch64 online" Linux aarch64 online gbrain-linux-aarch64-online
+check_case "T1 darwin x86_64 airgapped" Darwin x86_64 airgapped quaid-darwin-x86_64-airgapped
+check_case "T2 darwin x86_64 online" Darwin x86_64 online quaid-darwin-x86_64-online
+check_case "T3 darwin arm64 airgapped" Darwin arm64 airgapped quaid-darwin-arm64-airgapped
+check_case "T4 darwin arm64 online" Darwin arm64 online quaid-darwin-arm64-online
+check_case "T5 linux x86_64 airgapped" Linux x86_64 airgapped quaid-linux-x86_64-airgapped
+check_case "T6 linux x86_64 online" Linux x86_64 online quaid-linux-x86_64-online
+check_case "T7 linux aarch64 airgapped" Linux aarch64 airgapped quaid-linux-aarch64-airgapped
+check_case "T8 linux aarch64 online" Linux aarch64 online quaid-linux-aarch64-online
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 

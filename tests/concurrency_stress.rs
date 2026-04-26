@@ -15,15 +15,15 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use gbrain::core::db;
-use gbrain::core::migrate::import_dir;
+use quaid::core::db;
+use quaid::core::migrate::import_dir;
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 /// Create a named temporary DB file and return (path_string, TempDir guard).
 fn temp_db_path() -> (String, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().expect("create temp dir");
-    let path = dir.path().join("brain.db").to_str().unwrap().to_string();
+    let path = dir.path().join("memory.db").to_str().unwrap().to_string();
     (path, dir)
 }
 

@@ -54,31 +54,31 @@ printf '\nRunning release asset parity tests...\n\n'
 
 # ── T1: install.sh resolve_platform + resolve_channel cover every canonical binary name ──
 # Source installer in test mode to get access to resolve_platform/resolve_channel helpers.
-GBRAIN_TEST_MODE=1 \
-  GBRAIN_RELEASE_API_URL="https://example.invalid" \
-  GBRAIN_RELEASE_BASE_URL="https://example.invalid" \
-  GBRAIN_INSTALL_DIR="$BIN_DIR" \
-  GBRAIN_NO_PROFILE=0 \
-  GBRAIN_CHANNEL="airgapped" \
-  GBRAIN_VERSION="v0.0.0-test" \
+QUAID_TEST_MODE=1 \
+  QUAID_RELEASE_API_URL="https://example.invalid" \
+  QUAID_RELEASE_BASE_URL="https://example.invalid" \
+  QUAID_INSTALL_DIR="$BIN_DIR" \
+  QUAID_NO_PROFILE=0 \
+  QUAID_CHANNEL="airgapped" \
+  QUAID_VERSION="v0.0.0-test" \
   HOME="$HOME_DIR" \
   . "$INSTALL_SH"
 
 # Simulate install.sh asset naming for all platform+channel combos.
-# install.sh uses: asset_name="gbrain-${PLATFORM}-${CHANNEL}"
+# install.sh uses: asset_name="quaid-${PLATFORM}-${CHANNEL}"
 # Platform resolution: os_name-arch_name (see resolve_platform).
 simulate_asset() {
   platform="$1"
   channel="$2"
-  printf 'gbrain-%s-%s' "$platform" "$channel"
+  printf 'quaid-%s-%s' "$platform" "$channel"
 }
 
 for name in $(canonical_assets); do
   # Extract platform and channel from canonical name
-  # Format: gbrain-<platform>-<channel>  where channel is last segment
+  # Format: quaid-<platform>-<channel>  where channel is last segment
   channel="${name##*-}"
   without_channel="${name%-*}"
-  platform="${without_channel#gbrain-}"
+  platform="${without_channel#quaid-}"
   expected="$(simulate_asset "$platform" "$channel")"
   if [ "$expected" = "$name" ]; then
     ok "T1[$name]: install.sh naming formula generates expected asset name"
@@ -104,8 +104,8 @@ else
 fi
 
 # ── T4: no extra artifact: lines in release.yml beyond the canonical set ──
-workflow_artifact_count=$(grep -c "artifact: gbrain-" "$RELEASE_YML" || true)
-canonical_count=$(canonical_assets | grep -c "gbrain-" || true)
+workflow_artifact_count=$(grep -c "artifact: quaid-" "$RELEASE_YML" || true)
+canonical_count=$(canonical_assets | grep -c "quaid-" || true)
 if [ "$workflow_artifact_count" = "$canonical_count" ]; then
   ok "T4: release.yml has exactly $canonical_count artifact: entries (no extras or gaps)"
 else
@@ -123,7 +123,7 @@ fi
 # ── T6: RELEASE_CHECKLIST.md uses channel-suffixed names and points at the manifest ──
 CHECKLIST="$SCRIPT_DIR/.github/RELEASE_CHECKLIST.md"
 if [ -f "$CHECKLIST" ]; then
-  bare_count=$(grep -Ec 'gbrain-(darwin|linux)-(arm64|x86_64|aarch64)[^-]' "$CHECKLIST" || true)
+  bare_count=$(grep -Ec 'quaid-(darwin|linux)-(arm64|x86_64|aarch64)[^-]' "$CHECKLIST" || true)
   if [ "$bare_count" = "0" ] && grep -Fq ".github/release-assets.txt" "$CHECKLIST"; then
     ok "T6: RELEASE_CHECKLIST.md contains no bare binary names and references the canonical manifest"
   else
@@ -134,16 +134,16 @@ else
 fi
 
 # ── T7: installer does not attempt to download anything without channel suffix ──
-if grep -Fq 'gbrain-${PLATFORM}-${CHANNEL}' "$INSTALL_SH" || \
-   grep -Fq '"gbrain-${PLATFORM}-${CHANNEL}"' "$INSTALL_SH"; then
+if grep -Fq 'quaid-${PLATFORM}-${CHANNEL}' "$INSTALL_SH" || \
+   grep -Fq '"quaid-${PLATFORM}-${CHANNEL}"' "$INSTALL_SH"; then
   ok "T7: install.sh asset name always includes CHANNEL suffix (no bare fallback path)"
 else
   not_ok "T7: install.sh asset construction does not consistently include CHANNEL suffix"
 fi
 
 # ── T8: spec docs describe the channel-suffixed schema ──
-if grep -Fq 'gbrain-<platform>-<channel>' "$SCRIPT_DIR/docs/spec.md" && \
-   grep -Fq 'gbrain-<platform>-<channel>' "$SCRIPT_DIR/website/src/content/docs/contributing/specification.md"; then
+if grep -Fq 'quaid-<platform>-<channel>' "$SCRIPT_DIR/docs/spec.md" && \
+   grep -Fq 'quaid-<platform>-<channel>' "$SCRIPT_DIR/website/src/content/docs/contributing/specification.md"; then
   ok "T8: spec docs describe the channel-suffixed release asset schema"
 else
   not_ok "T8: spec docs are missing the channel-suffixed release asset schema"

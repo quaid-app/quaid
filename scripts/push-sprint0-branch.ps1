@@ -3,7 +3,7 @@
     Creates the sprint-0/scaffold branch, stages all files, commits, and pushes.
 
 .DESCRIPTION
-    Requires: git configured with push access to origin (macro88/gigabrain).
+    Requires: git configured with push access to origin (quaid-app/quaid).
     Run from the repo root:
         powershell -ExecutionPolicy Bypass -File .\scripts\push-sprint0-branch.ps1
 
@@ -20,7 +20,7 @@ $BranchName = "sprint-0/scaffold"
 # ── Preflight ────────────────────────────────────────────────────────────────
 $repoRoot = git rev-parse --show-toplevel 2>$null
 if (-not $repoRoot) {
-    Write-Error "Not inside a Git repository. Run this from the gigabrain repo root."
+    Write-Error "Not inside a Git repository. Run this from the quaid repo root."
     exit 1
 }
 

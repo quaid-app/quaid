@@ -8,7 +8,7 @@
 
 Quaid gives AI agents a persistent, queryable memory layer backed by a single SQLite file. Every piece of knowledge has two parts: **compiled truth** (always current, rewritten as new evidence arrives) and a **timeline** (append-only evidence base, never rewritten). Agents read and write through 17 MCP tools over stdio — no API keys, no cloud, no Docker. One static binary.
 
-Inspired by [Garry Tan's GBrain work](https://gist.github.com/garrytan/49c88e83cf8d7ae95e087426368809cb), Quaid adapts the same compiled-knowledge model to a local-first Rust + SQLite architecture built for portable, offline use.
+Inspired by [Garry Tan's compiled knowledge work](https://gist.github.com/garrytan/49c88e83cf8d7ae95e087426368809cb), Quaid adapts the same compiled-knowledge model to a local-first Rust + SQLite architecture built for portable, offline use.
 
 ## Roadmap
 
@@ -20,7 +20,7 @@ Quaid is built in explicit phases. Each phase has a hard gate — no phase begin
 | **Phase 1** — Core storage + CLI | ✅ Complete | `quaid init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
 | **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.5` — flexible model resolution + configurable online-model selection) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
-| **vault-sync-engine** — Collections, live-sync, write safety | 🚢 Initial ship (`v0.9.6` — Unix/macOS/Linux) | Collections model, stat-diff reconciler, file watcher, quarantine `list`/`export`/`discard|restore`, write-through `memory_put`, `memory_collections` MCP tool; Windows `serve`/restore and IPC deferred |
+| **vault-sync-engine** — Collections, live-sync, write safety | 🚢 Initial ship (`v0.9.6` — Unix/macOS/Linux) | Collections model, stat-diff reconciler, file watcher, quarantine `list`/`export`/`discard`, write-through `memory_put`, `memory_collections` MCP tool; Windows `serve` and IPC deferred |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -57,7 +57,7 @@ Every knowledge page is a markdown file with this structure. Quaid stores them i
 - **Hybrid search** — FTS5 keyword + vector semantic search with set-union merge, exact-match short-circuit, and optional palace-style hierarchical filtering
 - **Live file watcher** *(v0.9.6, Unix/macOS/Linux)* — `quaid serve` runs a per-collection watcher with 1.5 s debounce and reconcile-backed flushes so the brain stays current as you edit in Obsidian or any editor
 - **Collection management** *(v0.9.6)* — attach one or more vaults with `quaid collection add`; per-collection writable/read-only, ignore patterns via `.quaidignore`, and `<collection>::<slug>` routing across all CLI/MCP surfaces
-- **Quarantine lifecycle** *(v0.9.6)* — deleted or renamed pages with DB-only state (links, assertions, gaps) are quarantined rather than hard-deleted; inspect, export, discard, or narrowly restore on Unix via `quaid collection quarantine ...`
+- **Quarantine lifecycle** *(v0.9.6)* — deleted or renamed pages with DB-only state (links, assertions, gaps) are quarantined rather than hard-deleted; inspect, export, and discard via `quaid collection quarantine ...`
 - **Progressive retrieval** — token-budget-gated content expansion (summary → section → full page)
 - **Temporal knowledge graph** — typed links with validity windows, contradiction detection via assertions
 - **Knowledge gap tracking** — agent logs what it can't answer; research skill resolves gaps later
@@ -89,7 +89,7 @@ Every knowledge page is a markdown file with this structure. Quaid stores them i
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
 | GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.8` airgapped + online assets |
-| `npm install -g quaid` | 🚧 Staged — online channel by default once published |
+| `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for the online asset |
 
 **Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.8` using the canonical `quaid-<platform>-<channel>` asset names.
@@ -182,7 +182,7 @@ If you initialize a DB with one model and later open it with another, Quaid erro
 
 | Variable | Purpose |
 | -------- | ------- |
-| `QUAID_DB` | Default database path for all commands |
+| `QUAID_DB` | Default database path for all commands (defaults to `~/.quaid/memory.db`) |
 | `QUAID_MODEL` | Embedding model alias or full Hugging Face model ID for the online build |
 | `QUAID_CHANNEL` | Installer channel selection (`airgapped` or `online`) |
 | `QUAID_WATCH_DEBOUNCE_MS` | Watcher debounce window in milliseconds (default `1500`) |
@@ -200,7 +200,7 @@ If you initialize a DB with one model and later open it with another, Quaid erro
 
 ```bash
 # Create a new brain
-quaid init ~/memory.db
+quaid init ~/.quaid/memory.db
 
 # Import an existing markdown directory
 quaid import /path/to/notes/ --db ~/.quaid/memory.db
@@ -283,10 +283,6 @@ quaid collection ignore clear work --confirm
 quaid collection quarantine list work
 quaid collection quarantine export work --out quarantine.json
 quaid collection quarantine discard work <page-slug>
-
-# Restore a vault root from a backup (offline path; leaves collection in pending-attach until finalized)
-quaid collection restore work /path/to/backup-vault
-quaid collection sync work --finalize-pending   # attach and reopen writes
 ```
 
 ## MCP integration
@@ -373,7 +369,7 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ## Contributing
 
-Quaid is open for contributions. All three core phases have shipped. The current release is `v0.9.6`, which lands the first vault-sync slice: collections, Unix-gated `quaid serve`, live-sync watcher, quarantine tooling, and narrow Unix restore on top of the prior dual-channel/model-selection work.
+Quaid is open for contributions. All three core phases have shipped. The current release is `v0.9.8`, which includes the first vault-sync slice: collections, Unix-gated `quaid serve`, live-sync watcher, and quarantine tooling (list, export, discard) on top of the prior dual-channel/model-selection work.
 
 **How we work:**
 
@@ -432,7 +428,7 @@ cargo test
 
 ## Acknowledgements
 
-This project is explicitly inspired by [Garry Tan's GBrain](https://gist.github.com/garrytan/49c88e83cf8d7ae95e087426368809cb). Garry's TypeScript/Bun implementation and evolving skill packs were the original catalyst. Quaid takes the same architecture — SQLite + FTS5 + vector search + MCP + fat markdown skills — and builds it in Rust for a fully local, truly static, zero-dependency binary. Same memory model, different stack, different deployment story.
+This project is explicitly inspired by [Garry Tan's compiled knowledge model](https://gist.github.com/garrytan/49c88e83cf8d7ae95e087426368809cb). Garry's TypeScript/Bun implementation and evolving skill packs were the original catalyst. Quaid takes the same architecture — SQLite + FTS5 + vector search + MCP + fat markdown skills — and builds it in Rust for a fully local, truly static, zero-dependency binary. Same memory model, different stack, different deployment story.
 
 Additional techniques sourced from [MemPalace](https://arxiv.org/abs/2410.10674), [OMNIMEM](https://arxiv.org/abs/2406.16026), and [agentmemory](https://github.com/AgentOps-AI/agentmemory) research.
 

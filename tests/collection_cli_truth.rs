@@ -1,5 +1,5 @@
-use gbrain::core::db;
-use gbrain::core::vault_sync;
+use quaid::core::db;
+use quaid::core::vault_sync;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use sha2::Digest;
@@ -12,16 +12,16 @@ fn open_test_db(path: &Path) -> Connection {
 }
 
 fn bin_path() -> &'static str {
-    env!("CARGO_BIN_EXE_gbrain")
+    env!("CARGO_BIN_EXE_quaid")
 }
 
-fn run_gbrain(db_path: &Path, args: &[&str]) -> std::process::Output {
+fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(bin_path());
     command.arg("--db").arg(db_path).args(args);
-    command.output().expect("run gbrain")
+    command.output().expect("run quaid")
 }
 
-fn run_gbrain_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::process::Output {
+fn run_quaid_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::process::Output {
     let mut command = Command::new(bin_path());
     command
         .arg("--db")
@@ -30,14 +30,14 @@ fn run_gbrain_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::pro
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("spawn gbrain");
+    let mut child = command.spawn().expect("spawn quaid");
     child
         .stdin
         .as_mut()
         .expect("stdin pipe")
         .write_all(stdin.as_bytes())
         .expect("write stdin");
-    child.wait_with_output().expect("wait for gbrain")
+    child.wait_with_output().expect("wait for quaid")
 }
 
 fn parse_stdout_json(output: &std::process::Output) -> Value {
@@ -206,7 +206,7 @@ fn sync_finalize_pending_returns_failure_for_no_pending_work() {
     insert_collection(&conn, "work", &root);
     drop(conn);
 
-    let output = run_gbrain(
+    let output = run_quaid(
         &db_path,
         &["collection", "sync", "work", "--finalize-pending"],
     );
@@ -261,7 +261,7 @@ fn sync_finalize_pending_returns_failure_for_deferred() {
     .expect("seed restoring collection with fresh heartbeat");
     drop(conn);
 
-    let output = run_gbrain(
+    let output = run_quaid(
         &db_path,
         &["collection", "sync", "work", "--finalize-pending"],
     );
@@ -316,7 +316,7 @@ fn collection_sync_without_flags_returns_failure_and_preserves_pending_finalize_
     .expect("seed pending restore");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["collection", "sync", "work"]);
+    let output = run_quaid(&db_path, &["collection", "sync", "work"]);
 
     assert!(
         !output.status.success(),
@@ -371,7 +371,7 @@ fn collection_sync_active_root_reports_active_root_reconciled_success() {
     .expect("write note");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "collection", "sync", "work"]);
+    let output = run_quaid(&db_path, &["--json", "collection", "sync", "work"]);
 
     assert!(
         output.status.success(),
@@ -419,7 +419,7 @@ fn collection_info_json_reports_restore_integrity_blockers() {
     .expect("seed integrity blockers");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "collection", "info", "work"]);
+    let output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
 
     assert!(
         output.status.success(),
@@ -446,7 +446,7 @@ fn collection_info_json_reports_restore_integrity_blockers() {
     assert!(parsed["pending_root_path"].as_str().is_some());
     assert_eq!(
         parsed["suggested_command"].as_str(),
-        Some("gbrain collection restore-reset work --confirm")
+        Some("quaid collection restore-reset work --confirm")
     );
 }
 
@@ -461,7 +461,7 @@ fn offline_restore_can_complete_via_explicit_cli_finalize_path() {
     std::fs::create_dir_all(&source_root).expect("create source root");
     let collection_id = insert_collection(&conn, "work", &source_root);
     let raw_bytes =
-        b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
     insert_page_with_raw_import(
         &conn,
         collection_id,
@@ -472,7 +472,7 @@ fn offline_restore_can_complete_via_explicit_cli_finalize_path() {
     );
     drop(conn);
 
-    let restore_output = run_gbrain(
+    let restore_output = run_quaid(
         &db_path,
         &[
             "--json",
@@ -491,7 +491,7 @@ fn offline_restore_can_complete_via_explicit_cli_finalize_path() {
     assert_eq!(restore_json["status"].as_str(), Some("ok"));
     assert!(restore_json["command_identity"].as_str().is_some());
 
-    let info_output = run_gbrain(&db_path, &["--json", "collection", "info", "work"]);
+    let info_output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
     assert!(
         info_output.status.success(),
         "collection info should succeed: {info_output:?}"
@@ -500,10 +500,10 @@ fn offline_restore_can_complete_via_explicit_cli_finalize_path() {
     assert_eq!(info_json["blocked_state"].as_str(), Some("pending_attach"));
     assert_eq!(
         info_json["suggested_command"].as_str(),
-        Some("gbrain collection sync work --finalize-pending")
+        Some("quaid collection sync work --finalize-pending")
     );
 
-    let finalize_output = run_gbrain(
+    let finalize_output = run_quaid(
         &db_path,
         &["--json", "collection", "sync", "work", "--finalize-pending"],
     );
@@ -556,7 +556,7 @@ fn startup_recovery_finalizes_tx_b_restore_orphan() {
     std::fs::create_dir_all(&source_root).expect("create source root");
     let collection_id = insert_collection(&conn, "work", &source_root);
     let raw_bytes =
-        b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
     insert_page_with_raw_import(
         &conn,
         collection_id,
@@ -670,7 +670,7 @@ fn collection_info_json_points_retryable_manifest_gap_to_finalize_pending() {
     .expect("seed retryable manifest gap");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "collection", "info", "work"]);
+    let output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
 
     assert!(
         output.status.success(),
@@ -684,7 +684,7 @@ fn collection_info_json_points_retryable_manifest_gap_to_finalize_pending() {
     );
     assert_eq!(
         parsed["suggested_command"].as_str(),
-        Some("gbrain collection sync work --finalize-pending")
+        Some("quaid collection sync work --finalize-pending")
     );
 }
 
@@ -709,7 +709,7 @@ fn restore_reset_returns_failure_for_retryable_manifest_gap() {
     .expect("seed retryable restore gap");
     drop(conn);
 
-    let output = run_gbrain(
+    let output = run_quaid(
         &db_path,
         &["collection", "restore-reset", "work", "--confirm"],
     );
@@ -769,7 +769,7 @@ fn restore_reset_succeeds_for_terminal_integrity_failure() {
     .expect("seed terminal integrity failure");
     drop(conn);
 
-    let output = run_gbrain(
+    let output = run_quaid(
         &db_path,
         &["--json", "collection", "restore-reset", "work", "--confirm"],
     );
@@ -815,7 +815,7 @@ fn collection_info_json_reports_reconcile_halt_cause() {
     .expect("seed reconcile halt");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "collection", "info", "work"]);
+    let output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
 
     assert!(
         output.status.success(),
@@ -834,7 +834,7 @@ fn collection_info_json_reports_reconcile_halt_cause() {
     );
     assert_eq!(
         parsed["suggested_command"].as_str(),
-        Some("gbrain collection reconcile-reset work --confirm")
+        Some("quaid collection reconcile-reset work --confirm")
     );
 }
 
@@ -856,7 +856,7 @@ fn collection_info_json_reports_read_only_truthfully() {
     .expect("seed read-only collection");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "collection", "info", "work"]);
+    let output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
 
     assert!(
         output.status.success(),
@@ -889,7 +889,7 @@ fn collection_info_json_reports_quarantine_backlog_count() {
     );
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "collection", "info", "work"]);
+    let output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
 
     assert!(
         output.status.success(),
@@ -921,7 +921,7 @@ fn collection_list_json_reports_k1_columns_truthfully() {
     .expect("seed collection list row");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "collection", "list"]);
+    let output = run_quaid(&db_path, &["--json", "collection", "list"]);
 
     assert!(
         output.status.success(),
@@ -962,7 +962,7 @@ fn quarantine_export_then_discard_without_force_succeeds_after_export() {
     insert_knowledge_gap(&conn, quarantined_page_id, "gap-quarantine-export");
     drop(conn);
 
-    let discard_before_export = run_gbrain(
+    let discard_before_export = run_quaid(
         &db_path,
         &[
             "collection",
@@ -981,7 +981,7 @@ fn quarantine_export_then_discard_without_force_succeeds_after_export() {
     );
 
     let export_path = dir.path().join("quarantine-export.json");
-    let export_output = run_gbrain(
+    let export_output = run_quaid(
         &db_path,
         &[
             "--json",
@@ -1032,7 +1032,7 @@ fn quarantine_export_then_discard_without_force_succeeds_after_export() {
     );
     drop(verify_export);
 
-    let discard_output = run_gbrain(
+    let discard_output = run_quaid(
         &db_path,
         &[
             "--json",
@@ -1074,7 +1074,7 @@ fn quarantine_list_missing_collection_reports_collection_specific_error() {
     insert_collection(&conn, "work", &root);
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["collection", "quarantine", "list", "missing"]);
+    let output = run_quaid(&db_path, &["collection", "quarantine", "list", "missing"]);
 
     assert!(
         !output.status.success(),
@@ -1104,7 +1104,7 @@ fn quarantine_restore_reingests_page_and_reactivates_file_state() {
         collection_id,
         "notes/quarantined",
         "11111111-1111-7111-8111-111111111111",
-        b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n",
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n",
         "notes/original.md",
     );
     let quarantined_page_id = page_id(&conn, collection_id, "notes/quarantined");
@@ -1116,7 +1116,7 @@ fn quarantine_restore_reingests_page_and_reactivates_file_state() {
     .expect("remove file_state");
     drop(conn);
 
-    let output = run_gbrain(
+    let output = run_quaid(
         &db_path,
         &[
             "--json",
@@ -1188,7 +1188,7 @@ fn quarantine_restore_reingests_page_and_reactivates_file_state() {
         );
         assert_eq!(
             std::fs::read(root.join("notes").join("restored.md")).expect("read restored bytes"),
-            b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n"
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n"
         );
     }
 }
@@ -1203,7 +1203,7 @@ fn quarantine_restore_reingests_page_and_reactivates_file_state_at_target_markdo
     std::fs::create_dir_all(root.join("notes")).expect("create notes dir");
     let collection_id = insert_collection(&conn, "work", &root);
     let raw_bytes =
-        b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n";
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n";
     insert_page_with_raw_import(
         &conn,
         collection_id,
@@ -1221,7 +1221,7 @@ fn quarantine_restore_reingests_page_and_reactivates_file_state_at_target_markdo
     .expect("remove file_state");
     drop(conn);
 
-    let output = run_gbrain(
+    let output = run_quaid(
         &db_path,
         &[
             "collection",
@@ -1321,7 +1321,7 @@ fn put_cli_refuses_when_collection_is_persisted_read_only() {
     .expect("mark collection read-only");
     drop(conn);
 
-    let output = run_gbrain_with_stdin(
+    let output = run_quaid_with_stdin(
         &db_path,
         &["put", "work::notes/read-only"],
         "---\ntitle: Read Only\ntype: note\n---\nhello\n",
@@ -1358,14 +1358,14 @@ fn cli_get_accepts_explicit_collection_slug_and_rejects_ambiguous_bare_slug() {
     insert_page(&conn, memory_id, "notes/meeting");
     drop(conn);
 
-    let ambiguous = run_gbrain(&db_path, &["get", "notes/meeting"]);
+    let ambiguous = run_quaid(&db_path, &["get", "notes/meeting"]);
     assert_ambiguous_slug_failure(
         &ambiguous,
         "notes/meeting",
         &["work::notes/meeting", "memory::notes/meeting"],
     );
 
-    let explicit = run_gbrain(&db_path, &["--json", "get", "work::notes/meeting"]);
+    let explicit = run_quaid(&db_path, &["--json", "get", "work::notes/meeting"]);
     assert!(
         explicit.status.success(),
         "explicit collection slug should succeed: {explicit:?}"
@@ -1393,21 +1393,21 @@ fn cli_query_rejects_ambiguous_exact_slug_input() {
     insert_page_with_truth(&conn, memory_id, "notes/meeting", "memory note");
     drop(conn);
 
-    let bare = run_gbrain(&db_path, &["query", "notes/meeting"]);
+    let bare = run_quaid(&db_path, &["query", "notes/meeting"]);
     assert_ambiguous_slug_failure(
         &bare,
         "notes/meeting",
         &["work::notes/meeting", "memory::notes/meeting"],
     );
 
-    let bracketed = run_gbrain(&db_path, &["query", "[[notes/meeting]]"]);
+    let bracketed = run_quaid(&db_path, &["query", "[[notes/meeting]]"]);
     assert_ambiguous_slug_failure(
         &bracketed,
         "notes/meeting",
         &["work::notes/meeting", "memory::notes/meeting"],
     );
 
-    let explicit = run_gbrain(&db_path, &["--json", "query", "work::notes/meeting"]);
+    let explicit = run_quaid(&db_path, &["--json", "query", "work::notes/meeting"]);
     assert!(
         explicit.status.success(),
         "explicit collection slug should route query successfully: {explicit:?}"
@@ -1433,16 +1433,16 @@ fn cli_read_slug_commands_reject_ambiguous_bare_slugs() {
 
     let candidates = ["work::notes/shared", "memory::notes/shared"];
 
-    let graph = run_gbrain(&db_path, &["graph", "notes/shared", "--depth", "1"]);
+    let graph = run_quaid(&db_path, &["graph", "notes/shared", "--depth", "1"]);
     assert_ambiguous_slug_failure(&graph, "notes/shared", &candidates);
 
-    let timeline = run_gbrain(&db_path, &["timeline", "notes/shared"]);
+    let timeline = run_quaid(&db_path, &["timeline", "notes/shared"]);
     assert_ambiguous_slug_failure(&timeline, "notes/shared", &candidates);
 
-    let links = run_gbrain(&db_path, &["links", "notes/shared"]);
+    let links = run_quaid(&db_path, &["links", "notes/shared"]);
     assert_ambiguous_slug_failure(&links, "notes/shared", &candidates);
 
-    let backlinks = run_gbrain(&db_path, &["backlinks", "notes/shared"]);
+    let backlinks = run_quaid(&db_path, &["backlinks", "notes/shared"]);
     assert_ambiguous_slug_failure(&backlinks, "notes/shared", &candidates);
 }
 
@@ -1474,10 +1474,10 @@ fn cli_write_slug_commands_reject_ambiguous_bare_slugs() {
 
     let candidates = ["work::notes/shared", "memory::notes/shared"];
 
-    let check = run_gbrain(&db_path, &["check", "notes/shared"]);
+    let check = run_quaid(&db_path, &["check", "notes/shared"]);
     assert_ambiguous_slug_failure(&check, "notes/shared", &candidates);
 
-    let link = run_gbrain(
+    let link = run_quaid(
         &db_path,
         &[
             "link",
@@ -1489,7 +1489,7 @@ fn cli_write_slug_commands_reject_ambiguous_bare_slugs() {
     );
     assert_ambiguous_slug_failure(&link, "notes/shared", &candidates);
 
-    let unlink = run_gbrain(&db_path, &["unlink", "notes/shared", "work::notes/target"]);
+    let unlink = run_quaid(&db_path, &["unlink", "notes/shared", "work::notes/target"]);
     assert_ambiguous_slug_failure(&unlink, "notes/shared", &candidates);
 }
 
@@ -1508,7 +1508,7 @@ fn cli_unlink_no_match_reports_canonical_resolved_addresses() {
     insert_page(&conn, memory_id, "notes/b");
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["unlink", "notes/a", "notes/b"]);
+    let output = run_quaid(&db_path, &["unlink", "notes/a", "notes/b"]);
     assert!(
         !output.status.success(),
         "unlink should fail when no matching link exists: {output:?}"
@@ -1537,7 +1537,7 @@ fn cli_unlink_accepts_explicit_collection_slugs() {
     insert_page(&conn, memory_id, "notes/b");
     drop(conn);
 
-    let link = run_gbrain(
+    let link = run_quaid(
         &db_path,
         &[
             "link",
@@ -1549,7 +1549,7 @@ fn cli_unlink_accepts_explicit_collection_slugs() {
     );
     assert!(link.status.success(), "setup link should succeed: {link:?}");
 
-    let unlink = run_gbrain(
+    let unlink = run_quaid(
         &db_path,
         &[
             "unlink",
@@ -1605,7 +1605,7 @@ fn cli_link_views_and_graph_emit_canonical_page_addresses() {
     insert_page(&conn, memory_id, "notes/b");
     drop(conn);
 
-    let link_output = run_gbrain(
+    let link_output = run_quaid(
         &db_path,
         &[
             "link",
@@ -1623,7 +1623,7 @@ fn cli_link_views_and_graph_emit_canonical_page_addresses() {
     assert!(link_text.contains("work::notes/a"));
     assert!(link_text.contains("memory::notes/b"));
 
-    let outbound = run_gbrain(&db_path, &["--json", "links", "work::notes/a"]);
+    let outbound = run_quaid(&db_path, &["--json", "links", "work::notes/a"]);
     assert!(
         outbound.status.success(),
         "links should succeed: {outbound:?}"
@@ -1634,7 +1634,7 @@ fn cli_link_views_and_graph_emit_canonical_page_addresses() {
         Some("memory::notes/b")
     );
 
-    let inbound = run_gbrain(&db_path, &["--json", "backlinks", "memory::notes/b"]);
+    let inbound = run_quaid(&db_path, &["--json", "backlinks", "memory::notes/b"]);
     assert!(
         inbound.status.success(),
         "backlinks should succeed: {inbound:?}"
@@ -1642,7 +1642,7 @@ fn cli_link_views_and_graph_emit_canonical_page_addresses() {
     let inbound_json = parse_stdout_json(&inbound);
     assert_eq!(inbound_json[0]["from_slug"].as_str(), Some("work::notes/a"));
 
-    let graph = run_gbrain(
+    let graph = run_quaid(
         &db_path,
         &["--json", "graph", "work::notes/a", "--depth", "1"],
     );
@@ -1694,7 +1694,7 @@ fn cli_timeline_and_check_emit_canonical_slugs_for_explicit_routes() {
     );
     drop(conn);
 
-    let timeline = run_gbrain(&db_path, &["--json", "timeline", "work::people/alice"]);
+    let timeline = run_quaid(&db_path, &["--json", "timeline", "work::people/alice"]);
     assert!(
         timeline.status.success(),
         "timeline should succeed for explicit slug: {timeline:?}"
@@ -1702,13 +1702,13 @@ fn cli_timeline_and_check_emit_canonical_slugs_for_explicit_routes() {
     let timeline_json = parse_stdout_json(&timeline);
     assert_eq!(timeline_json["slug"].as_str(), Some("work::people/alice"));
 
-    let warmup = run_gbrain(&db_path, &["check", "--all"]);
+    let warmup = run_quaid(&db_path, &["check", "--all"]);
     assert!(
         warmup.status.success(),
         "all-mode check should seed contradiction rows: {warmup:?}"
     );
 
-    let check = run_gbrain(&db_path, &["--json", "check", "work::people/alice"]);
+    let check = run_quaid(&db_path, &["--json", "check", "work::people/alice"]);
     assert!(
         check.status.success(),
         "check should succeed for explicit slug: {check:?}"
@@ -1749,7 +1749,7 @@ fn cli_list_search_and_query_emit_canonical_slugs() {
     );
     drop(conn);
 
-    let list = run_gbrain(&db_path, &["--json", "list"]);
+    let list = run_quaid(&db_path, &["--json", "list"]);
     assert!(list.status.success(), "list should succeed: {list:?}");
     let list_json = parse_stdout_json(&list);
     let list_slugs: Vec<_> = list_json
@@ -1761,12 +1761,12 @@ fn cli_list_search_and_query_emit_canonical_slugs() {
     assert!(list_slugs.contains(&"work::people/alice"));
     assert!(list_slugs.contains(&"memory::people/bob"));
 
-    let search = run_gbrain(&db_path, &["--json", "search", "founder"]);
+    let search = run_quaid(&db_path, &["--json", "search", "founder"]);
     assert!(search.status.success(), "search should succeed: {search:?}");
     let search_json = parse_stdout_json(&search);
     assert_eq!(search_json[0]["slug"].as_str(), Some("work::people/alice"));
 
-    let query = run_gbrain(&db_path, &["--json", "query", "people/alice"]);
+    let query = run_quaid(&db_path, &["--json", "query", "people/alice"]);
     assert!(query.status.success(), "query should succeed: {query:?}");
     let query_json = parse_stdout_json(&query);
     assert_eq!(query_json[0]["slug"].as_str(), Some("work::people/alice"));

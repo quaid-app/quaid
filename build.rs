@@ -27,8 +27,8 @@ const MODEL_FILES: [(&str, &str); 3] = [
 ];
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=GBRAIN_EMBEDDED_MODEL_DIR");
-    println!("cargo:rerun-if-env-changed=GBRAIN_MODEL_DIR");
+    println!("cargo:rerun-if-env-changed=QUAID_EMBEDDED_MODEL_DIR");
+    println!("cargo:rerun-if-env-changed=QUAID_MODEL_DIR");
 
     if env::var_os("CARGO_FEATURE_EMBEDDED_MODEL").is_some() {
         prepare_embedded_model().unwrap_or_else(|error| {
@@ -49,15 +49,15 @@ fn prepare_embedded_model() -> Result<(), String> {
     }
 
     println!(
-        "cargo:rustc-env=GBRAIN_EMBEDDED_CONFIG_PATH={}",
+        "cargo:rustc-env=QUAID_EMBEDDED_CONFIG_PATH={}",
         out_dir.join("config.json").display()
     );
     println!(
-        "cargo:rustc-env=GBRAIN_EMBEDDED_TOKENIZER_PATH={}",
+        "cargo:rustc-env=QUAID_EMBEDDED_TOKENIZER_PATH={}",
         out_dir.join("tokenizer.json").display()
     );
     println!(
-        "cargo:rustc-env=GBRAIN_EMBEDDED_MODEL_PATH={}",
+        "cargo:rustc-env=QUAID_EMBEDDED_MODEL_PATH={}",
         out_dir.join("model.safetensors").display()
     );
 
@@ -84,7 +84,7 @@ fn copy_model_files(model_dir: &Path, out_dir: &Path) -> Result<(), String> {
 fn download_model_files(out_dir: &Path) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(300))
-        .user_agent("gigabrain-build/0.9.2")
+        .user_agent("quaid-build/0.9.2")
         .build()
         .map_err(|error| format!("build download client: {error}"))?;
 
@@ -128,18 +128,14 @@ fn find_local_model_dir() -> Option<PathBuf> {
 fn candidate_model_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    for env_var in ["GBRAIN_EMBEDDED_MODEL_DIR", "GBRAIN_MODEL_DIR"] {
+    for env_var in ["QUAID_EMBEDDED_MODEL_DIR", "QUAID_MODEL_DIR"] {
         if let Some(path) = env::var_os(env_var) {
             dirs.push(PathBuf::from(path));
         }
     }
 
     if let Some(home) = home_dir() {
-        dirs.push(
-            home.join(".gbrain")
-                .join("models")
-                .join("bge-small-en-v1.5"),
-        );
+        dirs.push(home.join(".quaid").join("models").join("bge-small-en-v1.5"));
 
         let snapshots = home
             .join(".cache")

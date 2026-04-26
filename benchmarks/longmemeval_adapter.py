@@ -2,27 +2,27 @@
 """
 benchmarks/longmemeval_adapter.py
 
-LongMemEval adapter for GigaBrain.
+LongMemEval adapter for Quaid.
 
 Evaluates multi-session memory retrieval using the LongMemEval benchmark.
-Converts LongMemEval sessions to gbrain pages, runs queries through gbrain,
+Converts LongMemEval sessions to quaid pages, runs queries through quaid,
 and measures Recall@5 against ground-truth answers.
 
 Target: R@5 >= 85%
 
 Prerequisites:
   - Dataset downloaded: ./benchmarks/prep_datasets.sh longmemeval
-  - GigaBrain binary built: cargo build --release
+  - Quaid binary built: cargo build --release
   - Python deps: pip install -r benchmarks/requirements.txt
 
 Usage:
   python benchmarks/longmemeval_adapter.py
-  python benchmarks/longmemeval_adapter.py --db /path/to/brain.db
+  python benchmarks/longmemeval_adapter.py --db /path/to/memory.db
   python benchmarks/longmemeval_adapter.py --limit 100   # evaluate first 100 questions
   python benchmarks/longmemeval_adapter.py --split test  # test | dev
 
 Environment:
-  GBRAIN_BIN  — path to gbrain binary (default: ./target/release/gbrain)
+  QUAID_BIN  — path to quaid binary (default: ./target/release/quaid)
   DATASETS_DIR — dataset root (default: ./benchmarks/datasets)
 """
 
@@ -42,7 +42,7 @@ from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).parent.parent
 DATASETS_DIR = Path(os.environ.get("DATASETS_DIR", REPO_ROOT / "benchmarks" / "datasets"))
-GBRAIN_BIN = os.environ.get("GBRAIN_BIN", str(REPO_ROOT / "target" / "release" / "gbrain"))
+QUAID_BIN = os.environ.get("QUAID_BIN", str(REPO_ROOT / "target" / "release" / "quaid"))
 LONGMEMEVAL_DIR = DATASETS_DIR / "longmemeval"
 
 TARGET_RECALL_AT_5 = 0.85
@@ -74,10 +74,10 @@ def load_longmemeval_sessions(split: str = "test") -> list[dict[str, Any]]:
     return sessions
 
 
-# ── Importer: sessions → gbrain pages ────────────────────────────────────────
+# ── Importer: sessions → quaid pages ────────────────────────────────────────
 
-def sessions_to_pages(sessions: list[dict], db_path: str, gbrain_bin: str) -> int:
-    """Import LongMemEval sessions as gbrain pages. Returns count of imported pages."""
+def sessions_to_pages(sessions: list[dict], db_path: str, quaid_bin: str) -> int:
+    """Import LongMemEval sessions as quaid pages. Returns count of imported pages."""
     with tempfile.TemporaryDirectory() as tmpdir:
         pages_dir = Path(tmpdir) / "sessions"
         pages_dir.mkdir()
@@ -86,7 +86,7 @@ def sessions_to_pages(sessions: list[dict], db_path: str, gbrain_bin: str) -> in
             session_id = session.get("session_id", session.get("id", "unknown"))
             slug = f"sessions/{_sanitize_slug(str(session_id))}"
 
-            # Convert session turns to gbrain timeline format
+            # Convert session turns to quaid timeline format
             turns = session.get("conversation", session.get("turns", []))
             timeline_lines = []
             for turn in turns:
@@ -112,9 +112,9 @@ def sessions_to_pages(sessions: list[dict], db_path: str, gbrain_bin: str) -> in
             page_path = pages_dir / f"{_sanitize_slug(str(session_id))}.md"
             page_path.write_text(content)
 
-        # Import via gbrain CLI
+        # Import via quaid CLI
         result = subprocess.run(
-            [gbrain_bin, "--db", db_path, "import", str(pages_dir)],
+            [quaid_bin, "--db", db_path, "import", str(pages_dir)],
             capture_output=True, text=True
         )
         if result.returncode != 0:
@@ -122,7 +122,7 @@ def sessions_to_pages(sessions: list[dict], db_path: str, gbrain_bin: str) -> in
 
     # Count pages
     count_result = subprocess.run(
-        [gbrain_bin, "--db", db_path, "stats", "--json"],
+        [quaid_bin, "--db", db_path, "stats", "--json"],
         capture_output=True, text=True
     )
     if count_result.returncode == 0:
@@ -136,10 +136,10 @@ def sessions_to_pages(sessions: list[dict], db_path: str, gbrain_bin: str) -> in
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
-def run_query(query: str, db_path: str, gbrain_bin: str, k: int = 5) -> list[str]:
-    """Run a query through gbrain and return top-k slugs."""
+def run_query(query: str, db_path: str, quaid_bin: str, k: int = 5) -> list[str]:
+    """Run a query through quaid and return top-k slugs."""
     result = subprocess.run(
-        [gbrain_bin, "--db", db_path, "query", query, "--json"],
+        [quaid_bin, "--db", db_path, "query", query, "--json"],
         capture_output=True, text=True, timeout=30
     )
     if result.returncode != 0:
@@ -166,7 +166,7 @@ def compute_recall_at_k(retrieved: list[str], relevant: list[str], k: int = 5) -
 def evaluate(
     sessions: list[dict[str, Any]],
     db_path: str,
-    gbrain_bin: str,
+    quaid_bin: str,
     limit: int | None = None,
 ) -> dict[str, Any]:
     """Run full LongMemEval evaluation. Returns metric summary."""
@@ -187,7 +187,7 @@ def evaluate(
     for qa in tqdm(questions, desc="LongMemEval queries"):
         query = qa["question"]
         expected_slugs = qa["evidence_slugs"]
-        retrieved = run_query(query, db_path, gbrain_bin, k=5)
+        retrieved = run_query(query, db_path, quaid_bin, k=5)
         r5 = compute_recall_at_k(retrieved, expected_slugs, k=5)
         recalls.append(r5)
 
@@ -213,16 +213,16 @@ def _sanitize_slug(s: str) -> str:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LongMemEval adapter for GigaBrain")
-    parser.add_argument("--db", default=":memory:", help="Path to brain.db (default: temp)")
+    parser = argparse.ArgumentParser(description="LongMemEval adapter for Quaid")
+    parser.add_argument("--db", default=":memory:", help="Path to memory.db (default: temp)")
     parser.add_argument("--split", default="test", choices=["test", "dev", "train"])
     parser.add_argument("--limit", type=int, default=None, help="Limit number of questions")
     parser.add_argument("--no-import", action="store_true", help="Skip import (DB already populated)")
     parser.add_argument("--json", action="store_true", help="Output JSON results")
     args = parser.parse_args()
 
-    if not Path(GBRAIN_BIN).exists():
-        sys.exit(f"gbrain binary not found at {GBRAIN_BIN}. Run: cargo build --release")
+    if not Path(QUAID_BIN).exists():
+        sys.exit(f"quaid binary not found at {QUAID_BIN}. Run: cargo build --release")
 
     use_temp_db = args.db == ":memory:"
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) if use_temp_db else open(os.devnull) as _f:
@@ -234,14 +234,14 @@ def main() -> None:
         print(f"Loaded {len(sessions)} sessions", file=sys.stderr)
 
         if not args.no_import:
-            print("Importing sessions into gbrain...", file=sys.stderr)
+            print("Importing sessions into quaid...", file=sys.stderr)
             # Initialize DB first
-            subprocess.run([GBRAIN_BIN, "--db", db_path, "init"], check=True, capture_output=True)
-            page_count = sessions_to_pages(sessions, db_path, GBRAIN_BIN)
+            subprocess.run([QUAID_BIN, "--db", db_path, "init"], check=True, capture_output=True)
+            page_count = sessions_to_pages(sessions, db_path, QUAID_BIN)
             print(f"Imported {page_count} pages", file=sys.stderr)
 
         print("Running evaluation...", file=sys.stderr)
-        results = evaluate(sessions, db_path, GBRAIN_BIN, limit=args.limit)
+        results = evaluate(sessions, db_path, QUAID_BIN, limit=args.limit)
 
         if args.json:
             print(json.dumps(results, indent=2))

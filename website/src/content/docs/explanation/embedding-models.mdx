@@ -50,14 +50,14 @@ On the airgapped binary, `--model` and `QUAID_MODEL` are warning-only no-ops: th
 
 ## What `init` records
 
-`quaid init` writes the active model into the immutable `brain_config` table:
+`quaid init` writes the active model into the immutable `quaid_config` table:
 
 | Key | Example | Meaning |
 | --- | ------- | ------- |
 | `model_id` | `BAAI/bge-large-en-v1.5` | The full Hugging Face model ID. |
 | `model_alias` | `large` | The alias the user passed (or default). |
 | `embedding_dim` | `1024` | The vector width — drives which `page_embeddings_vec_<dim>` table is used. |
-| `schema_version` | `5` | The schema generation. |
+| `schema_version` | `6` | The schema generation. |
 
 On every subsequent open, the binary verifies that the requested model matches the recorded one. **A mismatch fails the call before any command runs.** This isn't a UX choice; it's a correctness one — embeddings produced by different models live in different vector spaces and aren't comparable.
 

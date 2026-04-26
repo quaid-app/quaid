@@ -134,7 +134,7 @@ pub struct IgnoreParseErrorView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BrainCollectionView {
+pub struct MemoryCollectionView {
     pub name: String,
     pub root_path: Option<String>,
     pub state: String,
@@ -771,7 +771,7 @@ fn parse_ignore_parse_errors(
 }
 
 fn manifest_incomplete_escalation_secs() -> i64 {
-    std::env::var("GBRAIN_MANIFEST_INCOMPLETE_ESCALATION_SECS")
+    std::env::var("QUAID_MANIFEST_INCOMPLETE_ESCALATION_SECS")
         .ok()
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| *value > 0)
@@ -806,9 +806,9 @@ fn restore_in_progress(collection: &Collection) -> bool {
         && collection.watcher_released_at.is_some()
 }
 
-pub fn list_brain_collections(
+pub fn list_memory_collections(
     conn: &Connection,
-) -> Result<Vec<BrainCollectionView>, VaultSyncError> {
+) -> Result<Vec<MemoryCollectionView>, VaultSyncError> {
     let manifest_incomplete_escalation_secs = manifest_incomplete_escalation_secs();
     let mut stmt = conn.prepare(
         "SELECT
@@ -928,7 +928,7 @@ pub fn list_brain_collections(
                     updated_at: String::new(),
                 };
 
-                Ok(BrainCollectionView {
+                Ok(MemoryCollectionView {
                     name: collection.name.clone(),
                     root_path: matches!(collection.state, CollectionState::Active)
                         .then_some(collection.root_path.clone()),
@@ -1132,7 +1132,7 @@ fn mark_collection_needs_full_sync(
 
 #[cfg(unix)]
 fn watch_debounce_duration() -> Duration {
-    std::env::var("GBRAIN_WATCH_DEBOUNCE_MS")
+    std::env::var("QUAID_WATCH_DEBOUNCE_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
@@ -3343,7 +3343,7 @@ fn remove_empty_target_then_rename(
 
 fn staging_path_for_target(target_path: &Path) -> PathBuf {
     let name = format!(
-        "{}.gbrain-restoring-{}",
+        "{}.quaid-restoring-{}",
         target_path
             .file_name()
             .and_then(|value| value.to_str())
@@ -3618,7 +3618,7 @@ fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncErro
     let walked = walk_tree(root)?;
     let mut rows = Vec::new();
     for relative_path in walked.keys() {
-        if relative_path == Path::new(".gbrainignore") {
+        if relative_path == Path::new(".quaidignore") {
             continue;
         }
         let bytes = fs::read(root.join(relative_path))?;
@@ -3626,7 +3626,7 @@ fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncErro
         let (frontmatter, body) = markdown::parse_frontmatter(&text);
         rows.push(NewRootFileRow {
             relative_path: relative_path.clone(),
-            uuid: frontmatter.get("gbrain_id").cloned(),
+            uuid: frontmatter.get("memory_id").cloned(),
             sha256: sha256_hex(&bytes),
             body_size_bytes: body.trim().len(),
             has_nonempty_body: !body.trim().is_empty(),
@@ -3815,7 +3815,7 @@ mod tests {
 
     fn open_test_db_file() -> (tempfile::TempDir, String, Connection) {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("brain.db");
+        let db_path = dir.path().join("memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         (dir, db_path.display().to_string(), conn)
     }
@@ -4457,7 +4457,7 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let source_path = root.path().join("notes").join("from.md");
         let target_path = root.path().join("notes").join("to.md");
-        let temp_path = root.path().join(".gbrain-write-temp.tmp");
+        let temp_path = root.path().join(".quaid-write-temp.tmp");
         let bytes = b"matching bytes";
         write_restore_file(root.path(), "notes/to.md", bytes);
         remember_self_write_path_at(&target_path, &sha256_hex(bytes), Instant::now()).unwrap();
@@ -4713,7 +4713,7 @@ mod tests {
 
     /// Regression test for issue #81.
     ///
-    /// `gbrain serve` must not attempt to watch an empty collection root.
+    /// `quaid serve` must not attempt to watch an empty collection root.
     #[cfg(unix)]
     #[test]
     fn sync_collection_watchers_skips_active_collection_with_empty_root_path() {
@@ -4782,7 +4782,7 @@ mod tests {
             "notes/a",
             "11111111-1111-7111-8111-111111111111",
             "hello world from note a",
-            b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
             "notes/a.md",
         );
         fs::write(target_root.path().join("occupied.txt"), b"x").unwrap();
@@ -5262,7 +5262,7 @@ mod tests {
             "notes/a",
             "11111111-1111-7111-8111-111111111111",
             "hello world from note a",
-            b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
             "notes/a.md",
         );
         conn.execute(
@@ -5588,7 +5588,7 @@ mod tests {
             "notes/a",
             "11111111-1111-7111-8111-111111111111",
             "hello world from note a",
-            b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
             "notes/a.md",
         );
 
@@ -5611,7 +5611,7 @@ mod tests {
         let new_root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", old_root.path());
         let raw_bytes =
-            b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
         insert_page_with_raw_import(
             &conn,
             collection_id,
@@ -5649,7 +5649,7 @@ mod tests {
             "notes/a",
             "11111111-1111-7111-8111-111111111111",
             "hello world from note a",
-            b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
             "notes/a.md",
         );
         fs::create_dir_all(new_root.path().join("notes")).unwrap();
@@ -5928,7 +5928,7 @@ mod tests {
         let collection_id = insert_collection(&conn, "work", root.path());
         let uuid = "01969f11-9448-7d79-8d3f-c68f54768888";
         let old_bytes = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOld body from db.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOld body from db.\n"
         );
         insert_page_with_raw_import(
             &conn,
@@ -5940,7 +5940,7 @@ mod tests {
             "notes/a.md",
         );
         let new_bytes = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nNew body from disk after crash.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nNew body from disk after crash.\n"
         );
         write_restore_file(root.path(), "notes/a.md", new_bytes.as_bytes());
         let recovery_root = dir.path().join("recovery");
@@ -6025,7 +6025,7 @@ mod tests {
         let collection_id = insert_collection(&conn, "work", root.path());
         let uuid = "01969f11-9448-7d79-8d3f-c68f54768889";
         let old_bytes = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOld body from db.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOld body from db.\n"
         );
         insert_page_with_raw_import(
             &conn,
@@ -6037,7 +6037,7 @@ mod tests {
             "notes/a.md",
         );
         let new_bytes = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nNew body that foreign owner still needs to reconcile.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nNew body that foreign owner still needs to reconcile.\n"
         );
         write_restore_file(root.path(), "notes/a.md", new_bytes.as_bytes());
         let recovery_root = dir.path().join("recovery");
@@ -6092,10 +6092,10 @@ mod tests {
         let collection_id = insert_collection(&conn, "work", root.path());
         let uuid = "01969f11-9448-7d79-8d3f-c68f54768890";
         let note_a = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is comfortably above the minimum size for rename inference.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is comfortably above the minimum size for rename inference.\n"
         );
         let note_b = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis second body is also comfortably above the minimum size for rename inference.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis second body is also comfortably above the minimum size for rename inference.\n"
         );
         fs::write(root.path().join("a.md"), note_a).unwrap();
         fs::write(root.path().join("b.md"), note_b).unwrap();
@@ -6141,7 +6141,7 @@ mod tests {
         let collection_id = insert_collection(&conn, "work", root.path());
         let uuid = "01969f11-9448-7d79-8d3f-c68f54768891";
         let old_bytes = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOld body from db.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOld body from db.\n"
         );
         insert_page_with_raw_import(
             &conn,
@@ -6155,10 +6155,10 @@ mod tests {
         write_restore_file(root.path(), "notes/a.md", old_bytes.as_bytes());
 
         let our_bytes = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOur writer bytes lose the race.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nOur writer bytes lose the race.\n"
         );
         let foreign_bytes = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nForeign bytes win before stat capture.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nForeign bytes win before stat capture.\n"
         );
         let relative_path = Path::new("notes/a.md");
         let write_id = "writer-foreign-rename";
@@ -6413,10 +6413,10 @@ mod tests {
         let collection_id = insert_collection(&conn, "work", root.path());
         let uuid = "01969f11-9448-7d79-8d3f-c68f54768888";
         let note_a = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is comfortably above the minimum size for rename inference.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is comfortably above the minimum size for rename inference.\n"
         );
         let note_b = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis second body is also comfortably above the minimum size for rename inference.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis second body is also comfortably above the minimum size for rename inference.\n"
         );
         fs::write(root.path().join("a.md"), note_a).unwrap();
         fs::write(root.path().join("b.md"), note_b).unwrap();

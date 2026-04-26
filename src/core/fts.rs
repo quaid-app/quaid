@@ -72,11 +72,11 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
 /// **Explicit FTS5 semantics are preserved.** Quoted phrases, boolean operators
 /// (`AND`, `OR`, `NOT`), and prefix wildcards (`*`) all work as documented by
 /// SQLite FTS5.  Invalid syntax is propagated as `Err` — this is intentional for
-/// expert callers using `gbrain search --raw`.
+/// expert callers using `quaid search --raw`.
 ///
 /// Default callers are sanitized upstream:
 /// - `src/commands/search.rs` applies `sanitize_fts_query` unless `--raw` is set.
-/// - `src/mcp/server.rs` (`brain_search`) always sanitizes.
+/// - `src/mcp/server.rs` (`memory_search`) always sanitizes.
 /// - `hybrid_search` in `src/core/search.rs` sanitizes before calling this function.
 pub fn search_fts(
     query: &str,
@@ -174,7 +174,7 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         // Leak TempDir so the DB file stays alive for the test.
         std::mem::forget(dir);
@@ -469,13 +469,13 @@ mod tests {
     #[test]
     fn sanitize_natural_language_sentence_with_mixed_punctuation() {
         // Full natural-language sentences must survive sanitization without crashing.
-        let input = "What do I know about Alice's work on GigaBrain, specifically the FTS5 fix?";
+        let input = "What do I know about Alice's work on Quaid, specifically the FTS5 fix?";
         let result = sanitize_fts_query(input);
         assert!(!result.contains(','));
         assert!(!result.contains('\''));
         assert!(!result.contains('?'));
         assert!(result.contains("Alice"));
-        assert!(result.contains("GigaBrain"));
+        assert!(result.contains("Quaid"));
     }
 
     // ── explicit FTS5 semantics (search_fts is the expert interface) ─────────

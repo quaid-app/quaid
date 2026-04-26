@@ -1,5 +1,5 @@
 {
-  "description": "GigaBrain BEIR-style nDCG@10 baseline — Phase 1 (hash-shim embeddings)",
+  "description": "Quaid BEIR-style nDCG@10 baseline — Phase 1 (hash-shim embeddings)",
   "created_at": "2026-04-15",
   "embedding_model": "hash-shim",
   "note": "Phase 1 proxy baseline uses SHA-256 hash-based embeddings on a 5-page synthetic corpus. Replace with BGE-small-en-v1.5 results after first full BEIR run (task 5.7).",

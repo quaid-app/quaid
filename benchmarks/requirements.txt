@@ -1,4 +1,4 @@
-# GigaBrain Advisory Benchmark Requirements
+# Quaid Advisory Benchmark Requirements
 #
 # Python dependencies for the advisory benchmark harnesses.
 # These benchmarks run manually before major releases — they require API keys
@@ -39,7 +39,7 @@ pandas==2.2.3
 # ── Tqdm — progress bars ─────────────────────────────────────────────────
 tqdm==4.66.5
 
-# ── Requests — HTTP calls to gbrain API or Ollama ────────────────────────
+# ── Requests — HTTP calls to quaid API or Ollama ────────────────────────
 requests==2.32.3
 
 # ── LoCoMo evaluation helpers ─────────────────────────────────────────────

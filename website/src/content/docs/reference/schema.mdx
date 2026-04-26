@@ -8,7 +8,7 @@ guide:
 
 `memory.db` is a single SQLite file that holds every page, link, embedding, and audit row. The schema lives in [`src/schema.sql`](https://github.com/quaid-app/quaid/blob/main/src/schema.sql) and is embedded into the binary via `include_str!()`. This page documents the user-relevant tables — internal scaffolding (test guards, watcher state, IPC heartbeats) is excluded.
 
-The current schema version is **`5`**, recorded in both `config` and `brain_config`. Both `quaid validate` and the runtime `open` path verify the version on every load.
+The current schema version is **`6`**, recorded as `config.version` and `quaid_config.schema_version`. Both `quaid validate` and the runtime `open` path verify it on every load.
 
 ## Page model
 
@@ -173,7 +173,7 @@ History of quarantine exports — one row per `(page_id, quarantined_at)` event.
 
 ## Configuration tables
 
-### `brain_config`
+### `quaid_config`
 
 Immutable model and schema metadata, validated on every open. See [Configuration](/reference/configuration/).
 

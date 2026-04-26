@@ -5,95 +5,110 @@ use serde_json::Value;
 use crate::mcp::server::*;
 
 /// Dispatch a tool name + JSON params to the MCP handler, return JSON result.
-pub fn dispatch_tool(server: &GigaBrainServer, tool: &str, params: Value) -> Result<Value, String> {
+pub fn dispatch_tool(server: &QuaidServer, tool: &str, params: Value) -> Result<Value, String> {
     let result = match tool {
-        "brain_get" => {
-            let input: BrainGetInput =
+        "memory_get" => {
+            let input: MemoryGetInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_get(input).map_err(|e| e.message.to_string())
+            server.memory_get(input).map_err(|e| e.message.to_string())
         }
-        "brain_put" => {
-            let input: BrainPutInput =
+        "memory_put" => {
+            let input: MemoryPutInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_put(input).map_err(|e| e.message.to_string())
+            server.memory_put(input).map_err(|e| e.message.to_string())
         }
-        "brain_query" => {
-            let input: BrainQueryInput =
-                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_query(input).map_err(|e| e.message.to_string())
-        }
-        "brain_search" => {
-            let input: BrainSearchInput =
+        "memory_query" => {
+            let input: MemoryQueryInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
             server
-                .brain_search(input)
+                .memory_query(input)
                 .map_err(|e| e.message.to_string())
         }
-        "brain_list" => {
-            let input: BrainListInput =
-                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_list(input).map_err(|e| e.message.to_string())
-        }
-        "brain_link" => {
-            let input: BrainLinkInput =
-                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_link(input).map_err(|e| e.message.to_string())
-        }
-        "brain_link_close" => {
-            let input: BrainLinkCloseInput =
+        "memory_search" => {
+            let input: MemorySearchInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
             server
-                .brain_link_close(input)
+                .memory_search(input)
                 .map_err(|e| e.message.to_string())
         }
-        "brain_backlinks" => {
-            let input: BrainBacklinksInput =
+        "memory_list" => {
+            let input: MemoryListInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server.memory_list(input).map_err(|e| e.message.to_string())
+        }
+        "memory_link" => {
+            let input: MemoryLinkInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server.memory_link(input).map_err(|e| e.message.to_string())
+        }
+        "memory_link_close" => {
+            let input: MemoryLinkCloseInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
             server
-                .brain_backlinks(input)
+                .memory_link_close(input)
                 .map_err(|e| e.message.to_string())
         }
-        "brain_graph" => {
-            let input: BrainGraphInput =
-                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_graph(input).map_err(|e| e.message.to_string())
-        }
-        "brain_check" => {
-            let input: BrainCheckInput =
-                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_check(input).map_err(|e| e.message.to_string())
-        }
-        "brain_timeline" => {
-            let input: BrainTimelineInput =
+        "memory_backlinks" => {
+            let input: MemoryBacklinksInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
             server
-                .brain_timeline(input)
+                .memory_backlinks(input)
                 .map_err(|e| e.message.to_string())
         }
-        "brain_tags" => {
-            let input: BrainTagsInput =
+        "memory_graph" => {
+            let input: MemoryGraphInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_tags(input).map_err(|e| e.message.to_string())
+            server
+                .memory_graph(input)
+                .map_err(|e| e.message.to_string())
         }
-        "brain_gap" => {
-            let input: BrainGapInput =
+        "memory_check" => {
+            let input: MemoryCheckInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_gap(input).map_err(|e| e.message.to_string())
+            server
+                .memory_check(input)
+                .map_err(|e| e.message.to_string())
         }
-        "brain_gaps" => {
-            let input: BrainGapsInput =
+        "memory_timeline" => {
+            let input: MemoryTimelineInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_gaps(input).map_err(|e| e.message.to_string())
+            server
+                .memory_timeline(input)
+                .map_err(|e| e.message.to_string())
         }
-        "brain_stats" => {
-            let input: BrainStatsInput =
+        "memory_tags" => {
+            let input: MemoryTagsInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_stats(input).map_err(|e| e.message.to_string())
+            server.memory_tags(input).map_err(|e| e.message.to_string())
         }
-        "brain_raw" => {
-            let input: BrainRawInput =
+        "memory_gap" => {
+            let input: MemoryGapInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
-            server.brain_raw(input).map_err(|e| e.message.to_string())
+            server.memory_gap(input).map_err(|e| e.message.to_string())
+        }
+        "memory_gaps" => {
+            let input: MemoryGapsInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server.memory_gaps(input).map_err(|e| e.message.to_string())
+        }
+        "memory_stats" => {
+            let input: MemoryStatsInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_stats(input)
+                .map_err(|e| e.message.to_string())
+        }
+        "memory_collections" => {
+            let input: MemoryCollectionsInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_collections(input)
+                .map_err(|e| e.message.to_string())
+        }
+        "memory_raw" => {
+            let input: MemoryRawInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server.memory_raw(input).map_err(|e| e.message.to_string())
         }
         _ => return Err(format!("unknown tool: {tool}")),
     };
@@ -126,7 +141,7 @@ pub fn run(db: Connection, tool: &str, params: Option<String>) -> Result<()> {
         None => Value::Object(serde_json::Map::new()),
     };
 
-    let server = GigaBrainServer::new(db);
+    let server = QuaidServer::new(db);
 
     match dispatch_tool(&server, tool, params_json) {
         Ok(result) => {
@@ -137,5 +152,26 @@ pub fn run(db: Connection, tool: &str, params: Option<String>) -> Result<()> {
             eprintln!("{}", serde_json::json!({"error": e}));
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{db, inference::default_model};
+    use serde_json::json;
+
+    #[test]
+    fn dispatch_tool_routes_memory_collections() {
+        let conn = db::init(":memory:", &default_model()).expect("init in-memory db");
+        let server = QuaidServer::new(conn);
+
+        let result = dispatch_tool(&server, "memory_collections", json!({}))
+            .expect("dispatch memory_collections");
+
+        let rows = result.as_array().expect("collections array");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], json!("default"));
+        assert_eq!(rows[0]["state"], json!("detached"));
     }
 }

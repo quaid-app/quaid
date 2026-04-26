@@ -1,5 +1,5 @@
 /// Targeted tests for quarantine restore's narrow re-enable gate.
-use gbrain::core::db;
+use quaid::core::db;
 use rusqlite::{params, Connection};
 use std::fs;
 use std::path::Path;
@@ -46,7 +46,7 @@ fn insert_quarantined_page(
 
 #[cfg(unix)]
 fn run_restore(db_path: &Path, slug: &str, relative_path: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    Command::new(env!("CARGO_BIN_EXE_quaid"))
         .arg("--db")
         .arg(db_path)
         .arg("collection")
@@ -94,7 +94,7 @@ fn blocker_1_failed_export_does_not_unlock_discard() {
     let export_path = blocked_parent.join("subdir").join("out.json");
     drop(conn);
 
-    let export_result = std::process::Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    let export_result = std::process::Command::new(env!("CARGO_BIN_EXE_quaid"))
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -125,7 +125,7 @@ fn blocker_1_failed_export_does_not_unlock_discard() {
 
     drop(conn);
 
-    let discard_result = std::process::Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    let discard_result = std::process::Command::new(env!("CARGO_BIN_EXE_quaid"))
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -381,7 +381,7 @@ fn restore_refuses_when_target_appears_after_the_earlier_absence_check() {
     drop(conn);
 
     let pause_file = dir.path().join("restore.pause");
-    let child = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    let child = Command::new(env!("CARGO_BIN_EXE_quaid"))
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -389,7 +389,7 @@ fn restore_refuses_when_target_appears_after_the_earlier_absence_check() {
         .arg("restore")
         .arg("work::notes/quarantined")
         .arg("notes/restored")
-        .env("GBRAIN_TEST_QUARANTINE_RESTORE_PAUSE_FILE", &pause_file)
+        .env("QUAID_TEST_QUARANTINE_RESTORE_PAUSE_FILE", &pause_file)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -462,7 +462,7 @@ fn restore_cleans_up_tempfile_when_write_fails() {
     );
     drop(conn);
 
-    let restore_result = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    let restore_result = Command::new(env!("CARGO_BIN_EXE_quaid"))
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -471,7 +471,7 @@ fn restore_cleans_up_tempfile_when_write_fails() {
         .arg("work::notes/quarantined")
         .arg("notes/restored")
         .env(
-            "GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_TEMPFILE_CREATE",
+            "QUAID_TEST_QUARANTINE_RESTORE_FAIL_AFTER_TEMPFILE_CREATE",
             "1",
         )
         .output()
@@ -539,7 +539,7 @@ fn restore_rolls_back_target_when_parse_fails_after_install() {
     );
     drop(conn);
 
-    let restore_result = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    let restore_result = Command::new(env!("CARGO_BIN_EXE_quaid"))
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -547,7 +547,7 @@ fn restore_rolls_back_target_when_parse_fails_after_install() {
         .arg("restore")
         .arg("work::notes/quarantined")
         .arg("notes/restored")
-        .env("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_IN_PARSE", "1")
+        .env("QUAID_TEST_QUARANTINE_RESTORE_FAIL_IN_PARSE", "1")
         .output()
         .expect("run restore");
 
@@ -658,7 +658,7 @@ fn restore_rollback_unlinks_residue_and_fsyncs_parent_before_returning() {
     drop(conn);
 
     let trace_file = dir.path().join("restore.trace");
-    let restore_result = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    let restore_result = Command::new(env!("CARGO_BIN_EXE_quaid"))
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -666,8 +666,8 @@ fn restore_rollback_unlinks_residue_and_fsyncs_parent_before_returning() {
         .arg("restore")
         .arg("work::notes/quarantined")
         .arg("notes/restored")
-        .env("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_INSTALL", "1")
-        .env("GBRAIN_TEST_QUARANTINE_RESTORE_TRACE_FILE", &trace_file)
+        .env("QUAID_TEST_QUARANTINE_RESTORE_FAIL_AFTER_INSTALL", "1")
+        .env("QUAID_TEST_QUARANTINE_RESTORE_TRACE_FILE", &trace_file)
         .output()
         .expect("run restore");
 

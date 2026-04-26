@@ -170,7 +170,7 @@ Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, qua
 
 ### What has landed
 
-- **Schema v5** — `collections`, `file_state`, `raw_imports`, `embedding_jobs`, quarantine indexes; v4 brains refuse with re-init instructions
+- **Schema v6** — `collections`, `file_state`, `raw_imports`, `embedding_jobs`, quarantine indexes; older brains refuse with re-init instructions
 - **Collection management** — `quaid collection add|list|info|sync|restore|restore-reset|reconcile-reset`
 - **Ignore patterns** — `quaid collection ignore add|remove|list|clear --confirm`; atomic-parse `.quaidignore` with mirror refresh; built-in defaults (`.git/**`, `node_modules/**`, etc.) always applied
 - **Quarantine lifecycle** — `quaid collection quarantine list|export|discard|restore` (restore is a narrow Unix-only seam); auto-sweep TTL (`QUAID_QUARANTINE_TTL_DAYS`, default 30); pages with DB-only state (links, assertions, knowledge gaps, contradictions, raw_data) are quarantined rather than hard-deleted; `discard --force` or post-export discard available

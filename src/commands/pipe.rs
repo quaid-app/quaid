@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::io::{BufRead, Write};
 
 use crate::commands::call::dispatch_tool;
-use crate::mcp::server::GigaBrainServer;
+use crate::mcp::server::QuaidServer;
 
 /// Maximum JSONL line size accepted on stdin (5 MB).
 const MAX_LINE_BYTES: usize = 5_242_880;
@@ -98,7 +98,7 @@ fn write_json_line<W: Write>(writer: &mut W, value: &serde_json::Value) -> std::
 }
 
 fn run_with_io<R: BufRead, W: Write>(
-    server: &GigaBrainServer,
+    server: &QuaidServer,
     mut reader: R,
     mut writer: W,
     max_line_bytes: usize,
@@ -153,7 +153,7 @@ fn run_with_io<R: BufRead, W: Write>(
 }
 
 pub fn run(db: Connection) -> Result<()> {
-    let server = GigaBrainServer::new(db);
+    let server = QuaidServer::new(db);
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     run_with_io(&server, stdin.lock(), stdout.lock(), MAX_LINE_BYTES)
@@ -171,12 +171,12 @@ mod tests {
     #[test]
     fn pipe_rejects_oversized_line_and_continues() {
         let conn = db::open(":memory:").unwrap();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let oversized_payload = "x".repeat(80);
         let oversized_line =
-            format!("{{\"tool\":\"brain_stats\",\"input\":{{\"pad\":\"{oversized_payload}\"}}}}");
-        let valid_line = "{\"tool\":\"brain_stats\",\"input\":{}}";
+            format!("{{\"tool\":\"memory_stats\",\"input\":{{\"pad\":\"{oversized_payload}\"}}}}");
+        let valid_line = "{\"tool\":\"memory_stats\",\"input\":{}}";
         let input = format!("{oversized_line}\n{valid_line}\n");
 
         let reader = Cursor::new(input);

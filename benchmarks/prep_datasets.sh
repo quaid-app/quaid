@@ -316,7 +316,7 @@ download_locomo() {
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-log "=== GigaBrain Benchmark Dataset Prep ==="
+log "=== Quaid Benchmark Dataset Prep ==="
 log "Mode:     ${MODE}"
 log "Subset:   ${SUBSET}"
 log "Output:   ${DATASETS_DIR}"

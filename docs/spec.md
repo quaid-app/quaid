@@ -25,16 +25,16 @@ sources:
 
 > Open-source personal AI memory. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-Inspired by Garry Tan's GBrain work, with this spec adapting similar goals to a local-first Rust + SQLite architecture intended for portable, offline use.
+Inspired by Garry Tan's compiled-knowledge model work, with this spec adapting similar goals to a local-first Rust + SQLite architecture intended for portable, offline use.
 
 - **Status:** Spec complete v4 — ready to build core (see [Phased Delivery](#phased-delivery))
 - **Repo (planned):** GitHub.com/[owner]/quaid
 - **License (planned):** MIT
-- **Origin:** Inspired by Garry Tan's GBrain spec (2026-04-05), then extended with architecture improvements (2026-04-06) and memory research integration (2026-04-08)
+- **Origin:** Inspired by Garry Tan's compiled-knowledge spec (2026-04-05), then extended with architecture improvements (2026-04-06) and memory research integration (2026-04-08)
 - **v1 differentiator over Garry's spec:** Local embeddings, Rust binary instead of TypeScript/Bun, true zero-dependency single binary
 - **v2 additions (Apr 2026 research):** Set-union hybrid search, palace-style hierarchical filtering, progressive retrieval, selective ingestion, temporal knowledge graph, contradiction detection, four-tier memory consolidation. Techniques sourced from MemPalace (96.6% R@5 LongMemEval), OMNIMEM (+411% F1), agentmemory (92% token reduction).
 - **v3 additions (Architecture Review):** Exact-Match Short-Circuit (SMS) search, Temporal Sub-chunking for timelines, Assertions table for heuristic contradiction detection, strict Optimistic Concurrency on MCP writes, true zero-dependency static linking via `candle` (replacing `fastembed`/ONNX).
-- **v4 additions (Community Research + Garry v0.8.0):** Knowledge gap detection (`knowledge_gaps` table + `memory_gap` MCP tool), graph neighborhood traversal (`memory_graph`), `original` page type for user's own thinking, standardised source attribution format with authority hierarchy, filing disambiguation rules, richer person templates, new skills (upgrade, alerts, research), and PGLite convergence validation. Informed by community prototypes, public discussion, and Garry Tan's v0.8.0 GBrain skillpack analysis.
+- **v4 additions (Community Research + Garry v0.8.0):** Knowledge gap detection (`knowledge_gaps` table + `memory_gap` MCP tool), graph neighborhood traversal (`memory_graph`), `original` page type for user's own thinking, standardised source attribution format with authority hierarchy, filing disambiguation rules, richer person templates, new skills (upgrade, alerts, research), and PGLite convergence validation. Informed by community prototypes, public discussion, and Garry Tan's v0.8.0 skillpack analysis.
 
 ---
 
@@ -211,9 +211,9 @@ The horizontal rule (`---`) is the boundary. Reconstructed on export.
 | Markdown | **pulldown-cmark** + **gray-matter** port | Fast CommonMark parser. Frontmatter parsing via custom YAML header extraction. |
 | JSON/YAML | **serde_json** / **serde_yaml** | Standard serialization. |
 
-### Why Rust over TypeScript/Bun (Garry's original stack)
+### Why Rust over TypeScript/Bun (Garry Tan's original stack)
 
-| | Garry's GBrain (TypeScript/Bun) | This spec (Rust) |
+| | Garry Tan's original (TypeScript/Bun) | This spec (Rust) |
 |---|---|---|
 | Binary size | ~10MB (Bun compiled) | ~90MB (includes model weights) |
 | Embeddings | text-embedding-3-small (OpenAI API, costs money, needs internet) | BGE-small-en-v1.5 via candle (local, free, fast, pure Rust) |
@@ -553,16 +553,18 @@ CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resol
 
 -- ============================================================
 -- knowledge_gaps: queries the brain couldn't answer well
--- Privacy-safe by default: raw query text is NOT retained
--- unless explicitly approved.  Only query_hash is stored on
--- detection; query_text is populated post-approval.
+-- Current shipped MCP writes stay privacy-safe by default:
+-- `memory_gap` stores `query_hash`, clears caller context, and
+-- creates `internal` rows. Approval/audit columns exist in schema
+-- but are not exposed by the public MCP surface today.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS knowledge_gaps (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    query_hash       TEXT    NOT NULL,   -- SHA-256 of original query, always stored
-    query_text       TEXT    DEFAULT NULL,  -- raw text retained only after approval
+    page_id          INTEGER DEFAULT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    query_hash       TEXT    NOT NULL,
+    query_text       TEXT    DEFAULT NULL,  -- reserved for non-public approval/audit flows
     context          TEXT    NOT NULL DEFAULT '',
-    confidence_score REAL    DEFAULT NULL,
+    confidence_score REAL    DEFAULT NULL,  -- server-side score for auto-logged gaps
     sensitivity      TEXT    NOT NULL DEFAULT 'internal',
     approved_by      TEXT    DEFAULT NULL,
     approved_at      TEXT    DEFAULT NULL,
@@ -571,11 +573,14 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
     resolved_by_slug TEXT    DEFAULT NULL,
     detected_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     CHECK (sensitivity IN ('internal', 'external', 'redacted')),
-    CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+    CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)),
+    CHECK (sensitivity = 'internal' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gaps_query_hash ON knowledge_gaps(query_hash);
+CREATE INDEX IF NOT EXISTS idx_gaps_page ON knowledge_gaps(page_id) WHERE page_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at) WHERE resolved_at IS NULL;
-```
+
 
 ### Schema Notes
 
@@ -592,7 +597,7 @@ CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at) WH
 - **Temporal links (`valid_from`, `valid_until`, `relationship`):** Links carry typed relationships and temporal validity windows. `valid_until IS NULL` = currently active. `valid_from` is nullable (NULL = unknown start date). Each link has a surrogate `id` used by `memory_link_close` for unambiguous targeting. Multiple intervals with unknown start dates are allowed — dedup and non-overlap enforced in application logic.
 - **Freshness timestamps:** `updated_at` bumped on any page-scoped mutation. `truth_updated_at` bumped only when `compiled_truth` changes (Tiers 2-4). `timeline_updated_at` bumped only when timeline content or `timeline_entries` change (Tier 1). Staleness = `timeline_updated_at` > `truth_updated_at` by 30+ days.
 - **Contradictions:** Detected by `quaid check` (CLI) and `memory_check` (MCP). Stored with `resolved_at` for tracking. Unresolved contradictions surface in briefings and maintenance reports.
-- **Knowledge gaps:** Logged by `memory_gap` (MCP) when `memory_query` returns no results or only low-confidence matches (below configurable threshold). **Privacy-safe by default:** only a SHA-256 `query_hash` is stored at detection time; raw `query_text` is `NULL` until explicitly approved. `confidence_score` stores the highest search score from the triggering query. **Sensitivity is always `internal` at creation — `memory_gap` does not accept a sensitivity parameter.** Escalation to `redacted` or `external` requires a separate `memory_gap_approve` call that records `approved_by`, `approved_at`, and optionally populates `query_text` and `redacted_query` (the anonymised version for `redacted` mode). A CHECK constraint enforces that `query_text` can only be non-NULL when an approval audit trail exists. The research skill (`skills/research/SKILL.md`) refuses external calls for any gap without an approval record. When a gap is resolved via ingest, `resolved_at` and `resolved_by_slug` are set. Unresolved gaps surface in briefings alongside contradictions.
+- **Knowledge gaps:** Logged by `memory_gap` and auto-logged by `memory_query` on weak results. The shipped public surface stores a SHA-256 `query_hash`, clears caller-provided context before persistence, keeps `query_text` unset, and creates `internal` rows only. The schema already includes approval/audit columns plus resolution fields, but no public gap approval or gap-resolution MCP tool is shipped today. Unresolved gaps still surface in briefings alongside contradictions.
 
 ---
 
@@ -605,7 +610,7 @@ USAGE:
     quaid [OPTIONS] <COMMAND>
 
 OPTIONS:
-    --db <PATH>      Path to memory.db [env: QUAID_DB] [default: ./memory.db]
+    --db <PATH>      Path to memory.db [env: QUAID_DB] [default: ~/.quaid/memory.db]
     --json           Output JSON instead of human-readable text
     --version        Print version
     --tools-json     Print MCP tool discovery JSON
@@ -683,11 +688,13 @@ COMMANDS:
     version                         Version info
 ```
 
+`quaid call` uses `src/commands/call.rs`'s fixed dispatcher. It routes all 17 shipped MCP tools, including `memory_collections`.
+
 ### DB path resolution
 
 1. `--db /path/to/memory.db` flag (highest priority)
 2. `QUAID_DB` environment variable
-3. `./memory.db` in current directory (default)
+3. `~/.quaid/memory.db` (default)
 
 ### Output formats
 
@@ -700,10 +707,10 @@ COMMANDS:
 
 ```bash
 # Create a new memory store
-$ quaid init ~/my-memory.db
+$ quaid init ~/.quaid/memory.db
 
 # Import existing markdown directory
-$ quaid import /data/brain/ --db ~/memory.db
+$ quaid import /data/brain/ --db ~/.quaid/memory.db
 Importing 7,471 files...
   people:    1,222 pages
   companies:   847 pages
@@ -761,8 +768,8 @@ DB size: 521MB
 $ quaid serve
 Quaid MCP server running (stdio)
 Model: bge-small-en-v1.5 (384-dim, local)
-DB: /Users/garry/memory.db (521MB, 7471 pages)
-Tools: search, get, put, ingest, link, query, timeline, tags, list, stats
+DB: /Users/garry/.quaid/memory.db (521MB, 7471 pages)
+Tools: 17 `memory_*` tools (core read/write, graph, gaps, collections, raw data)
 ```
 
 ---
@@ -790,48 +797,36 @@ Stdio (standard MCP). The client spawns `quaid serve` as a subprocess and commun
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `memory_search` | FTS5 full-text search | `{ query: string, type?: string, wing?: string, limit?: number }` |
-| `memory_query` | Hybrid search (SMS + set-union + progressive retrieval) | `{ question: string, depth?: "summary"\|"section"\|"full"\|"auto", token_budget?: number, wing?: string, limit?: number }` |
 | `memory_get` | Read a page by slug | `{ slug: string }` |
-| `memory_put` | Write/update a page (auto-extracts summary + palace metadata) | `{ slug: string, content: string, expected_version: number, assertions?: Array<{subject, predicate, object, valid_from?, asserted_by?, source_ref?, evidence_text?}> }` or `{ slug: string, compiled_truth?: string, timeline_append?: string, frontmatter?: object, expected_version: number }` |
-| `brain_ingest` | Ingest a source document — **single transactional mutation** | `{ content: string, source_type: string, source_ref: string, force?: boolean, pages: Array<{slug, content, expected_version, assertions?, links?, timeline_entries?, tags?}> }` |
-| `memory_link` | Create a new link interval (returns link ID) | `{ from: string, to: string, relationship?: string, context?: string, valid_from?: string, page_version: number }` |
-| `memory_links` | List outbound links with IDs | `{ slug: string, temporal?: "current"\|"historical"\|"all" }` |
-| `memory_link_close` | Close an existing link interval by ID | `{ link_id: number, valid_until: string, page_version: number }` |
-| `brain_unlink` | Remove cross-reference entirely | `{ from: string, to: string, relationship?: string, page_version: number }` |
-| `memory_timeline` | Get timeline entries | `{ slug: string, limit?: number }` |
-| `memory_timeline_add` | Add timeline entry | `{ slug: string, date: string, summary: string, source?: string, detail?: string, page_version: number }` |
-| `memory_tags` | List tags for a page | `{ slug: string }` |
-| `brain_tag` | Add/remove tag | `{ slug: string, tag: string, remove?: boolean, page_version: number }` |
-| `memory_list` | List pages with filters | `{ type?: string, tag?: string, wing?: string, limit?: number, sort?: string }` |
-| `memory_backlinks` | Pages linking to a slug (temporal filtering) | `{ slug: string, temporal?: "current"\|"historical"\|"all" }` |
-| `memory_graph` | N-hop neighborhood graph (pages + links as JSON) | `{ slug: string, depth?: number, temporal?: "current"\|"historical"\|"all", limit?: number }` |
-| `memory_check` | Run contradiction detection | `{ slug?: string, type?: "temporal"\|"cross_page"\|"stale", resolve?: string }` |
-| `memory_gap` | Log a knowledge gap (always created as `internal` — no caller override) | `{ query_text: string, context?: string, confidence_score?: number }` |
-| `memory_gap_approve` | Escalate gap sensitivity (audited — records approver + timestamp) | `{ gap_id: number, sensitivity: "redacted"\|"external", approver: string, redacted_query?: string }` |
-| `memory_gaps` | List unresolved knowledge gaps | `{ limit?: number, include_resolved?: boolean }` |
-| `memory_stats` | Brain statistics (includes contradiction + gap counts) | `{}` |
-| `memory_raw` | Read/write raw enrichment data | `{ slug: string, source?: string, data?: object, page_version: number }` |
+| `memory_put` | Create or update a page | `{ slug: string, content: string, expected_version?: number }` |
+| `memory_query` | Hybrid semantic + FTS5 query | `{ query: string, collection?: string, wing?: string, limit?: number, depth?: "auto" }` |
+| `memory_search` | FTS5 full-text search | `{ query: string, collection?: string, wing?: string, limit?: number }` |
+| `memory_list` | List pages with optional filters | `{ collection?: string, wing?: string, page_type?: string, limit?: number }` |
+| `memory_link` | Create a typed temporal link | `{ from_slug: string, to_slug: string, relationship: string, valid_from?: string, valid_until?: string }` |
+| `memory_link_close` | Close a temporal link by ID | `{ link_id: number, valid_until: string }` |
+| `memory_backlinks` | List inbound links to a page | `{ slug: string, limit?: number, temporal?: "active"|"current"|"all"|"history" }` |
+| `memory_graph` | N-hop neighbourhood graph | `{ slug: string, depth?: number, temporal?: "active"|"current"|"all"|"history" }` |
+| `memory_check` | Run contradiction detection | `{ slug?: string }` |
+| `memory_timeline` | Show timeline entries for a page | `{ slug: string, limit?: number }` |
+| `memory_tags` | List, add, or remove tags for a page | `{ slug: string, add?: string[], remove?: string[] }` |
+| `memory_gap` | Log a knowledge gap (internal only) | `{ query: string, slug?: string, context?: string }` |
+| `memory_gaps` | List knowledge gaps | `{ resolved?: boolean, limit?: number }` |
+| `memory_stats` | Brain statistics | `{}` |
+| `memory_collections` | Read-only collection status rows | `{}` |
+| `memory_raw` | Store raw structured data for a page | `{ slug: string, source: string, data: object, overwrite?: boolean }` |
 
-**Concurrency Model:**
+**Behavior notes:**
 
-- **`memory_put`** requires `expected_version`. Mismatch → MCP Tool Error (conflict). Agent must `memory_get`, merge, retry.
-- **`brain_ingest`** is a single server-side transactional mutation. The agent passes all page updates, links, timeline entries, assertions, and tags in one call. The server wraps everything in a SQLite transaction, checks `expected_version` for each page, and either commits all or rolls back all. This eliminates the window where side tables (links, timeline, tags) can desync from page content.
-- **All page-scoped mutators** (`memory_link`, `brain_unlink`, `memory_timeline_add`, `brain_tag`, `memory_raw`) require `page_version`. The server verifies it matches before mutating and bumps `pages.version` on success. Mismatch → same conflict error as `memory_put`. No write path bypasses the version check.
+- **`memory_put`** is the only public MCP mutator with explicit optimistic concurrency. Create without `expected_version`; updates must supply it and retry on conflict.
+- **`memory_query`** auto-logs low-signal gaps. The CLI `quaid query` can override token budget, but MCP `memory_query` does not accept a per-call `token_budget`; when `depth: "auto"` it uses `config.default_token_budget`.
+- **`memory_tags`** is the combined tag surface: omit `add`/`remove` to list current tags, or provide one/both arrays to mutate.
+- **`memory_gap`** always creates `internal` rows, hashes the query, and clears caller-provided context before persistence. No public approval/escalation or resolve tool is shipped.
+- **`memory_raw`** only accepts JSON objects and refuses to replace an existing `(page, source)` row unless `overwrite: true`.
+- **`memory_collections`** is read-only and returns frozen 13-field collection status rows.
 
-### Resources
+### Resources and prompts
 
-| Resource | URI | Description |
-|----------|-----|-------------|
-| Page | `brain://pages/{slug}` | Full page content as markdown |
-| Index | `brain://index` | All page slugs grouped by type |
-
-### Prompts
-
-| Prompt | Description |
-|--------|-------------|
-| `brain_briefing` | Compile a briefing from current brain state |
-| `brain_ingest_meeting` | Guide for ingesting a meeting transcript |
+Current `src/mcp/server.rs` registers no MCP resources or prompt templates. The shipped server surface is tools-only.
 
 ---
 
@@ -986,7 +981,7 @@ OMNIMEM's ablation (AutoResearchClaw, Apr 2026): removing progressive retrieval 
 
 ### Token budget
 
-Default: 4000 tokens (configurable in `config` table as `default_token_budget`). Override per-query via the `token_budget` parameter.
+Default: 4000 tokens (configurable in `config` table as `default_token_budget`). The CLI can override this with `--token-budget`; MCP `memory_query` uses the configured value when `depth: "auto"`.
 
 ### Algorithm (auto mode)
 
@@ -1004,14 +999,15 @@ Default: 4000 tokens (configurable in `config` table as `default_token_budget`).
 
 ### MCP integration
 
-The `memory_query` tool gains `depth` and `token_budget` parameters:
+`memory_query` currently exposes `query`, `collection`, `wing`, `limit`, and `depth`. Only `depth: "auto"` changes server behaviour; token budget stays server-configured in MCP.
 
 ```json
 {
-  "question": "who knows Jensen Huang?",
-  "token_budget": 4000,
+  "query": "who knows Jensen Huang?",
   "depth": "auto",
-  "wing": null
+  "collection": null,
+  "wing": null,
+  "limit": 10
 }
 ```
 
@@ -1957,10 +1953,10 @@ The agent should surface its classification reasoning if borderline ("I classifi
 ---
 name: quaid-research
 description: |
-  Resolve knowledge gaps logged by memory_gap. Run on schedule or on demand.
-  Respects sensitivity classification: internal gaps resolved from existing
-  brain only, redacted gaps anonymised before external queries, external gaps
-  may use web search and enrichment APIs. Default sensitivity is internal.
+  Resolve knowledge gaps logged by memory_gap. Current shipped CLI/MCP
+  surface only creates internal gaps. Resolve them from existing memory
+  first; if external research is needed, escalate outside the public MCP
+  contract rather than assuming a gap-approval tool exists.
 ---
 
 # Research Skill
@@ -1971,37 +1967,36 @@ description: |
 
 2. **Prioritise.** Rank by:
    - Age (older gaps first — they've been unresolved longest)
-   - Context (gaps from high-priority queries rank higher)
-   - Frequency (same query_text appearing multiple times = high demand)
+   - Whether the gap is page-bound (`page_id` set) or global
+   - Context only when it comes from internal/system logging; `memory_gap` clears caller-supplied context before persistence
 
-3. **Check sensitivity classification and approval before researching.**
+3. **Treat the public gap surface as internal-only.**
 
-   | Sensitivity | Approval required? | Allowed research methods |
-   |-------------|-------------------|------------------------|
-   | `internal` (default) | No | Search existing brain pages only (`memory_query`, `memory_search`). No network calls. If the brain can't answer it, leave the gap unresolved and note "requires external research — escalate sensitivity via `memory_gap_approve` to proceed." |
-   | `redacted` | Yes (`memory_gap_approve` with `approved_by`, `redacted_query`) | External search permitted using ONLY the `redacted_query` stored in the approval record (entity names, deal terms, dollar amounts stripped). **Never send the original `query_text` externally.** If no `redacted_query` exists in the approval record, refuse and ask for one. |
-   | `external` | Yes (`memory_gap_approve` with `approved_by`) | External search permitted with the original query text. Use only for non-sensitive topics (public companies, open-source projects, general concepts). |
+   Use existing brain data only:
+   - `memory_query` / `quaid query`
+   - `memory_search`
+   - `memory_backlinks`
+   - `memory_graph`
 
-   **Hard rule:** The research skill MUST verify that `approved_by IS NOT NULL AND approved_at IS NOT NULL` before any external call. If the approval record is missing (which shouldn't happen due to the CHECK constraint, but defense in depth), treat as `internal`.
+   If the brain still cannot answer the question, stop and escalate through an out-of-band operator workflow. The shipped public MCP surface has no public gap approval or gap-resolution tool.
 
-4. **Research each gap (per sensitivity rules above).**
-   - `internal`: re-query brain with alternate phrasing, check backlinks, scan related pages
-   - `redacted`/`external`: Web search (Exa, Brave) for the (redacted or original) query text
-   - If entity-related: check enrichment APIs (Crustdata, Happenstance) — `external` only
-   - If topic-related: search for recent articles, papers, threads
-   - Compile findings into a draft page or update to existing page
+4. **Research each gap with internal data only.**
+   - Re-query the brain with alternate phrasing
+   - Check backlinks and neighbourhood graph
+   - Scan nearby pages in the same collection/entity wing
+   - Compile findings into a draft page or update to an existing page
 
-4. **Ingest findings.** Follow `skills/ingest/SKILL.md` — standard four-tier consolidation.
+5. **Write findings back.** Follow `skills/ingest/SKILL.md` — standard four-tier consolidation.
    - New entity discovered → create page via `quaid put`
-   - Existing entity enriched → update via `brain_ingest` with `expected_version`
+   - Existing entity enriched → update via `quaid put` or `memory_put` with the current optimistic-concurrency flow
    - Topic research → create `concepts/` or `sources/` page
 
-5. **Resolve gap.** After successful ingest:
-   - The system marks the gap resolved with the slug of the page that filled it
-   - If research yields nothing useful, add a note to the gap context and leave unresolved
+6. **Track closure honestly.**
+   - Public CLI/MCP currently exposes `memory_gap` and `memory_gaps` only; gap resolution is not a shipped public tool
+   - If research yields nothing useful, leave the gap unresolved and note the limitation in your worklog
    - Re-check after 7 days (topics evolve, new sources appear)
 
-6. **Report.** Write research summary to `sources/research-YYYY-MM-DD` for audit trail.
+7. **Report.** Write research summary to `sources/research-YYYY-MM-DD` for audit trail.
 
 ## When to run
 
@@ -2035,7 +2030,7 @@ description: |
 ## Pre-upgrade checklist
 
 1. **Check current version:** `quaid version`
-2. **Record the resolved DB path:** `echo "${QUAID_DB:-./memory.db}"` — needed for rollback.
+2. **Record the resolved DB path:** `echo "${QUAID_DB:-~/.quaid/memory.db}"` — needed for rollback.
 3. **Stop MCP server if running:** `pgrep -f "quaid serve" && echo "STOP: kill quaid serve before upgrading"`
 4. **Backup:** `quaid compact` then manual backup if desired (the binary creates its own WAL-safe backup during migration)
 5. **Validate current state:** `quaid validate --all` — fix any issues before upgrading
@@ -2048,12 +2043,14 @@ description: |
    ```bash
    TARGET_VERSION="v0.2.0"  # always pin an explicit version, never use 'latest' unverified
    PLATFORM="$(uname -s | tr A-Z a-z)-$(uname -m)"
+   CHANNEL="airgapped"  # airgapped (default, ~180MB, offline) or online (~90MB, downloads model on first use)
+   ASSET="quaid-${PLATFORM}-${CHANNEL}"
    STAGING="/tmp/quaid-${TARGET_VERSION}"
 
    # Download binary and checksum file
-   curl -fsSL "https://github.com/[owner]/quaid/releases/download/${TARGET_VERSION}/quaid-${PLATFORM}" \
+   curl -fsSL "https://github.com/[owner]/quaid/releases/download/${TARGET_VERSION}/${ASSET}" \
      -o "${STAGING}"
-   curl -fsSL "https://github.com/[owner]/quaid/releases/download/${TARGET_VERSION}/quaid-${PLATFORM}.sha256" \
+   curl -fsSL "https://github.com/[owner]/quaid/releases/download/${TARGET_VERSION}/${ASSET}.sha256" \
      -o "${STAGING}.sha256"
    ```
 
@@ -2110,7 +2107,7 @@ If anything goes wrong:
    The backup file is the resolved DB path — respect `--db`/`QUAID_DB` if set.
    ```bash
    # Resolve the actual DB path (same logic as the binary uses)
-   DB_PATH="${QUAID_DB:-./memory.db}"
+   DB_PATH="${QUAID_DB:-~/.quaid/memory.db}"
 
    # Delete WAL sidecars — they contain post-migration state that would
    # replay into the restored backup and corrupt the rollback.
@@ -2421,9 +2418,11 @@ Release artifacts published to GitHub Releases on tag push. Each release include
 
 ```bash
 VERSION="v0.1.0"
-PLATFORM="darwin-arm64"
-curl -fsSL "https://github.com/[owner]/quaid/releases/download/${VERSION}/quaid-${PLATFORM}" -o /tmp/quaid
-curl -fsSL "https://github.com/[owner]/quaid/releases/download/${VERSION}/quaid-${PLATFORM}.sha256" -o /tmp/quaid.sha256
+PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
+CHANNEL="airgapped"       # airgapped (default, ~180MB) or online (~90MB)
+ASSET="quaid-${PLATFORM}-${CHANNEL}"
+curl -fsSL "https://github.com/[owner]/quaid/releases/download/${VERSION}/${ASSET}" -o /tmp/quaid
+curl -fsSL "https://github.com/[owner]/quaid/releases/download/${VERSION}/${ASSET}.sha256" -o /tmp/quaid.sha256
 echo "$(cat /tmp/quaid.sha256)  /tmp/quaid" | shasum -a 256 --check
 cp /tmp/quaid /usr/local/bin/quaid && chmod +x /usr/local/bin/quaid
 ```
@@ -2727,9 +2726,9 @@ OMNIMEM's three principles: selective ingestion, multimodal atomic units, progre
 
 ### Why SQLite over PGLite (v4 validation)
 
-Garry Tan's GBrain v0.8.0 (Apr 2026) moved from Supabase to PGLite — an in-process Postgres that runs in a browser or Node.js via WASM. Same principle as our SQLite choice: zero external dependencies, fully local. Three independent teams in the same week (us with SQLite, Garry with PGLite, @ansubkhan with Fastify/SQLite) converged on local embedded databases for agent memory. The architecture is validated.
+Garry Tan's v0.8.0 knowledge-brain system (Apr 2026) moved from Supabase to PGLite — an in-process Postgres that runs in a browser or Node.js via WASM. Same principle as our SQLite choice: zero external dependencies, fully local. Three independent teams in the same week (us with SQLite, Garry with PGLite, @ansubkhan with Fastify/SQLite) converged on local embedded databases for agent memory. The architecture is validated.
 
-| | SQLite (quaid) | PGLite (Garry's GBrain) |
+| | SQLite (quaid) | PGLite (Garry Tan's system) |
 |---|---|---|
 | Transport | `cp memory.db` / `scp` / USB stick | Requires WASM runtime to read |
 | Runtime | None (statically linked into Rust binary) | Node.js/Bun + WASM |
@@ -2839,7 +2838,7 @@ memory.db contains sensitive personal intelligence: deal assessments, people eva
 **Operational:**
 - No telemetry. No analytics. No phone-home. The quaid binary itself makes zero network calls at runtime.
 - Skills are local markdown files. The binary does not exfiltrate data.
-- **Network boundary for agent-driven skills:** The enrichment skill (`skills/enrich/SKILL.md`) and research skill (`skills/research/SKILL.md`) instruct the agent to call external APIs (Crustdata, Exa, Brave, Happenstance). These network calls are made by the agent, not by the quaid binary — but the effect is the same: brain content (queries, entity names) can reach third-party services. The `knowledge_gaps.sensitivity` field controls this: gaps default to `internal` (no external research), and must be explicitly upgraded to `redacted` or `external` before the research skill will issue network calls. Raw query text (`query_text`) is never retained at detection time — only a `query_hash` is stored; `query_text` is populated only after explicit approval. Agents must respect this classification.
+- **Network boundary for agent-driven skills:** The enrichment skill (`skills/enrich/SKILL.md`) and some operator-driven research workflows may call external APIs (Crustdata, Exa, Brave, Happenstance). Those network calls are made by the agent, not by the quaid binary. The shipped public gap surface does not expose approval/escalation tools; `memory_gap` only creates internal rows with `query_hash`, so any decision to send brain-derived queries to third parties must happen outside the public MCP contract.
 - `quaid export` writes plaintext markdown. Treat export directories with the same sensitivity as the DB.
 - `.env` files or API keys for enrichment skills (Crustdata, Exa) are the user's responsibility. quaid never stores them in memory.db.
 
@@ -2865,7 +2864,7 @@ memory.db contains sensitive personal intelligence: deal assessments, people eva
 
 ## Comparison Table
 
-| | Garry's GBrain (v0.8) | This spec (v4) | MemPalace | agentmemory | Obsidian | Notion |
+| | Garry Tan's v0.8 | This spec (v4) | MemPalace | agentmemory | Obsidian | Notion |
 |---|---|---|---|---|---|---|
 | Language | TypeScript/Bun | Rust | Python | Node.js | Electron | Web/Cloud |
 | Binary | ~10MB + API dep | ~90MB self-contained | pip install | npm install | Heavy app | SaaS |
@@ -2932,7 +2931,7 @@ BGE-small-en-v1.5 = 384 dims. BGE-base = 768 dims. BGE-large = 1024 dims.
 
 ### 5. Ingest command UX
 
-Does `quaid ingest <file>` attempt to parse entities itself (requiring an LLM call), or is it a pass-through that stores the file and expects the agent (via MCP `brain_ingest` tool) to do the parsing?
+Does `quaid ingest <file>` attempt to parse entities itself (requiring an LLM call), or is it a pass-through that stores the file and expects the agent to follow `skills/ingest/SKILL.md` and then apply updates via `quaid put` / `memory_put`?
 
 **Recommendation:** `quaid ingest` stores the raw source + auto-logs it + runs novelty check. The actual entity extraction and page creation happens via the agent following `skills/ingest/SKILL.md`. This keeps the binary dumb and the intelligence in markdown.
 
@@ -2960,7 +2959,7 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 
 | Date | Event |
 |------|-------|
-| 2026-04-05 | Garry Tan specs GBrain v1 (TypeScript/Bun, OpenAI embeddings). Inspired by hitting git scaling limits at 7,471 files / 2.3GB. |
+| 2026-04-05 | Garry Tan publishes a compiled-knowledge model spec v1 (TypeScript/Bun, OpenAI embeddings). Inspired by hitting git scaling limits at 7,471 files / 2.3GB. |
 | 2026-04-05 | Garry posts spec to GitHub Gist. Architecture: SQLite + FTS5 + vector, thin CLI, fat skills, MCP-first. |
 | 2026-04-06 | Initial architecture review of Garry's spec. Key improvements identified: Rust over TypeScript, local BGE-small-en-v1.5 over OpenAI embeddings, sqlite-vec over pure-JS cosine similarity, RRF over weighted sum. |
 | 2026-04-06 | Full standalone spec written (v1). Incorporates Garry's schema verbatim (adapted for 384-dim vectors), all CLI commands, all skill files. Adds: Rust implementation details, cross-compile CI, embedding decision rationale. |
@@ -2972,4 +2971,5 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 
 ---
 
-*This spec is designed to stand alone. Everything needed to build Quaid is above — no prior context required. It is explicitly inspired by Garry Tan's GBrain work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 GBrain skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
+*This spec is designed to stand alone. Everything needed to build Quaid is above — no prior context required. It is explicitly inspired by Garry Tan's compiled-knowledge model work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
+

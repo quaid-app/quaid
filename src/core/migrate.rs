@@ -28,7 +28,7 @@ impl ImportStats {
     }
 }
 
-/// Import all `.md` files from a directory into the brain database.
+/// Import all `.md` files from a directory into the memory database.
 ///
 /// SHA-256 of raw file bytes is the idempotency key. Files already ingested
 /// (by hash) are skipped. When `validate_only` is true, files are parsed but
@@ -580,7 +580,7 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         std::mem::forget(dir);
         conn
@@ -812,7 +812,7 @@ mod tests {
         copy_fixture_tree(&fixtures_dir, corpus_dir.path());
 
         let db_dir = tempfile::TempDir::new().unwrap();
-        let db_path = db_dir.path().join("test_brain.db");
+        let db_path = db_dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
 
         let initial_stats = import_dir(&conn, corpus_dir.path(), false).unwrap();
@@ -1115,12 +1115,12 @@ mod tests {
     }
 
     #[test]
-    fn import_export_reimport_preserves_gbrain_id_frontmatter() {
+    fn import_export_reimport_preserves_memory_id_frontmatter() {
         let source_db = open_test_db();
         let source_dir = tempfile::TempDir::new().unwrap();
         fs::write(
             source_dir.path().join("alice.md"),
-            "---\ngbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+            "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
         )
         .unwrap();
 
@@ -1132,8 +1132,8 @@ mod tests {
         let exported =
             fs::read_to_string(export_dir_path.path().join("people").join("alice.md")).unwrap();
         assert!(
-            exported.contains("gbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\n"),
-            "exported markdown must keep gbrain_id frontmatter, got: {exported}"
+            exported.contains("memory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\n"),
+            "exported markdown must keep memory_id frontmatter, got: {exported}"
         );
 
         let reimport_db = open_test_db();
@@ -1148,7 +1148,7 @@ mod tests {
             .unwrap();
         let frontmatter: HashMap<String, String> = serde_json::from_str(&frontmatter_json).unwrap();
         assert_eq!(
-            frontmatter.get("gbrain_id").map(String::as_str),
+            frontmatter.get("memory_id").map(String::as_str),
             Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
     }

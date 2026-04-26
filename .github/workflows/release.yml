@@ -21,42 +21,42 @@ jobs:
             os: macos-latest
             channel: airgapped
             features: bundled,embedded-model
-            artifact: gbrain-darwin-arm64-airgapped
+            artifact: quaid-darwin-arm64-airgapped
           - target: x86_64-apple-darwin
             os: macos-latest
             channel: airgapped
             features: bundled,embedded-model
-            artifact: gbrain-darwin-x86_64-airgapped
+            artifact: quaid-darwin-x86_64-airgapped
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             channel: airgapped
             features: bundled,embedded-model
-            artifact: gbrain-linux-x86_64-airgapped
+            artifact: quaid-linux-x86_64-airgapped
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             channel: airgapped
             features: bundled,embedded-model
-            artifact: gbrain-linux-aarch64-airgapped
+            artifact: quaid-linux-aarch64-airgapped
           - target: aarch64-apple-darwin
             os: macos-latest
             channel: online
             features: bundled,online-model
-            artifact: gbrain-darwin-arm64-online
+            artifact: quaid-darwin-arm64-online
           - target: x86_64-apple-darwin
             os: macos-latest
             channel: online
             features: bundled,online-model
-            artifact: gbrain-darwin-x86_64-online
+            artifact: quaid-darwin-x86_64-online
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             channel: online
             features: bundled,online-model
-            artifact: gbrain-linux-x86_64-online
+            artifact: quaid-linux-x86_64-online
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             channel: online
             features: bundled,online-model
-            artifact: gbrain-linux-aarch64-online
+            artifact: quaid-linux-aarch64-online
 
     steps:
       - uses: actions/checkout@v4
@@ -96,7 +96,7 @@ jobs:
 
       - name: Rename binary
         run: |
-          cp target/${{ matrix.target }}/release/gbrain ${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/quaid ${{ matrix.artifact }}
 
       - name: Verify static binary (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -170,19 +170,36 @@ jobs:
           files: artifacts/**
           generate_release_notes: true
           body: |
+            ## ⚠️ BREAKING RENAME — Read before upgrading
+
+            This release carries the **quaid-hard-rename** change. Every user-facing surface
+            changed at once. **There is no in-place upgrade path.** Pre-rename installations
+            are fully incompatible with this binary.
+
+            | Surface | What you must do |
+            |---------|-----------------|
+            | **Binary** | The old binary is gone. The new binary is `quaid`. Update any PATH entries, shell aliases, or scripts that invoked the old name. |
+            | **MCP tools** | All 17 tools are now prefixed `memory_*`. Every MCP client config (Claude Code `.mcp.json`, Cursor, etc.) must be rewritten — clients will expose zero tools until the `memory_*` names are in place. |
+            | **Env vars** | All environment variables are now `QUAID_*`. Update any shell profile lines, CI secrets, or dotenv files that used the old prefix. |
+            | **Database** | Existing databases are incompatible (`SCHEMA_VERSION` bumped). Export with the old binary, then `quaid init ~/.quaid/memory.db` + `quaid import <backup-dir/>`. No automatic migration is provided. |
+
+            **→ Full step-by-step migration instructions: [MIGRATION.md](https://github.com/quaid-app/quaid/blob/${{ github.ref_name }}/MIGRATION.md)**
+
+            ---
+
             ## Install
 
             Default airgapped installer:
 
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/${{ github.ref_name }}/scripts/install.sh | sh
+            curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/${{ github.ref_name }}/scripts/install.sh | sh
             ```
 
             Online installer override:
 
             ```bash
-            GBRAIN_CHANNEL=online \
-              curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/${{ github.ref_name }}/scripts/install.sh | sh
+            curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/${{ github.ref_name }}/scripts/install.sh \
+              | QUAID_CHANNEL=online sh
             ```
 
             Manual downloads use the channel-suffixed assets:
@@ -191,15 +208,15 @@ jobs:
             VERSION="${{ github.ref_name }}"
             PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 
-            AIRGAPPED_ASSET="gbrain-${PLATFORM}-airgapped"
-            ONLINE_ASSET="gbrain-${PLATFORM}-online"
+            AIRGAPPED_ASSET="quaid-${PLATFORM}-airgapped"
+            ONLINE_ASSET="quaid-${PLATFORM}-online"
 
-            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${AIRGAPPED_ASSET}" -o "${AIRGAPPED_ASSET}"
-            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${AIRGAPPED_ASSET}.sha256" -o "${AIRGAPPED_ASSET}.sha256"
+            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${AIRGAPPED_ASSET}" -o "${AIRGAPPED_ASSET}"
+            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${AIRGAPPED_ASSET}.sha256" -o "${AIRGAPPED_ASSET}.sha256"
             shasum -a 256 --check "${AIRGAPPED_ASSET}.sha256"
 
-            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ONLINE_ASSET}" -o "${ONLINE_ASSET}"
-            curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ONLINE_ASSET}.sha256" -o "${ONLINE_ASSET}.sha256"
+            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ONLINE_ASSET}" -o "${ONLINE_ASSET}"
+            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ONLINE_ASSET}.sha256" -o "${ONLINE_ASSET}.sha256"
             shasum -a 256 --check "${ONLINE_ASSET}.sha256"
             ```
 
@@ -210,7 +227,16 @@ jobs:
             cargo build --release --no-default-features --features bundled,online-model
             ```
 
-            This patch release preserves the current vault-sync surface and fixes Issue #81: `gbrain serve` now normalizes legacy active collections with blank root paths to `detached` before watcher registration, so empty-root bootstrap rows no longer break watcher startup. The `online` build still supports configurable BGE models via `GBRAIN_MODEL` / `--model`; `airgapped` embeds BGE-small-en-v1.5. npm installs the `online` channel; the shell installer defaults to `airgapped`.
+            > **npm — planned follow-on, not yet available.** `quaid` is not in the public
+            > npm registry. Use the shell installer or a GitHub Releases binary above.
+
+            ---
+
+            This release fixes Issue #81: `quaid serve` now normalizes active collections
+            with blank root paths to `detached` before watcher registration, so empty-root
+            bootstrap rows no longer break watcher startup. The `online` build supports
+            configurable BGE models via `QUAID_MODEL` / `--model`; `airgapped` embeds
+            BGE-small-en-v1.5. The shell installer defaults to `airgapped`.
 
             ---
           draft: false

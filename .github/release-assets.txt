@@ -1,20 +1,20 @@
-# Canonical GitHub release asset contract for public GigaBrain releases.
+# Canonical GitHub release asset contract for public Quaid releases.
 # Keep this manifest aligned with scripts/install.sh, .github/workflows/release.yml,
 # .github/RELEASE_CHECKLIST.md, and release-asset parity tests.
-gbrain-darwin-arm64-airgapped
-gbrain-darwin-arm64-airgapped.sha256
-gbrain-darwin-arm64-online
-gbrain-darwin-arm64-online.sha256
-gbrain-darwin-x86_64-airgapped
-gbrain-darwin-x86_64-airgapped.sha256
-gbrain-darwin-x86_64-online
-gbrain-darwin-x86_64-online.sha256
-gbrain-linux-x86_64-airgapped
-gbrain-linux-x86_64-airgapped.sha256
-gbrain-linux-x86_64-online
-gbrain-linux-x86_64-online.sha256
-gbrain-linux-aarch64-airgapped
-gbrain-linux-aarch64-airgapped.sha256
-gbrain-linux-aarch64-online
-gbrain-linux-aarch64-online.sha256
+quaid-darwin-arm64-airgapped
+quaid-darwin-arm64-airgapped.sha256
+quaid-darwin-arm64-online
+quaid-darwin-arm64-online.sha256
+quaid-darwin-x86_64-airgapped
+quaid-darwin-x86_64-airgapped.sha256
+quaid-darwin-x86_64-online
+quaid-darwin-x86_64-online.sha256
+quaid-linux-x86_64-airgapped
+quaid-linux-x86_64-airgapped.sha256
+quaid-linux-x86_64-online
+quaid-linux-x86_64-online.sha256
+quaid-linux-aarch64-airgapped
+quaid-linux-aarch64-airgapped.sha256
+quaid-linux-aarch64-online
+quaid-linux-aarch64-online.sha256
 install.sh

@@ -24,7 +24,7 @@ pub enum CollectionAction {
     List,
     /// Show collection diagnostics
     Info { name: String },
-    /// Manage .gbrainignore patterns
+    /// Manage .quaidignore patterns
     Ignore {
         #[command(subcommand)]
         action: CollectionIgnoreAction,
@@ -63,7 +63,7 @@ pub struct CollectionAddArgs {
     #[arg(long, conflicts_with = "read_only")]
     pub writable: bool,
     #[arg(long)]
-    pub write_gbrain_id: bool,
+    pub write_memory_id: bool,
     #[arg(long)]
     pub watcher_mode: Option<String>,
 }
@@ -181,7 +181,7 @@ struct CollectionMetrics {
 pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> {
     match action {
         CollectionAction::Add(args) => {
-            ensure_unix_collection_command("gbrain collection add")?;
+            ensure_unix_collection_command("quaid collection add")?;
             add(db, args, json)
         }
         CollectionAction::List => list(db, json),
@@ -189,11 +189,11 @@ pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> 
         CollectionAction::Ignore { action } => ignore(db, action, json),
         CollectionAction::Quarantine { action } => quarantine_action(db, action, json),
         CollectionAction::Sync(args) => {
-            ensure_unix_collection_command("gbrain collection sync")?;
+            ensure_unix_collection_command("quaid collection sync")?;
             sync(db, args, json)
         }
         CollectionAction::Restore(args) => {
-            ensure_unix_collection_command("gbrain collection restore")?;
+            ensure_unix_collection_command("quaid collection restore")?;
             restore(db, args, json)
         }
         CollectionAction::RestoreReset { name, confirm } => {
@@ -228,9 +228,9 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
     if collections::get_by_name(db, &args.name)?.is_some() {
         bail!("collection already exists: {}", args.name);
     }
-    if args.write_gbrain_id {
+    if args.write_memory_id {
         bail!(
-            "--write-gbrain-id is deferred in Batch K2; K1 only supports default read-only attach"
+            "--write-quaid-id is deferred in Batch K2; K1 only supports default read-only attach"
         );
     }
     if let Some(mode) = args.watcher_mode {
@@ -446,16 +446,16 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
 fn ignore(db: &Connection, action: CollectionIgnoreAction, json: bool) -> Result<()> {
     match action {
         CollectionIgnoreAction::Add { name, pattern } => {
-            ensure_unix_collection_command("gbrain collection ignore add")?;
+            ensure_unix_collection_command("quaid collection ignore add")?;
             ignore_add(db, &name, &pattern, json)
         }
         CollectionIgnoreAction::Remove { name, pattern } => {
-            ensure_unix_collection_command("gbrain collection ignore remove")?;
+            ensure_unix_collection_command("quaid collection ignore remove")?;
             ignore_remove(db, &name, &pattern, json)
         }
         CollectionIgnoreAction::List { name } => ignore_list(db, &name, json),
         CollectionIgnoreAction::Clear { name, confirm } => {
-            ensure_unix_collection_command("gbrain collection ignore clear")?;
+            ensure_unix_collection_command("quaid collection ignore clear")?;
             if !confirm {
                 bail!("ignore clear requires --confirm");
             }
@@ -481,7 +481,7 @@ fn quarantine_action(
             slug,
             relative_path,
         } => {
-            ensure_unix_collection_command("gbrain collection quarantine restore")?;
+            ensure_unix_collection_command("quaid collection quarantine restore")?;
             quarantine_restore(db, &slug, &relative_path, json)
         }
     }
@@ -500,7 +500,7 @@ fn cached_user_ignore_patterns(collection: &collections::Collection) -> Result<V
 }
 
 fn ignore_file_path(collection: &collections::Collection) -> PathBuf {
-    Path::new(&collection.root_path).join(".gbrainignore")
+    Path::new(&collection.root_path).join(".quaidignore")
 }
 
 fn load_ignore_source(collection: &collections::Collection) -> Result<Option<String>> {
@@ -604,10 +604,10 @@ fn format_ignore_parse_errors(errors: &[ignore_patterns::IgnoreParseError]) -> S
 }
 
 fn write_ignore_file_atomically(root_path: &Path, contents: Option<&str>) -> Result<PathBuf> {
-    let ignore_path = root_path.join(".gbrainignore");
+    let ignore_path = root_path.join(".quaidignore");
     match contents {
         Some(contents) => {
-            let temp_path = root_path.join(format!(".gbrainignore.tmp-{}", Uuid::now_v7()));
+            let temp_path = root_path.join(format!(".quaidignore.tmp-{}", Uuid::now_v7()));
             {
                 let mut file = fs::File::create(&temp_path).with_context(|| {
                     format!(
@@ -882,20 +882,20 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
             blocked_state: "reconcile_halted".to_owned(),
             integrity_blocked: Some(reason.to_owned()),
             suggested_command: Some(format!(
-                "gbrain collection reconcile-reset {} --confirm",
+                "quaid collection reconcile-reset {} --confirm",
                 collection.name
             )),
             status_message: match reason {
                 "duplicate_uuid" => format!(
-                    "reconcile is halted on duplicate gbrain_id values; repair the vault first, then run gbrain collection reconcile-reset {} --confirm",
+                    "reconcile is halted on duplicate memory_id values; repair the vault first, then run quaid collection reconcile-reset {} --confirm",
                     collection.name
                 ),
                 "unresolvable_trivial_content" => format!(
-                    "reconcile is halted on trivial-content identity ambiguity; run gbrain collection migrate-uuids {} or restore the vault, then run gbrain collection reconcile-reset {} --confirm",
+                    "reconcile is halted on trivial-content identity ambiguity; run quaid collection migrate-uuids {} or restore the vault, then run quaid collection reconcile-reset {} --confirm",
                     collection.name, collection.name
                 ),
                 _ => format!(
-                    "reconcile is halted; repair the vault first, then run gbrain collection reconcile-reset {} --confirm",
+                    "reconcile is halted; repair the vault first, then run quaid collection reconcile-reset {} --confirm",
                     collection.name
                 ),
             },
@@ -906,11 +906,11 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
             blocked_state: "restore_integrity_blocked".to_owned(),
             integrity_blocked: Some("manifest_tampering".to_owned()),
             suggested_command: Some(format!(
-                "gbrain collection restore-reset {} --confirm",
+                "quaid collection restore-reset {} --confirm",
                 collection.name
             )),
             status_message: format!(
-                "restore is terminally blocked by integrity failure; run gbrain collection restore-reset {} --confirm after repair",
+                "restore is terminally blocked by integrity failure; run quaid collection restore-reset {} --confirm after repair",
                 collection.name
             ),
         };
@@ -920,11 +920,11 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
             blocked_state: "pending_finalize".to_owned(),
             integrity_blocked: Some("manifest_incomplete_pending".to_owned()),
             suggested_command: Some(format!(
-                "gbrain collection sync {} --finalize-pending",
+                "quaid collection sync {} --finalize-pending",
                 collection.name
             )),
             status_message: format!(
-                "restore manifest is still incomplete; collection remains blocked until the files reappear and gbrain collection sync {} --finalize-pending succeeds",
+                "restore manifest is still incomplete; collection remains blocked until the files reappear and quaid collection sync {} --finalize-pending succeeds",
                 collection.name
             ),
         };
@@ -934,11 +934,11 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
             blocked_state: "pending_finalize".to_owned(),
             integrity_blocked: None,
             suggested_command: Some(format!(
-                "gbrain collection sync {} --finalize-pending",
+                "quaid collection sync {} --finalize-pending",
                 collection.name
             )),
             status_message: format!(
-                "restore is waiting for finalize; plain sync stays closed until gbrain collection sync {} --finalize-pending succeeds",
+                "restore is waiting for finalize; plain sync stays closed until quaid collection sync {} --finalize-pending succeeds",
                 collection.name
             ),
         };
@@ -950,11 +950,11 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
             blocked_state: "pending_attach".to_owned(),
             integrity_blocked: Some("post_tx_b_attach_pending".to_owned()),
             suggested_command: Some(format!(
-                "gbrain collection sync {} --finalize-pending",
+                "quaid collection sync {} --finalize-pending",
                 collection.name
             )),
             status_message: format!(
-                "restore finalized its root switch but writes stay closed until gbrain collection sync {} --finalize-pending completes attach",
+                "restore finalized its root switch but writes stay closed until quaid collection sync {} --finalize-pending completes attach",
                 collection.name
             ),
         };
@@ -973,7 +973,7 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
         return CollectionStatusSummary {
             blocked_state: "active_reconcile_needed".to_owned(),
             integrity_blocked: None,
-            suggested_command: Some(format!("gbrain collection sync {}", collection.name)),
+            suggested_command: Some(format!("quaid collection sync {}", collection.name)),
             status_message:
                 "collection is active but needs a real reconcile before writes are considered fully healthy"
                     .to_owned(),
@@ -1103,7 +1103,7 @@ fn resolve_collection_root(path: &Path) -> Result<PathBuf> {
 }
 
 fn read_initial_ignore_patterns(root_path: &Path) -> Result<Option<String>> {
-    let ignore_path = root_path.join(".gbrainignore");
+    let ignore_path = root_path.join(".quaidignore");
     if !ignore_path.exists() {
         return Ok(None);
     }
@@ -1125,7 +1125,7 @@ fn read_initial_ignore_patterns(root_path: &Path) -> Result<Option<String>> {
                 .collect::<Vec<_>>()
                 .join("\n");
             bail!(
-                "invalid .gbrainignore at {}\n{}\nFix .gbrainignore and re-run gbrain collection add.",
+                "invalid .quaidignore at {}\n{}\nFix .quaidignore and re-run quaid collection add.",
                 ignore_path.display(),
                 details
             );
@@ -1142,7 +1142,7 @@ fn writable_label(writable: bool) -> &'static str {
 }
 
 fn probe_root_writable(root_path: &Path) -> Result<bool> {
-    let probe_name = format!(".gbrain-probe-{}", Uuid::now_v7());
+    let probe_name = format!(".quaid-probe-{}", Uuid::now_v7());
     let probe_path = root_path.join(&probe_name);
 
     #[cfg(unix)]
@@ -1251,7 +1251,7 @@ mod tests {
     #[cfg(unix)]
     fn open_test_db_file() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("brain.db");
+        let db_path = dir.path().join("memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         (dir, conn)
     }
@@ -1298,7 +1298,7 @@ mod tests {
                 path: root_path.to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_gbrain_id: false,
+                write_memory_id: false,
                 watcher_mode: None,
             }),
             true,
@@ -1319,7 +1319,7 @@ mod tests {
                 path: missing,
                 read_only: false,
                 writable: false,
-                write_gbrain_id: false,
+                write_memory_id: false,
                 watcher_mode: None,
             }),
             true,
@@ -1342,7 +1342,7 @@ mod tests {
     fn add_refuses_invalid_ignore_before_creating_collection_row() {
         let conn = open_test_db();
         let root = tempfile::TempDir::new().unwrap();
-        fs::write(root.path().join(".gbrainignore"), "[broken\n").unwrap();
+        fs::write(root.path().join(".quaidignore"), "[broken\n").unwrap();
 
         let error = run(
             &conn,
@@ -1351,15 +1351,15 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_gbrain_id: false,
+                write_memory_id: false,
                 watcher_mode: None,
             }),
             true,
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("invalid .gbrainignore"));
-        assert!(error.to_string().contains("Fix .gbrainignore and re-run"));
+        assert!(error.to_string().contains("invalid .quaidignore"));
+        assert!(error.to_string().contains("Fix .quaidignore and re-run"));
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM collections WHERE name = 'work'",
@@ -1388,7 +1388,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_gbrain_id: false,
+                write_memory_id: false,
                 watcher_mode: None,
             }),
             true,
@@ -1444,7 +1444,7 @@ mod tests {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with(".gbrain-probe-")
+                    .starts_with(".quaid-probe-")
             });
         assert!(!residue);
     }
@@ -1475,7 +1475,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_gbrain_id: false,
+                write_memory_id: false,
                 watcher_mode: None,
             }),
             true,
@@ -1499,7 +1499,7 @@ mod tests {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with(".gbrain-probe-")
+                    .starts_with(".quaid-probe-")
             });
         assert!(!residue);
     }
@@ -1522,7 +1522,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: true,
                 writable: false,
-                write_gbrain_id: false,
+                write_memory_id: false,
                 watcher_mode: None,
             }),
             true,
@@ -1644,7 +1644,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fs::read_to_string(root.path().join(".gbrainignore")).unwrap(),
+            fs::read_to_string(root.path().join(".quaidignore")).unwrap(),
             "note.md\n"
         );
         let mirror: Vec<String> =
@@ -1688,7 +1688,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!root.path().join(".gbrainignore").exists());
+        assert!(!root.path().join(".quaidignore").exists());
         assert!(fetch_ignore_mirror(&conn, "work").is_none());
         assert_eq!(collection_page_count(&conn, "work"), 1);
     }
@@ -1713,7 +1713,7 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("Invalid glob pattern"));
-        assert!(!root.path().join(".gbrainignore").exists());
+        assert!(!root.path().join(".quaidignore").exists());
         assert!(fetch_ignore_mirror(&conn, "work").is_none());
     }
 
@@ -1764,7 +1764,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fs::read_to_string(root.path().join(".gbrainignore")).unwrap(),
+            fs::read_to_string(root.path().join(".quaidignore")).unwrap(),
             "archive/**\n"
         );
         let mirror: Vec<String> =
@@ -1798,7 +1798,7 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("CollectionRestoringError"));
-        assert!(!root.path().join(".gbrainignore").exists());
+        assert!(!root.path().join(".quaidignore").exists());
     }
 
     #[test]
@@ -1849,7 +1849,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_gbrain_id: false,
+                write_memory_id: false,
                 watcher_mode: None,
             }),
             true,
@@ -2155,7 +2155,7 @@ mod tests {
         assert_eq!(status.blocked_state, "pending_finalize");
         assert_eq!(
             status.suggested_command.as_deref(),
-            Some("gbrain collection sync work --finalize-pending")
+            Some("quaid collection sync work --finalize-pending")
         );
     }
 
@@ -2184,7 +2184,7 @@ mod tests {
         );
         assert_eq!(
             status.suggested_command.as_deref(),
-            Some("gbrain collection sync work --finalize-pending")
+            Some("quaid collection sync work --finalize-pending")
         );
     }
 
@@ -2212,7 +2212,7 @@ mod tests {
         );
         assert_eq!(
             status.suggested_command.as_deref(),
-            Some("gbrain collection sync work --finalize-pending")
+            Some("quaid collection sync work --finalize-pending")
         );
     }
 }

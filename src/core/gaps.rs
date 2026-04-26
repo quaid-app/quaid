@@ -83,7 +83,7 @@ pub fn list_gaps(
 }
 
 /// Mark a gap as resolved by linking it to the page that answered the query.
-#[allow(dead_code)] // Wired in Phase 2 Group 9 (MCP brain_gap_resolve)
+#[allow(dead_code)] // Wired in Phase 2 Group 9 (MCP memory_gap_resolve)
 pub fn resolve_gap(id: i64, resolved_by_slug: &str, conn: &Connection) -> Result<(), GapsError> {
     let rows = conn.execute(
         "UPDATE knowledge_gaps SET \

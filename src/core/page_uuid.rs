@@ -5,14 +5,14 @@ use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum PageUuidError {
-    #[error("frontmatter gbrain_id cannot be empty")]
+    #[error("frontmatter memory_id cannot be empty")]
     EmptyFrontmatterUuid,
 
-    #[error("invalid frontmatter gbrain_id: {value}")]
+    #[error("invalid frontmatter memory_id: {value}")]
     InvalidFrontmatterUuid { value: String },
 
     #[error(
-        "frontmatter gbrain_id {frontmatter_uuid} does not match stored page uuid {stored_uuid}"
+        "frontmatter memory_id {frontmatter_uuid} does not match stored page uuid {stored_uuid}"
     )]
     UuidMismatch {
         stored_uuid: String,
@@ -27,7 +27,7 @@ pub fn generate_uuid_v7() -> String {
 pub fn parse_frontmatter_uuid(
     frontmatter: &HashMap<String, String>,
 ) -> Result<Option<String>, PageUuidError> {
-    let Some(raw_uuid) = frontmatter.get("gbrain_id") else {
+    let Some(raw_uuid) = frontmatter.get("memory_id") else {
         return Ok(None);
     };
 
@@ -77,13 +77,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_frontmatter_uuid_preserves_present_gbrain_id() {
+    fn parse_frontmatter_uuid_preserves_present_memory_id() {
         let frontmatter = HashMap::from([(
-            "gbrain_id".to_string(),
+            "memory_id".to_string(),
             "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
         )]);
 
-        let parsed = parse_frontmatter_uuid(&frontmatter).expect("gbrain_id should parse");
+        let parsed = parse_frontmatter_uuid(&frontmatter).expect("memory_id should parse");
 
         assert_eq!(
             parsed,
@@ -114,12 +114,12 @@ mod tests {
     #[test]
     fn resolve_page_uuid_rejects_mismatched_frontmatter_uuid() {
         let frontmatter = HashMap::from([(
-            "gbrain_id".to_string(),
+            "memory_id".to_string(),
             "01969f11-9448-7d79-8d3f-c68f54761235".to_string(),
         )]);
 
         let err = resolve_page_uuid(&frontmatter, Some("01969f11-9448-7d79-8d3f-c68f54761234"))
-            .expect_err("mismatched gbrain_id should fail");
+            .expect_err("mismatched memory_id should fail");
 
         assert!(matches!(err, PageUuidError::UuidMismatch { .. }));
     }

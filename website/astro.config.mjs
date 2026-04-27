@@ -5,10 +5,13 @@ import starlight from "@astrojs/starlight";
 const repo = process.env.GITHUB_REPOSITORY?.split("/")?.[1] ?? "quaid";
 const owner = process.env.GITHUB_REPOSITORY_OWNER ?? "quaid-app";
 const isGitHubActions = process.env.GITHUB_ACTIONS === "true";
+const customDomain = process.env.CUSTOM_DOMAIN ?? "quaid.app";
 
 export default defineConfig({
-  site: isGitHubActions ? `https://${owner}.github.io` : undefined,
-  base: isGitHubActions ? `/${repo}` : "/",
+  site: isGitHubActions
+    ? (customDomain ? `https://${customDomain}` : `https://${owner}.github.io`)
+    : undefined,
+  base: isGitHubActions && !customDomain ? `/${repo}` : "/",
   trailingSlash: "always",
   integrations: [
     starlight({

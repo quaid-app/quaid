@@ -170,23 +170,6 @@ jobs:
           files: artifacts/**
           generate_release_notes: true
           body: |
-            ## ⚠️ BREAKING RENAME — Read before upgrading
-
-            This release carries the **quaid-hard-rename** change. Every user-facing surface
-            changed at once. **There is no in-place upgrade path.** Pre-rename installations
-            are fully incompatible with this binary.
-
-            | Surface | What you must do |
-            |---------|-----------------|
-            | **Binary** | The old binary is gone. The new binary is `quaid`. Update any PATH entries, shell aliases, or scripts that invoked the old name. |
-            | **MCP tools** | All 17 tools are now prefixed `memory_*`. Every MCP client config (Claude Code `.mcp.json`, Cursor, etc.) must be rewritten — clients will expose zero tools until the `memory_*` names are in place. |
-            | **Env vars** | All environment variables are now `QUAID_*`. Update any shell profile lines, CI secrets, or dotenv files that used the old prefix. |
-            | **Database** | Existing databases are incompatible (`SCHEMA_VERSION` bumped). Export with the old binary, then `quaid init ~/.quaid/memory.db` + `quaid import <backup-dir/>`. No automatic migration is provided. |
-
-            **→ Full step-by-step migration instructions: [MIGRATION.md](https://github.com/quaid-app/quaid/blob/${{ github.ref_name }}/MIGRATION.md)**
-
-            ---
-
             ## Install
 
             Default airgapped installer:
@@ -232,11 +215,14 @@ jobs:
 
             ---
 
-            This release fixes Issue #81: `quaid serve` now normalizes active collections
-            with blank root paths to `detached` before watcher registration, so empty-root
-            bootstrap rows no longer break watcher startup. The `online` build supports
-            configurable BGE models via `QUAID_MODEL` / `--model`; `airgapped` embeds
-            BGE-small-en-v1.5. The shell installer defaults to `airgapped`.
+            This release fixes Issues #67, #69, and #81. The compound-term FTS recall fix
+            (#67/#69): natural-language queries such as `neural network inference` now use
+            an AND-first / OR-fallback strategy in `quaid search` and the hybrid-search FTS
+            arm — including `memory_query` — so relevant pages are no longer dropped when no
+            single document contains every token. `quaid search --raw` preserves expert FTS5
+            semantics. The watcher hotfix (#81): `quaid serve` now normalizes legacy active
+            collections with blank root paths before watcher registration. The shell installer
+            defaults to `airgapped`.
 
             ---
           draft: false

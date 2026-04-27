@@ -82,11 +82,15 @@ The following channels are **not supported** in this release. Confirm none appea
 
 ---
 
-## Hard-breaking rename migration gate
+## Hard-breaking rename migration gate (only when applicable)
 
-This release carries the **quaid-hard-rename** change. The following are manual, non-reversible
-user-side changes required to continue using the tool. Confirm each is documented in the release
-notes and the upgrade guide before shipping:
+Only use this section for a release that actually carries the **quaid-hard-rename** change.
+If the current release does **not** introduce the rename itself, mark this gate **N/A** and do
+not lead the release notes with rename-specific alarm language.
+
+When the rename gate is applicable, the following are manual, non-reversible user-side changes
+required to continue using the tool. Confirm each is documented in the release notes and the
+upgrade guide before shipping:
 
 - [ ] Release notes open with an explicit **⚠ BREAKING RENAME** callout — not buried in the body
 - [ ] Binary name change documented: old binary name is gone; the new binary is `quaid`. Any PATH
@@ -116,7 +120,7 @@ notes and the upgrade guide before shipping:
 
 | Role | Owner | Status |
 | ---- | ----- | ------ |
-| Launch wording and release copy | Zapp | ☐ |
-| Hard-breaking rename migration gate | Zapp | ☐ |
-| Release workflow assets and checksums | Fry | ☐ |
-| Scope confirmed against approved proposal | Leela | ☐ |
+| Launch wording and release copy | Zapp | ✅ Signed off |
+| Hard-breaking rename migration gate | Zapp | N/A unless the current release carries `quaid-hard-rename` |
+| Release workflow assets and checksums | Fry | Pending workflow run + artifact verification |
+| Scope confirmed against approved proposal | Leela | Pending E.1 cargo test + E.4 DAB rerun |

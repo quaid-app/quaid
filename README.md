@@ -2,7 +2,7 @@
 
 > Open-source personal AI memory. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
-**Status:** `v0.9.8` (release candidate) — current vault-sync surface plus the Issue #81 watcher-startup hotfix for legacy active collections with blank root paths. [See the roadmap →](#roadmap)
+**Status:** `v0.9.10` (release candidate) — current vault-sync surface plus compound-term FTS recall recovery for Issues #67/#69, on top of the Issue #81 watcher-startup hotfix for legacy active collections with blank root paths. [See the roadmap →](#roadmap)
 
 ---
 
@@ -19,7 +19,7 @@ Quaid is built in explicit phases. Each phase has a hard gate — no phase begin
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `quaid init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.5` — flexible model resolution + configurable online-model selection) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.5` — flexible model resolution + configurable online-model selection) | All 8 skills production-ready, 17 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
 | **vault-sync-engine** — Collections, live-sync, write safety | 🚢 Initial ship (`v0.9.6` — Unix/macOS/Linux) | Collections model, stat-diff reconciler, file watcher, quarantine `list`/`export`/`discard`, write-through `memory_put`, `memory_collections` MCP tool; Windows `serve` and IPC deferred |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
@@ -81,18 +81,18 @@ Every knowledge page is a markdown file with this structure. Quaid stores them i
 
 ## Quick start
 
-> `v0.9.8` keeps the current vault-sync surface and fixes Issue #81: `quaid serve` now normalizes legacy active collections with blank root paths before watcher registration.
+> `v0.9.10` keeps the current vault-sync surface, fixes compound-term FTS recall for Issues #67/#69, and includes the Issue #81 watcher-startup hotfix: `quaid serve` now normalizes legacy active collections with blank root paths before watcher registration.
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.8` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.10` airgapped + online assets |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for the online asset |
 
-**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.8` using the canonical `quaid-<platform>-<channel>` asset names.
+**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.10` using the canonical `quaid-<platform>-<channel>` asset names.
 
 Install with the shell script:
 
@@ -127,7 +127,7 @@ curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/instal
 Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.9.8"
+VERSION="v0.9.10"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 ASSET="quaid-${PLATFORM}-airgapped"   # or: quaid-${PLATFORM}-online
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
@@ -311,7 +311,7 @@ Add to your MCP client config (e.g. Claude Code):
 
 **vault-sync tools (collections):** `memory_collections` — returns per-collection status, state, ignore diagnostics, and recovery flags
 
-All 17 tools are available in the current `v0.9.6` release when you run `quaid serve` on Unix/macOS/Linux.
+All 17 tools are available in the current `v0.9.10` release when you run `quaid serve` on Unix/macOS/Linux.
 
 ## Skills
 
@@ -369,7 +369,7 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ## Contributing
 
-Quaid is open for contributions. All three core phases have shipped. The current release is `v0.9.8`, which includes the first vault-sync slice: collections, Unix-gated `quaid serve`, live-sync watcher, and quarantine tooling (list, export, discard) on top of the prior dual-channel/model-selection work.
+Quaid is open for contributions. All three core phases have shipped. The current repo release candidate is `v0.9.10`, which keeps the first vault-sync slice and adds compound-term FTS recall recovery for Issues #67/#69 on top of the prior dual-channel/model-selection work.
 
 **How we work:**
 

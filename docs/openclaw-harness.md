@@ -1,59 +1,58 @@
-# Using Quaid v0.9.6 as an OpenClaw Harness
+# Using Quaid as an OpenClaw Harness
 
-Quaid `v0.9.6` works well as the memory and knowledge layer for agents running on OpenClaw. OpenClaw talks to Quaid over MCP, while Quaid keeps a local SQLite memory store synchronized with one or more markdown collections.
-
-This release changes the recommended setup:
-
-- Old one-shot ingest: `quaid import <path>`
-- New live-sync workflow: `quaid collection add <name> <path>` then `quaid serve`
-
-When `quaid serve` starts on macOS/Linux, it starts the MCP server and the live watcher for active collections. There is no separate sync daemon to run.
+Quaid works as the memory and knowledge layer for agents running on OpenClaw. OpenClaw connects to Quaid over MCP, while Quaid keeps a local SQLite memory database synchronized with one or more markdown collections.
 
 ## Prerequisites
 
-- macOS or Linux host for `quaid serve`
-- `quaid` `v0.9.6`
-- An initialized memory database
+- macOS or Linux
+- `quaid` v0.9.9 or later
 - An OpenClaw install that supports MCP server configuration
 
-Initialize the database once:
+## Install
 
 ```bash
-quaid init ~/memory.db
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
+```
+
+Verify:
+
+```bash
+quaid --version
+```
+
+## Initialize
+
+```bash
+quaid init ~/.quaid/memory.db
 ```
 
 ## Attach a vault as a collection
 
-For ongoing sync with Obsidian or any markdown vault, attach the directory as a collection instead of using `quaid import`.
+For ongoing sync with Obsidian or any markdown vault:
 
 ```bash
-quaid collection add notes ~/Documents/Obsidian
+quaid collection add notes ~/Documents/notes
 ```
 
-This creates the collection metadata in the v6 schema and performs the initial reconcile. In `v0.9.6`, the benchmark on a 350-page vault is about 5 seconds for `collection add`.
+This creates the collection, performs the initial reconcile, and registers a watcher for live sync. On a 350-page vault, `collection add` takes about 5 seconds.
 
-Collections are backed by the new schema tables introduced in `v0.9.6`:
+Generate embeddings after indexing:
 
-- `collections`
-- `file_state`
-- `embedding_jobs`
-- `raw_imports`
-- `collection_owners`
+```bash
+quaid embed --db ~/.quaid/memory.db
+```
 
-Use `.quaidignore` at the vault root to exclude files or patterns from sync:
+Use `.quaidignore` at the vault root to exclude files or patterns:
 
 ```gitignore
 .obsidian/
 Templates/
-Daily/*.tmp.md
 archive/**
 ```
 
 ## Configure OpenClaw
 
-OpenClaw should launch `quaid serve` as an MCP server. Put the Quaid block in `openclaw.json` under `mcp.servers`.
-
-Recommended `openclaw.json` snippet:
+Add the Quaid block to `openclaw.json` under `mcp.servers`:
 
 ```json
 {
@@ -63,7 +62,7 @@ Recommended `openclaw.json` snippet:
         "command": "quaid",
         "args": ["serve"],
         "env": {
-          "QUAID_DB": "/Users/alice/memory.db"
+          "QUAID_DB": "/Users/alice/.quaid/memory.db"
         }
       }
     }
@@ -71,86 +70,59 @@ Recommended `openclaw.json` snippet:
 }
 ```
 
-The important part is `QUAID_DB`: it must point at the `memory.db` file that OpenClaw agents should use.
+`QUAID_DB` must point to the memory database that OpenClaw agents should use.
 
-If you want to test the server outside OpenClaw first:
+To test the server outside OpenClaw:
 
 ```bash
-QUAID_DB=~/memory.db quaid serve
+QUAID_DB=~/.quaid/memory.db quaid serve
 ```
 
 ## Live sync workflow
 
-The normal OpenClaw workflow is:
+1. `quaid init ~/.quaid/memory.db`
+2. `quaid collection add <name> <path>` — attach one or more vaults
+3. `quaid embed` — generate embeddings (required for `memory_query`)
+4. Configure OpenClaw to spawn `quaid serve`
+5. Start OpenClaw
 
-1. Initialize the database with `quaid init`.
-2. Attach one or more vaults with `quaid collection add`.
-3. Configure OpenClaw to spawn `quaid serve`.
-4. Start OpenClaw.
-5. Edit markdown files in the vault. The watcher started by `quaid serve` reconciles changes into `memory.db` automatically.
+`quaid serve` owns both the MCP server and the file watcher. Edits, creates, and deletes in the vault are picked up automatically.
 
-On `v0.9.6`, `quaid serve` owns the watcher lifecycle on Unix/macOS. File edits, creates, and deletes are picked up automatically after the server starts.
+## MCP tools
 
-Deleted pages are not hard-deleted immediately. `v0.9.6` adds a quarantine lifecycle so pages with preserved DB-side state can be reviewed and restored instead of being dropped blindly.
-
-## MCP usage patterns
-
-OpenClaw agents should treat the Quaid MCP tools as the durable memory interface. `v0.9.6` exposes 17 tools, including the new `memory_collections` status tool.
+Quaid exposes 17 MCP tools via `quaid serve`. All tool names use the `memory_*` prefix.
 
 ### `memory_query` vs `memory_search`
 
 Use `memory_query` for:
 
-- natural-language questions
-- synthesis across multiple pages
-- semantic retrieval when wording may not match exactly
+- Natural-language questions
+- Synthesis across multiple pages
+- Semantic retrieval when wording may not match exactly
 
 Use `memory_search` for:
 
-- exact keywords
-- names, titles, tags, or phrases likely to appear verbatim
-- fast recall when you know the text you want
+- Exact keywords, names, titles, or tags
+- Fast recall when you know the text you want
 
-Benchmarks from the `v0.9.6` 350-page DAB run:
+### `memory_put`
 
-- `collection add`: 5s
-- FTS query: 26ms
-- semantic query: 93ms
-- all checks: passed
+Use `memory_put` when the agent is intentionally creating or updating durable knowledge. For updates to an existing page:
 
-### When to use `memory_put`
+1. Call `memory_get` first to read the current `version`
+2. Send `memory_put` with `expected_version` to preserve optimistic concurrency
 
-Use `memory_put` when the agent is intentionally creating or updating durable knowledge in memory, not for temporary scratch work.
+### `memory_collections` — health check
 
-For updates to an existing page:
+`memory_collections` returns the status of all attached collections. Check these fields when results look stale or writes are blocked:
 
-1. Call `memory_get` first.
-2. Read the current `version`.
-3. Send `memory_put` with `expected_version`.
-
-That preserves optimistic concurrency and avoids blind overwrites.
-
-### Use `memory_collections` for health checks
-
-`memory_collections` is the right first check when OpenClaw can query the MCP server but results look stale or writes are blocked.
-
-It returns a JSON array of collection status records. Check these fields first:
-
-- `state`
-- `page_count`
-- `last_sync_at`
-- `embedding_queue_depth`
-- `ignore_parse_errors`
-- `needs_full_sync`
-- `recovery_in_progress`
-- `integrity_blocked`
-- `restore_in_progress`
-
-Example request:
-
-```json
-{}
-```
+| Field | Healthy value |
+|-------|--------------|
+| `state` | `"active"` |
+| `embedding_queue_depth` | `0` |
+| `needs_full_sync` | `false` |
+| `recovery_in_progress` | `false` |
+| `integrity_blocked` | `null` |
 
 Example response:
 
@@ -158,29 +130,58 @@ Example response:
 [
   {
     "name": "notes",
-    "root_path": "/Users/alice/Documents/Obsidian",
+    "root_path": "/Users/alice/Documents/notes",
     "state": "active",
     "writable": true,
-    "is_write_target": true,
     "page_count": 350,
-    "last_sync_at": "2026-04-25T09:01:00Z",
+    "last_sync_at": "2026-04-27T03:12:04Z",
     "embedding_queue_depth": 0,
-    "ignore_parse_errors": null,
     "needs_full_sync": false,
     "recovery_in_progress": false,
-    "integrity_blocked": null,
-    "restore_in_progress": false
+    "integrity_blocked": null
   }
 ]
 ```
 
-If `ignore_parse_errors` is non-null, fix the `.quaidignore` file. If `needs_full_sync` is `true` or `state` is not `active`, treat the collection as unhealthy until reconcile or restore finishes.
+## Benchmark reference
+
+Verified against [quaid-evals](https://github.com/quaid-app/quaid-evals) on MSMARCO dev corpus, Quaid v0.9.9:
+
+| Test | Result |
+|------|--------|
+| DAB total | 193 / 215 (90%) |
+| FTS (`memory_search`) | 40 / 40 — perfect |
+| Semantic (`memory_query`) | 48 / 50 |
+| Performance | 30 / 30 — perfect |
+| MCP | 20 / 20 — perfect |
+| `collection add` | ~5s / 350 pages |
+| FTS latency | ~25ms |
+| Semantic latency | ~95ms |
+
+Live results: [benchmark.quaid.app](https://benchmark.quaid.app)
 
 ## Recommended operating model
 
-- Use `quaid collection add` for vault-backed knowledge sources.
-- Keep `quaid import` for one-shot bulk ingest, not live vault sync.
-- Let OpenClaw spawn `quaid serve`; that keeps MCP and watcher lifecycle in one process.
-- Run `memory_query` first for agent reasoning, then fall back to `memory_search` for exact recall.
-- Use `memory_put` only for durable page updates.
-- Poll `memory_collections` during startup or incident diagnosis.
+- Use `quaid collection add` for vault-backed knowledge sources
+- Use `quaid import` for one-shot bulk ingest only (not live vault sync)
+- Let OpenClaw spawn `quaid serve` — keeps MCP and watcher in one process
+- Run `memory_query` first for agent reasoning; fall back to `memory_search` for exact recall
+- Use `memory_put` only for intentional durable page updates
+- Poll `memory_collections` on startup or during incident diagnosis
+
+## Migration from GigaBrain / pre-v0.9.9
+
+Existing databases (schema v5) are incompatible with v0.9.9 (schema v6). See [MIGRATION.md](../MIGRATION.md) for the full migration guide.
+
+Quick summary:
+
+```bash
+# Export with old binary
+gbrain export ~/brain-backup
+
+# Initialize new database
+quaid init ~/.quaid/memory.db
+
+# Import
+quaid import ~/brain-backup
+```

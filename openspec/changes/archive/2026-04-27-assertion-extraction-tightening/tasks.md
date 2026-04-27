@@ -62,10 +62,10 @@ Related: #55
 - [x] E.1 Run `cargo test --test assertions` — all new unit tests pass.
 - [x] E.2 Run `cargo test --test corpus_reality conflicting_ingest_contradiction_is_detected -- --exact`
   — genuine same-entity contradiction is still detected.
-- [ ] E.3 On a representative real vault (350+ pages), run `quaid check --all` after extraction
+- [x] E.3 On a representative real vault (350+ pages), run `quaid check --all` after extraction
   tightening lands. Confirm: (a) no contradiction flood from unrelated prose-only pages;
   (b) at least one genuine contradiction between pages sharing an entity is still reported.
-- [ ] E.4 (#55 rerun gate) After E.3, review whether false positives materially survive. If
+- [x] E.4 (#55 rerun gate) After E.3, review whether false positives materially survive. If
   they do not, close #55 as resolved-by-tightening and record the decision. If they do,
   open a new `assertion-similarity-gate` lane with its own design and acceptance criteria.
   Do not implement the similarity gate in this lane.

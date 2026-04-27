@@ -103,6 +103,6 @@ Closes: #52, #53
   ```
   Clean up `benchmark_issue_check.db` after the run.
 
-- [ ] E.4 DAB rerun checkpoint: run Doug's DAB FTS slice against the v0.9.4 branch. Confirm
+- [x] E.4 DAB rerun checkpoint: run Doug's DAB FTS slice against the v0.9.4 branch. Confirm
   zero crash or parse-error failures in the FTS section. Record the rerun result in the
   issue tracker or release notes before closing the lane.

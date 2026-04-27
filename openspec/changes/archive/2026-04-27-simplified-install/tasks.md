@@ -49,11 +49,13 @@
 
 - [x] D.1 Smoke test `scripts/install.sh` locally against the `v0.9.0` release asset shape: run the full script when a matching release is available, confirm `quaid version` succeeds.
 
-- [ ] D.2 Test npm postinstall locally: `cd packages/quaid-npm && npm install` (or `npm pack` then `npm install -g quaid-0.9.0.tgz`). Confirm `quaid version` works and binary is in `bin/quaid`.
-  - ~~Product gap: `v0.9.0` is not an actual GitHub Release~~ — RESOLVED: v0.9.0 is a real release with all 4 platform binaries + checksums + install.sh (9 assets, verified 2026-04-18).
+- [x] D.2 Test npm postinstall locally: `cd packages/quaid-npm && npm install` (or `npm pack` then `npm install -g quaid-0.9.10.tgz`). Confirm `quaid version` works and binary is in `bin/quaid`.
+  - ~~Product gap: `v0.9.0` is not an actual GitHub Release~~ — RESOLVED: release assets are now present and package version is currently `0.9.10`.
   - `npm pack --dry-run` validated in CI (run 24516842061): 4 files, 2.4KB tarball, binary NOT packed. Package shape confirmed.
   - Asset-name alignment verified: `postinstall.js` platform→asset mapping matches all 4 release asset names exactly.
-  - **Still blocked:** Windows host → EBADPLATFORM; WSL has no Node runtime. End-to-end postinstall download+verify cycle has not been exercised on a macOS or Linux machine. Needs a supported-platform runner to close.
+  - **Windows evidence (confirmed 2026-04-27):** local `npm install` on `win32/x64` fails with `EBADPLATFORM`, expected due to package `os`/`cpu` restrictions (`darwin,linux` + `x64,arm64`).
+  - **Linux evidence (confirmed 2026-04-27):** `npm install` succeeded on Ubuntu and `postinstall.js` reported `Installed quaid-linux-x86_64-online (online channel) from GitHub Releases.`
+  - **Closure evidence (Ubuntu, 2026-04-27):** `ls -l bin/quaid.bin` showed executable binary present (`-rwxrwxrwx`, size `13905840`), and `./bin/quaid version` returned `quaid 0.9.10`.
 
 - [x] D.3 Run `npm pack --dry-run` from `packages/quaid-npm/` and confirm `bin/quaid` is NOT listed in the packed files (only `bin/.gitkeep` and `scripts/postinstall.js`).
 

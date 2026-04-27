@@ -578,8 +578,8 @@ mod tests {
             "no embeddings are written in this proof, so vector recall must stay empty"
         );
 
-        let results =
-            hybrid_search("neural network inference", None, None, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search("neural network inference", None, None, &conn, 1000)
+            .expect("hybrid search");
 
         assert_eq!(
             results

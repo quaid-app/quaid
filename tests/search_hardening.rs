@@ -228,7 +228,10 @@ fn search_compound_terms_and_path_takes_precedence() {
     drop(conn);
 
     let output = run_quaid(&db_path, &["--json", "search", "neural network inference"]);
-    assert!(output.status.success(), "search should exit cleanly: {output:?}");
+    assert!(
+        output.status.success(),
+        "search should exit cleanly: {output:?}"
+    );
 
     let parsed = parse_stdout_json(&output);
     let results = parsed.as_array().expect("output must be a JSON array");
@@ -269,7 +272,10 @@ fn search_raw_mode_bypasses_or_fallback() {
         &db_path,
         &["--json", "search", "--raw", "neural network inference"],
     );
-    assert!(output.status.success(), "raw search should exit cleanly: {output:?}");
+    assert!(
+        output.status.success(),
+        "raw search should exit cleanly: {output:?}"
+    );
     let parsed = parse_stdout_json(&output);
     let results = parsed.as_array().expect("output must be a JSON array");
     assert!(

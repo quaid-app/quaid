@@ -168,8 +168,14 @@ fn search_fts_tiered_internal(
     canonical_slug: bool,
 ) -> Result<Vec<SearchResult>, SearchError> {
     // AND pass — highest precision; use this if it returns any results.
-    let and_results =
-        search_fts_internal(sanitized_query, wing_filter, collection_filter, conn, limit, canonical_slug)?;
+    let and_results = search_fts_internal(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        conn,
+        limit,
+        canonical_slug,
+    )?;
     if !and_results.is_empty() {
         return Ok(and_results);
     }
@@ -179,7 +185,14 @@ fn search_fts_tiered_internal(
         return Ok(Vec::new());
     }
 
-    search_fts_internal(&or_query, wing_filter, collection_filter, conn, limit, canonical_slug)
+    search_fts_internal(
+        &or_query,
+        wing_filter,
+        collection_filter,
+        conn,
+        limit,
+        canonical_slug,
+    )
 }
 
 fn search_fts_internal(
@@ -755,8 +768,8 @@ mod tests {
         );
 
         // "inference cloud" AND would miss everything; OR fallback fires.
-        let results = search_fts_tiered("inference cloud", Some("people"), None, &conn, 1000)
-            .unwrap();
+        let results =
+            search_fts_tiered("inference cloud", Some("people"), None, &conn, 1000).unwrap();
         for r in &results {
             assert_eq!(r.wing, "people", "OR fallback must respect wing filter");
         }

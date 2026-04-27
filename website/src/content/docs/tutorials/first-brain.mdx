@@ -1,0 +1,134 @@
+---
+title: Build your first brain
+description: Initialize a brain, write a page, search it, and ask it a question — about ten minutes from cold start.
+guide:
+  eyebrow: Tutorial
+  accentBar: true
+---
+
+import CodePanel from "../../../components/docs/CodePanel.astro";
+import GuideStep from "../../../components/docs/GuideStep.astro";
+import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
+
+This tutorial walks you through the three things that make GigaBrain useful: writing a page, searching for it, and asking a question that requires more than a keyword match. By the end, you'll understand the page model and have a brain you can keep using.
+
+## Before you start
+
+- You've installed `gbrain` (see [Install GigaBrain](/tutorials/install/)).
+- `gbrain version` works in your shell.
+
+This tutorial uses `~/brain.db` throughout. Substitute another path if you prefer; the `--db` flag and `GBRAIN_DB` env var both work.
+
+## Fast path
+
+<div class="gb-guide-stack">
+  <GuideStep
+    number="01"
+    title="Initialize a brain"
+    code={`gbrain init ~/brain.db`}
+    codeLabel="CLI"
+    codeTone="terminal"
+  >
+    <p>Creates a SQLite file at `~/brain.db` with the v5 schema, the FTS5 index, the active embedding model registered, and the embedded skills extracted to `~/.gbrain/skills/` on first run.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="02"
+    title="Write your first page"
+    code={`cat <<'MD' | gbrain put people/alice --db ~/brain.db
+---
+title: Alice Example
+type: person
+summary: Founder, RiverAI — offline-first knowledge systems
+---
+
+# Alice Example
+
+Founder at RiverAI. Works on offline-first knowledge systems.
+Reliable async correspondent; consistently sharp on retrieval design.
+
+---
+
+## Timeline
+
+- 2026-04-14 — Met at a demo day; interested in offline-first knowledge.
+- 2026-04-22 — Replied to outreach; warm intro to Bob.
+MD`}
+    codeLabel="Compiled truth + timeline"
+  >
+    <p>Every page splits into <strong>compiled truth</strong> (above the line) and <strong>timeline</strong> (below it). The top stays current; the bottom is append-only evidence. See <a href="/explanation/page-model/">the page model</a> for why.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="03"
+    title="Search what you just wrote"
+    code={`gbrain search "offline-first" --db ~/brain.db
+gbrain query "who is interested in offline knowledge?" --db ~/brain.db`}
+    codeLabel="Keyword + hybrid"
+    codeTone="terminal"
+  >
+    <p><code>search</code> runs FTS5 keyword retrieval. <code>query</code> runs hybrid retrieval (FTS5 + local vector embeddings) so paraphrases and synonyms are honored. Both work over the page you just wrote.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="04"
+    title="Ask a question with context"
+    code={`gbrain query "who would I ask about retrieval design?" --depth auto --db ~/brain.db`}
+    codeLabel="Progressive retrieval"
+    codeTone="terminal"
+  >
+    <p>With <code>--depth auto</code>, the engine expands context up to the active token budget — assembling enough surrounding chunks to feed straight into a downstream LLM. See <a href="/explanation/hybrid-search/">hybrid search</a> for the mechanics.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="05"
+    title="Append a timeline entry"
+    code={`gbrain timeline-add people/alice \\
+  --date 2026-05-03 \\
+  --summary "Co-authored draft on local embeddings; sharp edits." \\
+  --db ~/brain.db`}
+    codeLabel="Structured timeline"
+    codeTone="terminal"
+  >
+    <p>Add evidence without rewriting the whole page. <code>timeline-add</code> is idempotent on <code>(slug, date, summary)</code> — re-running the same call is a no-op.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="06"
+    title="See what you have"
+    code={`gbrain stats --db ~/brain.db
+gbrain list --type person --db ~/brain.db`}
+    codeLabel="Inspect the brain"
+    codeTone="terminal"
+  >
+    <p>You'll see one page, one timeline entry, and one active embedding model.</p>
+  </GuideStep>
+</div>
+
+## What just happened
+
+You created a SQLite file, wrote a page that follows the compiled-truth + timeline model, and ran two different retrieval strategies against it. Specifically:
+
+- **`init`** wrote the v5 schema, registered `BAAI/bge-small-en-v1.5` (or whichever model you used), and extracted the embedded skills.
+- **`put`** parsed the frontmatter, split the body at the `---` separator, ran novelty deduplication, and enqueued an embedding job.
+- **`search`** hit the FTS5 virtual table; **`query`** ran FTS5 *and* the local vector index in parallel and fused the results with set-union.
+- **`query --depth auto`** then ran progressive retrieval, expanding context until it hit the 4000-token default budget.
+
+All of this happened on your machine. Nothing went over the network.
+
+## Where to go next
+
+- **More pages.** Repeat step 02 with whatever you've been meaning to capture. Or use `gbrain import <DIR>` to bulk-load a markdown directory ([Import an Obsidian vault](/how-to/import-obsidian/)).
+- **Connect an agent.** [Connect Claude Code](/tutorials/connect-claude-code/) wires this brain to any MCP-compatible client.
+- **Build a graph.** [Build a knowledge graph](/how-to/build-graph/) shows how typed temporal links work.
+- **Understand the design.** [Compiled truth + timeline](/explanation/page-model/) and [hybrid search](/explanation/hybrid-search/) cover the big design choices.
+
+<GuideActionBanner
+  title="Connect this brain to Claude Code"
+  primaryHref="/tutorials/connect-claude-code/"
+  primaryText="Connect Claude Code"
+  secondaryHref="/reference/cli/"
+  secondaryText="CLI reference"
+>
+  <p>The brain you just built can be served to any MCP client over stdio. Five lines of config, no keys.</p>
+</GuideActionBanner>

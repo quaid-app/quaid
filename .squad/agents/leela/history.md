@@ -936,3 +936,17 @@ DEFER: `17.5aa5` (stable-absence `ignore_parse_errors` expansion — requires `1
 
 **Lesson:** When an installer 404 follows a release, audit the build matrix first — a compile failure upstream is more likely than an asset naming mistake. Professor's D-R79-6 gate (6 criteria) was the correct bar; only gate 6 (real release evidence) remains pending CI.
 
+### 2026-05-01: Dirty tree audit — scribe scripts vs gitignore contract
+
+**What:** Audited 8 untracked files on `main` after compound-term recall PR (#100) was merged.
+
+**Findings:**
+- 4 files are dead scribe artifacts (`create_files.py`, `scribe-cleanup.py`, `scribe-commit.bat`, `.squad/git-commit-msg.txt`). The scribe scripts were never executed and are incorrect by design: they attempt to `git add` paths that `.gitignore` explicitly excludes (`.squad/orchestration-log/`, `.squad/log/`, `.squad/decisions/inbox/`). DELETE.
+- 4 files are real team knowledge: `.squad/skills/{compound-term-tiered-fts,deterministic-hybrid-proof,search-proof-contracts,search-surface-coverage}/SKILL.md`. These are skill extracts from the compound-term recall work. LAND VIA PR. No OpenSpec required.
+- `origin/main` is 1 commit ahead (doc site style #101). Pull before branching.
+- `.squad/decisions/inbox/` has 4 committed files that predate the gitignore rule — separate housekeeping PR needed.
+
+**Key pattern:** When scribe scripts appear in the working tree alongside gitignored directories, check `.gitignore` first. Scripts that try to force-add gitignored paths are always wrong.
+
+**Routing memo:** `.squad/decisions/inbox/leela-dirty-tree-audit.md`
+

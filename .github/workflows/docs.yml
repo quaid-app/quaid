@@ -25,6 +25,8 @@ jobs:
           node-version: "22"
       - run: cd website && npm ci --no-audit --no-fund
       - run: cd website && npm run build
+        env:
+          CUSTOM_DOMAIN: quaid.app
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:

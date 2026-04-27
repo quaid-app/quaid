@@ -176,8 +176,8 @@ Existing databases (schema v5) are incompatible with v0.9.9 (schema v6). See [MI
 Quick summary:
 
 ```bash
-# Export with old binary
-gbrain export ~/brain-backup
+# Export using the pre-v0.9.9 binary command shown in MIGRATION.md
+# (kept there so legacy command details stay in one place)
 
 # Initialize new database
 quaid init ~/.quaid/memory.db

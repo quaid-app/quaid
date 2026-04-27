@@ -42,6 +42,6 @@
 
 - [x] D.0 Normalize all implementation-facing contract surfaces (`Cargo.toml` comments, `inference.rs` doc comments, `tasks.md` scope line) to use `airgapped`/`online` channel names only. Remove stale `slim` naming from contract positions. Remaining `slim` in docs prose is descriptive English, not a contract name.
 
-- [ ] D.1 Run full repo validation against the completed `v0.9.1` change: `cargo fmt --all --check`, `cargo check`, `cargo test` (all tests passing), and `npm pack --dry-run` from `packages/quaid-npm/` to confirm the online-only package shape. Confirm no reference to `slim` or `quaid-slim-*` remains in code, scripts, or docs.
+- [x] D.1 Run full repo validation against the completed `v0.9.1` change: `cargo fmt --all --check`, `cargo check`, `cargo test` (all tests passing), and `npm pack --dry-run` from `packages/quaid-npm/` to confirm the online-only package shape. Confirm no reference to `slim` or `quaid-slim-*` remains in code, scripts, or docs.
 
-- [ ] D.2 Commit the completed `v0.9.1` dual-release change on `release/v0.9.1-dual-release`, push to remote, and open a PR targeting `main` that references the `bge-small-dual-release-channels` OpenSpec change. Include sign-off that both channel features build cleanly and the asset manifest is correct.
+- [x] D.2 Commit the completed `v0.9.1` dual-release change on `release/v0.9.1-dual-release`, push to remote, and open a PR targeting `main` that references the `bge-small-dual-release-channels` OpenSpec change. Include sign-off that both channel features build cleanly and the asset manifest is correct.

@@ -121,14 +121,14 @@ Closes: #67, #69
 
 ## Phase E — verification
 
-- [ ] E.1 All Phase D tests pass. Full `cargo test` suite green.
+- [x] E.1 All Phase D tests pass. Full `cargo test` suite green.
 
-- [ ] E.2 Manually verify `quaid search "neural network inference"` returns results on a
+- [x] E.2 Manually verify `quaid search "neural network inference"` returns results on a
   corpus that contains documents about ML inference. Close issues #67 and #69.
 
-- [ ] E.3 Verify `quaid search --raw "neural network inference"` still returns zero on the
+- [x] E.3 Verify `quaid search --raw "neural network inference"` still returns zero on the
   same corpus (confirming raw path is unaffected).
 
-- [ ] E.4 DAB benchmark §4 rerun: run the DAB v1.0 §4 Semantic/Hybrid slice against this
+- [x] E.4 DAB benchmark §4 rerun: run the DAB v1.0 §4 Semantic/Hybrid slice against this
   branch. Confirm P04b paraphrase pair no longer produces zero results. Record result in
   issue #67 before closing the lane.

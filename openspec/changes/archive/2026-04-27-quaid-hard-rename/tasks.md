@@ -118,8 +118,9 @@ All skill SKILL.md files previously used the legacy CLI binary name and legacy M
 
 ## Phase J — Final audit
 
-- [ ] J.1 Run exhaustive repo-wide scan for any remaining legacy product-name or legacy tool/env/table references across all text-type files.
+- [x] J.1 Run exhaustive repo-wide scan for any remaining legacy product-name or legacy tool/env/table references across all text-type files.
   Expected result: zero files (excluding `.squad/` agent history files, which are historical record and explicitly excluded from this rename).
+  - Verified 2026-04-27 with repo-wide `git grep` scans (excluding `.squad/**`) for legacy runtime identifiers (`gbrain`, `GBRAIN_*`, legacy `brain_*` MCP tool names, `brain_config`): zero matches.
 - [x] J.2 Confirm `openspec/` existing change directories have had their prose updated (G.x not this task, but verify).
 - [x] J.3 Confirm `Cargo.lock` is regenerated after `Cargo.toml` rename (`cargo build` touch).
 - [x] J.4 `cargo build --release` succeeds and produces a binary named `quaid`.
@@ -128,7 +129,7 @@ All skill SKILL.md files previously used the legacy CLI binary name and legacy M
 
 ## Phase K — Migration guide
 
-- [ ] K.1 Add a `MIGRATION.md` (or a section in `README.md`) documenting:
+- [x] K.1 Add a `MIGRATION.md` (or a section in `README.md`) documenting:
   - The old-to-new binary name change
   - The old-to-new env var table
   - The old-to-new MCP tool name table
@@ -141,7 +142,7 @@ All skill SKILL.md files previously used the legacy CLI binary name and legacy M
 
 - [x] L.1 `cargo test` green.
 - [x] L.2 `cargo build --release` produces `quaid` binary.
-- [ ] L.3 Open PR against `main`. Title: `chore: hard rename legacy product → Quaid, quaid, memory_*, QUAID_*`. Body references this openspec change directory.
+- [x] L.3 Open PR against `main`. Title: `chore: hard rename legacy product → Quaid, quaid, memory_*, QUAID_*`. Body references this openspec change directory.
 
 ---
 

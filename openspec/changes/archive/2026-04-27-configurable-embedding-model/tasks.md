@@ -66,7 +66,7 @@
 ## Phase H — PR
 
 - [x] H.1 `cargo test` passes with no failures.
-- [ ] H.2 Push `feat/44-configurable-model` and open PR against `main`. Title: `feat: configurable embedding model selection via QUAID_MODEL env / --model flag (#44)`. Body references this openspec change directory.
+- [x] H.2 Push `feat/44-configurable-model` and open PR against `main`. Title: `feat: configurable embedding model selection via QUAID_MODEL env / --model flag (#44)`. Body references this openspec change directory.
 
 ---
 

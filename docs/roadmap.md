@@ -157,6 +157,10 @@ These are known design choices that are _not_ oversights:
 | `v0.2.0` | Phase 2 — intelligence layer |
 | `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
 | `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter; #55 remains a post-ship rerun gate) |
+| `v0.9.5` | Flexible model resolution + configurable online-model selection; `QUAID_MODEL` / `--model` support in online channel |
+| `v0.9.6` | vault-sync-engine initial ship (Unix/macOS/Linux): Collections model, stat-diff reconciler, file watcher, quarantine lifecycle, write-through `memory_put`, `memory_collections` MCP tool |
+| `v0.9.9` | Intermediate hotfix release for vault-sync refinements |
+| `v0.9.10` | Compound-term FTS recall recovery (#67/#69): AND-first / OR-fallback tiered search strategy + watcher-startup hotfix (#81) for legacy blank-root collections |
 
 ---
 

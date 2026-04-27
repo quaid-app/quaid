@@ -25,8 +25,11 @@ use super::types::{SearchError, SearchResult};
 /// left unquoted.  This handles inputs like `AND?` → stripped `AND` → quoted
 /// `"AND"`.
 ///
-/// The explicit FTS5 query interface (`search_fts`) is intentionally *not*
-/// touched — it preserves full FTS5 syntax for expert callers.
+/// Natural-language callers should pass this output to [`search_fts_tiered`],
+/// which keeps the initial implicit-AND pass and only widens to OR when the
+/// AND pass returns no results. The explicit FTS5 query interface
+/// ([`search_fts`]) is intentionally *not* touched — it preserves full FTS5
+/// syntax for expert callers.
 pub(crate) fn sanitize_fts_query(raw: &str) -> String {
     const FTS5_KEYWORDS: &[&str] = &["AND", "OR", "NOT", "NEAR"];
 
@@ -72,12 +75,15 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
 /// **Explicit FTS5 semantics are preserved.** Quoted phrases, boolean operators
 /// (`AND`, `OR`, `NOT`), and prefix wildcards (`*`) all work as documented by
 /// SQLite FTS5.  Invalid syntax is propagated as `Err` — this is intentional for
-/// expert callers using `quaid search --raw`.
+/// expert callers using `quaid search --raw`. `search_fts_tiered` uses this
+/// function as its precision-first AND pass before widening to OR fallback.
 ///
 /// Default callers are sanitized upstream:
 /// - `src/commands/search.rs` applies `sanitize_fts_query` unless `--raw` is set.
 /// - `src/mcp/server.rs` (`memory_search`) always sanitizes.
-/// - `hybrid_search` in `src/core/search.rs` sanitizes before calling this function.
+/// - `hybrid_search` in `src/core/search.rs` sanitizes before calling
+///   `search_fts_tiered`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn search_fts(
     query: &str,
     wing_filter: Option<&str>,
@@ -96,6 +102,98 @@ pub fn search_fts_canonical(
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_internal(query, wing_filter, collection_filter, conn, limit, true)
+}
+
+/// Expands a sanitized multi-token query into an explicit FTS5 OR chain.
+///
+/// Single-token or empty inputs are returned unchanged.
+pub fn expand_fts_query_or(sanitized: &str) -> String {
+    let tokens: Vec<_> = sanitized.split_whitespace().collect();
+    if tokens.len() <= 1 {
+        sanitized.to_owned()
+    } else {
+        tokens.join(" OR ")
+    }
+}
+
+/// Natural-language FTS5 search with tiered AND→OR fallback for compound-term
+/// recall.
+///
+/// Tries an AND query first (highest precision). If AND returns no results and
+/// the sanitized query has more than one token, retries with an explicit OR
+/// chain so documents matching any individual term are surfaced.
+///
+/// Callers must pass a **sanitized** query from [`sanitize_fts_query`].
+pub fn search_fts_tiered(
+    sanitized_query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_tiered_internal(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        conn,
+        limit,
+        false,
+    )
+}
+
+/// Canonical-slug variant of [`search_fts_tiered`].
+/// Returns slugs in `<collection>::<slug>` format.
+pub fn search_fts_canonical_tiered(
+    sanitized_query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_tiered_internal(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        conn,
+        limit,
+        true,
+    )
+}
+
+fn search_fts_tiered_internal(
+    sanitized_query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    conn: &Connection,
+    limit: usize,
+    canonical_slug: bool,
+) -> Result<Vec<SearchResult>, SearchError> {
+    // AND pass — highest precision; use this if it returns any results.
+    let and_results = search_fts_internal(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        conn,
+        limit,
+        canonical_slug,
+    )?;
+    if !and_results.is_empty() {
+        return Ok(and_results);
+    }
+
+    let or_query = expand_fts_query_or(sanitized_query);
+    if or_query == sanitized_query {
+        return Ok(Vec::new());
+    }
+
+    search_fts_internal(
+        &or_query,
+        wing_filter,
+        collection_filter,
+        conn,
+        limit,
+        canonical_slug,
+    )
 }
 
 fn search_fts_internal(
@@ -536,5 +634,145 @@ mod tests {
             result.is_err(),
             "search_fts must propagate FTS5 syntax errors"
         );
+    }
+
+    // ── expand_fts_query_or ──────────────────────────────────────
+
+    #[test]
+    fn expand_fts_query_or_joins_multi_token_query_with_or() {
+        assert_eq!(
+            expand_fts_query_or("neural network inference"),
+            "neural OR network OR inference"
+        );
+    }
+
+    #[test]
+    fn expand_fts_query_or_leaves_single_token_query_unchanged() {
+        assert_eq!(expand_fts_query_or("inference"), "inference");
+    }
+
+    #[test]
+    fn expand_fts_query_or_leaves_empty_query_unchanged() {
+        assert_eq!(expand_fts_query_or(""), "");
+    }
+
+    // ── search_fts_tiered: OR fallback for compound-term recall (issues #67, #69) ──
+
+    /// Regression #67/#69: "neural network inference" returned zero results when
+    /// documents contain the terms in different pages. `search_fts_tiered` must
+    /// fall back to OR and surface those pages.
+    #[test]
+    fn search_tiered_compound_term_falls_back_to_or_when_and_empty() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/inference-engine",
+            "Inference Engine",
+            "concepts",
+            "Model serving",
+            "An inference engine serves trained embedding models in production.",
+        );
+
+        // AND search returns zero — no single page has all three tokens.
+        let and_results = search_fts("neural network inference", None, None, &conn, 1000).unwrap();
+        assert!(
+            and_results.is_empty(),
+            "AND search must return empty when no page contains all three tokens"
+        );
+
+        // Natural search must fall back to OR and find all three pages.
+        let results =
+            search_fts_tiered("neural network inference", None, None, &conn, 1000).unwrap();
+        assert!(
+            !results.is_empty(),
+            "OR fallback must surface pages containing any of the query tokens"
+        );
+        assert_eq!(results[0].slug, "concepts/inference-engine");
+    }
+
+    /// Precision-first: when AND finds results, OR fallback must NOT be triggered.
+    #[test]
+    fn search_tiered_returns_and_results_without_or_fallback() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/combined",
+            "Neural Network Inference",
+            "concepts",
+            "Combined page",
+            "Neural network inference is the deployment of a trained model.",
+        );
+        insert_page(
+            &conn,
+            "concepts/neural",
+            "Neural only",
+            "concepts",
+            "Neural",
+            "A standalone neural science article.",
+        );
+        insert_page(
+            &conn,
+            "concepts/inference",
+            "Inference only",
+            "concepts",
+            "Inference",
+            "Inference in formal logic.",
+        );
+
+        let and_results = search_fts("neural network inference", None, None, &conn, 1000).unwrap();
+        let tiered_results =
+            search_fts_tiered("neural network inference", None, None, &conn, 1000).unwrap();
+
+        assert_eq!(tiered_results.len(), and_results.len());
+        assert_eq!(tiered_results[0].slug, "concepts/combined");
+    }
+
+    /// Single-token query: no OR fallback attempted; empty returns empty.
+    #[test]
+    fn search_tiered_single_token_empty_corpus_returns_empty() {
+        let conn = open_test_db();
+        let results = search_fts_tiered("zzznomatch", None, None, &conn, 1000).unwrap();
+        assert!(
+            results.is_empty(),
+            "single-token miss must return empty, not trigger OR fallback"
+        );
+    }
+
+    /// Empty sanitized query: no crash, empty vec returned.
+    #[test]
+    fn search_tiered_empty_query_returns_empty() {
+        let conn = open_test_db();
+        let results = search_fts_tiered("", None, None, &conn, 1000).unwrap();
+        assert!(results.is_empty());
+    }
+
+    /// Wing filter is respected in OR-fallback path.
+    #[test]
+    fn search_tiered_or_fallback_respects_wing_filter() {
+        let conn = open_test_db();
+        // Same token appears in two wings; filter must restrict to one.
+        insert_page(
+            &conn,
+            "people/alice",
+            "Alice",
+            "people",
+            "Engineer",
+            "Alice works on inference engines.",
+        );
+        insert_page(
+            &conn,
+            "companies/acme",
+            "Acme",
+            "companies",
+            "Startup",
+            "Acme builds inference products.",
+        );
+
+        // "inference cloud" AND would miss everything; OR fallback fires.
+        let results =
+            search_fts_tiered("inference cloud", Some("people"), None, &conn, 1000).unwrap();
+        for r in &results {
+            assert_eq!(r.wing, "people", "OR fallback must respect wing filter");
+        }
     }
 }

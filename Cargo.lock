@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "quaid"
-version = "0.9.8"
+version = "0.9.10"
 dependencies = [
  "anyhow",
  "candle-core",

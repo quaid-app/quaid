@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 use super::collections::{self, OpKind, SlugResolution};
-use super::fts::{sanitize_fts_query, search_fts, search_fts_canonical};
+use super::fts::{sanitize_fts_query, search_fts_canonical_tiered, search_fts_tiered};
 use super::inference::{search_vec, search_vec_canonical};
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
@@ -59,9 +59,9 @@ fn hybrid_search_impl(
     }
 
     let fts_results = if canonical_slug {
-        search_fts_canonical(&fts_safe, wing, collection_filter, conn, limit)?
+        search_fts_canonical_tiered(&fts_safe, wing, collection_filter, conn, limit)?
     } else {
-        search_fts(&fts_safe, wing, collection_filter, conn, limit)?
+        search_fts_tiered(&fts_safe, wing, collection_filter, conn, limit)?
     };
     let vec_results = if canonical_slug {
         search_vec_canonical(trimmed, 10, wing, collection_filter, conn)?
@@ -392,11 +392,15 @@ fn normalize_score(score: f64, max_score: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use rusqlite::Connection;
 
     use super::*;
     use crate::commands::embed;
     use crate::core::db;
+    use crate::core::fts::{sanitize_fts_query, search_fts};
+    use crate::core::inference::{search_vec, search_vec_canonical};
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().expect("create temp dir");
@@ -538,6 +542,99 @@ mod tests {
 
         assert!(slugs.contains(&"people/alice"));
         assert!(slugs.contains(&"companies/acme"));
+    }
+
+    #[test]
+    fn hybrid_search_uses_tiered_fts_recall_when_and_and_vector_are_empty() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/neural",
+            "Neural Networks",
+            "Representation learning",
+            "Neural networks learn useful representations.",
+            "concepts",
+        );
+        insert_page(
+            &conn,
+            "concepts/inference-engine",
+            "Inference Engine",
+            "Model serving",
+            "An inference engine deploys trained models.",
+            "concepts",
+        );
+
+        let sanitized = sanitize_fts_query("neural network inference");
+        assert!(
+            search_fts(&sanitized, None, None, &conn, 1000)
+                .expect("AND-only FTS query")
+                .is_empty(),
+            "the deterministic proof corpus must force the implicit-AND FTS pass to miss"
+        );
+        assert!(
+            search_vec("neural network inference", 10, None, None, &conn)
+                .expect("vector search without embeddings")
+                .is_empty(),
+            "no embeddings are written in this proof, so vector recall must stay empty"
+        );
+
+        let results = hybrid_search("neural network inference", None, None, &conn, 1000)
+            .expect("hybrid search");
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.slug.clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "concepts/inference-engine".to_owned(),
+                "concepts/neural".to_owned(),
+            ]),
+            "hybrid_search should recover compound-term recall from the tiered FTS arm alone"
+        );
+    }
+
+    #[test]
+    fn hybrid_search_canonical_preserves_collection_prefix_on_tiered_fts_recall() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/neural",
+            "Neural Networks",
+            "Representation learning",
+            "Neural networks learn useful representations.",
+            "concepts",
+        );
+        insert_page(
+            &conn,
+            "concepts/inference-engine",
+            "Inference Engine",
+            "Model serving",
+            "An inference engine deploys trained models.",
+            "concepts",
+        );
+
+        assert!(
+            search_vec_canonical("neural network inference", 10, None, None, &conn)
+                .expect("canonical vector search without embeddings")
+                .is_empty(),
+            "canonical hybrid proof must not depend on vector quality"
+        );
+
+        let results = hybrid_search_canonical("neural network inference", None, None, &conn, 1000)
+            .expect("canonical hybrid search");
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.slug.clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "default::concepts/inference-engine".to_owned(),
+                "default::concepts/neural".to_owned(),
+            ]),
+            "canonical hybrid results should keep the collection prefix on FTS fallback hits"
+        );
     }
 
     #[test]

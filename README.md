@@ -86,7 +86,7 @@ Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the 
 ### Download a binary
 
 ```bash
-VERSION="v0.9.9"
+VERSION="v0.9.10"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
@@ -163,7 +163,7 @@ quaid serve
 
 ## MCP tools
 
-All 17 tools available in `v0.9.9` via `quaid serve` (macOS + Linux):
+All 17 tools available in `v0.9.10` via `quaid serve` (macOS + Linux):
 
 | Category | Tools |
 |----------|-------|

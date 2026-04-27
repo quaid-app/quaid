@@ -2,16 +2,16 @@
 """
 benchmarks/ragas_eval.py
 
-Ragas evaluation for GigaBrain progressive retrieval.
+Ragas evaluation for Quaid progressive retrieval.
 
 Measures context_precision, context_recall, and faithfulness for
-`gbrain query --depth auto` using Ragas as the LLM-based judge.
+`quaid query --depth auto` using Ragas as the LLM-based judge.
 
 This is an ADVISORY benchmark — results inform quality improvements but
 do not block release gates.
 
 Prerequisites:
-  - GigaBrain binary built: cargo build --release
+  - Quaid binary built: cargo build --release
   - Python deps: pip install -r benchmarks/requirements.txt
   - LLM judge: OpenAI API key OR local Ollama instance
 
@@ -23,7 +23,7 @@ Usage:
   OLLAMA_BASE_URL=http://localhost:11434 python benchmarks/ragas_eval.py --llm ollama
 
   # Point at an existing populated brain:
-  python benchmarks/ragas_eval.py --db ~/brain.db
+  python benchmarks/ragas_eval.py --db ~/memory.db
 
   # Limit queries:
   python benchmarks/ragas_eval.py --limit 20
@@ -32,7 +32,7 @@ Environment:
   OPENAI_API_KEY    — OpenAI API key (required unless --llm ollama)
   OLLAMA_BASE_URL   — Ollama API base URL (default: http://localhost:11434)
   OLLAMA_MODEL      — Ollama model name (default: llama3.2)
-  GBRAIN_BIN        — path to gbrain binary (default: ./target/release/gbrain)
+  QUAID_BIN        — path to quaid binary (default: ./target/release/quaid)
 """
 
 import argparse
@@ -47,7 +47,7 @@ from typing import Any
 # ── Config ────────────────────────────────────────────────────────────────────
 
 REPO_ROOT = Path(__file__).parent.parent
-GBRAIN_BIN = os.environ.get("GBRAIN_BIN", str(REPO_ROOT / "target" / "release" / "gbrain"))
+QUAID_BIN = os.environ.get("QUAID_BIN", str(REPO_ROOT / "target" / "release" / "quaid"))
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
@@ -55,7 +55,7 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 # Synthetic evaluation query set (used when no brain is provided)
 DEFAULT_EVAL_QUERIES = [
     "who founded brex",
-    "what is gigabrain used for",
+    "what is quaid used for",
     "knowledge management with sqlite",
     "corporate card fintech startup history",
     "personal knowledge base embeddings",
@@ -105,7 +105,7 @@ def build_embeddings(provider: str) -> Any:
 def run_progressive_query(query: str, db_path: str, depth: str = "auto") -> dict[str, Any]:
     """Run progressive retrieval query and return result + context."""
     result = subprocess.run(
-        [GBRAIN_BIN, "--db", db_path, "query", query, "--json"],
+        [QUAID_BIN, "--db", db_path, "query", query, "--json"],
         capture_output=True, text=True, timeout=60
     )
     if result.returncode != 0:
@@ -195,8 +195,8 @@ def run_ragas_evaluation(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ragas evaluation for GigaBrain")
-    parser.add_argument("--db", default=None, help="Path to brain.db (uses fixtures if not set)")
+    parser = argparse.ArgumentParser(description="Ragas evaluation for Quaid")
+    parser.add_argument("--db", default=None, help="Path to memory.db (uses fixtures if not set)")
     parser.add_argument("--llm", default="openai", choices=["openai", "ollama"], help="LLM judge")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of queries")
     parser.add_argument("--queries-file", default=None, help="JSON file with query list")
@@ -205,8 +205,8 @@ def main() -> None:
                         help="Show queries without running Ragas (no API calls)")
     args = parser.parse_args()
 
-    if not Path(GBRAIN_BIN).exists():
-        sys.exit(f"gbrain binary not found at {GBRAIN_BIN}. Run: cargo build --release")
+    if not Path(QUAID_BIN).exists():
+        sys.exit(f"quaid binary not found at {QUAID_BIN}. Run: cargo build --release")
 
     # Load queries
     if args.queries_file:
@@ -224,11 +224,11 @@ def main() -> None:
     try:
         if use_temp_db:
             # Populate with fixture pages for demo evaluation
-            subprocess.run([GBRAIN_BIN, "--db", db_path, "init"], check=True, capture_output=True)
+            subprocess.run([QUAID_BIN, "--db", db_path, "init"], check=True, capture_output=True)
             fixtures_dir = REPO_ROOT / "tests" / "fixtures"
             if fixtures_dir.exists():
                 subprocess.run(
-                    [GBRAIN_BIN, "--db", db_path, "import", str(fixtures_dir)],
+                    [QUAID_BIN, "--db", db_path, "import", str(fixtures_dir)],
                     capture_output=True,
                 )
 

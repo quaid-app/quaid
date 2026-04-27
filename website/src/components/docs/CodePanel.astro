@@ -33,7 +33,7 @@ function inferLanguage(code: string, tone: 'soft' | 'terminal', label?: string) 
 
 	if (
 		tone === 'terminal' ||
-		/\b(gbrain|cargo|curl|git|npm|pnpm|shasum|GBRAIN_|cat\s*<<|cd\s|export\s)/.test(trimmed)
+		/\b(quaid|cargo|curl|git|npm|pnpm|shasum|QUAID_|cat\s*<<|cd\s|export\s)/.test(trimmed)
 	) {
 		return 'bash';
 	}

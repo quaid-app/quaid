@@ -1,0 +1,90 @@
+---
+title: Install Quaid
+description: Get the quaid binary onto your machine in one command.
+guide:
+  eyebrow: Tutorial
+  accentBar: true
+---
+
+import CodePanel from "../../../components/docs/CodePanel.astro";
+import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
+
+This tutorial gets `quaid` on your PATH the fastest way: one shell command, no Rust toolchain. For variants — building from source, the airgapped vs online channel, npm — see [Airgapped vs online](/how-to/airgapped-vs-online/) afterwards.
+
+## Before you start
+
+You'll need:
+
+- **macOS** (Apple Silicon or Intel) or **Linux** (x86_64 or ARM64).
+- A shell where you can pipe to `sh`.
+- Permission to write to `~/.local/bin` (the default install directory).
+
+Windows users: the install script does not yet support Windows. The cross-platform release binary works under WSL2; native Windows is on the roadmap.
+
+## Step 1 — Run the installer
+
+<CodePanel
+  tone="terminal"
+  label="One-line install"
+  code={`curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh`}
+/>
+
+The installer:
+
+1. Detects your platform.
+2. Downloads the matching airgapped binary from the latest GitHub Release.
+3. Verifies the SHA-256 checksum.
+4. Moves the binary to `~/.local/bin/quaid`.
+5. Adds the directory to `PATH` in your shell profile (unless you pass `--no-profile`).
+
+## Step 2 — Confirm it's on your PATH
+
+Open a new shell or `source` your profile, then:
+
+<CodePanel
+  tone="terminal"
+  code={`quaid version
+quaid --help`}
+/>
+
+You should see a version line beginning with `quaid v0.9.x`. If `quaid: command not found`, ensure `~/.local/bin` is on your PATH (the installer prints a hint for your shell on success).
+
+## Step 3 — Pin a specific version (optional)
+
+The installer always grabs the latest release. To pin:
+
+<CodePanel
+  tone="terminal"
+  label="Pinned install"
+  code={`curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+  | QUAID_VERSION=v0.9.8 sh`}
+/>
+
+## What you got
+
+By default, the installer fetches the **airgapped** binary. That means:
+
+- The BGE-small embedding model is bundled inside the binary.
+- The first time you run a semantic query, no download happens.
+- The binary is ~180 MB.
+
+If you'd rather have a smaller binary that downloads model weights on first use, see [Airgapped vs online](/how-to/airgapped-vs-online/).
+
+## Where things live
+
+| Path | What |
+| ---- | ---- |
+| `~/.local/bin/quaid` | The binary itself. |
+| `~/.quaid/skills/` | Embedded skills, extracted on first run. |
+| `~/.quaid/models/` | Cached model weights (online channel only). |
+| `~/memory.db` (you choose) | Your actual knowledge memory. We'll create this in the next tutorial. |
+
+<GuideActionBanner
+  title="Now build your first memory"
+  primaryHref="/tutorials/first-memory/"
+  primaryText="Build your first memory"
+  secondaryHref="/how-to/troubleshooting/"
+  secondaryText="Troubleshooting"
+>
+  <p>Ten minutes from here to a working memory that answers your first question. If anything went sideways during install, the troubleshooting page covers the common failure modes.</p>
+</GuideActionBanner>

@@ -1,0 +1,99 @@
+---
+title: Hybrid search
+description: How Quaid combines FTS5, vector similarity, and progressive retrieval.
+guide:
+  eyebrow: Explanation
+  accentBar: true
+---
+
+A query like *"who is interested in offline-first knowledge?"* needs both keyword precision and semantic recall. Quaid runs both, fuses the results, and — when asked — keeps expanding context until the answer holds together. This page explains how that works.
+
+## Three retrieval lanes
+
+Every `memory_query` runs up to three lookups, in order:
+
+1. **Small-match short-circuit (SMS).** If the query is a slug, a title, or a near-exact match for one of those, return it immediately. No need to embed or rank.
+2. **FTS5 keyword search** over `(title, slug, compiled_truth, timeline)` with the porter-unicode61 tokenizer.
+3. **Vector search** over the active model's `page_embeddings_vec_<dim>` table.
+
+Lanes 2 and 3 run in parallel when SMS doesn't fire. Their result sets are merged with **set-union** — unique pages take rank from whichever lane scored them, with a small bias toward documents that appeared in both.
+
+## Why both lanes
+
+FTS5 and vector search fail in different places, and each is good at what the other can't do:
+
+| Question | What helps |
+| -------- | ---------- |
+| "river ai" | FTS5 (exact tokens, no synonyms needed) |
+| "offline-first knowledge systems" | Vector (paraphrase tolerance) |
+| "the person who joined RiverAI in April" | Both (needs *RiverAI* AND *April* AND a person concept) |
+| "who's lukewarm on cloud RAG?" | Vector (no exact phrase exists in the corpus) |
+
+Running only vectors makes you miss precise matches; running only FTS5 makes you miss everything that's worded differently. Set-union recovers both.
+
+## Set-union, not RRF
+
+Many hybrid systems use Reciprocal Rank Fusion. We don't. The set-union strategy is simpler and works well at a single-user scale:
+
+- Take the top-K from each lane.
+- Merge by page ID, deduplicate.
+- For a page that appeared in both lanes, take the better rank and add a small "appeared in both" bonus.
+- Sort by adjusted score, return.
+
+The merge strategy is configurable via `config.search_merge_strategy` for future experimentation; `set-union` is the seeded default.
+
+## Chunks, not pages
+
+The vector index doesn't embed whole pages. It embeds:
+
+- **Truth sections** — chunks split by heading inside the compiled-truth half.
+- **Individual timeline entries** — each `- DATE — text` line is its own chunk.
+
+This is what gives Quaid its date-aware behavior. A query like "what happened in April with Alice?" lands directly on the relevant timeline entries, not the whole Alice page.
+
+When `memory_put` writes a new version, the embedding job queue (`embedding_jobs`) re-chunks and re-embeds anything whose `content_hash` changed. Stale chunks are pruned. `quaid embed --stale` does the same job ad-hoc.
+
+## Progressive retrieval
+
+`memory_query` accepts `depth: "auto"`. With auto-depth on, the engine doesn't just return the top-K — it expands context.
+
+The expansion logic, simplified:
+
+1. Run hybrid search; take top-K results.
+2. For each result, fetch the surrounding chunks (headings above and below; nearby timeline entries).
+3. While the cumulative token count is under the budget (`default_token_budget`, default 4000), keep adding context.
+4. Stop when the budget is hit, or when adding more context would not improve coverage (no new relevant terms).
+
+The output is a richer, ranked list with fully reconstituted context — designed to be dropped straight into an LLM prompt without further retrieval.
+
+## Wing filters and palace classification
+
+`quaid` derives a `wing` and `room` for every page during ingestion (see `core::palace`). Wings are the top-level memory-palace bucket (`people`, `companies`, `concepts`, …); rooms are derived from content shape.
+
+You can pass `--wing <NAME>` to `search`, `query`, or `list` to constrain retrieval to one bucket. The classifier is also consulted by `intent` detection on the query side: a query with named-entity shape biases toward people/company wings; a how-to question biases toward concept/resource wings.
+
+## Token budgets
+
+Two budgets matter:
+
+- **Embedding budget at ingest time.** Chunks that exceed the model's max context get split. The active model's max is recorded in `embedding_models` and respected by the chunker.
+- **Retrieval budget at query time.** `default_token_budget` (default 4000) caps how much context progressive retrieval will assemble. Tune via `quaid config set default_token_budget 6000` if your downstream model wants more.
+
+## Performance
+
+For a memory with ~50,000 pages on a modern laptop:
+
+- SMS short-circuit: sub-millisecond.
+- FTS5 lane: typically 5–30 ms.
+- Vector lane: 20–100 ms (BGE-small, ~150K embedded chunks).
+- Progressive retrieval expansion: O(K × neighbours), typically under 100 ms.
+
+The end-to-end p95 for `memory_query --depth auto` lands in the low-hundreds of milliseconds. There's no network in the path.
+
+## When to use which CLI verb
+
+- `quaid search` — when you want **just** keyword matches and you trust your phrasing.
+- `quaid query` (no `--depth`) — when you want hybrid ranking but no expansion.
+- `quaid query --depth auto` — when you want fully assembled context for downstream consumption (an LLM, a report, a summary).
+
+The MCP tools mirror this split: `memory_search` for FTS5-only, `memory_query` for hybrid (with optional `depth: "auto"`).

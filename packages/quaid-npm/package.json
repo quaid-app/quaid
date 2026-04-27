@@ -1,0 +1,38 @@
+{
+  "name": "quaid",
+  "version": "0.9.8",
+  "description": "Quaid personal memory CLI (online BGE-small channel)",
+  "bin": {
+    "quaid": "bin/quaid"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin/quaid",
+    "scripts/postinstall.js",
+    "README.md"
+  ],
+  "keywords": [
+    "quaid",
+    "sqlite",
+    "mcp",
+    "knowledge-base"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quaid-app/quaid.git"
+  }
+}

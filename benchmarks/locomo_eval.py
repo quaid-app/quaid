@@ -2,7 +2,7 @@
 """
 benchmarks/locomo_eval.py
 
-LoCoMo (Long-term Conversational Memory) evaluation for GigaBrain.
+LoCoMo (Long-term Conversational Memory) evaluation for Quaid.
 
 Imports LoCoMo conversations, evaluates hybrid search F1 against ground truth,
 and compares against a FTS5-only baseline.
@@ -11,7 +11,7 @@ Target: hybrid search F1 >= +30% over FTS5-only baseline
 
 Prerequisites:
   - Dataset downloaded: ./benchmarks/prep_datasets.sh locomo
-  - GigaBrain binary built: cargo build --release
+  - Quaid binary built: cargo build --release
   - Python deps: pip install -r benchmarks/requirements.txt
 
 Usage:
@@ -21,7 +21,7 @@ Usage:
   python benchmarks/locomo_eval.py --json             # JSON output
 
 Environment:
-  GBRAIN_BIN   — path to gbrain binary (default: ./target/release/gbrain)
+  QUAID_BIN   — path to quaid binary (default: ./target/release/quaid)
   DATASETS_DIR — dataset root (default: ./benchmarks/datasets)
 """
 
@@ -42,7 +42,7 @@ from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).parent.parent
 DATASETS_DIR = Path(os.environ.get("DATASETS_DIR", REPO_ROOT / "benchmarks" / "datasets"))
-GBRAIN_BIN = os.environ.get("GBRAIN_BIN", str(REPO_ROOT / "target" / "release" / "gbrain"))
+QUAID_BIN = os.environ.get("QUAID_BIN", str(REPO_ROOT / "target" / "release" / "quaid"))
 LOCOMO_DIR = DATASETS_DIR / "locomo"
 
 TARGET_DELTA_F1 = 0.30  # +30% F1 over FTS5 baseline
@@ -83,7 +83,7 @@ def load_locomo_data(data_dir: Path | None = None) -> list[dict[str, Any]]:
 # ── Importer ──────────────────────────────────────────────────────────────────
 
 def import_conversations(sessions: list[dict], db_path: str) -> int:
-    """Import LoCoMo conversations as gbrain pages. Returns count."""
+    """Import LoCoMo conversations as quaid pages. Returns count."""
     with tempfile.TemporaryDirectory() as tmpdir:
         pages_dir = Path(tmpdir) / "locomo"
         pages_dir.mkdir()
@@ -118,7 +118,7 @@ def import_conversations(sessions: list[dict], db_path: str) -> int:
             page_path.write_text(content)
 
         result = subprocess.run(
-            [GBRAIN_BIN, "--db", db_path, "import", str(pages_dir)],
+            [QUAID_BIN, "--db", db_path, "import", str(pages_dir)],
             capture_output=True, text=True
         )
         if result.returncode != 0:
@@ -130,9 +130,9 @@ def import_conversations(sessions: list[dict], db_path: str) -> int:
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
 def run_hybrid_query(query: str, db_path: str, k: int = 5) -> list[str]:
-    """Run hybrid search (FTS5 + vector) via gbrain query."""
+    """Run hybrid search (FTS5 + vector) via quaid query."""
     result = subprocess.run(
-        [GBRAIN_BIN, "--db", db_path, "query", query, "--json"],
+        [QUAID_BIN, "--db", db_path, "query", query, "--json"],
         capture_output=True, text=True, timeout=30
     )
     if result.returncode != 0:
@@ -146,9 +146,9 @@ def run_hybrid_query(query: str, db_path: str, k: int = 5) -> list[str]:
 
 
 def run_fts5_search(query: str, db_path: str, k: int = 5) -> list[str]:
-    """Run FTS5-only search via gbrain search."""
+    """Run FTS5-only search via quaid search."""
     result = subprocess.run(
-        [GBRAIN_BIN, "--db", db_path, "search", query, "--json"],
+        [QUAID_BIN, "--db", db_path, "search", query, "--json"],
         capture_output=True, text=True, timeout=30
     )
     if result.returncode != 0:
@@ -256,16 +256,16 @@ def _sanitize_slug(s: str) -> str:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="LoCoMo evaluation for GigaBrain")
-    parser.add_argument("--db", default=None, help="Path to brain.db (default: temp file)")
+    parser = argparse.ArgumentParser(description="LoCoMo evaluation for Quaid")
+    parser.add_argument("--db", default=None, help="Path to memory.db (default: temp file)")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of QA pairs")
     parser.add_argument("--baseline-only", action="store_true", help="Measure FTS5 baseline only")
     parser.add_argument("--no-import", action="store_true", help="Skip import (DB already populated)")
     parser.add_argument("--json", action="store_true", help="Output JSON results")
     args = parser.parse_args()
 
-    if not Path(GBRAIN_BIN).exists():
-        sys.exit(f"gbrain binary not found at {GBRAIN_BIN}. Run: cargo build --release")
+    if not Path(QUAID_BIN).exists():
+        sys.exit(f"quaid binary not found at {QUAID_BIN}. Run: cargo build --release")
 
     use_temp = args.db is None
     db_path = args.db or tempfile.mktemp(suffix=".db")
@@ -276,7 +276,7 @@ def main() -> None:
         print(f"Loaded {len(sessions)} conversations", file=sys.stderr)
 
         if not args.no_import:
-            subprocess.run([GBRAIN_BIN, "--db", db_path, "init"], check=True, capture_output=True)
+            subprocess.run([QUAID_BIN, "--db", db_path, "init"], check=True, capture_output=True)
             count = import_conversations(sessions, db_path)
             print(f"Imported {count} conversations", file=sys.stderr)
 

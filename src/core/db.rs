@@ -12,8 +12,7 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 5;
-const LEGACY_SMALL_MODEL_NAME: &str = "bge-small-en-v1.5";
+const SCHEMA_VERSION: i64 = 6;
 const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
 const PAGES_AU_TRIGGER_SQL: &str =
     "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
@@ -39,14 +38,14 @@ impl std::fmt::Debug for OpenDb {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrainConfig {
+pub struct QuaidConfig {
     pub model_id: String,
     pub model_alias: String,
     pub embedding_dim: usize,
     pub schema_version: i64,
 }
 
-impl BrainConfig {
+impl QuaidConfig {
     fn from_model(model: &ModelConfig) -> Self {
         Self {
             model_id: model.model_id.clone(),
@@ -96,6 +95,16 @@ pub fn open(path: &str) -> Result<Connection, DbError> {
     open_with_model(path, &default_model()).map(|opened| opened.conn)
 }
 
+pub fn default_db_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .map(|home| home.join(".quaid").join("memory.db"))
+        .unwrap_or_else(|| std::path::PathBuf::from("memory.db"))
+}
+
+pub fn default_db_path_string() -> String {
+    default_db_path().display().to_string()
+}
+
 pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<OpenDb, DbError> {
     let requested_model = coerce_model_for_build(requested_model);
     let existed_before = path != ":memory:" && Path::new(path).exists();
@@ -106,7 +115,7 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
         let effective_model = hydrate_model_config(&requested_model)
             .map_err(|message| DbError::Schema { message })?;
         ensure_embedding_model_registry(&conn, &effective_model)?;
-        write_brain_config(&conn, &BrainConfig::from_model(&effective_model))?;
+        write_quaid_config(&conn, &QuaidConfig::from_model(&effective_model))?;
         sync_legacy_config(&conn, &effective_model)?;
         configure_runtime_model(effective_model.clone());
         return Ok(OpenDb {
@@ -115,9 +124,9 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
         });
     }
 
-    let effective_model = match read_brain_config(&conn)? {
+    let effective_model = match read_quaid_config(&conn)? {
         Some(stored) => {
-            // Check schema version — refuse to open v4 or older
+            // Check schema version — refuse to open older schema versions
             if stored.schema_version < SCHEMA_VERSION {
                 return Err(DbError::Schema {
                     message: format_schema_reinit_message(stored.schema_version, path),
@@ -131,11 +140,9 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
             stored.to_model_config()
         }
         None => {
-            eprintln!(
-                "Warning: brain_config is missing or empty; assuming a legacy BAAI/bge-small-en-v1.5 database. Run `gbrain init` once to persist model metadata."
-            );
-            upgrade_legacy_small_model_names(&conn)?;
-            default_model()
+            return Err(DbError::Schema {
+                message: format_schema_reinit_message(0, path),
+            })
         }
     };
 
@@ -155,7 +162,7 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
     preflight_existing_schema(path)?;
     let conn = open_connection(path)?;
 
-    if let Some(stored) = read_brain_config(&conn)? {
+    if let Some(stored) = read_quaid_config(&conn)? {
         let stored_model = stored.to_model_config();
         ensure_embedding_model_registry(&conn, &stored_model)?;
         sync_legacy_config(&conn, &stored_model)?;
@@ -163,18 +170,17 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
         return Ok(conn);
     }
 
-    let selected_model = if existed_before {
-        eprintln!(
-            "Warning: brain_config missing or empty on existing database; writing default small-model metadata during `gbrain init`."
-        );
-        upgrade_legacy_small_model_names(&conn)?;
-        default_model()
-    } else {
-        hydrate_model_config(&requested_model).map_err(|message| DbError::Schema { message })?
-    };
+    if existed_before {
+        return Err(DbError::Schema {
+            message: format_schema_reinit_message(0, path),
+        });
+    }
+
+    let selected_model =
+        hydrate_model_config(&requested_model).map_err(|message| DbError::Schema { message })?;
 
     ensure_embedding_model_registry(&conn, &selected_model)?;
-    write_brain_config(&conn, &BrainConfig::from_model(&selected_model))?;
+    write_quaid_config(&conn, &QuaidConfig::from_model(&selected_model))?;
     sync_legacy_config(&conn, &selected_model)?;
     configure_runtime_model(selected_model);
     Ok(conn)
@@ -339,7 +345,7 @@ fn ensure_default_collection(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(
         "INSERT OR IGNORE INTO collections \
              (id, name, root_path, state, writable, is_write_target) \
-         VALUES (1, 'default', '', 'active', 1, 1);",
+         VALUES (1, 'default', '', 'detached', 1, 1);",
     )?;
     Ok(())
 }
@@ -389,28 +395,28 @@ fn sync_legacy_config(conn: &Connection, model: &ModelConfig) -> Result<(), DbEr
     Ok(())
 }
 
-pub fn write_brain_config(conn: &Connection, config: &BrainConfig) -> Result<(), DbError> {
+pub fn write_quaid_config(conn: &Connection, config: &QuaidConfig) -> Result<(), DbError> {
     // Write all four keys atomically so a mid-flight crash never leaves a
-    // partial brain_config that silently falls back to the legacy small-model
+    // partial quaid_config that silently falls back to the legacy small-model
     // path on the next open.
     let tx = conn.unchecked_transaction()?;
     tx.execute(
-        "INSERT INTO brain_config (key, value) VALUES ('model_id', ?1) \
+        "INSERT INTO quaid_config (key, value) VALUES ('model_id', ?1) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [&config.model_id],
     )?;
     tx.execute(
-        "INSERT INTO brain_config (key, value) VALUES ('model_alias', ?1) \
+        "INSERT INTO quaid_config (key, value) VALUES ('model_alias', ?1) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [&config.model_alias],
     )?;
     tx.execute(
-        "INSERT INTO brain_config (key, value) VALUES ('embedding_dim', ?1) \
+        "INSERT INTO quaid_config (key, value) VALUES ('embedding_dim', ?1) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [config.embedding_dim.to_string()],
     )?;
     tx.execute(
-        "INSERT INTO brain_config (key, value) VALUES ('schema_version', ?1) \
+        "INSERT INTO quaid_config (key, value) VALUES ('schema_version', ?1) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [config.schema_version.to_string()],
     )?;
@@ -418,15 +424,15 @@ pub fn write_brain_config(conn: &Connection, config: &BrainConfig) -> Result<(),
     Ok(())
 }
 
-pub fn read_brain_config(conn: &Connection) -> Result<Option<BrainConfig>, DbError> {
-    if !table_exists(conn, "brain_config")? {
-        // Legacy DB pre-dating brain_config — treated as small-model default.
+pub fn read_quaid_config(conn: &Connection) -> Result<Option<QuaidConfig>, DbError> {
+    if !table_exists(conn, "quaid_config")? {
+        // Legacy DB pre-dating quaid_config — treated as small-model default.
         return Ok(None);
     }
 
     // Fetch all four required keys in one pass.
     let mut rows: std::collections::HashMap<String, String> = conn
-        .prepare("SELECT key, value FROM brain_config WHERE key IN ('model_id','model_alias','embedding_dim','schema_version')")?
+        .prepare("SELECT key, value FROM quaid_config WHERE key IN ('model_id','model_alias','embedding_dim','schema_version')")?
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<Result<_, _>>()?;
 
@@ -445,9 +451,9 @@ pub fn read_brain_config(conn: &Connection) -> Result<Option<BrainConfig>, DbErr
     if !missing.is_empty() {
         return Err(DbError::Schema {
             message: format!(
-                "brain_config is incomplete (missing keys: {}). \
+                "quaid_config is incomplete (missing keys: {}). \
                  The database may have been corrupted by an interrupted write. \
-                 Re-initialize with: rm <path-to-brain.db> && gbrain init",
+                 Re-initialize with: rm <path-to-memory.db> && quaid init",
                 missing.join(", ")
             ),
         });
@@ -460,17 +466,17 @@ pub fn read_brain_config(conn: &Connection) -> Result<Option<BrainConfig>, DbErr
         .unwrap()
         .parse::<usize>()
         .map_err(|_| DbError::Schema {
-            message: "brain_config.embedding_dim must be an integer".to_owned(),
+            message: "quaid_config.embedding_dim must be an integer".to_owned(),
         })?;
     let schema_version = rows
         .remove("schema_version")
         .unwrap()
         .parse::<i64>()
         .map_err(|_| DbError::Schema {
-            message: "brain_config.schema_version must be an integer".to_owned(),
+            message: "quaid_config.schema_version must be an integer".to_owned(),
         })?;
 
-    Ok(Some(BrainConfig {
+    Ok(Some(QuaidConfig {
         model_id,
         model_alias,
         embedding_dim,
@@ -490,7 +496,7 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
 }
 
 fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbError> {
-    for (table, key) in [("brain_config", "schema_version"), ("config", "version")] {
+    for (table, key) in [("quaid_config", "schema_version"), ("config", "version")] {
         if !table_exists(conn, table)? {
             continue;
         }
@@ -517,15 +523,14 @@ fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbErro
 }
 
 fn format_schema_reinit_message(schema_version: i64, path: &str) -> String {
+    let default_path = default_db_path_string();
     format!(
-        "Database schema version {} is older than required version {}. \
-         GigaBrain v5 requires re-initialization. \
-         Backup your data, then run: rm {} && gbrain init",
-        schema_version, SCHEMA_VERSION, path
+        "Error: database schema version mismatch.\n  Found version {}, expected {}.\n  Existing databases created before the Quaid rename are not supported.\n  To migrate: export your data with the pre-rename binary, then run:\n    quaid init {}\n    quaid import <export-directory>\n  Original database: {}",
+        schema_version, SCHEMA_VERSION, default_path, path
     )
 }
 
-fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig, db_path: &str) -> String {
+fn format_model_mismatch(stored: &QuaidConfig, requested: &ModelConfig, db_path: &str) -> String {
     let requested_dim = if requested.embedding_dim == 0 {
         "unknown".to_owned()
     } else {
@@ -533,7 +538,7 @@ fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig, db_path:
     };
 
     format!(
-        "Error: Model mismatch\n\n  This brain.db was initialized with: {} ({} dimensions)\n  You requested:                       {} ({} dimensions)\n\n  Embedding dimensions are incompatible. Options:\n    1. Use the original model:   GBRAIN_MODEL={} gbrain <command>\n    2. Re-initialize the DB:     rm {} && gbrain init   (data will be lost)",
+        "Error: Model mismatch\n\n  This memory.db was initialized with: {} ({} dimensions)\n  You requested:                       {} ({} dimensions)\n\n  Embedding dimensions are incompatible. Options:\n    1. Use the original model:   QUAID_MODEL={} quaid <command>\n    2. Re-initialize the DB:     rm {} && quaid init   (data will be lost)",
         stored.model_id,
         stored.embedding_dim,
         requested.model_id,
@@ -545,39 +550,6 @@ fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig, db_path:
         },
         db_path,
     )
-}
-
-fn upgrade_legacy_small_model_names(conn: &Connection) -> Result<(), DbError> {
-    let has_legacy_model: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM embedding_models WHERE name = ?1)",
-        [LEGACY_SMALL_MODEL_NAME],
-        |row| row.get(0),
-    )?;
-
-    if !has_legacy_model {
-        return Ok(());
-    }
-
-    let default_small = default_model();
-    conn.execute(
-        "UPDATE page_embeddings SET model = ?1 WHERE model = ?2",
-        params![default_small.model_id, LEGACY_SMALL_MODEL_NAME],
-    )?;
-    conn.execute(
-        "UPDATE embedding_models SET name = ?1, dimensions = ?2, vec_table = ?3 \
-         WHERE name = ?4",
-        params![
-            default_small.model_id,
-            default_small.embedding_dim as i64,
-            default_small.vec_table(),
-            LEGACY_SMALL_MODEL_NAME
-        ],
-    )?;
-    conn.execute(
-        "UPDATE config SET value = ?1 WHERE key = 'embedding_model' AND value = ?2",
-        params![default_small.model_id, LEGACY_SMALL_MODEL_NAME],
-    )?;
-    Ok(())
 }
 
 pub fn compact(conn: &Connection) -> Result<(), DbError> {
@@ -598,7 +570,7 @@ mod tests {
     fn seed_existing_db(path: &Path, schema_version: i64) {
         let conn = Connection::open(path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE brain_config (
+            "CREATE TABLE quaid_config (
                  key   TEXT PRIMARY KEY NOT NULL,
                  value TEXT NOT NULL
              ) STRICT;
@@ -609,9 +581,9 @@ mod tests {
         )
         .unwrap();
         let model = default_model();
-        write_brain_config(
+        write_quaid_config(
             &conn,
-            &BrainConfig {
+            &QuaidConfig {
                 model_id: model.model_id.clone(),
                 model_alias: model.alias.clone(),
                 embedding_dim: model.embedding_dim,
@@ -629,7 +601,7 @@ mod tests {
     #[test]
     fn open_creates_all_expected_tables() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
 
         let tables: Vec<String> = conn
@@ -646,7 +618,7 @@ mod tests {
 
         let expected = [
             "assertions",
-            "brain_config",
+            "quaid_config",
             "collections",
             "collection_owners",
             "config",
@@ -677,21 +649,21 @@ mod tests {
     }
 
     #[test]
-    fn open_sets_user_version_to_5() {
+    fn open_sets_user_version_to_6() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 
     #[test]
     fn open_enables_wal_and_foreign_keys() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
 
         let journal: String = conn
@@ -707,7 +679,9 @@ mod tests {
 
     #[test]
     fn open_rejects_nonexistent_parent_dir() {
-        let result = open("/nonexistent/dir/brain.db");
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("missing-parent").join("memory.db");
+        let result = open(missing.to_str().unwrap());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), DbError::PathNotFound { .. }));
     }
@@ -715,7 +689,7 @@ mod tests {
     #[test]
     fn open_is_idempotent() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let path_str = db_path.to_str().unwrap();
 
         let conn1 = open(path_str).unwrap();
@@ -725,13 +699,13 @@ mod tests {
         let version: i64 = conn2
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 
     #[test]
     fn open_replaces_buggy_pages_update_trigger_for_quarantined_rows() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let path_str = db_path.to_str().unwrap();
 
         let conn = open(path_str).unwrap();
@@ -797,37 +771,37 @@ mod tests {
     }
 
     #[test]
-    fn open_with_model_rejects_v4_database_before_creating_v5_tables() {
+    fn open_with_model_rejects_legacy_database_before_creating_v6_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 4);
+        seed_existing_db(&db_path, 5);
 
         let err = open_with_model(db_path.to_str().unwrap(), &default_model())
-            .expect_err("v4 database should be refused");
+            .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("schema version 4"));
+        assert!(err.to_string().contains("Found version 5, expected 6"));
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
         let stored_version: String = conn
             .query_row(
-                "SELECT value FROM brain_config WHERE key = 'schema_version'",
+                "SELECT value FROM quaid_config WHERE key = 'schema_version'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored_version, "4");
+        assert_eq!(stored_version, "5");
     }
 
     #[test]
-    fn init_rejects_v4_database_before_creating_v5_tables() {
+    fn init_rejects_legacy_database_before_creating_v6_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 4);
+        seed_existing_db(&db_path, 5);
 
         let err = init(db_path.to_str().unwrap(), &default_model())
-            .expect_err("v4 database should be refused");
+            .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
 
@@ -840,13 +814,13 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(config_version, "4");
+        assert_eq!(config_version, "5");
     }
 
     #[test]
     fn compact_checkpoints_wal() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
         assert!(compact(&conn).is_ok());
     }
@@ -854,7 +828,7 @@ mod tests {
     #[test]
     fn open_seeds_default_embedding_model() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let opened = open_with_model(db_path.to_str().unwrap(), &default_model()).unwrap();
 
         let (name, dims, active): (String, i64, i64) = opened
@@ -872,8 +846,8 @@ mod tests {
     }
 
     #[test]
-    fn brain_config_to_model_config_restores_pinned_hashes_for_standard_aliases() {
-        let config = BrainConfig {
+    fn quaid_config_to_model_config_restores_pinned_hashes_for_standard_aliases() {
+        let config = QuaidConfig {
             model_id: "BAAI/bge-large-en-v1.5".to_owned(),
             model_alias: "large".to_owned(),
             embedding_dim: 1024,
@@ -889,8 +863,8 @@ mod tests {
     }
 
     #[test]
-    fn brain_config_to_model_config_preserves_custom_model_values() {
-        let config = BrainConfig {
+    fn quaid_config_to_model_config_preserves_custom_model_values() {
+        let config = QuaidConfig {
             model_id: "org/custom-model".to_owned(),
             model_alias: "custom".to_owned(),
             embedding_dim: 1536,
@@ -906,62 +880,62 @@ mod tests {
     }
 
     #[test]
-    fn brain_config_from_model_copies_runtime_metadata() {
-        let config = BrainConfig::from_model(&resolve_model("large"));
+    fn quaid_config_from_model_copies_runtime_metadata() {
+        let config = QuaidConfig::from_model(&resolve_model("large"));
 
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 5);
+        assert_eq!(config.schema_version, 6);
     }
 
     #[test]
-    fn brain_config_roundtrip_preserves_values() {
+    fn quaid_config_roundtrip_preserves_values() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let opened = open_with_model(db_path.to_str().unwrap(), &default_model()).unwrap();
 
-        let config = read_brain_config(&opened.conn).unwrap().unwrap();
+        let config = read_quaid_config(&opened.conn).unwrap().unwrap();
         assert_eq!(
             config,
-            BrainConfig {
+            QuaidConfig {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
-                schema_version: 5,
+                schema_version: 6,
             }
         );
     }
 
     #[test]
-    fn empty_brain_config_is_treated_as_legacy_small_model() {
+    fn empty_quaid_config_reads_as_missing() {
         let conn = open(":memory:").unwrap();
-        conn.execute("DELETE FROM brain_config", []).unwrap();
+        conn.execute("DELETE FROM quaid_config", []).unwrap();
 
-        let config = read_brain_config(&conn).unwrap();
+        let config = read_quaid_config(&conn).unwrap();
         assert!(config.is_none());
     }
 
     #[test]
-    fn incomplete_brain_config_returns_schema_error() {
+    fn incomplete_quaid_config_returns_schema_error() {
         let conn = open(":memory:").unwrap();
-        conn.execute("DELETE FROM brain_config", []).unwrap();
+        conn.execute("DELETE FROM quaid_config", []).unwrap();
         conn.execute(
-            "INSERT INTO brain_config (key, value) VALUES ('model_id', 'BAAI/bge-small-en-v1.5')",
+            "INSERT INTO quaid_config (key, value) VALUES ('model_id', 'BAAI/bge-small-en-v1.5')",
             [],
         )
         .unwrap();
 
-        let err = read_brain_config(&conn).unwrap_err();
+        let err = read_quaid_config(&conn).unwrap_err();
         assert!(matches!(err, DbError::Schema { .. }));
     }
 
     #[test]
-    fn read_brain_config_rejects_non_integer_embedding_dimensions() {
+    fn read_quaid_config_rejects_non_integer_embedding_dimensions() {
         let conn = open_connection(":memory:").unwrap();
-        write_brain_config(
+        write_quaid_config(
             &conn,
-            &BrainConfig {
+            &QuaidConfig {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
@@ -970,22 +944,22 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "UPDATE brain_config SET value = 'not-a-number' WHERE key = 'embedding_dim'",
+            "UPDATE quaid_config SET value = 'not-a-number' WHERE key = 'embedding_dim'",
             [],
         )
         .unwrap();
 
-        let err = read_brain_config(&conn).unwrap_err();
+        let err = read_quaid_config(&conn).unwrap_err();
 
         assert!(matches!(err, DbError::Schema { .. }));
     }
 
     #[test]
-    fn read_brain_config_rejects_non_integer_schema_versions() {
+    fn read_quaid_config_rejects_non_integer_schema_versions() {
         let conn = open_connection(":memory:").unwrap();
-        write_brain_config(
+        write_quaid_config(
             &conn,
-            &BrainConfig {
+            &QuaidConfig {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
@@ -994,80 +968,65 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "UPDATE brain_config SET value = 'not-a-number' WHERE key = 'schema_version'",
+            "UPDATE quaid_config SET value = 'not-a-number' WHERE key = 'schema_version'",
             [],
         )
         .unwrap();
 
-        let err = read_brain_config(&conn).unwrap_err();
+        let err = read_quaid_config(&conn).unwrap_err();
 
         assert!(matches!(err, DbError::Schema { .. }));
     }
 
     #[test]
-    fn missing_brain_config_is_treated_as_legacy_small_model() {
+    fn missing_quaid_config_requires_reinit() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let opened = open_with_model(db_path.to_str().unwrap(), &default_model()).unwrap();
-        opened.conn.execute("DELETE FROM brain_config", []).unwrap();
+        opened.conn.execute("DELETE FROM quaid_config", []).unwrap();
         drop(opened);
 
         let reopened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large"));
-        assert!(reopened.is_ok());
+        assert!(matches!(reopened, Err(DbError::Schema { .. })));
     }
 
     #[test]
     fn mismatch_detection_returns_model_mismatch_error() {
-        let stored = BrainConfig {
+        let stored = QuaidConfig {
             model_id: "BAAI/bge-small-en-v1.5".to_owned(),
             model_alias: "small".to_owned(),
             embedding_dim: 384,
             schema_version: 4,
         };
         let requested = resolve_model("large");
-        let message = format_model_mismatch(&stored, &requested, "/tmp/test/brain.db");
+        let message = format_model_mismatch(&stored, &requested, "/tmp/test/memory.db");
 
         let err = DbError::ModelMismatch { message };
         let DbError::ModelMismatch { message } = &err else {
             unreachable!()
         };
-        assert!(message.contains("rm /tmp/test/brain.db && gbrain init"));
+        assert!(message.contains("rm /tmp/test/memory.db && quaid init"));
     }
 
     #[test]
     fn mismatch_detection_uses_custom_model_id_in_recovery_hint() {
-        let stored = BrainConfig {
+        let stored = QuaidConfig {
             model_id: "org/custom-model".to_owned(),
             model_alias: "custom".to_owned(),
             embedding_dim: 1536,
             schema_version: 4,
         };
         let requested = resolve_model("large");
-        let message = format_model_mismatch(&stored, &requested, "brain.db");
+        let message = format_model_mismatch(&stored, &requested, "memory.db");
 
-        assert!(message.contains("GBRAIN_MODEL=org/custom-model gbrain <command>"));
-    }
-
-    #[test]
-    fn upgrade_legacy_small_model_names_is_noop_without_legacy_rows() {
-        let conn = open_connection(":memory:").unwrap();
-
-        upgrade_legacy_small_model_names(&conn).unwrap();
-
-        let model_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM embedding_models", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-
-        assert_eq!(model_count, 0);
+        assert!(message.contains("QUAID_MODEL=org/custom-model quaid <command>"));
     }
 
     #[cfg(feature = "online-model")]
     #[test]
     fn init_with_small_then_open_with_large_errors() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("brain.db");
+        let db_path = dir.path().join("memory.db");
 
         init(db_path.to_str().unwrap(), &resolve_model("small")).unwrap();
         let err = open_with_model(db_path.to_str().unwrap(), &resolve_model("large")).unwrap_err();
@@ -1079,14 +1038,14 @@ mod tests {
     #[test]
     fn init_with_large_then_open_with_large_succeeds() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("brain.db");
+        let db_path = dir.path().join("memory.db");
 
         let init_opened =
             open_with_model(db_path.to_str().unwrap(), &resolve_model("large")).unwrap();
         drop(init_opened);
 
         let reopened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large")).unwrap();
-        let stored = read_brain_config(&reopened.conn).unwrap().unwrap();
+        let stored = read_quaid_config(&reopened.conn).unwrap().unwrap();
         assert_eq!(stored.model_alias, "large");
         assert_eq!(stored.embedding_dim, 1024);
     }

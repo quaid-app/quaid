@@ -228,3 +228,23 @@ This dual-release cycle validated the full team workflow:
 - **Trace-file hooks prove rollback ordering without mocking the filesystem.** The `unlink:X → fsync-after-unlink:X` pattern is a reusable proof seam for any cleanup sequence that must guarantee fsync before returning. See `.squad/skills/quarantine-noreplace-rollback/SKILL.md`.
 - **When validating on Windows, enumerate which `#[cfg(unix)]` tests are being skipped and flag them explicitly.** "1 passed" looks weak but is correct if the other tests are platform-gated. Always note the skip count and where CI must close the gap.
 
+## 2026-04-25 v0.9.7 Release Validation — Issues #79/#80
+
+- **Scope:** Validate `release/v0.9.7` branch fixing macOS build failure (#80) and installer 404 (#79). Run seam tests, confirm CI, merge, tag, verify 17-asset release.
+- **Root cause confirmed:** `stat.st_mode` is `u16` on macOS/Darwin, `u32` on Linux. `FileStatNoFollow.mode_bits: u32` caused type-mismatch compile errors on all 4 macOS CI jobs in v0.9.6. No macOS binaries uploaded → install.sh returned HTTP 404 for all darwin targets.
+- **Fix:** `stat.st_mode as u32` at `src/core/fs_safety.rs:199` (lossless widening cast). Already committed on `release/v0.9.7` before this session.
+- **D-R79-2 implementation:** Centralized release asset manifest to `.github/release-assets.txt` (17 lines, canonical single source of truth). `release.yml`, `RELEASE_CHECKLIST.md`, `release_asset_parity.sh`, and `install_release_seam.sh` all validate against it.
+- **Seam tests:** `release_asset_parity.sh` 22/22 PASS (static analysis, any platform). `install_release_seam.sh` is CI-only (requires real Unix exec semantics for uname stubs).
+- **CI blocker discovered and fixed:** All 4 `release-macos-preflight` jobs failed at "Cache cargo registry" with error `Key Validation Error: ... cannot contain commas`. The cache key used `matrix.features` (`bundled,embedded-model`); `actions/cache@v4` rejects commas. Fixed by adding `channel` field (airgapped/online) to each matrix entry and using `matrix.channel` in the key.
+- **CI green confirmed:** Run `24922724381` at `2b9221c` — all 8 jobs passed including all 4 macOS preflight "Cargo check release target" steps. `stat.st_mode as u32` fix proven on aarch64+x86_64 × airgapped+online.
+- **PR #83 merged** to main (admin merge required — branch protection policy).
+- **Release verified:** Tag `v0.9.7` at `72b5ed0` (macro88). Release workflow `24922783295` succeeded. All 17 assets present on GitHub Release including `gbrain-darwin-x86_64-airgapped` and `gbrain-darwin-arm64-airgapped` (the previously missing assets).
+- **Issues #79 and #80 closed** (both already closed when verified).
+
+## Learnings
+
+- **`actions/cache@v4` rejects commas in cache keys.** When a matrix variable (like `features`) contains comma-separated values (`bundled,embedded-model`), it must NOT be used directly in the `key:` field. Extract a separate comma-free matrix field (e.g., `channel: airgapped`) for the cache key. The comma restriction is not documented prominently — it manifests as an instant job failure at the cache setup step, causing all downstream steps to be skipped.
+- **Cache key failures cause downstream steps to be SKIPPED, not FAILED.** When diagnosing CI failures where "Cargo check release target" shows as skipped, look at the step that ran before it — often a cache setup failure. A skipped build step does NOT mean the build passed; it means the step never ran.
+- **A CI infrastructure failure (cache key error) can mask a code fix being unproven.** All 4 macOS preflight jobs "failed" but the actual cargo check never ran. Declaring the code fix valid on that basis would have been wrong. Always confirm the build step itself ran and succeeded, not just that the job infrastructure passed.
+- **When a job fails in CI infrastructure (cache, checkout, env setup), the fix is in the workflow YAML, not in the source code.** Before concluding a compile error persists, audit which step the job actually failed at and whether the compile step ran at all.
+

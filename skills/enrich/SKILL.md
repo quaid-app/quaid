@@ -1,5 +1,5 @@
 ---
-name: gbrain-enrich
+name: quaid-enrich
 description: |
   Enrich brain pages with external data from Crustdata, Exa, and Partiful.
   Stores raw API responses, extracts structured facts, and handles conflicts.
@@ -11,7 +11,7 @@ min_binary_version: "0.3.0"
 ## Overview
 
 The enrich skill integrates external data sources into brain pages. Raw API responses
-are stored atomically in the `raw_data` table via `brain_raw`, then structured facts
+are stored atomically in the `raw_data` table via `memory_raw`, then structured facts
 are extracted and written into `compiled_truth` and `assertions`. This two-phase approach
 makes enrichment idempotent and allows re-extraction if extraction logic improves.
 
@@ -29,7 +29,7 @@ revenue signals, and professional histories.
 
 **Endpoint:** `https://api.crustdata.com/v1/companies/search` (and `/people/search`)
 
-**Rate limit:** Varies by subscription tier. Cache all responses in `brain_raw` to avoid
+**Rate limit:** Varies by subscription tier. Cache all responses in `memory_raw` to avoid
 repeated API calls.
 
 ### Exa — Web search and content extraction
@@ -41,7 +41,7 @@ queries and enriching pages with recent public information.
 - `POST https://api.exa.ai/search` — search
 - `POST https://api.exa.ai/contents` — fetch full content by result IDs
 
-**Rate limit:** 20 req/min on free tier. Use `brain_raw` to cache responses.
+**Rate limit:** 20 req/min on free tier. Use `memory_raw` to cache responses.
 
 ### Partiful — Event and social data
 
@@ -49,7 +49,7 @@ Partiful provides event attendance, RSVPs, and social network data for community
 knowledge graphs.
 
 **Usage:** Partiful does not have a public REST API; extract structured data from event
-export files or invitation CSVs. Import as pages via `gbrain import`, then enrich with
+export files or invitation CSVs. Import as pages via `quaid import`, then enrich with
 the flow below.
 
 ---
@@ -61,7 +61,7 @@ the flow below.
 Store the full API response before doing any extraction. This is the idempotency anchor.
 
 ```bash
-gbrain call brain_raw '{
+quaid call memory_raw '{
   "slug": "<page_slug>",
   "source": "<crustdata|exa|partiful>",
   "data": <raw_api_response_json>
@@ -72,7 +72,7 @@ Returns: `{"id": <row_id>}`
 
 If the target page does not exist yet, create it first:
 ```bash
-gbrain put <page_slug> < stub.md   # minimal page: slug + type only
+quaid put <page_slug> < stub.md   # minimal page: slug + type only
 ```
 
 ### Phase 2 — Extract facts
@@ -88,9 +88,9 @@ Read the stored raw data and derive structured facts:
 ### Phase 3 — Write updated page
 
 ```bash
-gbrain get <page_slug> --json     # fetch current page + version
+quaid get <page_slug> --json     # fetch current page + version
 # Merge extracted facts into compiled_truth and timeline
-gbrain put <page_slug> --expected-version <N> < updated.md
+quaid put <page_slug> --expected-version <N> < updated.md
 ```
 
 Always use `--expected-version` to detect concurrent writes (OCC). If the write returns
@@ -118,11 +118,11 @@ Always use `--expected-version` to detect concurrent writes (OCC). If the write 
 **Example workflow:**
 ```
 1. GET https://api.crustdata.com/v1/companies/search?domain=acme.com
-2. gbrain call brain_raw '{"slug":"companies/acme","source":"crustdata","data":<response>}'
+2. quaid call memory_raw '{"slug":"companies/acme","source":"crustdata","data":<response>}'
 3. Extract: headcount=450, funding_total=$42M, last_round="Series B 2024-03"
-4. gbrain get companies/acme --json → fetch + version
+4. quaid get companies/acme --json → fetch + version
 5. Merge facts into compiled_truth; append funding round to timeline
-6. gbrain put companies/acme --expected-version <N> < updated.md
+6. quaid put companies/acme --expected-version <N> < updated.md
 ```
 
 ### Crustdata — Person page enrichment
@@ -137,7 +137,7 @@ Always use `--expected-version` to detect concurrent writes (OCC). If the write 
 
 **Relationships to create:**
 ```bash
-gbrain link people/<slug> companies/<employer_slug> \
+quaid link people/<slug> companies/<employer_slug> \
   --relationship works_at \
   --valid-from <start_year>
 ```
@@ -150,7 +150,7 @@ gbrain link people/<slug> companies/<employer_slug> \
 1. query = gap.query_text or derived research question
 2. POST https://api.exa.ai/search with query
 3. For top 3 results: POST https://api.exa.ai/contents with result IDs
-4. Store each result: gbrain call brain_raw '{"slug":"<target>","source":"exa","data":<result>}'
+4. Store each result: quaid call memory_raw '{"slug":"<target>","source":"exa","data":<result>}'
 5. Extract key facts; append to compiled_truth with source citation
 6. Append timeline entry: "YYYY-MM-DD: [Exa] <summary> (source: <url>)"
 ```
@@ -168,10 +168,10 @@ For event pages:
 - Store RSVP data in `raw_data`
 
 ```bash
-gbrain call brain_raw '{"slug":"events/<event_slug>","source":"partiful","data":<export>}'
+quaid call memory_raw '{"slug":"events/<event_slug>","source":"partiful","data":<export>}'
 # For each attendee not already in brain:
-gbrain put people/<attendee_slug> < stub.md
-gbrain link people/<attendee_slug> events/<event_slug> --relationship attended --valid-from <event_date>
+quaid put people/<attendee_slug> < stub.md
+quaid link people/<attendee_slug> events/<event_slug> --relationship attended --valid-from <event_date>
 ```
 
 ---
@@ -181,7 +181,7 @@ gbrain link people/<attendee_slug> events/<event_slug> --relationship attended -
 When enrichment data contradicts existing `compiled_truth`:
 
 1. **Do NOT overwrite** the existing value automatically.
-2. Use `brain_check` or inspect existing assertions to understand the conflict.
+2. Use `memory_check` or inspect existing assertions to understand the conflict.
 3. Log the contradiction explicitly:
    - Old value: existing `compiled_truth` statement
    - New value: enrichment data claim
@@ -204,7 +204,7 @@ external data as ground truth.
 
 | Source | Guidance |
 |--------|----------|
-| Crustdata | Store full response in `brain_raw` before extraction. Batch enrichment to ≤ 20 pages per session. |
+| Crustdata | Store full response in `memory_raw` before extraction. Batch enrichment to ≤ 20 pages per session. |
 | Exa | 20 req/min free tier. Introduce 3s delay between requests. Cache all results. |
 | Partiful | File-based; no API rate limit. Process event exports one at a time. |
 
@@ -214,8 +214,8 @@ external data as ground truth.
 
 | Condition | Behaviour |
 |-----------|-----------|
-| `brain_raw` returns `-32001` | Target page does not exist — create stub page first, then retry |
-| `brain_put` returns `ConflictError` | Re-fetch page with `gbrain get --json`, merge changes, retry with new version |
+| `memory_raw` returns `-32001` | Target page does not exist — create stub page first, then retry |
+| `memory_put` returns `ConflictError` | Re-fetch page with `quaid get --json`, merge changes, retry with new version |
 | Crustdata / Exa returns 429 | Wait 60s, retry once. If still 429, skip page and log: `Skipped <slug>: rate limited` |
 | API returns empty results | Log: `No enrichment data found for <slug> from <source>`. Skip gracefully. |
 | Extracted fact is ambiguous | Log conflict in timeline; do not write to `compiled_truth` |

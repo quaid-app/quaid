@@ -1,6 +1,6 @@
 ## Why
 
-GigaBrain currently has a mismatch between its product promise and its shipped binary story: the docs still describe an offline embedded-weight build, while the actual release lane only ships the slim cached/downloaded path. We need to restore an honest, reviewable release surface that supports both airgapped users and smaller-networked installs without widening scope into full multi-model support.
+Quaid currently has a mismatch between its product promise and its shipped binary story: the docs still describe an offline embedded-weight build, while the actual release lane only ships the slim cached/downloaded path. We need to restore an honest, reviewable release surface that supports both airgapped users and smaller-networked installs without widening scope into full multi-model support.
 
 ## What Changes
 
@@ -25,6 +25,6 @@ GigaBrain currently has a mismatch between its product promise and its shipped b
 ## Impact
 
 - `Cargo.toml`, build features, and model-loading code in `src/core/inference.rs`
-- Release/build/install surfaces in `.github/workflows/**`, `scripts/install.sh`, and `packages/gbrain-npm/**`
+- Release/build/install surfaces in `.github/workflows/**`, `scripts/install.sh`, and `packages/quaid-npm/**`
 - User-facing and project-facing docs in `README.md`, `CLAUDE.md`, `docs/**`, and `website/**`
 - Release assets, checksum generation, installer variant selection, and validation coverage for `v0.9.1`

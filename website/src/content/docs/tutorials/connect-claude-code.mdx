@@ -1,0 +1,148 @@
+---
+title: Connect Claude Code over MCP
+description: Wire your local memory to Claude Code as an MCP server in one config block.
+guide:
+  eyebrow: Tutorial
+  accentBar: true
+---
+
+import CodePanel from "../../../components/docs/CodePanel.astro";
+import GuideStep from "../../../components/docs/GuideStep.astro";
+import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
+
+In this tutorial you'll connect a running memory to Claude Code so the model can call any of the seventeen `memory_*` tools. The transport is stdio, so there's nothing to host, no keys to manage, and no port to open.
+
+This is the canonical wiring path. For other MCP clients (Cursor, custom rmcp clients) the shape of the config is identical; only the location of the config file differs.
+
+## Before you start
+
+- You've completed [Build your first memory](/tutorials/first-memory/) — there's a `~/memory.db` somewhere.
+- You're on macOS or Linux. _(Windows MCP hosting is deferred; the CLI works fine there but `quaid serve` returns `UnsupportedPlatformError`.)_
+- Claude Code is installed and you can edit its MCP config.
+
+## Fast path
+
+<div class="gb-guide-stack">
+  <GuideStep
+    number="01"
+    title="Confirm quaid serve runs"
+    code={`QUAID_DB=~/memory.db quaid serve`}
+    codeLabel="Sanity check"
+    codeTone="terminal"
+  >
+    <p>You should see the server hold the terminal open, waiting for stdio. <code>Ctrl-C</code> to exit. If it errors immediately, the memory probably has the wrong model recorded — see <a href="/how-to/troubleshooting/">troubleshooting</a>.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="02"
+    title="Add the MCP server to Claude Code"
+    code={`{
+  "mcpServers": {
+    "quaid": {
+      "command": "quaid",
+      "args": ["serve"],
+      "env": { "QUAID_DB": "/Users/you/memory.db" }
+    }
+  }
+}`}
+    codeLabel="claude_desktop_config.json (or equivalent)"
+  >
+    <p>Replace the path with the absolute path to your <code>memory.db</code>. Claude Code spawns <code>quaid serve</code> as a child process and speaks JSON-RPC 2.0 over its stdin/stdout.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="03"
+    title="Restart Claude Code"
+  >
+    <p>Most MCP clients only re-read the config on startup. Quit and relaunch Claude Code so it picks up the new server entry.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="04"
+    title="Confirm the tools are available"
+    code={`# Within Claude Code:
+# /mcp list         (see "quaid" in the list of servers)
+# /mcp tools        (see all 17 memory_* tools)`}
+    codeLabel="In Claude Code"
+  >
+    <p>If the server doesn't appear, check the Claude Code logs for spawn errors. The most common issue is <code>command: "quaid"</code> not being on PATH for the spawned shell — use the absolute path (<code>/Users/you/.local/bin/quaid</code>) if needed.</p>
+  </GuideStep>
+
+  <GuideStep
+    number="05"
+    title="Try it"
+  >
+    <p>Ask Claude Code something only your memory knows: "Use memory_query to find people interested in offline-first knowledge." It should call <code>memory_query</code> with your phrasing and return your Alice page.</p>
+  </GuideStep>
+</div>
+
+## What just happened
+
+- Claude Code spawned `quaid serve` as a child process.
+- The child opened your `memory.db`, validated the recorded embedding model, and started listening on stdio.
+- Claude Code issued an MCP handshake (`initialize` → `tools/list`) and got back the seventeen `memory_*` tool definitions.
+- When you asked a question, the model picked the appropriate tool, made a `tools/call`, and rendered the result.
+
+There is no daemon, no port, no auth layer. The trust boundary is "anything Claude Code can spawn".
+
+## Common adjustments
+
+### A different memory per project
+
+Put a `.mcp.json` in your project directory with a project-scoped memory path:
+
+<CodePanel
+  label="Project-scoped MCP config"
+  code={`{
+  "mcpServers": {
+    "quaid": {
+      "command": "quaid",
+      "args": ["serve"],
+      "env": { "QUAID_DB": "./memory.db" }
+    }
+  }
+}`}
+/>
+
+Claude Code merges project and user MCP configs. Per-project memories are how you keep your work, side-projects, and personal notes separate.
+
+### A pinned model on the online build
+
+If you've initialized a memory with a non-default model (e.g. `large`), the `serve` process must use the same `--model`. Either set `QUAID_MODEL=large` in the `env` block or pass it as an arg:
+
+<CodePanel
+  label="Pinned model"
+  code={`{
+  "mcpServers": {
+    "quaid": {
+      "command": "quaid",
+      "args": ["serve", "--model", "large"],
+      "env": { "QUAID_DB": "/Users/you/memory.db" }
+    }
+  }
+}`}
+/>
+
+### Read-only mode
+
+There isn't a CLI flag for it, but if you point Claude Code at a memory inside a read-only collection (`quaid collection add … --read-only`), every mutating tool call will return `CollectionReadOnlyError`. Useful for pairing an agent with someone else's memory you've snapshotted locally.
+
+## What the agent now sees
+
+Once connected, Claude Code can:
+
+- **Read** any page (`memory_get`, `memory_search`, `memory_query`, `memory_list`, `memory_timeline`, `memory_backlinks`, `memory_graph`).
+- **Write** pages, links, tags, and raw data (`memory_put`, `memory_link`, `memory_link_close`, `memory_tags`, `memory_raw`) — subject to the collection write-gate.
+- **Run intelligence checks** (`memory_check`, `memory_gap`, `memory_gaps`, `memory_stats`, `memory_collections`).
+
+This is the full memory. Anything you can do at the CLI, the agent can do over MCP — and vice versa. See the [MCP tool reference](/reference/mcp/) for parameter shapes.
+
+<GuideActionBanner
+  title="Now go customize the workflow"
+  primaryHref="/agents/quickstart/"
+  primaryText="Agent quickstart"
+  secondaryHref="/how-to/skills/"
+  secondaryText="Customize skills"
+>
+  <p>The agent quickstart covers the recommended skill load order and the sensitivity contract; the skills how-to shows how to override default workflows for your memory.</p>
+</GuideActionBanner>

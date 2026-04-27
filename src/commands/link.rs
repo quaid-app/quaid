@@ -30,7 +30,7 @@ fn resolve_page(db: &Connection, slug: &str, op_kind: OpKind) -> Result<Resolved
     Ok(ResolvedPage { resolved, page_id })
 }
 
-// ── gbrain link ──────────────────────────────────────────────
+// ── quaid link ──────────────────────────────────────────────
 
 /// Create a typed temporal link between two pages, or close an existing one.
 ///
@@ -136,7 +136,7 @@ fn run_resolved(
     Ok(false)
 }
 
-// ── gbrain link-close ────────────────────────────────────────
+// ── quaid link-close ────────────────────────────────────────
 
 /// Close a temporal link interval by its database ID.
 pub fn close(db: &Connection, link_id: u64, valid_until: &str) -> Result<()> {
@@ -171,7 +171,7 @@ pub fn close_silent(db: &Connection, link_id: u64, valid_until: &str) -> Result<
     Ok(())
 }
 
-// ── gbrain links ─────────────────────────────────────────────
+// ── quaid links ─────────────────────────────────────────────
 
 /// Serialisable link row for JSON output.
 #[derive(Debug, Serialize)]
@@ -239,7 +239,7 @@ pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool)
     Ok(())
 }
 
-// ── gbrain unlink ────────────────────────────────────────────
+// ── quaid unlink ────────────────────────────────────────────
 
 /// Remove a cross-reference entirely.
 pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String>) -> Result<()> {
@@ -278,7 +278,7 @@ pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String
     Ok(())
 }
 
-// ── gbrain backlinks ─────────────────────────────────────────
+// ── quaid backlinks ─────────────────────────────────────────
 
 /// List backlinks (inbound links) for a page.
 pub fn backlinks(db: &Connection, slug: &str, _temporal: Option<String>, json: bool) -> Result<()> {
@@ -372,7 +372,7 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         std::mem::forget(dir);
         conn

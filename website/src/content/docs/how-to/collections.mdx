@@ -1,0 +1,126 @@
+---
+title: Manage collections (vault sync)
+description: Attach Obsidian vaults as live-synced collections, with quarantine and ignore patterns.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+Collections are how Quaid attaches one or more vault directories to a single memory. The reconciler keeps the memory in sync with files on disk; the watcher follows your edits in real time.
+
+This surface ships on macOS and Linux today — Windows parity is on the roadmap.
+
+## Attach a vault
+
+```bash
+quaid collection add notes ~/Documents/Obsidian --writable
+```
+
+`--writable` allows mutating MCP tools (`memory_put`, `memory_link`, etc.) to write to this collection. Without it, the collection is read-only and writes return `CollectionReadOnlyError`.
+
+Other useful flags at attach time:
+
+| Flag | Effect |
+| ---- | ------ |
+| `--read-only` | Forbid mutations through this collection. |
+| `--write-quaid-id` | Write a `.quaid-id` marker file at the root for collision detection. |
+| `--watcher-mode <auto\|off>` | Override the default file-watcher mode. |
+
+## See what's attached
+
+```bash
+quaid collection list
+quaid collection info notes
+```
+
+`info` shows extended diagnostics: state (`active` / `detached` / `restoring`), watcher status, ignore-pattern parse errors, recovery flags.
+
+## Reconcile against disk
+
+When `serve` isn't running and you've edited files outside the memory's view, force a reconcile:
+
+```bash
+quaid collection sync notes
+quaid collection sync notes --remap-root /new/path     # if you moved the vault
+quaid collection sync notes --finalize-pending         # commit pending recovery state
+```
+
+The reconciler does a stat-diff (mtime + size + ctime) over `file_state`, falling back to SHA-256 only when stat is ambiguous. Most pages skip rehashing entirely.
+
+## Ignore patterns
+
+`.quaidignore` follows gitignore semantics. Edit via the CLI to keep the parser happy:
+
+```bash
+quaid collection ignore add notes "_attachments/**"
+quaid collection ignore add notes "*.tmp"
+quaid collection ignore list notes
+quaid collection ignore remove notes "*.tmp"
+quaid collection ignore clear notes --confirm
+```
+
+Patterns are stored in the `collections.ignore_patterns` column and surfaced through `memory_collections` for MCP clients. Parse errors are reported via `collection info`.
+
+## Quarantine lifecycle
+
+When a file disappears or is renamed, the page isn't hard-deleted — it's quarantined. Links, assertions, and embeddings are preserved.
+
+```bash
+quaid collection quarantine list notes
+quaid collection quarantine export <SLUG> --out /tmp/page.json
+quaid collection quarantine restore <SLUG> notes/path/to/file.md
+quaid collection quarantine discard <SLUG>
+```
+
+Quarantined pages auto-discard after `QUAID_QUARANTINE_TTL_DAYS` (default 30) **only if** they have no remaining DB-only state. Pages with active links or assertions stay until a human reviews them.
+
+## Restore from a backup
+
+```bash
+quaid collection restore notes /path/to/backup-vault
+quaid collection restore-reset notes --confirm        # if a previous restore halted
+```
+
+Restore is gated: the collection enters `restoring` state and rejects writes (`CollectionRestoringError`) until the manifest is finalized.
+
+## Reset reconcile-halted state
+
+If the reconciler halts due to integrity issues, recover with:
+
+```bash
+quaid collection reconcile-reset notes --confirm
+```
+
+Use sparingly; investigate the underlying cause first via `collection info`.
+
+## What the watcher does
+
+While `serve` is running, a notify-based watcher follows attached collection roots:
+
+- Edits debounced for `QUAID_WATCH_DEBOUNCE_MS` (default 1500 ms).
+- Renames, moves, and deletes flow through the same reconciler as `collection sync`.
+- The same write-gate applies — restoring or `needs_full_sync = 1` collections reject mutations.
+
+## Multiple collections, one memory
+
+You can attach more than one vault. Slugs are unique per `(collection, slug)`, so the same `people/alice` can exist in two collections without collision. Use collection-qualified slugs to disambiguate:
+
+```bash
+quaid get work::people/alice
+quaid get personal::people/alice
+```
+
+The MCP server returns `Ambiguity` if a bare slug matches in more than one collection.
+
+## What ships when
+
+| Feature | Status |
+| ------- | ------ |
+| `collection add` / `list` / `info` / `sync` | Unix |
+| Watcher (live edits) | Unix, in `quaid serve` |
+| Quarantine `list` / `export` / `discard` | Unix |
+| Quarantine `restore` | Unix |
+| `restore` from backup | Unix |
+| Windows parity | Roadmap |
+
+Don't read the memory at the same time you `restore` — leases are scoped to a single `serve` session, so a restore halts other writers via `collection_owners`.

@@ -7,13 +7,13 @@ mod mcp;
 
 #[derive(Parser)]
 #[command(
-    name = "gbrain",
+    name = "quaid",
     version,
-    about = "Personal knowledge brain — SQLite + FTS5 + local vector embeddings"
+    about = "Local-first personal memory — SQLite + FTS5 + local vector embeddings"
 )]
 struct Cli {
-    /// Path to brain database file [env: GBRAIN_DB] [default: ./brain.db]
-    #[arg(long, env = "GBRAIN_DB", global = true)]
+    /// Path to memory database file [env: QUAID_DB] [default: ~/.quaid/memory.db]
+    #[arg(long, env = "QUAID_DB", global = true)]
     db: Option<String>,
 
     /// Output as JSON
@@ -21,7 +21,7 @@ struct Cli {
     json: bool,
 
     /// Embedding model alias or Hugging Face model ID
-    #[arg(long, env = "GBRAIN_MODEL", global = true, default_value = "small")]
+    #[arg(long, env = "QUAID_MODEL", global = true, default_value = "small")]
     model: String,
 
     #[command(subcommand)]
@@ -30,9 +30,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialise a new brain database
+    /// Initialise a new memory database
     Init {
-        /// Path to create the new brain database
+        /// Path to create the new memory database
         path: Option<String>,
     },
     /// Read a page by slug
@@ -89,7 +89,7 @@ enum Commands {
         #[arg(long)]
         validate_only: bool,
     },
-    /// Export brain to markdown directory
+    /// Export memory to markdown directory
     Export {
         path: String,
         #[arg(long)]
@@ -207,7 +207,7 @@ enum Commands {
         #[command(subcommand)]
         action: commands::config::ConfigAction,
     },
-    /// Validate brain integrity
+    /// Validate memory integrity
     Validate {
         /// Run all checks (default if no specific flag given)
         #[arg(long)]
@@ -224,7 +224,7 @@ enum Commands {
     },
     /// Start MCP stdio server
     Serve,
-    /// Brain statistics
+    /// Memory statistics
     Stats,
     /// Skills management
     Skills {
@@ -243,18 +243,19 @@ enum Commands {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum EarlyCommand<'a> {
+enum EarlyCommand {
     None,
-    Init(&'a str),
+    Init(String),
     Version,
 }
 
-fn early_command<'a>(cli: &'a Cli) -> EarlyCommand<'a> {
+fn early_command(cli: &Cli) -> EarlyCommand {
     match &cli.command {
         Commands::Version => EarlyCommand::Version,
         Commands::Init { path } => {
-            let db_path = cli.db.as_deref().unwrap_or("brain.db");
-            EarlyCommand::Init(path.as_deref().unwrap_or(db_path))
+            let default_path = core::db::default_db_path_string();
+            let db_path = cli.db.as_deref().unwrap_or(default_path.as_str());
+            EarlyCommand::Init(path.clone().unwrap_or_else(|| db_path.to_owned()))
         }
         _ => EarlyCommand::None,
     }
@@ -286,11 +287,11 @@ async fn main() -> Result<()> {
     // Commands that don't require a database connection
     match early_command(&cli) {
         EarlyCommand::Version => return commands::version::run(),
-        EarlyCommand::Init(path) => return commands::init::run(path, &requested_model),
+        EarlyCommand::Init(path) => return commands::init::run(&path, &requested_model),
         EarlyCommand::None => {}
     }
 
-    let db_path = cli.db.unwrap_or_else(|| "brain.db".to_owned());
+    let db_path = cli.db.unwrap_or_else(core::db::default_db_path_string);
     let opened = core::db::open_with_model(&db_path, &requested_model)?;
     core::inference::set_model_config(opened.effective_model.clone());
     let db = opened.conn;
@@ -395,25 +396,31 @@ mod tests {
 
     #[test]
     fn early_command_returns_version_for_version_subcommand() {
-        let cli = Cli::try_parse_from(["gbrain", "version"]).expect("parse version");
+        let cli = Cli::try_parse_from(["quaid", "version"]).expect("parse version");
 
         assert_eq!(early_command(&cli), EarlyCommand::Version);
     }
 
     #[test]
     fn early_command_prefers_init_path_over_global_db_flag() {
-        let cli = Cli::try_parse_from(["gbrain", "--db", "global.db", "init", "custom.db"])
+        let cli = Cli::try_parse_from(["quaid", "--db", "global.db", "init", "custom.db"])
             .expect("parse init");
 
-        assert_eq!(early_command(&cli), EarlyCommand::Init("custom.db"));
+        assert_eq!(
+            early_command(&cli),
+            EarlyCommand::Init("custom.db".to_owned())
+        );
     }
 
     #[test]
     fn early_command_uses_global_db_flag_when_init_path_is_omitted() {
-        let cli = Cli::try_parse_from(["gbrain", "--db", "global.db", "init"])
+        let cli = Cli::try_parse_from(["quaid", "--db", "global.db", "init"])
             .expect("parse init without path");
 
-        assert_eq!(early_command(&cli), EarlyCommand::Init("global.db"));
+        assert_eq!(
+            early_command(&cli),
+            EarlyCommand::Init("global.db".to_owned())
+        );
     }
 
     #[test]

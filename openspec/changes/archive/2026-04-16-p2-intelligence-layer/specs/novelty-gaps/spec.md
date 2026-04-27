@@ -8,20 +8,20 @@ the novelty check and proceed unconditionally. The `#![allow(dead_code)]` suppre
 `src/core/novelty.rs` SHALL be removed once the wiring is in place.
 
 #### Scenario: Near-duplicate content is silently skipped
-- **WHEN** `gbrain ingest note.md` is called and the new content is ≥ 85% Jaccard-similar
+- **WHEN** `quaid ingest note.md` is called and the new content is ≥ 85% Jaccard-similar
   to the existing compiled_truth
 - **THEN** no database write occurs; stderr shows "Skipping ingest: content not novel (slug: <slug>)"
 
 #### Scenario: Clearly new content proceeds normally
-- **WHEN** `gbrain ingest note.md` is called and the new content has < 85% Jaccard overlap
+- **WHEN** `quaid ingest note.md` is called and the new content has < 85% Jaccard overlap
 - **THEN** the page is upserted as in Phase 1
 
 #### Scenario: --force bypasses novelty check
-- **WHEN** `gbrain ingest note.md --force` is called with near-duplicate content
+- **WHEN** `quaid ingest note.md --force` is called with near-duplicate content
 - **THEN** the page is upserted without any novelty check warning
 
 #### Scenario: Novelty check is skipped for new pages (no prior content)
-- **WHEN** `gbrain ingest note.md` is called and no page with that slug exists yet
+- **WHEN** `quaid ingest note.md` is called and no page with that slug exists yet
 - **THEN** the novelty check is NOT performed and the page is created normally
 
 ### Requirement: Knowledge gaps — log and list
@@ -32,22 +32,22 @@ the novelty check and proceed unconditionally. The `#![allow(dead_code)]` suppre
   (default) or all if `resolved = true`.
 - `resolve_gap(id, resolved_by_slug, conn)` — sets `resolved_at` and `resolved_by_slug`.
 
-`brain_query` and `gbrain query` SHALL call `log_gap` automatically when `hybrid_search`
+`memory_query` and `quaid query` SHALL call `log_gap` automatically when `hybrid_search`
 returns fewer than 2 results or all scores are below 0.3.
 
 `src/commands/gaps.rs` SHALL implement `run(db, limit, resolved, json)` to list gaps.
 
 #### Scenario: Low-confidence query auto-logs a gap
-- **WHEN** `gbrain query "who invented quantum socks"` returns 0 results
+- **WHEN** `quaid query "who invented quantum socks"` returns 0 results
 - **THEN** a row is inserted into `knowledge_gaps` with the query hash; stderr shows
   "Knowledge gap logged"
 
 #### Scenario: gaps command lists unresolved gaps
-- **WHEN** `gbrain gaps` is called and there are 2 unresolved gaps
+- **WHEN** `quaid gaps` is called and there are 2 unresolved gaps
 - **THEN** stdout shows 2 entries with their query hashes and detected_at timestamps
 
 #### Scenario: gaps --resolved includes resolved gaps
-- **WHEN** `gbrain gaps --resolved` is called
+- **WHEN** `quaid gaps --resolved` is called
 - **THEN** all gaps (resolved and unresolved) are listed
 
 #### Scenario: Duplicate gap query is idempotent

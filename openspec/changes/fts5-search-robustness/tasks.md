@@ -1,6 +1,6 @@
 # FTS5 Search Robustness — Implementation Checklist
 
-**Scope:** Apply `sanitize_fts_query` to the `gbrain search` command and MCP `brain_search`
+**Scope:** Apply `sanitize_fts_query` to the `quaid search` command and MCP `memory_search`
 tool; add `--raw` flag for expert FTS5 access; emit `{"error":...}` JSON on error when
 `--json` is active.
 Closes: #52, #53
@@ -36,7 +36,7 @@ Closes: #52, #53
   };
   ```
 
-- [x] A.5 Wire up the `raw: bool` field in the clap argument struct for `gbrain search`
+- [x] A.5 Wire up the `raw: bool` field in the clap argument struct for `quaid search`
   (in `src/main.rs` or wherever the `Search` subcommand args are defined):
   - Add `#[arg(long, default_value_t = false)]` `raw: bool` field.
   - Pass it through to `search::run(db, query, wing, limit, json, raw)`.
@@ -47,7 +47,7 @@ Closes: #52, #53
 
 ## Phase B — src/mcp/server.rs
 
-- [x] B.1 In the `brain_search` tool handler, import `sanitize_fts_query` and apply it
+- [x] B.1 In the `memory_search` tool handler, import `sanitize_fts_query` and apply it
   to the incoming `query` parameter before calling `search_fts`:
   ```rust
   let safe_query = sanitize_fts_query(&query);
@@ -75,13 +75,13 @@ Closes: #52, #53
 - [x] D.3 Unit test: call `run()` with `raw = false` and query `"gpt-5.4 codex model"` —
   verify no error.
 
-- [x] D.4 Integration test: `gbrain search --json "50% fee reduction"` — verify stdout is
+- [x] D.4 Integration test: `quaid search --json "50% fee reduction"` — verify stdout is
   valid JSON (array or empty array, not an error message).
 
-- [x] D.5 Integration test: `gbrain search --raw --json "?invalid"` — verify stdout is
+- [x] D.5 Integration test: `quaid search --raw --json "?invalid"` — verify stdout is
   valid JSON `{"error": "..."}` and process exits cleanly (not a panic).
 
-- [x] D.6 Add a `brain_search` MCP integration test: send a natural-language query with
+- [x] D.6 Add a `memory_search` MCP integration test: send a natural-language query with
   `?` character — verify the tool returns a valid JSON-RPC response (not an error response).
 
 ---
@@ -90,7 +90,7 @@ Closes: #52, #53
 
 - [x] E.1 All tests in Phase D pass. Full `cargo test` suite green.
 
-- [x] E.2 Manually verify `gbrain search "what is CLARITY?"` returns results or empty list
+- [x] E.2 Manually verify `quaid search "what is CLARITY?"` returns results or empty list
   without crashing. Close issues #52 and #53.
 
 - [x] E.3 Run the following benchmark validation commands (from Kif's v0.9.4 triage) and

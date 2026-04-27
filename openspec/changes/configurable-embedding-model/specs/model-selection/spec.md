@@ -4,17 +4,17 @@
 
 **Environment variable (primary):**
 ```
-GBRAIN_MODEL=large gbrain query "stablecoin regulation"
-GBRAIN_MODEL=BAAI/bge-large-en-v1.5 gbrain query "stablecoin regulation"
+QUAID_MODEL=large quaid query "stablecoin regulation"
+QUAID_MODEL=BAAI/bge-large-en-v1.5 quaid query "stablecoin regulation"
 ```
 
 **CLI flag (alternative):**
 ```
-gbrain --model large query "stablecoin regulation"
-gbrain --model BAAI/bge-m3 query "stablecoin regulation"
+quaid --model large query "stablecoin regulation"
+quaid --model BAAI/bge-m3 query "stablecoin regulation"
 ```
 
-**Precedence:** `--model` flag > `GBRAIN_MODEL` env var > default (`small`)
+**Precedence:** `--model` flag > `QUAID_MODEL` env var > default (`small`)
 
 ### Alias Resolution
 
@@ -28,7 +28,7 @@ gbrain --model BAAI/bge-m3 query "stablecoin regulation"
 
 ### Airgapped Channel Behaviour
 
-The `embedded-model` feature (airgapped build) always uses the embedded BGE-small weights. If `GBRAIN_MODEL` or `--model` is set to anything other than `small` or `BAAI/bge-small-en-v1.5`, emit a clear warning and continue with BGE-small. Do not error out.
+The `embedded-model` feature (airgapped build) always uses the embedded BGE-small weights. If `QUAID_MODEL` or `--model` is set to anything other than `small` or `BAAI/bge-small-en-v1.5`, emit a clear warning and continue with BGE-small. Do not error out.
 
 ### SHA-256 Integrity Verification
 

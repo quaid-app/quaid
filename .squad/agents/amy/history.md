@@ -20,6 +20,19 @@
 
 **Outcome:** Four prose docs updated; zero untruthful restore/IPC claims introduced. docs/spec.md and AGENTS.md/CLAUDE.md remain stale and are blocked on future vault-sync implementation tasks (16.3–16.5, 16.8).
 
+## 2026-04-24: PR #77 docs truth repair — vault-sync-engine
+
+**Role:** Docs truthfulness responder — `docs/getting-started.md` corrections for PR review feedback
+
+**What happened:**
+- PR #77 review flagged two false claims in `docs/getting-started.md`.
+- Claim 1 (line 398): no platform note on `gbrain serve` / vault-sync watcher section. Code hard-gates `gbrain serve` to Unix via `ensure_unix_platform`. Added `> **Unix only.**` callout explaining the constraint and explicitly noting that MCP read/write tools remain cross-platform.
+- Claim 2 (line 437): "quarantine restore is not yet implemented" — false. The branch has `gbrain collection quarantine restore` implemented and wired to `core::quarantine::restore_quarantined_page` behind `#[cfg(unix)]`. Replaced the deferred note with an accurate Unix-only restore description. Kept a deferred-item note scoped only to the IPC/online-handshake path.
+- Committed and pushed to `spec/vault-sync-engine`.
+- Wrote decisions to `.squad/decisions/inbox/amy-pr77-docs.md`.
+
+**Outcome:** Two false claims corrected. Zero aspirational scope introduced. PR review items addressed.
+
 ## Learnings
 
 - Docs must make a sophisticated local-first system feel approachable.

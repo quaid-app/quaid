@@ -1,15 +1,15 @@
-## Brain Config Schema Spec
+## Memory Config Schema Spec
 
 ### Table DDL
 
 ```sql
-CREATE TABLE IF NOT EXISTS brain_config (
+CREATE TABLE IF NOT EXISTS quaid_config (
     key   TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 ) STRICT;
 ```
 
-### Required Keys (written at `gbrain init`)
+### Required Keys (written at `quaid init`)
 
 | Key | Example Value | Description |
 |-----|--------------|-------------|
@@ -20,6 +20,6 @@ CREATE TABLE IF NOT EXISTS brain_config (
 
 ### Init Behaviour
 
-- `gbrain init` writes all four keys on first creation.
-- If the DB already exists and `brain_config` is populated, `gbrain init` is a no-op (idempotent).
-- If the DB exists but `brain_config` is missing (pre-v0.9.2 DB), `gbrain init` writes the config keys using the default model (`small`), emitting a migration notice.
+- `quaid init` writes all four keys on first creation.
+- If the DB already exists and `quaid_config` is populated, `quaid init` is a no-op (idempotent).
+- If the DB exists but `quaid_config` is missing (pre-v0.9.2 DB), `quaid init` writes the config keys using the default model (`small`), emitting a migration notice.

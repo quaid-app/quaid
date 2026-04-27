@@ -119,3 +119,22 @@
 - **vault-sync-engine docs strategy**: Document capabilities as "In progress" in roadmap only until the branch merges. Deferred work (restore, IPC) must be explicitly named as deferred — silence reads as "not planned", explicit listing reads as "coming."
 - **Roadmap version targets**: Internal issue numbers (#55 etc.) should not appear in public-facing version target rows.
 - **Homepage and user funnel accuracy (2026-04-25):** User-facing docs misled the audience for months about the MCP surface: the snippet claimed 'Server active at http://localhost:8080' but gbrain serve is stdio JSON-RPC, not HTTP. The fix was not a footnote or a clarification — it was a replacement sequence showing the real transport (init → import → serve with no HTTP output). Never ship example code that contradicts the actual behavior; users will spend days debugging the wrong thing. When correcting this, also surface any major workflow steps that were missing from the funnel (e.g., import was omitted from the homepage but is mandatory to see results).
+- **MCP tool response schema drift (2026-04-25):** The `brain_collections` example in `mcp-server.md` used fabricated field names (`id`, `path`, `write_target`, `blocker`, `restore_pending`, `ignore_patterns_count`) that don't match `BrainCollectionView`. Always verify docs JSON examples against the actual serialized struct before shipping. The authoritative source is the struct definition in `src/core/vault_sync.rs`.
+- **Platform-gated feature docs (2026-04-25):** When a feature is `#[cfg(unix)]` or behind `ensure_unix_platform`, every docs surface advertising that feature must carry an explicit Unix/macOS/Linux-only note — homepage cards, quickstart snippets, and guide prose included. One missing note causes support tickets from Windows users.
+- **Quarantine restore partial-land pattern (2026-04-25):** When a feature is partially landed (Unix-only narrow seam), the roadmap should show it in the Landed list with its caveat, not in "Explicitly deferred." Only move something to deferred if zero code is shipped. Partial-land → landed-with-caveats.
+
+## 2026-04-25: PR #77 Docs Review — vault-sync-engine accuracy pass
+
+**Role:** Docs-site engineer, PR review resolution + release ship
+
+**What happened:**
+- Addressed all 20+ review comments on PR #77 across 4 docs-site files.
+- `mcp-server.md`: replaced fabricated `brain_collections` JSON example with the real `BrainCollectionView` struct fields; corrected `state` enum (`needs_sync` → `detached`); fixed table description (removed "watcher activity, blocker").
+- `roadmap.md`: moved quarantine restore from "Explicitly deferred" to Landed with Unix-only caveat; updated `brain_collections` bullet to match real field list.
+- `index.mdx`: bumped tool count 16→17; added Unix/macOS/Linux note to `gbrain serve` quickstart comment and Live Vault Sync card.
+- `why-gigabrain.mdx`: fixed grammar nit ("so the brain an AI agent reads" → "so the brain that an AI agent reads"); added Unix-only note to vault-watcher paragraph.
+- Verified docs site build: 15 pages, zero errors.
+- Committed and pushed to `spec/vault-sync-engine`; marked PR ready; merged with `--admin`; tagged and released `v0.9.6`.
+
+**Outcome:** All review comments addressed. PR #77 merged to main. v0.9.6 released at https://github.com/macro88/gigabrain/releases/tag/v0.9.6.
+

@@ -1,6 +1,6 @@
 # Import Type Inference — Implementation Checklist
 
-**Scope:** Add folder-based type inference as tier-2 fallback in `gbrain import`;
+**Scope:** Add folder-based type inference as tier-2 fallback in `quaid import`;
 document the type inference rules.
 Closes: #40
 
@@ -48,7 +48,7 @@ Closes: #40
   - Note that the fallback for unrecognized folders is `concept`.
   - Show an example: importing `2. Areas/Health/exercise.md` yields type `area`.
 
-- [x] B.2 Update `gbrain import --help` text (in `src/commands/import.rs` or equivalent) to
+- [x] B.2 Update `quaid import --help` text (in `src/commands/import.rs` or equivalent) to
   note that page types are inferred from top-level folder name when not set in frontmatter.
 
 ---
@@ -74,5 +74,5 @@ Closes: #40
 ## Phase D — verification
 
 - [x] D.1 Import the beta tester's vault structure (or representative subset). Run
-  `gbrain stats`. Confirm `concept` count drops to near-zero for PARA-structured content
+  `quaid stats`. Confirm `concept` count drops to near-zero for PARA-structured content
   and project/area/resource/archive counts are proportional to folder sizes.

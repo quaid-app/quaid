@@ -1,5 +1,5 @@
 ---
-name: gbrain-query
+name: quaid-query
 description: |
   Answer questions from the brain using FTS5 + semantic search + structured queries.
   Synthesize across multiple pages. Cite sources.
@@ -12,9 +12,9 @@ description: |
 ### Hybrid search (recommended)
 
 ```bash
-gbrain query "who knows about fintech?"
-gbrain query "who knows about fintech?" --wing people
-gbrain query "AI agents" --limit 5 --json
+quaid query "who knows about fintech?"
+quaid query "who knows about fintech?" --wing people
+quaid query "AI agents" --limit 5 --json
 ```
 
 Runs the four-layer search strategy and returns ranked results under a token budget.
@@ -22,9 +22,9 @@ Runs the four-layer search strategy and returns ranked results under a token bud
 ### FTS5 keyword search
 
 ```bash
-gbrain search "machine learning"
-gbrain search "fundraising" --wing companies
-gbrain search "infrastructure" --limit 10 --json
+quaid search "machine learning"
+quaid search "fundraising" --wing companies
+quaid search "infrastructure" --limit 10 --json
 ```
 
 Pure BM25-ranked keyword search over `compiled_truth` + `timeline`.
@@ -32,8 +32,8 @@ Pure BM25-ranked keyword search over `compiled_truth` + `timeline`.
 ### Exact page lookup
 
 ```bash
-gbrain get people/alice
-gbrain get people/alice --json
+quaid get people/alice
+quaid get people/alice --json
 ```
 
 Direct slug lookup. Returns the full page content or JSON representation.
@@ -45,7 +45,7 @@ Direct slug lookup. Returns the full page content or JSON representation.
 2. **FTS5 full-text** — BM25-ranked keyword search across `compiled_truth` + `timeline`.
 3. **Vector semantic** — Cosine similarity via the brain's configured embedding model.
    Default is BGE-small-en-v1.5 (384-dim); online builds may also use `base`, `large`,
-   `m3`, or another Hugging Face model ID selected via `GBRAIN_MODEL` / `--model`.
+   `m3`, or another Hugging Face model ID selected via `QUAID_MODEL` / `--model`.
    Currently falls back to a SHA-256 hash placeholder when Candle weights are unavailable.
 4. **Set-union merge** — Combine FTS5 and vector result sets. Pages in either set are
    returned, ranked by normalised combined score (configurable: `set_union` or `rrf`).
@@ -69,7 +69,7 @@ All search commands support `--json` for structured output:
 ## Merge Strategy Configuration
 
 ```bash
-gbrain config set search_merge_strategy rrf    # reciprocal rank fusion
-gbrain config set search_merge_strategy union  # set union (default)
+quaid config set search_merge_strategy rrf    # reciprocal rank fusion
+quaid config set search_merge_strategy union  # set union (default)
 ```
 

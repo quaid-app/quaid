@@ -4,7 +4,7 @@
 The system SHALL initialize BGE-small-en-v1.5 via candle at most once per process using
 a `OnceLock<EmbeddingModel>` in `src/core/inference.rs`. The model weights SHALL be
 embedded in the binary via `include_bytes!` by default. The `online-model` feature flag
-SHALL skip embedding weights and download them to `~/.gbrain/models/` on first call.
+SHALL skip embedding weights and download them to `~/.quaid/models/` on first call.
 
 #### Scenario: Model initialised on first inference call
 - **WHEN** `embed("hello world")` is called for the first time in a process
@@ -64,26 +64,26 @@ nearest neighbours by cosine similarity, and return ranked `SearchResult` items.
 - **WHEN** `search_vec("any query", 5, None, &conn)` is called on a database with no embeddings
 - **THEN** an empty result set is returned without error
 
-### Requirement: gbrain embed command
-`gbrain embed [SLUG]` SHALL generate and store embeddings for a single page.
-`gbrain embed --all` SHALL generate embeddings for all pages.
-`gbrain embed --stale` SHALL regenerate embeddings for pages whose `content_hash` has
+### Requirement: quaid embed command
+`quaid embed [SLUG]` SHALL generate and store embeddings for a single page.
+`quaid embed --all` SHALL generate embeddings for all pages.
+`quaid embed --stale` SHALL regenerate embeddings for pages whose `content_hash` has
 changed since last embedding.
 
 #### Scenario: Embed single page
-- **WHEN** `gbrain embed people/alice` is called
+- **WHEN** `quaid embed people/alice` is called
 - **THEN** all chunks for `people/alice` are embedded and stored in `page_embeddings`
 
 #### Scenario: Embed all pages
-- **WHEN** `gbrain embed --all` is called
+- **WHEN** `quaid embed --all` is called
 - **THEN** all pages in the database are embedded (skipping already-embedded unchanged chunks)
 
-### Requirement: gbrain query command
-`gbrain query "<QUERY>" [--depth auto|1|2] [--token-budget N] [--wing WING]`
+### Requirement: quaid query command
+`quaid query "<QUERY>" [--depth auto|1|2] [--token-budget N] [--wing WING]`
 SHALL perform hybrid search and print the top results with their summaries.
 The `--depth` flag controls progressive expansion (Phase 2 feature; in Phase 1, depth
 always returns full page content for matched results). `--token-budget` caps output.
 
 #### Scenario: Basic semantic query
-- **WHEN** `gbrain query "who is working on AI agents?"` is called
+- **WHEN** `quaid query "who is working on AI agents?"` is called
 - **THEN** hybrid search is performed and the top results are printed with slug + summary

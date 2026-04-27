@@ -1,0 +1,105 @@
+---
+title: Privacy and data sovereignty
+description: What leaves your machine (nothing, unless you ask) and how the gap-tracking system enforces consent before storing query text.
+guide:
+  eyebrow: Explanation
+  accentBar: true
+---
+
+Quaid is local-first by construction. This page makes the privacy posture explicit: what runs locally, what (rarely) goes over the wire, and how the knowledge-gap system handles the one place where consent matters.
+
+## What runs locally
+
+Everything that touches your notes runs on your machine:
+
+- Page parsing, frontmatter validation, slug resolution.
+- FTS5 indexing.
+- Embedding inference (via `candle`, on CPU).
+- Vector search.
+- Graph traversal.
+- Contradiction detection.
+- The MCP server itself.
+
+No API keys are required. No third-party service is contacted by `quaid` during normal use.
+
+## What can go over the wire
+
+Three narrow exceptions, all opt-in:
+
+| Path | When | What is sent |
+| ---- | ---- | ------------ |
+| Model download (online build only) | First semantic use, then never again | Standard Hugging Face model fetch (BGE weights). No prompt or page content. |
+| Skill enrichment (`enrich`) | If you authorize an external API call from a skill | Whatever the skill's `memory_raw` payload is — under your control. |
+| Knowledge gap escalation | If you approve a gap for `external` sensitivity | Only after explicit approval — see below. |
+
+The airgapped build can refuse all of these by construction. The online build lets you participate in the first; the other two require you to wire and authorize them.
+
+## The knowledge gap problem
+
+When the memory can't answer a query well, it's tempting to log "we couldn't answer Q." That logged text is *user data*. If the agent later sends that log to an external service to ask for help, you've just exfiltrated a prompt that may contain PII or proprietary detail.
+
+Quaid's `knowledge_gaps` table is built around that risk.
+
+### What's stored by default
+
+When `memory_gap` is called, the table records:
+
+- `query_hash` — SHA-256 of the original query. **Always populated.**
+- `context` — short free-form context (caller-controlled).
+- `sensitivity` — defaults to `internal`.
+- `query_text` — **NULL by default.**
+
+So the default state is: we know there was a gap (and can deduplicate it), but we don't keep the words.
+
+### What requires approval
+
+| To do this | You need |
+| ---------- | -------- |
+| Store `query_text` verbatim | An `approved_by` and `approved_at` set |
+| Set `sensitivity = "external"` (allow external research) | Same approval, plus explicit policy |
+| Set `sensitivity = "redacted"` (store a sanitized variant) | Same approval; `redacted_query` is what gets used downstream |
+
+Database CHECK constraints enforce this — there is no code path that stores raw query text without an approval pair, by construction.
+
+### The sensitivity tiers
+
+- **`internal`** — Hash-only. Default for every detected gap. Safe to store; tells you "this kind of question came up" without revealing the question.
+- **`redacted`** — Approved, with a `redacted_query` populated. The original is not stored; the sanitized variant is what gets shared with anything outside the memory.
+- **`external`** — Approved, raw query stored. Authorizes external research (e.g. an `enrich` skill that calls a third-party API). Use sparingly.
+
+See [Sensitivity contract](/agents/sensitivity-contract/) for the agent-facing reading.
+
+## What about embeddings?
+
+Embeddings are derived from page content. They are vectors that look like noise to a human, but they're not opaque — a sufficiently motivated attacker with the right model can reconstruct rough paraphrases from embeddings.
+
+Practically:
+
+- Embeddings live inside `memory.db`. Treat the file like the rest of your notes.
+- They never leave the machine unless you copy the file.
+- If you're in a regulated environment, encrypt the volume that holds `memory.db`. SQLite respects filesystem-level encryption.
+
+## What about logs?
+
+The MCP server writes operational logs to stderr. By default these include tool names, request shapes, and error paths — **not** request bodies. Specifically:
+
+- A `memory_put` log line records the slug and version, not the content.
+- A `memory_query` log line records the query length and result count, not the query text.
+- A `memory_gap` log line records the hash, not the text (matching the table policy).
+
+If you redirect stderr to a file or a SIEM, audit what gets captured before you ship the redirect.
+
+## What about backups?
+
+`memory.db` is one file. Back it up the way you back up everything else. There's no remote backup baked in, no cloud sync, no telemetry. Whatever your existing volume backup or snapshot strategy is, that's the strategy.
+
+## A note on agents
+
+The same MCP surface that humans use is exposed to agents. An agent connected over MCP can read every page in your memory and call every tool. That's a feature: agents need access to do useful work.
+
+It's also a responsibility. Two practical implications:
+
+1. **Trust your client.** Anything that connects via `quaid serve` can read everything. Don't run unknown MCP clients against a memory that contains sensitive material.
+2. **Use sensitivity tiers.** If an agent escalates a gap, the sensitivity contract is what keeps the raw query out of any outbound payload by default.
+
+Local-first doesn't make those concerns disappear. It just means the trust boundary is at your machine instead of a SaaS dashboard.

@@ -1,0 +1,110 @@
+---
+import Icon from './GuideIcon.astro';
+
+interface Props {
+	title: string;
+	icon?: string;
+	eyebrow: string;
+	href: string;
+	linkText: string;
+}
+
+const { title, icon, eyebrow, href, linkText } = Astro.props;
+---
+
+<a class="gb-audience-card" href={href}>
+	<p class="gb-audience-card__eyebrow">{eyebrow}</p>
+	<div class="gb-audience-card__head">
+		{icon && (
+			<span class="gb-audience-card__icon" aria-hidden="true">
+				<Icon name={icon as any} />
+			</span>
+		)}
+		<h3>{title}</h3>
+	</div>
+	<div class="gb-audience-card__body">
+		<slot />
+	</div>
+	<span class="gb-audience-card__link">
+		<span>{linkText}</span>
+		<Icon name="right-arrow" size="1rem" />
+	</span>
+</a>
+
+<style>
+	.gb-audience-card {
+		display: grid;
+		gap: 1rem;
+		padding: 1.6rem;
+		border-radius: 1.1rem;
+		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+		background: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-gray-6));
+		box-shadow: 0 18px 32px -28px rgba(30, 20, 15, 0.38);
+		text-decoration: none;
+		color: inherit;
+		transition: transform 120ms ease, box-shadow 200ms ease, border-color 200ms ease;
+	}
+
+	.gb-audience-card:hover {
+		transform: translateY(-2px);
+		border-color: color-mix(in srgb, var(--sl-color-orange-high) 40%, transparent);
+		box-shadow: 0 24px 36px -28px rgba(218, 119, 86, 0.32);
+	}
+
+	.gb-audience-card__eyebrow {
+		margin: 0;
+		color: var(--sl-color-orange-high);
+		font-size: 0.74rem;
+		font-weight: 800;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+	}
+
+	.gb-audience-card__head {
+		display: flex;
+		align-items: center;
+		gap: 0.85rem;
+	}
+
+	.gb-audience-card__icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 2.5rem;
+		height: 2.5rem;
+		border-radius: 0.8rem;
+		background: color-mix(in srgb, var(--sl-color-orange-low) 82%, transparent);
+		color: var(--sl-color-orange-high);
+	}
+
+	.gb-audience-card h3 {
+		margin: 0;
+		color: var(--gb-on-surface);
+		font-size: 1.3rem;
+		font-weight: 700;
+		letter-spacing: -0.025em;
+	}
+
+	.gb-audience-card__body {
+		color: var(--sl-color-gray-3);
+		font-size: 0.98rem;
+		line-height: 1.65;
+	}
+
+	.gb-audience-card__body :global(p) {
+		margin: 0;
+	}
+
+	.gb-audience-card__link {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--sl-color-orange-high);
+		font-size: 0.92rem;
+		font-weight: 700;
+	}
+
+	.gb-audience-card:hover .gb-audience-card__link {
+		gap: 0.7rem;
+	}
+</style>

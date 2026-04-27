@@ -36,16 +36,16 @@ The system SHALL resolve short alias strings to canonical HuggingFace model IDs 
 - **THEN** the system resolves it identically to `--model base`
 
 ### Requirement: Model list command
-The system SHALL provide a `gbrain model list` subcommand that prints a static table of known model aliases, their canonical HuggingFace IDs, embedding dimensions, and approximate download sizes. The command SHALL NOT require network access.
+The system SHALL provide a `quaid model list` subcommand that prints a static table of known model aliases, their canonical HuggingFace IDs, embedding dimensions, and approximate download sizes. The command SHALL NOT require network access.
 
 #### Scenario: Plain text output
-- **WHEN** user runs `gbrain model list`
+- **WHEN** user runs `quaid model list`
 - **THEN** a human-readable table is printed to stdout listing all known aliases
 
 #### Scenario: JSON output
-- **WHEN** user runs `gbrain model list --json`
+- **WHEN** user runs `quaid model list --json`
 - **THEN** a JSON array is printed with fields: `alias`, `model_id`, `dim`, `size_mb`, `notes`
 
 #### Scenario: Help text references model list
-- **WHEN** user runs `gbrain --help` or `gbrain init --help`
-- **THEN** the `--model` flag description mentions `gbrain model list` for available options
+- **WHEN** user runs `quaid --help` or `quaid init --help`
+- **THEN** the `--model` flag description mentions `quaid model list` for available options

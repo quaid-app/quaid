@@ -1,0 +1,98 @@
+---
+title: Configuration
+description: Environment variables, the `config` and `quaid_config` tables in memory.db, and the ~/.quaid/ filesystem layout.
+guide:
+  eyebrow: Reference
+  accentBar: true
+---
+
+Quaid reads mutable runtime defaults from three places, in order of precedence: command-line flags, environment variables, and the `config` table inside `memory.db`. Anything that fixes the database identity (most notably the embedding model and schema generation) is also recorded in the immutable `quaid_config` table at `init` time.
+
+## Environment variables
+
+User-facing variables. Internal/test-only flags are intentionally omitted.
+
+| Variable | Used by | Default | Notes |
+| -------- | ------- | ------- | ----- |
+| `QUAID_DB` | every command | `~/.quaid/memory.db` | Path to the memory database file. |
+| `QUAID_MODEL` | every command | `small` | Embedding model alias (`small`/`base`/`large`/`m3`) or any Hugging Face model ID. On the airgapped build, non-default values produce a warning and are ignored. |
+| `QUAID_CHANNEL` | install script | `airgapped` | Selects which release channel the shell installer downloads. Set to `online` for the smaller binary that pulls model assets at first use. |
+| `QUAID_WATCH_DEBOUNCE_MS` | watcher / vault sync | `1500` | Debounce window before the file watcher flushes a batch of changes. Higher values reduce churn during noisy edits. |
+| `QUAID_QUARANTINE_TTL_DAYS` | quarantine GC | `30` | Auto-discard threshold for clean quarantined pages with no remaining DB-only state. |
+| `QUAID_RAW_IMPORTS_KEEP` | raw-import GC | `10` | Per-page cap on retained `raw_imports` history rows. |
+| `QUAID_RAW_IMPORTS_TTL_DAYS` | raw-import GC | `90` | Time-to-live for inactive `raw_imports` rows. |
+| `QUAID_RAW_IMPORTS_KEEP_ALL` | raw-import GC | unset | Set to `1` to disable raw-import GC entirely. |
+| `QUAID_FULL_HASH_AUDIT_DAYS` | `collection audit` | `7` | Interval after which the full-hash audit pass re-hashes a file. |
+| `QUAID_HF_BASE_URL` | online-model fetch | `https://huggingface.co` | Override the Hugging Face origin (e.g. for an internal mirror). |
+| `QUAID_MODEL_CACHE_DIR` | online-model fetch | `~/.quaid/models/` | Cache directory for downloaded model weights. |
+
+The `--db` and `--model` CLI flags are global and override the corresponding env vars on a per-invocation basis.
+
+## Filesystem layout
+
+Quaid owns one directory under your home folder:
+
+```
+~/.quaid/
+├── skills/                 # Embedded skills extracted on first run
+│   ├── ingest/SKILL.md
+│   ├── query/SKILL.md
+│   └── …
+└── models/                 # Cached model weights (online build only)
+    └── BAAI__bge-base-en-v1.5/
+```
+
+Custom skills resolve in this order: working-directory `SKILL.md` → `~/.quaid/skills/<name>/SKILL.md` → embedded default. Run `quaid skills doctor` to see what is shadowing what.
+
+The runtime default memory path is `~/.quaid/memory.db`. If Quaid cannot resolve a home directory, it falls back to `memory.db` in the current working directory. SQLite WAL sidecars (`memory.db-wal`, `memory.db-shm`) are created at runtime and folded back in by `quaid compact`.
+
+## Mutable runtime config
+
+The `config` table inside `memory.db` holds runtime defaults editable via `quaid config`:
+
+```bash
+quaid config get default_token_budget
+quaid config set default_token_budget 6000
+quaid config reset default_token_budget
+```
+
+Recognized keys (with seeded defaults):
+
+| Key | Default | Effect |
+| --- | ------- | ------ |
+| `version` | `6` | Schema version mirror, kept in sync with `quaid_config.schema_version`. Don't edit by hand. |
+| `embedding_model` | `BAAI/bge-small-en-v1.5` | Mirror of the active model from `quaid_config`. Read-only; managed by `init`. |
+| `embedding_dimensions` | `384` | Mirror of the active model's vector width. |
+| `chunk_strategy` | `section` | How pages are split before embedding. |
+| `search_merge_strategy` | `set-union` | How FTS5 and vector results are fused. |
+| `default_token_budget` | `4000` | Used by `query --depth auto`. |
+
+## Immutable model config
+
+`quaid_config` holds metadata that cannot change after `init` without rebuilding the database:
+
+| Key | Example | Notes |
+| --- | ------- | ----- |
+| `model_id` | `BAAI/bge-small-en-v1.5` | Full Hugging Face model ID. |
+| `model_alias` | `small` | The alias passed to `init`. |
+| `embedding_dim` | `384` | Vector width. Determines which `page_embeddings_vec_*` table is used. |
+| `schema_version` | `6` | Validated on every open. |
+
+On open, `quaid` verifies the requested model matches the recorded one. A mismatch errors out before any command runs. To switch models, initialize a new memory and import into it.
+
+## Build-time feature flags
+
+| Feature | Effect |
+| ------- | ------ |
+| `embedded-model` (default) | Airgapped build. Embeds BGE-small (~180 MB) directly into the binary. Non-default model selection is a warning-only no-op. |
+| `online-model` | Smaller binary (~90 MB). Downloads and caches the selected model on first semantic use. |
+
+```bash
+# Default (airgapped)
+cargo build --release
+
+# Online build
+cargo build --release --no-default-features --features bundled,online-model
+```
+
+See [Airgapped vs online](/how-to/airgapped-vs-online/) for guidance on which channel to use, and [Embedding models](/explanation/embedding-models/) for the design.

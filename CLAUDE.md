@@ -1,6 +1,6 @@
-# GigaBrain
+# Quaid
 
-Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One binary.
+Personal AI memory. SQLite + FTS5 + local vector embeddings. One binary.
 
 ## Architecture
 
@@ -15,7 +15,7 @@ src/commands/              — one file per command
     ↓
 src/core/                  — library: DB, search, embeddings, parsing
     ↓
-brain.db                   — SQLite: pages + FTS5 + vec0 + links + assertions
+memory.db                  — SQLite: pages + FTS5 + vec0 + links + assertions
 ```
 
 **Thin harness, fat skills.** The binary is plumbing. All agent workflows live in `skills/*/SKILL.md`.
@@ -71,8 +71,8 @@ cargo test
 
 ## Embedding model
 
-GigaBrain defaults to `BAAI/bge-small-en-v1.5` (384 dimensions), but the `online-model`
-build now accepts runtime model selection via `GBRAIN_MODEL` or `--model`.
+Quaid defaults to `BAAI/bge-small-en-v1.5` (384 dimensions), but the `online-model`
+build now accepts runtime model selection via `QUAID_MODEL` or `--model`.
 
 - `small` → `BAAI/bge-small-en-v1.5` (384d, default)
 - `base` → `BAAI/bge-base-en-v1.5` (768d)
@@ -84,12 +84,12 @@ Compile-time channels:
 - default `embedded-model` build — airgapped channel, always uses embedded BGE-small and warns if another model is requested
 - `online-model` build — downloads/caches the selected model on first semantic use
 
-Model metadata is persisted in the `brain_config` table at `gbrain init` and validated on every subsequent open. If the requested model differs from the initialized model, the command errors before touching embeddings.
+Model metadata is persisted in the `quaid_config` table at `quaid init` and validated on every subsequent open. If the requested model differs from the initialized model, the command errors before touching embeddings.
 
 ## Skills
 
 Read `skills/` before doing brain operations. All workflow intelligence lives there.
-Skills are embedded in the binary and extracted to `~/.gbrain/skills/` on first run.
+Skills are embedded in the binary and extracted to `~/.quaid/skills/` on first run.
 Drop a custom `SKILL.md` in your working directory to override any default.
 
 ## Database schema
@@ -97,7 +97,7 @@ Drop a custom `SKILL.md` in your working directory to override any default.
 See `src/schema.sql` for the full v4 DDL. Key tables:
 - `pages` — core content (compiled_truth + timeline markdown)
 - `page_fts` — FTS5 virtual table (content-rowid, porter tokenizer)
-- `brain_config` — persisted `model_id`, `model_alias`, `embedding_dim`, `schema_version`
+- `quaid_config` — persisted `model_id`, `model_alias`, `embedding_dim`, `schema_version`
 - `page_embeddings_vec_384` — vec0 virtual table for the default small model (additional vec tables are created for larger dimensions as needed)
 - `page_embeddings` — chunk metadata + vec rowid join table
 - `links` — typed temporal cross-references
@@ -107,12 +107,12 @@ See `src/schema.sql` for the full v4 DDL. Key tables:
 
 ## MCP tools
 
-Core (Phase 1): `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
+Core (Phase 1): `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 
-Full surface (Phase 2+): `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`,
-`brain_timeline`, `brain_tags`, `brain_check`, `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
+Full surface (Phase 2+): `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`,
+`memory_timeline`, `memory_tags`, `memory_check`, `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
 
 ## Optimistic concurrency
 
-`brain_put` accepts an optional `expected_version`. If the page's current version
+`memory_put` accepts an optional `expected_version`. If the page's current version
 doesn't match, the call returns `ConflictError`. Always re-fetch before writing.

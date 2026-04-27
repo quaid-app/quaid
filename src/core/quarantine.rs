@@ -278,7 +278,7 @@ pub enum QuarantineError {
 }
 
 pub fn quarantine_ttl_days() -> i64 {
-    std::env::var("GBRAIN_QUARANTINE_TTL_DAYS")
+    std::env::var("QUAID_QUARANTINE_TTL_DAYS")
         .ok()
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|value| *value >= 0)
@@ -548,7 +548,7 @@ pub fn restore_quarantined_page(
     _relative_path_input: &str,
 ) -> Result<QuarantineRestoreReceipt, QuarantineError> {
     Err(VaultSyncError::UnsupportedPlatform {
-        command: "gbrain collection quarantine restore",
+        command: "quaid collection quarantine restore",
     }
     .into())
 }
@@ -1208,7 +1208,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(unix)]
 fn maybe_pause_after_precheck() -> Result<(), QuarantineError> {
-    let Some(flag_path) = std::env::var_os("GBRAIN_TEST_QUARANTINE_RESTORE_PAUSE_FILE") else {
+    let Some(flag_path) = std::env::var_os("QUAID_TEST_QUARANTINE_RESTORE_PAUSE_FILE") else {
         return Ok(());
     };
     let flag_path = PathBuf::from(flag_path);
@@ -1221,7 +1221,7 @@ fn maybe_pause_after_precheck() -> Result<(), QuarantineError> {
 
 #[cfg(unix)]
 fn should_fail_after_tempfile_create() -> bool {
-    std::env::var("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_TEMPFILE_CREATE")
+    std::env::var("QUAID_TEST_QUARANTINE_RESTORE_FAIL_AFTER_TEMPFILE_CREATE")
         .ok()
         .as_deref()
         == Some("1")
@@ -1229,7 +1229,7 @@ fn should_fail_after_tempfile_create() -> bool {
 
 #[cfg(unix)]
 fn should_fail_after_install_before_db() -> bool {
-    std::env::var("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_AFTER_INSTALL")
+    std::env::var("QUAID_TEST_QUARANTINE_RESTORE_FAIL_AFTER_INSTALL")
         .ok()
         .as_deref()
         == Some("1")
@@ -1237,7 +1237,7 @@ fn should_fail_after_install_before_db() -> bool {
 
 #[cfg(unix)]
 fn should_fail_in_parse() -> bool {
-    std::env::var("GBRAIN_TEST_QUARANTINE_RESTORE_FAIL_IN_PARSE")
+    std::env::var("QUAID_TEST_QUARANTINE_RESTORE_FAIL_IN_PARSE")
         .ok()
         .as_deref()
         == Some("1")
@@ -1245,7 +1245,7 @@ fn should_fail_in_parse() -> bool {
 
 #[cfg(unix)]
 fn append_restore_trace(event: &str) -> Result<(), QuarantineError> {
-    let Some(trace_path) = std::env::var_os("GBRAIN_TEST_QUARANTINE_RESTORE_TRACE_FILE") else {
+    let Some(trace_path) = std::env::var_os("QUAID_TEST_QUARANTINE_RESTORE_TRACE_FILE") else {
         return Ok(());
     };
     let mut file = fs::OpenOptions::new()

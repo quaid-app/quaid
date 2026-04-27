@@ -1,0 +1,182 @@
+---
+title: Schema
+description: User-relevant tables in memory.db — what they store and when they're written.
+guide:
+  eyebrow: Reference
+  accentBar: true
+---
+
+`memory.db` is a single SQLite file that holds every page, link, embedding, and audit row. The schema lives in [`src/schema.sql`](https://github.com/quaid-app/quaid/blob/main/src/schema.sql) and is embedded into the binary via `include_str!()`. This page documents the user-relevant tables — internal scaffolding (test guards, watcher state, IPC heartbeats) is excluded.
+
+The current schema version is **`6`**, recorded as `config.version` and `quaid_config.schema_version`. Both `quaid validate` and the runtime `open` path verify it on every load.
+
+## Page model
+
+### `pages`
+
+The core content table. One row per page, regardless of which collection it lives in.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | INTEGER PK | |
+| `collection_id` | INTEGER FK | References `collections(id)`. Default `1` is the auto-created default collection. |
+| `slug` | TEXT | Unique per `(collection_id, slug)`. |
+| `uuid` | TEXT (nullable) | Stable identifier across renames; populated by the UUID lifecycle. |
+| `type` | TEXT | One of the values listed in [Page types](/reference/page-types/). |
+| `title` | TEXT | Display title from frontmatter. |
+| `summary` | TEXT | Short summary (rendered in lists). |
+| `compiled_truth` | TEXT | The "above the line" canonical body. |
+| `timeline` | TEXT | The "below the line" append-only timeline. |
+| `frontmatter` | JSON TEXT | Whole frontmatter blob (including extension fields). |
+| `wing` / `room` | TEXT | Memory-palace classification (derived). |
+| `version` | INTEGER | Bumps on every write; used for OCC. |
+| `quarantined_at` | TEXT (nullable) | Soft-delete timestamp. Quarantined pages are hidden from FTS5 via triggers. |
+| `created_at` / `updated_at` | TEXT | ISO-8601 timestamps. |
+
+### `page_fts`
+
+FTS5 virtual table indexing `(title, slug, compiled_truth, timeline)`. Tokenizer: `porter unicode61`. Synchronized to `pages` via `pages_ai` / `pages_ad` / `pages_au` triggers; quarantined rows are excluded.
+
+### `timeline_entries`
+
+Structured timeline rows used by `quaid timeline-add`. Unique per `(page_id, date, summary_hash)` to make ingestion idempotent.
+
+| Column | Type |
+| ------ | ---- |
+| `id` | INTEGER PK |
+| `page_id` | FK → `pages(id)` |
+| `date` | TEXT (ISO-8601) |
+| `source` | TEXT |
+| `summary` | TEXT |
+| `summary_hash` | TEXT (SHA-256 of summary) |
+| `detail` | TEXT |
+
+## Embeddings
+
+### `embedding_models`
+
+Registry of every model ever active. Exactly one row has `active = 1`, enforced by a partial unique index.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `name` | TEXT PK | E.g. `BAAI/bge-small-en-v1.5`. |
+| `dimensions` | INTEGER | Vector width. |
+| `vec_table` | TEXT | The dynamically created vec0 table (`page_embeddings_vec_384`, `_768`, …). |
+| `active` | INTEGER | One row may be `1`. |
+
+### `page_embeddings_vec_<DIM>`
+
+`sqlite-vec` virtual table holding the actual vectors. One per dimension you've used. Created on demand by `db.rs`.
+
+### `page_embeddings`
+
+Chunk metadata joining vec rowids back to pages.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | INTEGER PK | |
+| `page_id` | FK → `pages(id)` | |
+| `model` | TEXT | FK → `embedding_models(name)`. |
+| `vec_rowid` | INTEGER | Joins to the vec0 table. |
+| `chunk_type` | TEXT | `truth_section` or `timeline_entry`. |
+| `chunk_index` | INTEGER | Position within the page. |
+| `chunk_text` | TEXT | The content that was embedded. |
+| `content_hash` | TEXT | SHA-256, used for stale detection by `quaid embed --stale`. |
+| `token_count` | INTEGER | Pre-tokenized count. |
+| `heading_path` | TEXT | Breadcrumb of headings preceding the chunk. |
+
+## Graph
+
+### `links`
+
+Typed temporal cross-references.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | INTEGER PK | |
+| `from_page_id` / `to_page_id` | FK → `pages(id)` | |
+| `relationship` | TEXT | E.g. `mentions`, `supersedes`, `manages`. Free-form. |
+| `context` | TEXT | Optional context string. |
+| `source_kind` | TEXT | `wiki_link` (parsed from markdown) or `programmatic` (`memory_link` etc.). |
+| `valid_from` / `valid_until` | TEXT (nullable) | Open intervals encode "still active". |
+| `created_at` | TEXT | |
+
+### `assertions`
+
+Subject-predicate-object triples used by `memory_check` for contradiction detection.
+
+| Column | Type |
+| ------ | ---- |
+| `id` | INTEGER PK |
+| `page_id` | FK |
+| `subject` / `predicate` / `object` | TEXT |
+| `valid_from` / `valid_until` | TEXT (nullable) |
+| `supersedes_id` | FK → `assertions(id)` |
+| `confidence` | REAL |
+| `asserted_by` | TEXT — one of `agent`, `manual`, `import`, `enrichment` |
+| `evidence_text` | TEXT |
+
+### `tags`
+
+Page tags. Unique per `(page_id, tag)`.
+
+## Side tables
+
+### `raw_data`
+
+API responses or raw enrichment payloads attached to a page. One active row per `(page_id, source)`.
+
+### `raw_imports`
+
+Original byte-exact contents of imported files. Used by `quaid export --raw` to round-trip through the database without lossy normalization.
+
+### `ingest_log`
+
+Per-file SHA-256 audit trail for `quaid import` / `quaid ingest` idempotency. Re-running on the same source content is a no-op unless `--force` is supplied.
+
+### `file_state`
+
+Stat-based change detection for the file watcher. One row per `(collection_id, relative_path)`.
+
+## Intelligence
+
+### `contradictions`
+
+Materialized contradictions detected by `memory_check`. Cleared on resolution.
+
+### `knowledge_gaps`
+
+Privacy-safe gap log. The default behavior is to store **only** `query_hash` (SHA-256 of the original query); `query_text` is populated post-approval and only when `sensitivity` permits. See [Sensitivity contract](/agents/sensitivity-contract/).
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `query_hash` | TEXT | Always populated. |
+| `query_text` | TEXT (nullable) | Only after explicit approval. |
+| `sensitivity` | TEXT | `internal` / `external` / `redacted`. |
+| `approved_by` / `approved_at` | TEXT | Required when `sensitivity ≠ internal` or `query_text` is set. |
+| `redacted_query` | TEXT | Sanitized form, when sensitivity is `redacted`. |
+| `resolved_at` / `resolved_by_slug` | TEXT | Set when a page resolves the gap. |
+
+## Collections (Unix)
+
+### `collections`
+
+Named vault roots. State is one of `active`, `detached`, or `restoring`. Multiple ignore-pattern, watcher-release, and reconcile-halt flags coordinate the file-watcher and reconciler.
+
+### `serve_sessions` and `collection_owners`
+
+Lease-based ownership. One MCP `serve` process leases each collection; `collection_owners` records the lease, `serve_sessions` carries heartbeats. Stale leases are reaped on next start.
+
+### `quarantine_exports`
+
+History of quarantine exports — one row per `(page_id, quarantined_at)` event.
+
+## Configuration tables
+
+### `quaid_config`
+
+Immutable model and schema metadata, validated on every open. See [Configuration](/reference/configuration/).
+
+### `config`
+
+Mutable runtime defaults editable via `quaid config`.

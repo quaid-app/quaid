@@ -1,0 +1,263 @@
+---
+title: MCP tool reference
+description: Every memory_* tool exposed by quaid serve, with parameters, returns, and JSON-RPC examples.
+guide:
+  eyebrow: Reference
+  accentBar: true
+---
+
+`quaid serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Seventeen `memory_*` tools cover the read, write, graph, intelligence, and stats surfaces. This page is the canonical catalog.
+
+The transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
+
+> **Platform note.** `quaid serve` and all MCP tools are cross-platform. Live vault-sync watcher threads (automatic reconcile on file edits) start only on Unix (macOS / Linux) and are simply not started on Windows — MCP tool calls continue to work normally on all platforms.
+
+## Conventions
+
+- Slugs may be **collection-qualified** (`<collection>::<slug>`). Bare slugs resolve to the default collection or fail with `Ambiguity` if multiple collections expose the same slug.
+- All timestamps are ISO-8601 strings. `valid_from` / `valid_until` may be `null` to indicate open-start or open-end intervals.
+- Error responses use extended JSON-RPC codes documented in [Errors](/reference/errors/).
+- The MCP server enforces collection write-gates: a `restoring` or `needs_full_sync` collection rejects mutations with `CollectionRestoringError` before any other validation runs.
+
+## Tools at a glance
+
+| Tool | Purpose | Mutates |
+| ---- | ------- | :-----: |
+| `memory_get` | Read a page | – |
+| `memory_put` | Create or update a page (OCC) | ✓ |
+| `memory_query` | Hybrid semantic + FTS5 query | – |
+| `memory_search` | FTS5 keyword search | – |
+| `memory_list` | List pages with filters | – |
+| `memory_link` | Create a temporal link | ✓ |
+| `memory_link_close` | Close a temporal link interval | ✓ |
+| `memory_backlinks` | List inbound links | – |
+| `memory_graph` | N-hop graph neighbourhood | – |
+| `memory_check` | Contradiction detection | – |
+| `memory_timeline` | Timeline entries for a page | – |
+| `memory_tags` | List, add, or remove tags | ✓ |
+| `memory_gap` | Log a knowledge gap (privacy-safe) | ✓ |
+| `memory_gaps` | List knowledge gaps | – |
+| `memory_stats` | Memory statistics | – |
+| `memory_collections` | List collection status | – |
+| `memory_raw` | Store raw structured data | ✓ |
+
+## Read tools
+
+### `memory_get`
+
+> Get a page by slug.
+
+| Param | Type | Required | Notes |
+| ----- | ---- | :------: | ----- |
+| `slug` | string | yes | Bare or collection-qualified |
+
+Returns the rendered markdown of the page (compiled truth + timeline).
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+  "name":"memory_get","arguments":{"slug":"people/alice"}
+}}
+```
+
+Errors: `NotFound`, `Ambiguity`.
+
+### `memory_search`
+
+> FTS5 full-text search.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `query` | string | yes | – |
+| `collection` | string | no | – |
+| `wing` | string | no | – |
+| `limit` | u32 | no | 10 |
+
+Returns a JSON array of `{slug, title, snippet, score}`.
+
+### `memory_query`
+
+> Hybrid semantic + FTS5 query.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `query` | string | yes | – |
+| `collection` | string | no | – |
+| `wing` | string | no | – |
+| `limit` | u32 | no | 10 |
+| `depth` | string | no | – (set to `"auto"` for progressive expansion) |
+
+Returns a ranked, fused result list with optional progressive context up to the active token budget.
+
+### `memory_list`
+
+> List pages with optional filters.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `collection` | string | no | – |
+| `wing` | string | no | – |
+| `page_type` | string | no | – |
+| `limit` | u32 | no | 50 |
+
+## Write tools
+
+### `memory_put`
+
+> Write or update a page.
+
+| Param | Type | Required | Notes |
+| ----- | ---- | :------: | ----- |
+| `slug` | string | yes | – |
+| `content` | string | yes | Full page markdown (frontmatter + body) |
+| `expected_version` | i64 | no (required for safe updates) | OCC: must match current `version` |
+
+Errors: `Conflict` on OCC violation; `CollectionReadOnlyError` if the target collection is not writable; `CollectionRestoringError` while a collection is mid-restore.
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+  "name":"memory_put",
+  "arguments":{
+    "slug":"people/alice",
+    "content":"---\ntitle: Alice\ntype: person\n---\n# Alice\n\n…",
+    "expected_version": 7
+  }
+}}
+```
+
+### `memory_raw`
+
+> Store raw structured data (API responses, JSON) for a page.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `slug` | string | yes | – |
+| `source` | string | yes | E.g. `"crustdata"`, `"exa"`, `"meeting"` |
+| `data` | object | yes | Must be a JSON **object** (not array/scalar) |
+| `overwrite` | boolean | no | `false` |
+
+Per `(slug, source)` only one row is kept active; older rows roll over per the configured retention.
+
+## Graph tools
+
+### `memory_link`
+
+> Create a typed temporal link between two pages.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `from_slug` | string | yes |
+| `to_slug` | string | yes |
+| `relationship` | string | yes |
+| `valid_from` | ISO-8601 | no |
+| `valid_until` | ISO-8601 | no |
+
+### `memory_link_close`
+
+> Close a temporal link by its database ID.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `link_id` | u64 | yes |
+| `valid_until` | ISO-8601 | yes |
+
+### `memory_backlinks`
+
+> List inbound backlinks for a page.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `slug` | string | yes | – |
+| `limit` | u32 | no | – |
+| `temporal` | string | no | `"current"` (alt: `"all"`) |
+
+### `memory_graph`
+
+> N-hop neighbourhood graph from a page.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `slug` | string | yes | – |
+| `depth` | u32 | no | 2 |
+| `temporal` | string | no | `"current"` |
+
+## Intelligence tools
+
+### `memory_check`
+
+> Run contradiction detection on a page or all pages.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `slug` | string | no (omit to scan globally) |
+
+### `memory_timeline`
+
+> Show timeline entries for a page.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `slug` | string | yes | – |
+| `limit` | u32 | no | 20 |
+
+### `memory_tags`
+
+> List, add, or remove tags on a page.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `slug` | string | yes |
+| `add` | string[] | no |
+| `remove` | string[] | no |
+
+### `memory_gap`
+
+> Log a knowledge gap (privacy-safe: stores `query_hash`, not raw query).
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `query` | string | yes |
+| `slug` | string | no |
+| `context` | string | no |
+
+The raw query is **not** persisted unless explicitly approved via the `knowledge_gaps` approval workflow. See [Sensitivity contract](/agents/sensitivity-contract/).
+
+### `memory_gaps`
+
+> List knowledge gaps.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `resolved` | boolean | no | `false` |
+| `limit` | u32 | no | 20 (max 1000) |
+
+## Stats and collections
+
+### `memory_stats`
+
+> Memory statistics.
+
+No parameters. Returns counts (pages, links, embeddings, gaps), the active embedding model, and schema version.
+
+### `memory_collections`
+
+> List collection status for MCP clients.
+
+No parameters. Returns one entry per attached collection with state, ignore-pattern diagnostics, and recovery flags.
+
+## JSON-RPC envelope
+
+Every tool call uses the standard MCP `tools/call` shape:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": <request_id>,
+  "method": "tools/call",
+  "params": {
+    "name": "<tool_name>",
+    "arguments": { ... }
+  }
+}
+```
+
+Successful responses contain a `result.content` array. Errors return an `error.code` per [Errors](/reference/errors/).

@@ -13,12 +13,12 @@ depends_on: p3-skills-benchmarks
 
 ## Why
 
-GigaBrain needs a simpler install story for the upcoming `v0.9.0` test release. Pre-built
+Quaid needs a simpler install story for the upcoming `v0.9.0` test release. Pre-built
 binaries for macOS ARM/x86 and Linux x86_64/ARM64 are already part of the release pipeline,
 but the current README and website docs still make users assemble the install manually and
 still describe both lightweight install paths as deferred:
 
-- `npm install -g gbrain`
+- `npm install -g quaid`
 - One-command curl installer
 
 The current GitHub Releases install workflow requires the user to know their platform string,
@@ -31,7 +31,7 @@ Two audiences benefit immediately:
 1. **JS-toolchain users** — developers who already have Node.js installed reach for
    `npm install -g` instinctively. They should not need to discover GitHub Releases.
 
-2. **Blog post / tutorial readers** — any article about GigaBrain will lead with a single
+2. **Blog post / tutorial readers** — any article about Quaid will lead with a single
    install command. A one-command curl installer is the standard for this class of tool
    (Homebrew, rustup, bun, etc.).
 
@@ -51,30 +51,30 @@ user's local bin directory — no sudo required by default.
 Invocation:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
 ```
 
 Or with version and directory overrides:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
-  | GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR="$HOME/.local/bin" sh
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+  | QUAID_VERSION=v0.9.0 QUAID_INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
-After installing, the script prints a tip suggesting the user set `GBRAIN_DB` in their
-shell profile. The `GBRAIN_DB` env var is already supported by the binary — without it,
-the default database path is `./brain.db` (current working directory), which is not useful
+After installing, the script prints a tip suggesting the user set `QUAID_DB` in their
+shell profile. The `QUAID_DB` env var is already supported by the binary — without it,
+the default database path is `./memory.db` (current working directory), which is not useful
 for a globally-installed CLI. The installer does **not** modify any shell files
 automatically; it only prints the suggestion:
 
 ```
-Tip: Set GBRAIN_DB to avoid passing --db on every command:
-  echo 'export GBRAIN_DB="$HOME/brain.db"' >> ~/.zshrc
+Tip: Set QUAID_DB to avoid passing --db on every command:
+  echo 'export QUAID_DB="$HOME/memory.db"' >> ~/.zshrc
 ```
 
-### 2. npm global package scaffolding (`packages/gbrain-npm/`)
+### 2. npm global package scaffolding (`packages/quaid-npm/`)
 
-A zero-code npm package named `gbrain` that uses a `postinstall` Node.js script to download
+A zero-code npm package named `quaid` that uses a `postinstall` Node.js script to download
 the correct platform binary from GitHub Releases. The npm tarball contains only the wrapper
 script — the 90MB binary is never bundled inside it.
 
@@ -98,12 +98,12 @@ configured `NPM_TOKEN` secret.
   target.
 - **Bundling the binary in the npm tarball** — Would bloat npm installs to ~90MB and
   require platform-specific npm packages. Rejected in favour of postinstall download.
-- **Publishing to crates.io** — GigaBrain is an application binary, not a library.
+- **Publishing to crates.io** — Quaid is an application binary, not a library.
   `cargo install` from source is already supported.
 
 ## Impact
 
-- Users can go from zero to a working `gbrain` binary in one command during the `v0.9.0`
+- Users can go from zero to a working `quaid` binary in one command during the `v0.9.0`
   test cycle.
 - No Rust toolchain is required for end users using GitHub Releases or the shell installer.
 - Install script can be linked directly from the README quick-start.

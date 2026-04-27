@@ -20,7 +20,7 @@ Phase 1 delivered a static binary with full CRUD, FTS5 + vector hybrid search, i
 Schema (`src/schema.sql`) already defines `links`, `assertions`, `contradictions`,
 `knowledge_gaps`, and `timeline_entries` — no DDL changes required in Phase 2.
 
-OCC on `brain_put` is **already complete** (shipped in the SG-6 final fix). Do not re-implement.
+OCC on `memory_put` is **already complete** (shipped in the SG-6 final fix). Do not re-implement.
 
 **Stakeholders:** Fry (implementer), Professor (graph/OCC review), Nibbler (adversarial review),
 Mom (temporal edge cases), Bender (integration testing), Kif (wing-filter benchmark).
@@ -38,11 +38,11 @@ Mom (temporal edge cases), Bender (integration testing), Kif (wing-filter benchm
 4. Implement `src/core/gaps.rs` — list, log, and resolve knowledge gaps.
 5. Wire `src/core/novelty.rs` into `src/commands/ingest.rs` (logic exists; plumbing missing).
 6. Implement `src/core/palace.rs::derive_room` — room classification from heading structure.
-7. Expose Phase 2 MCP tools: `brain_link`, `brain_link_close`, `brain_backlinks`,
-   `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`.
+7. Expose Phase 2 MCP tools: `memory_link`, `memory_link_close`, `memory_backlinks`,
+   `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`.
 8. Implement `src/commands/graph.rs` and `src/commands/check.rs` CLI commands.
 9. Implement `src/commands/gaps.rs` CLI command.
-10. Wire `--depth` progressive retrieval into `brain_query`.
+10. Wire `--depth` progressive retrieval into `memory_query`.
 11. Pass Phase 2 ship gate (Professor + Nibbler sign-off).
 
 **Non-Goals:**
@@ -52,7 +52,7 @@ Mom (temporal edge cases), Bender (integration testing), Kif (wing-filter benchm
 - Multi-tenant or auth layer (never in this product).
 - BEIR benchmarks (Phase 3).
 - Changing the database schema — all tables are already defined.
-- Re-implementing OCC on `brain_put` (already done).
+- Re-implementing OCC on `memory_put` (already done).
 - Full room-level palace filtering benchmark (Kif validates in Phase 3).
 
 ---
@@ -73,7 +73,7 @@ easy to bound at compile time. Depth limit of 10 hops enforced as a safety cap r
 
 ### D2 — Graph temporal filtering: "active at query time" by default, `--all` flag for full history
 
-**Rationale:** A knowledge brain's default graph view should reflect the current world.
+**Rationale:** A AI memory's default graph view should reflect the current world.
 Links with `valid_until < now()` represent closed relationships (e.g., former employer).
 The default filter is `WHERE valid_until IS NULL OR valid_until >= date('now')`.
 `--all` removes the filter to expose full temporal history.
@@ -97,7 +97,7 @@ are also detected.
 ### D4 — Progressive retrieval: token budget from `config` table, expandable per call
 
 **Rationale:** The `config` table already has `default_token_budget = 4000`. Progressive
-retrieval uses this as the base. `brain_query` with `--depth auto` expands results by following
+retrieval uses this as the base. `memory_query` with `--depth auto` expands results by following
 outbound links of top-ranked results until the budget is consumed or depth 3 is reached.
 Token count is approximated as `len(content) / 4` (industry standard proxy).
 
@@ -127,17 +127,17 @@ room `""` (unchanged from Phase 1 behavior).
 - ML classification into a fixed taxonomy: requires model inference on every write; deferred.
 - First paragraph noun extraction: too noisy without NER.
 
-### D7 — MCP Phase 2 tools: same `GigaBrainServer` impl block, new `#[tool]` methods
+### D7 — MCP Phase 2 tools: same `QuaidServer` impl block, new `#[tool]` methods
 
-**Rationale:** `server.rs` already uses `rmcp`'s `#[tool(tool_box)]` macro on `impl GigaBrainServer`.
+**Rationale:** `server.rs` already uses `rmcp`'s `#[tool(tool_box)]` macro on `impl QuaidServer`.
 Adding Phase 2 tools as new methods on the same impl block is the natural pattern — no
 architectural change needed. Input structs follow the same `#[derive(Debug, Deserialize, schemars::JsonSchema)]`
 pattern as Phase 1.
 
-### D8 — Knowledge gaps: log on low-confidence query results, expose via `gbrain gaps`
+### D8 — Knowledge gaps: log on low-confidence query results, expose via `quaid gaps`
 
 **Rationale:** The `knowledge_gaps` schema stores `query_hash` (always) and `query_text`
-(only after approval). `brain_gap` logs a gap when `hybrid_search` returns fewer than
+(only after approval). `memory_gap` logs a gap when `hybrid_search` returns fewer than
 `min_results` (default 2) or all scores are below `confidence_threshold` (default 0.3).
 The `gaps` CLI command lists unresolved gaps with their hashes; resolution links them to
 the page that answered the question.
@@ -160,14 +160,14 @@ the page that answered the question.
 ## Migration Plan
 
 No schema changes. No data migration. All tables used in Phase 2 (`links`, `assertions`,
-`contradictions`, `knowledge_gaps`) were created at `gbrain init` in Phase 1.
+`contradictions`, `knowledge_gaps`) were created at `quaid init` in Phase 1.
 
 Deployment steps:
 1. Implement and test each module independently (see tasks.md).
 2. Run `cargo test` after each group — no partial-state binary should ship.
 3. Professor reviews graph.rs BFS and progressive.rs budget logic before MCP wiring.
 4. Nibbler runs adversarial review of MCP Phase 2 write surface before ship gate.
-5. Ship gate: `cargo test` (all pass) + MCP Phase 2 tools connect + `gbrain graph` works + no
+5. Ship gate: `cargo test` (all pass) + MCP Phase 2 tools connect + `quaid graph` works + no
    regressions on Phase 1 round-trip tests.
 
 Rollback: Phase 2 is additive (no schema changes, no Phase 1 behavior modified). Rolling back
@@ -183,8 +183,8 @@ means reverting to Phase 1 binary — the DB is forward/backward compatible.
 2. **Assertion confidence thresholds**: The 0.8 default for heuristic triples is a guess.
    Kif should establish a recall/precision curve in Phase 3 benchmarks.
 
-3. **`brain_gap` auto-logging**: Should every low-confidence query auto-log a gap, or require
-   an explicit `brain_gap` call? *Current decision*: auto-log when `len(results) < 2`.
+3. **`memory_gap` auto-logging**: Should every low-confidence query auto-log a gap, or require
+   an explicit `memory_gap` call? *Current decision*: auto-log when `len(results) < 2`.
    May produce noise on sparse brains — monitor and tune in Phase 3.
 
 4. **Progressive retrieval depth cap**: Is 3 hops enough? The spec says `--depth auto`.

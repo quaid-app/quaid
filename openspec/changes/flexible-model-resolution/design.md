@@ -10,13 +10,13 @@ The dimension-inference path (`hydrate_model_config`) already exists for custom 
 - Remove all pinned revision SHAs and sha256_hashes from known-alias entries
 - Add `medium` → `base` and `max` → `m3` aliases to close the doc/code gap
 - Accept any `owner/repo` HF model ID without warnings
-- Add `gbrain model list` subcommand: static table of known aliases, their HF IDs, dims, and sizes
-- Update `--model` help text to mention `gbrain model list`
+- Add `quaid model list` subcommand: static table of known aliases, their HF IDs, dims, and sizes
+- Update `--model` help text to mention `quaid model list`
 
 **Non-Goals:**
 - Live HF API queries (rate limits, auth complexity, network dependency)
 - Integrity checking of downloaded model files (removed with the SHA tables)
-- Changing the DB `brain_config` schema or `model_id` storage format
+- Changing the DB `quaid_config` schema or `model_id` storage format
 
 ## Decisions
 
@@ -29,7 +29,7 @@ The dimension-inference path (`hydrate_model_config`) already exists for custom 
 - *Pin to `"main"` branch* — avoids 404s but still requires manual updates if the branch is renamed or the model is restructured
 - *Warn-only on SHA mismatch* — half-measure; still requires maintaining hash tables
 
-**Rationale:** The meaningful reproducibility guarantee is the `model_id` string stored in `brain_config`, validated on every `brain open`. Commit SHAs offer a second layer whose maintenance cost exceeds its benefit for a personal, single-user tool.
+**Rationale:** The meaningful reproducibility guarantee is the `model_id` string stored in `quaid_config`, validated on every `memory open`. Commit SHAs offer a second layer whose maintenance cost exceeds its benefit for a personal, single-user tool.
 
 ### Accept arbitrary HF model IDs silently (no warning)
 
@@ -43,7 +43,7 @@ The dimension-inference path (`hydrate_model_config`) already exists for custom 
 
 **Rationale:** Closes issue #60. Cheaper than updating all docs. Aliases are obvious and consistent with size-based naming.
 
-### `gbrain model list` as a static informational command
+### `quaid model list` as a static informational command
 
 **Decision:** New `src/commands/model.rs` with a `list` subcommand. Prints a fixed table from a `KNOWN_MODELS` const slice. No network required.
 
@@ -58,10 +58,10 @@ The dimension-inference path (`hydrate_model_config`) already exists for custom 
 
 ## Migration Plan
 
-No DB migration required. `brain_config` stores `model_id` (a string like `BAAI/bge-base-en-v1.5`), not the alias or revision. Existing brains open normally.
+No DB migration required. `quaid_config` stores `model_id` (a string like `BAAI/bge-base-en-v1.5`), not the alias or revision. Existing brains open normally.
 
 Code-only change: update `inference.rs`, add `commands/model.rs`, wire into `main.rs` / `commands/mod.rs`.
 
 ## Open Questions
 
-- Should `gbrain model list` output plain text (default) and optionally JSON (`--json`)? Recommend yes for scripting consistency with other commands.
+- Should `quaid model list` output plain text (default) and optionally JSON (`--json`)? Recommend yes for scripting consistency with other commands.

@@ -16,28 +16,34 @@ const currentPath = Astro.url.pathname.startsWith(base)
 
 const withBase = (path: string) => `${base}${path}`;
 
-const isArchitecturePage = currentPath.startsWith('/reference/');
-const isInstallPage = currentPath.startsWith('/guides/install/');
+const isReferencePage = currentPath.startsWith('/reference/');
+const isInstallPage = currentPath.startsWith('/tutorials/install/');
+const isWhyPage = currentPath.startsWith('/why-quaid/');
 
 const navItems = [
 	{
 		label: 'Docs',
 		href: withBase('/'),
-		active: !isArchitecturePage && !isInstallPage,
+		active: !isReferencePage && !isInstallPage && !isWhyPage,
 	},
 	{
-		label: 'Architecture',
-		href: withBase('/reference/architecture/'),
-		active: isArchitecturePage,
+		label: 'Why Quaid',
+		href: withBase('/why-quaid/'),
+		active: isWhyPage,
+	},
+	{
+		label: 'Reference',
+		href: withBase('/reference/cli/'),
+		active: isReferencePage,
 	},
 	{
 		label: 'GitHub',
-		href: 'https://github.com/macro88/gigabrain',
+		href: 'https://github.com/quaid-app/quaid',
 		active: false,
 	},
 	{
 		label: 'Install',
-		href: withBase('/guides/install/'),
+		href: withBase('/tutorials/install/'),
 		active: isInstallPage,
 	},
 ];

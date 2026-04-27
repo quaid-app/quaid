@@ -1,0 +1,90 @@
+---
+title: Embedding models and build channels
+description: Which BGE model the memory uses, why it can't change after init, and how the airgapped and online channels differ.
+guide:
+  eyebrow: Explanation
+  accentBar: true
+---
+
+Quaid runs the embedding model itself, on the CPU you already own. The defaults are tuned for a useful tradeoff between quality and binary size; the online build lets you trade those off at install time.
+
+## The model menu
+
+| Alias | Model ID | Dimensions | Notes |
+| ----- | -------- | :--------: | ----- |
+| `small` (default) | `BAAI/bge-small-en-v1.5` | 384 | Fastest. Embedded in the airgapped binary. |
+| `base` | `BAAI/bge-base-en-v1.5` | 768 | Stronger English recall. Online build only. |
+| `large` | `BAAI/bge-large-en-v1.5` | 1024 | Highest English recall. Online build only. |
+| `m3` | `BAAI/bge-m3` | 1024 | Multilingual. Online build only. |
+
+You can also pass a full Hugging Face model ID as `--model <ORG>/<NAME>` on the online channel; it's resolved at runtime, downloaded, and cached.
+
+## Why BGE
+
+We picked the BGE family because:
+
+- **Quality.** Strong on retrieval benchmarks (BEIR) for the size class.
+- **Open weights.** No license entanglement.
+- **Sane defaults.** `bge-small-en-v1.5` punches above its weight on personal-knowledge corpora.
+
+We use [`candle`](https://github.com/huggingface/candle) for inference — pure Rust, no Python or ONNX runtime. The whole pipeline (tokenizer → model forward pass → pooled embedding) runs inside the binary.
+
+## Two build channels
+
+The same source compiles two binaries, selected by Cargo features:
+
+| Channel | Features | Binary size | Model assets |
+| ------- | -------- | ----------- | ------------ |
+| Airgapped (default) | `embedded-model` | ~180 MB | BGE-small bytes embedded via `include_bytes!` |
+| Online | `bundled,online-model` | ~90 MB | Cached on first semantic use under `~/.quaid/models/` |
+
+```bash
+# Default — airgapped
+cargo build --release
+
+# Online build
+cargo build --release --no-default-features --features bundled,online-model
+```
+
+On the airgapped binary, `--model` and `QUAID_MODEL` are warning-only no-ops: the embedded model is the only one that will ever load. The warning fires loudly enough that it's hard to miss in CI.
+
+## What `init` records
+
+`quaid init` writes the active model into the immutable `quaid_config` table:
+
+| Key | Example | Meaning |
+| --- | ------- | ------- |
+| `model_id` | `BAAI/bge-large-en-v1.5` | The full Hugging Face model ID. |
+| `model_alias` | `large` | The alias the user passed (or default). |
+| `embedding_dim` | `1024` | The vector width — drives which `page_embeddings_vec_<dim>` table is used. |
+| `schema_version` | `6` | The schema generation. |
+
+On every subsequent open, the binary verifies that the requested model matches the recorded one. **A mismatch fails the call before any command runs.** This isn't a UX choice; it's a correctness one — embeddings produced by different models live in different vector spaces and aren't comparable.
+
+## Switching models
+
+You can't change a memory's model in place. The vector space is part of the database identity. To switch:
+
+1. `quaid init ~/memory-large.db --model large` (online build).
+2. `quaid export ~/memory.db ~/memory-export/` (or just import your source markdown directory again).
+3. `quaid import ~/memory-export/ --db ~/memory-large.db`.
+4. Drop `~/memory.db` when you're satisfied.
+
+See [Switch embedding models](/how-to/switch-embedding-model/) for the full recipe.
+
+## When to use which model
+
+- **`small` (default)** — Almost everyone, almost always. Fast, accurate enough for personal-knowledge scale, ships in the airgapped binary.
+- **`base` / `large`** — When you have ≥100K pages and you're noticing recall degradation on paraphrased queries. Costs you binary size and per-query latency.
+- **`m3`** — When your corpus is multilingual or you specifically want the m3 retrieval profile.
+- **A specific HF model ID** — When you've benchmarked something specific to your domain and you want to use it.
+
+We do not recommend swapping models without a measured reason. The defaults are tuned for the median user.
+
+## What about API embeddings?
+
+Out of scope. The whole point of Quaid is that the memory doesn't talk to the network. If you want OpenAI or Voyage embeddings, you're in the wrong tool — but those tools work fine alongside Quaid for other concerns.
+
+## Stale embeddings
+
+When `memory_put` updates a page, the embedding job queue (`embedding_jobs`) re-chunks and re-embeds whatever changed. If you suspect drift — a model upgrade, a chunking-strategy change, an aborted batch — `quaid embed --stale` re-embeds only chunks whose `content_hash` no longer matches; `quaid embed --all` rebuilds everything.

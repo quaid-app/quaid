@@ -1,0 +1,129 @@
+---
+title: Write and maintain pages
+description: The compiled-truth + timeline workflow at the CLI, with safe optimistic-concurrency updates.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+Every page in Quaid has the same shape: frontmatter, then a body split into compiled truth and timeline. This recipe covers the daily workflow — capture, compile, update — and the optimistic-concurrency contract that prevents lost updates.
+
+For the conceptual side, see [Compiled truth + timeline](/explanation/page-model/).
+
+## Create a page from scratch
+
+```bash
+cat <<'MD' | quaid put concepts/local-first --db ~/memory.db
+---
+title: Local-first software
+type: concept
+tags: [architecture, design]
+---
+
+# Local-first software
+
+Software that stores user data on the user's device by default,
+syncs over networks when convenient, and keeps working when not.
+Coined by Ink & Switch, 2019.
+
+---
+
+## Timeline
+
+- 2026-04-25 — Captured definition while drafting Quaid pitch.
+MD
+```
+
+`put` creates the page at version 1. No `--expected-version` is needed because the page didn't exist.
+
+## Update a page safely (OCC)
+
+The safe pattern is **read, edit, write with version**:
+
+```bash
+quaid get concepts/local-first --db ~/memory.db    # note the version in the frontmatter
+# … edit the markdown locally …
+quaid put concepts/local-first --expected-version 1 --db ~/memory.db < edited.md
+```
+
+If the page has been updated by another writer (a watcher reconcile, an agent over MCP, you in another terminal) the call returns `Conflict`. Re-fetch, re-rebase, retry.
+
+## Append a timeline entry without rewriting
+
+```bash
+quaid timeline-add concepts/local-first \
+  --date 2026-05-03 \
+  --summary "Cited by Pedro Franceschi in his RiverAI talk." \
+  --source "https://example.com/talk" \
+  --db ~/memory.db
+```
+
+`timeline-add` is idempotent on `(slug, date, summary_hash)`. Re-running the same call is a no-op; running it twice with different summaries adds two entries. The compiled-truth section is untouched.
+
+## When to compile
+
+Once you have three or four timeline entries that all point in the same direction, compile them up:
+
+```bash
+quaid get concepts/local-first --db ~/memory.db > tmp.md
+# Edit tmp.md — rewrite only the section above the `---`
+quaid put concepts/local-first --expected-version <V> --db ~/memory.db < tmp.md
+```
+
+Don't try to be clever — compile when there's something to compile, leave the page as a timeline otherwise.
+
+## Tag and untag
+
+```bash
+quaid tags concepts/local-first --db ~/memory.db                    # list
+quaid tags concepts/local-first --add design --add architecture    # add
+quaid tags concepts/local-first --remove architecture              # remove
+```
+
+Tags are unique per page; adding an existing tag is a no-op.
+
+## Bulk operations
+
+For batch ingestion, use `quaid import <DIR>` ([Import an Obsidian vault](/how-to/import-obsidian/)). For one-off file additions:
+
+```bash
+quaid ingest path/to/article.md --db ~/memory.db
+quaid ingest path/to/article.md --force --db ~/memory.db    # bypass SHA-256 dedup
+```
+
+`ingest` is idempotent by default — re-running on the same file content is a no-op. `--force` re-processes anyway.
+
+## Delete a page
+
+There is no `quaid delete`. The reasons are deliberate:
+
+- Personal knowledge accumulates; deletions are rare.
+- Quarantine is preferred — it preserves history without surfacing the page.
+
+To quarantine a page (Unix, vault-sync), simply remove the file from the watched vault. The reconciler will quarantine it. To restore, put the file back.
+
+For a non-vault memory, edit `pages.quarantined_at` directly via SQL if you really need to. We recommend resisting the urge.
+
+## Common patterns
+
+| Goal | Command |
+| ---- | ------- |
+| Add a new fact about an existing person | `quaid timeline-add people/alice --date $(date -I) --summary "…"` |
+| Update the compiled summary on the same person | `quaid get people/alice` → edit → `quaid put --expected-version <V>` |
+| Capture a quick journal entry | `quaid put journal/$(date -I) <<< "$(cat)"` |
+| Re-embed a page after editing | `quaid embed people/alice` |
+| See the timeline | `quaid timeline people/alice` |
+
+## What `put` does behind the scenes
+
+A `memory_put` (the underlying primitive) runs:
+
+1. Slug validation.
+2. Collection write-gate check (rejects `restoring` / `needs_full_sync` collections).
+3. OCC version check.
+4. Frontmatter parse, body split, novelty check.
+5. Page upsert + version bump.
+6. FTS5 trigger fires.
+7. Embedding job enqueued for changed chunks.
+
+If any step fails, no partial state is written. SQLite WAL semantics guarantee atomicity.

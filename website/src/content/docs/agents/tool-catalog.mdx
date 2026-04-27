@@ -1,0 +1,178 @@
+---
+title: Tool catalog
+description: All seventeen memory_* tools, annotated with "use when" guidance for agents.
+guide:
+  eyebrow: For agents
+  accentBar: true
+---
+
+This is a curated index over the [MCP tool reference](/reference/mcp/), shaped for agents deciding which tool to call. Each entry has a one-line purpose, the trigger conditions, and the failure modes you'll encounter.
+
+For the exact parameter schemas, follow the link in each section.
+
+## Reading
+
+### `memory_get`
+
+> Read a page by slug.
+
+**Use when** the user names a page directly, or when you need the canonical content of a slug another tool returned.
+**Failure modes** `NotFound` (slug doesn't exist), `Ambiguity` (multiple collections have it). Resolve ambiguity by qualifying the slug.
+
+→ [reference](/reference/mcp/#memory_get)
+
+### `memory_search`
+
+> FTS5 keyword search.
+
+**Use when** you have exact tokens. Faster than `memory_query`. The right call when the user uses a proper noun, a code identifier, or a quoted phrase.
+**Failure modes** none specific; an empty result set is not an error.
+
+→ [reference](/reference/mcp/#memory_search)
+
+### `memory_query`
+
+> Hybrid semantic + FTS5 query.
+
+**Use when** the user asks a natural-language question, when paraphrase tolerance matters, or when the right page might be worded differently from the query.
+**Pass `depth: "auto"`** when you need assembled context to drop into an LLM prompt. Otherwise leave `depth` unset for raw ranked results.
+
+→ [reference](/reference/mcp/#memory_query)
+
+### `memory_list`
+
+> List pages with filters.
+
+**Use when** you want everything of a type (`page_type: "person"`), everything in a wing (`wing: "companies"`), or a sample of an attached collection.
+**Failure modes** none.
+
+→ [reference](/reference/mcp/#memory_list)
+
+### `memory_timeline`
+
+> Show timeline entries for a page.
+
+**Use when** you need history (when did X happen?), evidence for an assertion, or to understand how the compiled truth was synthesized.
+
+→ [reference](/reference/mcp/#memory_timeline)
+
+### `memory_backlinks`
+
+> List inbound links to a page.
+
+**Use when** you need to know who references this page — context, authority, or co-mentions.
+
+→ [reference](/reference/mcp/#memory_backlinks)
+
+### `memory_graph`
+
+> N-hop neighbourhood graph.
+
+**Use when** the user asks "who's connected to X?" or you want to find pages two hops away that you wouldn't otherwise retrieve. Default `depth: 2`. Set `temporal: "all"` to include closed intervals.
+
+→ [reference](/reference/mcp/#memory_graph)
+
+## Writing
+
+### `memory_put`
+
+> Create or update a page.
+
+**Use when** you have material to commit. Always **read first** if updating; pass `expected_version` to avoid lost updates.
+**Failure modes** `Conflict` (OCC mismatch — re-fetch and rebase), `CollectionReadOnlyError`, `CollectionRestoringError`, `InvalidParams` for slug or content validation.
+
+→ [reference](/reference/mcp/#memory_put)
+
+### `memory_link`
+
+> Create a typed temporal link.
+
+**Use when** you've found or established a relationship between two pages. Use `valid_from` and `valid_until` whenever the relationship has a time bound — this is what makes graph traversal time-aware.
+**Failure modes** `NotFound` (one endpoint doesn't exist), collection write-gates.
+
+→ [reference](/reference/mcp/#memory_link)
+
+### `memory_link_close`
+
+> Close a temporal link interval.
+
+**Use when** a relationship ends (someone left a company, a project closed). Prefer this over removing the link — closed intervals are still queryable history.
+
+→ [reference](/reference/mcp/#memory_link_close)
+
+### `memory_tags`
+
+> List, add, remove tags.
+
+**Use when** you want to mark a page for later retrieval by category. `add` and `remove` are repeatable arrays; an empty call (no `add`/`remove`) lists current tags.
+
+→ [reference](/reference/mcp/#memory_tags)
+
+### `memory_raw`
+
+> Store raw structured data (API responses, JSON).
+
+**Use when** running an `enrich` workflow — store the upstream API's response intact, then extract facts into compiled truth and assertions in a separate write. One row per `(slug, source)` unless `overwrite: true`.
+
+→ [reference](/reference/mcp/#memory_raw)
+
+## Intelligence
+
+### `memory_check`
+
+> Run contradiction detection.
+
+**Use when** you've just written new material that may conflict with existing assertions, or as a periodic maintenance pass. Pass `slug` to check one page; omit to scan globally.
+
+→ [reference](/reference/mcp/#memory_check)
+
+### `memory_gap`
+
+> Log a knowledge gap (privacy-safe).
+
+**Use when** `memory_query` returns weak results, or when the user asks something the memory demonstrably cannot answer. By default stores **only** the SHA-256 hash. See [Sensitivity contract](/agents/sensitivity-contract/) before escalating.
+
+→ [reference](/reference/mcp/#memory_gap)
+
+### `memory_gaps`
+
+> List knowledge gaps.
+
+**Use when** triaging the user's open questions, or as the work queue for a `research` skill. `resolved: false` (default) returns unresolved gaps only.
+
+→ [reference](/reference/mcp/#memory_gaps)
+
+## Stats and collections
+
+### `memory_stats`
+
+> Memory statistics.
+
+**Use when** sizing the memory (page count, embeddings count, gaps), confirming the active embedding model, or sanity-checking after a major operation.
+
+→ [reference](/reference/mcp/#memory_stats)
+
+### `memory_collections`
+
+> List collection status.
+
+**Use when** deciding whether to qualify slugs, when investigating a write that returned `CollectionRestoringError`, or when reporting status to the user.
+
+→ [reference](/reference/mcp/#memory_collections)
+
+## Decision flowchart
+
+A rough decision tree for "which tool should I call first?":
+
+```text
+User intent → tool
+
+"Find a thing"          → memory_search (exact) | memory_query (semantic)
+"Know about X"          → memory_get (if slug known) | memory_query
+"What's connected"      → memory_graph | memory_backlinks
+"What changed"          → memory_timeline | memory_check
+"Capture this"          → memory_put (always after a memory_get for updates)
+"Note a relationship"   → memory_link
+"I can't find Y"        → memory_gap (then memory_gaps to confirm logged)
+"How big / what model"  → memory_stats
+```

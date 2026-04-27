@@ -1,0 +1,70 @@
+---
+title: Import an Obsidian vault
+description: Bulk-import a markdown directory and (optionally) keep it live-synced.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+You have an existing Obsidian vault (or any directory of markdown files). This recipe gets it into a memory in one shot, and — on Unix — keeps it live-synced as you edit.
+
+## One-shot import
+
+```bash
+quaid init ~/memory.db
+quaid import ~/Documents/Obsidian --db ~/memory.db
+```
+
+`import` walks the directory, infers `type` from a PARA-style folder layout (`projects/`, `areas/`, `resources/`, `archives/`) when frontmatter doesn't declare it, and writes one page per `.md` file. SHA-256 idempotency means re-running on the same content is a no-op.
+
+## Validate without writing
+
+```bash
+quaid import ~/Documents/Obsidian --validate-only --db ~/memory.db
+```
+
+Prints what *would* be written, with parse errors and frontmatter warnings, but doesn't touch the database. Useful as a sanity check on a large vault before committing.
+
+## Live-sync with vault watcher (Unix)
+
+Attach the vault as a **collection** so the watcher follows your edits:
+
+```bash
+quaid collection add notes ~/Documents/Obsidian --writable
+quaid serve   # the watcher runs inside `serve`
+```
+
+While `serve` is running, the file watcher debounces edits (`QUAID_WATCH_DEBOUNCE_MS`, default 1500 ms) and reconciles them against `file_state`. Pages added, modified, or deleted on disk are reflected in the memory without re-running `import`.
+
+See [Manage collections](/how-to/collections/) for the full vault-sync surface.
+
+## Frontmatter conventions
+
+`import` respects your existing frontmatter. Recognized fields:
+
+- `title` — required (falls back to first H1, then filename).
+- `type` — required (or inferable from path).
+- `tags`, `summary`, `links` — preserved.
+
+Unknown fields are stored verbatim in `pages.frontmatter` and round-tripped on export.
+
+## What happens to wiki links
+
+`[[other-page]]` links inside the body are parsed during import into `links` rows with `source_kind = 'wiki_link'`. They show up in `memory_backlinks` and the graph traversal as soon as the import completes.
+
+## When to re-import
+
+- **You added new files**: re-run `import`. SHA-256 dedup keeps unchanged pages untouched.
+- **You moved files**: re-run `import` with `--validate-only` first. Moved pages may need explicit slug remapping.
+- **You're using vault-sync**: don't re-import; the watcher handles it.
+
+## Export back out
+
+If you ever want to leave (or migrate to a new model — see [Switch embedding models](/how-to/switch-embedding-model/)):
+
+```bash
+quaid export ~/Documents/Obsidian-export --db ~/memory.db
+quaid export ~/Documents/Obsidian-export --raw --db ~/memory.db   # byte-exact
+```
+
+`--raw` writes the original ingested bytes for every page (preserves frontmatter ordering and whitespace). Without it, the export is the canonicalized form.

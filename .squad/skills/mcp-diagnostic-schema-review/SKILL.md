@@ -30,3 +30,22 @@ Use this when a tool exposes state like `integrity_blocked`, `restore_in_progres
 - Don’t infer terminal state from a reason string alone when the contract requires a companion timestamp or age threshold.
 - Don’t “helpfully” surface deferred semantics just because the backing column already contains them.
 - For timeout-based states, test both sides of the threshold so reviewers can see the default/configured window is real.
+
+## Docs schema-drift pattern (added 2026-04-25)
+
+When documenting a new MCP tool response shape:
+
+1. **Always verify against the struct**, not the design doc or PR description.
+   - `grep -n "pub struct.*View" src/` — find the serialized view struct.
+   - Read every `pub` field and its type. Cross-reference with the JSON example in docs.
+
+2. **Check state enum arms**, not just the states listed in the design.
+   - `grep -n "CollectionState\|as_str" src/core/vault_sync.rs` to find all enum arms.
+   - Design may say `"needs_sync"` but code says `CollectionState::Detached`.
+
+3. **Separate boolean flags from state values.**
+   - `needs_full_sync`, `recovery_in_progress`, `integrity_blocked`, `restore_in_progress` are separate fields — not `state` enum arms.
+
+4. **Note optional fields.** `root_path` is `Option<String>` populated only for `active` collections; docs should reflect `null` in other cases.
+
+5. **Commit the JSON example as a contract.** Once shipped, MCP clients will codegen against it. A complete, accurate example beats a "representative" sketch with placeholder fields.

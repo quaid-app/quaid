@@ -12,16 +12,16 @@
 - [ ] 2.4 Remove the warning `eprintln!` from the `_` catch-all arm; arbitrary HF IDs are accepted silently
 - [ ] 2.5 Ensure full HF IDs (e.g. `BAAI/bge-base-en-v1.5`) still normalise to their alias equivalents
 
-## 3. Add `gbrain model list` command
+## 3. Add `quaid model list` command
 
 - [ ] 3.1 Create `src/commands/model.rs` with a `KNOWN_MODELS` const slice (alias, model_id, dim, size_mb, notes)
-- [ ] 3.2 Implement plain-text table output for `gbrain model list`
+- [ ] 3.2 Implement plain-text table output for `quaid model list`
 - [ ] 3.3 Implement `--json` flag outputting a JSON array
 - [ ] 3.4 Wire `model` subcommand into `src/commands/mod.rs` and `src/main.rs`
 
 ## 4. Update help text and docs
 
-- [ ] 4.1 Update `--model` flag description in all commands to mention `gbrain model list`
+- [ ] 4.1 Update `--model` flag description in all commands to mention `quaid model list`
 - [ ] 4.2 Update `CLAUDE.md` alias table: add `medium`, `max`; remove SHA/revision references
 - [ ] 4.3 Update `AGENTS.md` if it references model aliases or revision pinning
 

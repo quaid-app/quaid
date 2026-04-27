@@ -1,5 +1,5 @@
 ---
-title: GigaBrain - Personal Knowledge Brain
+title: Quaid - Personal AI Memory
 type: project
 created: 2026-04-06
 updated: 2026-04-13
@@ -21,20 +21,20 @@ sources:
   - Rowboat knowledge graph insight (2026-04-09)
 ---
 
-# GigaBrain - Personal Knowledge Brain
+# Quaid - Personal AI Memory
 
-> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
+> Open-source personal AI memory. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-Inspired by Garry Tan's GBrain work, with this spec adapting similar goals to a local-first Rust + SQLite architecture intended for portable, offline use.
+Inspired by Garry Tan's compiled-knowledge model work, with this spec adapting similar goals to a local-first Rust + SQLite architecture intended for portable, offline use.
 
 - **Status:** Spec complete v4 — ready to build core (see [Phased Delivery](#phased-delivery))
-- **Repo (planned):** GitHub.com/[owner]/gbrain
+- **Repo (planned):** GitHub.com/[owner]/quaid
 - **License (planned):** MIT
-- **Origin:** Inspired by Garry Tan's GBrain spec (2026-04-05), then extended with architecture improvements (2026-04-06) and memory research integration (2026-04-08)
+- **Origin:** Inspired by Garry Tan's compiled-knowledge spec (2026-04-05), then extended with architecture improvements (2026-04-06) and memory research integration (2026-04-08)
 - **v1 differentiator over Garry's spec:** Local embeddings, Rust binary instead of TypeScript/Bun, true zero-dependency single binary
 - **v2 additions (Apr 2026 research):** Set-union hybrid search, palace-style hierarchical filtering, progressive retrieval, selective ingestion, temporal knowledge graph, contradiction detection, four-tier memory consolidation. Techniques sourced from MemPalace (96.6% R@5 LongMemEval), OMNIMEM (+411% F1), agentmemory (92% token reduction).
 - **v3 additions (Architecture Review):** Exact-Match Short-Circuit (SMS) search, Temporal Sub-chunking for timelines, Assertions table for heuristic contradiction detection, strict Optimistic Concurrency on MCP writes, true zero-dependency static linking via `candle` (replacing `fastembed`/ONNX).
-- **v4 additions (Community Research + Garry v0.8.0):** Knowledge gap detection (`knowledge_gaps` table + `brain_gap` MCP tool), graph neighborhood traversal (`brain_graph`), `original` page type for user's own thinking, standardised source attribution format with authority hierarchy, filing disambiguation rules, richer person templates, new skills (upgrade, alerts, research), and PGLite convergence validation. Informed by community prototypes, public discussion, and Garry Tan's v0.8.0 GBrain skillpack analysis.
+- **v4 additions (Community Research + Garry v0.8.0):** Knowledge gap detection (`knowledge_gaps` table + `memory_gap` MCP tool), graph neighborhood traversal (`memory_graph`), `original` page type for user's own thinking, standardised source attribution format with authority hierarchy, filing disambiguation rules, richer person templates, new skills (upgrade, alerts, research), and PGLite convergence validation. Informed by community prototypes, public discussion, and Garry Tan's v0.8.0 skillpack analysis.
 
 ---
 
@@ -46,7 +46,7 @@ Inspired by Garry Tan's GBrain work, with this spec adapting similar goals to a 
 4. [Technology Stack](#technology-stack) *(v3: candle replaces fastembed)*
 5. [Database Schema](#database-schema) *(v4: + knowledge_gaps table, original page type)*
 6. [CLI Reference](#cli-reference) *(v4: + graph, gaps commands)*
-7. [MCP Server](#mcp-server) *(v4: + brain_graph, brain_gap, brain_gaps)*
+7. [MCP Server](#mcp-server) *(v4: + memory_graph, memory_gap, memory_gaps)*
 8. [Hybrid Search](#hybrid-search) *(v3: SMS short-circuit + set-union + palace filtering)*
 9. [Progressive Retrieval](#progressive-retrieval) *(v2: token-budget-gated expansion)*
 10. [Ingest Pipeline](#ingest-pipeline) *(v3: assertions + sub-chunking + idempotency)*
@@ -98,7 +98,7 @@ Additionally: every existing knowledge-base tool (Obsidian, Notion, RAG framewor
 
 A single Rust CLI distributed in two BGE-small channels — airgapped embedded (~180MB) or online (~90MB) — wrapping:
 
-- **SQLite** with WAL mode - single logical database (`brain.db` + WAL sidecars while live; `gbrain compact` checkpoints to true single file for transport/backup)
+- **SQLite** with WAL mode - single logical database (`memory.db` + WAL sidecars while live; `quaid compact` checkpoints to true single file for transport/backup)
 - **FTS5** - full-text search, built into SQLite
 - **sqlite-vec** - vector similarity search as a SQLite extension, statically linked
 - **candle + BGE-small-en-v1.5** - pure-Rust ML framework running a local embedding model, no ONNX runtime dependencies
@@ -123,14 +123,14 @@ One `cargo build --release --target x86_64-unknown-linux-musl`. One truly static
 ║                   │                            │             ║
 ║   ┌───────────────▼──────────┐  ┌─────────────▼──────────┐ ║
 ║   │      MCP Server          │  │         CLI             │ ║
-║   │   (stdio transport)      │  │    bin/gbrain           │ ║
-║   │    gbrain serve          │  │  single Rust binary     │ ║
+║   │   (stdio transport)      │  │    bin/quaid           │ ║
+║   │    quaid serve          │  │  single Rust binary     │ ║
 ║   └───────────────┬──────────┘  └─────────────┬──────────┘ ║
 ║                   │                            │             ║
 ║                   └──────────────┬─────────────┘            ║
 ║                                  │                           ║
 ║              ┌───────────────────▼──────────────┐           ║
-║              │            gbrain-core            │           ║
+║              │            quaid-core            │           ║
 ║              │              (Rust)               │           ║
 ║              │                                   │           ║
 ║              │  ┌──────────────────────────────┐ │           ║
@@ -151,7 +151,7 @@ One `cargo build --release --target x86_64-unknown-linux-musl`. One truly static
 ║                                  │                           ║
 ║              ┌───────────────────▼──────────────┐           ║
 ║              │           SQLite DB               │           ║
-║              │           brain.db                │           ║
+║              │           memory.db                │           ║
 ║              │                                   │           ║
 ║              │  ┌──────────────────────────────┐ │           ║
 ║              │  │  pages                        │ │           ║
@@ -185,7 +185,7 @@ One `cargo build --release --target x86_64-unknown-linux-musl`. One truly static
 
 ### Core Philosophy
 
-**Thin harness, fat skills.** The binary is plumbing. The intelligence lives in SKILL.md files. Claude Code, OpenClaw, or any agent reads SKILL.md at session start and knows every workflow, heuristic, and edge case without that logic being compiled into the binary. Default skills are embedded in the binary via `include_str!()` and extracted to `~/.gbrain/skills/` on first run. External skill files in the working directory override embedded defaults. `gbrain skills doctor` shows active resolution order and content hashes.
+**Thin harness, fat skills.** The binary is plumbing. The intelligence lives in SKILL.md files. Claude Code, OpenClaw, or any agent reads SKILL.md at session start and knows every workflow, heuristic, and edge case without that logic being compiled into the binary. Default skills are embedded in the binary via `include_str!()` and extracted to `~/.quaid/skills/` on first run. External skill files in the working directory override embedded defaults. `quaid skills doctor` shows active resolution order and content hashes.
 
 **Above the line / Below the line.** Every knowledge page has two zones:
 - **compiled_truth** - Always current. Rewritten when new info arrives. The intelligence assessment. The "what we know now."
@@ -193,7 +193,7 @@ One `cargo build --release --target x86_64-unknown-linux-musl`. One truly static
 
 The horizontal rule (`---`) is the boundary. Reconstructed on export.
 
-**Single logical database, total ownership.** `brain.db` is the database. During operation, SQLite WAL mode creates `-wal` and `-shm` sidecars for write performance. Run `gbrain compact` to checkpoint back to a true single file for transport. The practical artifact is: binary + DB + skill pack (embedded defaults, optional overrides). No connection strings. No Docker. No managed database. No API keys required at runtime.
+**Single logical database, total ownership.** `memory.db` is the database. During operation, SQLite WAL mode creates `-wal` and `-shm` sidecars for write performance. Run `quaid compact` to checkpoint back to a true single file for transport. The practical artifact is: binary + DB + skill pack (embedded defaults, optional overrides). No connection strings. No Docker. No managed database. No API keys required at runtime.
 
 ---
 
@@ -211,9 +211,9 @@ The horizontal rule (`---`) is the boundary. Reconstructed on export.
 | Markdown | **pulldown-cmark** + **gray-matter** port | Fast CommonMark parser. Frontmatter parsing via custom YAML header extraction. |
 | JSON/YAML | **serde_json** / **serde_yaml** | Standard serialization. |
 
-### Why Rust over TypeScript/Bun (Garry's original stack)
+### Why Rust over TypeScript/Bun (Garry Tan's original stack)
 
-| | Garry's GBrain (TypeScript/Bun) | This spec (Rust) |
+| | Garry Tan's original (TypeScript/Bun) | This spec (Rust) |
 |---|---|---|
 | Binary size | ~10MB (Bun compiled) | ~90MB (includes model weights) |
 | Embeddings | text-embedding-3-small (OpenAI API, costs money, needs internet) | BGE-small-en-v1.5 via candle (local, free, fast, pure Rust) |
@@ -231,8 +231,8 @@ The horizontal rule (`---`) is the boundary. Reconstructed on export.
 ## Database Schema
 
 ```sql
--- brain.db schema
--- GigaBrain v4
+-- memory.db schema
+-- Quaid v4
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -372,7 +372,7 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_lookup ON page_embeddings(model, page_
 -- Surrogate ID is the stable target for link-close operations.
 -- No UNIQUE on (from, to, relationship, valid_from) — multiple intervals with
 -- unknown start dates are allowed. Dedup and non-overlap enforced in app logic.
--- brain_link_close targets by link ID, not by date columns.
+-- memory_link_close targets by link ID, not by date columns.
 CREATE TABLE IF NOT EXISTS links (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     from_page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -553,16 +553,18 @@ CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resol
 
 -- ============================================================
 -- knowledge_gaps: queries the brain couldn't answer well
--- Privacy-safe by default: raw query text is NOT retained
--- unless explicitly approved.  Only query_hash is stored on
--- detection; query_text is populated post-approval.
+-- Current shipped MCP writes stay privacy-safe by default:
+-- `memory_gap` stores `query_hash`, clears caller context, and
+-- creates `internal` rows. Approval/audit columns exist in schema
+-- but are not exposed by the public MCP surface today.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS knowledge_gaps (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    query_hash       TEXT    NOT NULL,   -- SHA-256 of original query, always stored
-    query_text       TEXT    DEFAULT NULL,  -- raw text retained only after approval
+    page_id          INTEGER DEFAULT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    query_hash       TEXT    NOT NULL,
+    query_text       TEXT    DEFAULT NULL,  -- reserved for non-public approval/audit flows
     context          TEXT    NOT NULL DEFAULT '',
-    confidence_score REAL    DEFAULT NULL,
+    confidence_score REAL    DEFAULT NULL,  -- server-side score for auto-logged gaps
     sensitivity      TEXT    NOT NULL DEFAULT 'internal',
     approved_by      TEXT    DEFAULT NULL,
     approved_at      TEXT    DEFAULT NULL,
@@ -571,11 +573,14 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
     resolved_by_slug TEXT    DEFAULT NULL,
     detected_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     CHECK (sensitivity IN ('internal', 'external', 'redacted')),
-    CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+    CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)),
+    CHECK (sensitivity = 'internal' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gaps_query_hash ON knowledge_gaps(query_hash);
+CREATE INDEX IF NOT EXISTS idx_gaps_page ON knowledge_gaps(page_id) WHERE page_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at) WHERE resolved_at IS NULL;
-```
+
 
 ### Schema Notes
 
@@ -584,15 +589,15 @@ CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at) WH
 - **Embeddings:** BGE-small-en-v1.5 produces 384-dimensional float32 vectors. sqlite-vec stores them natively in `vec0` virtual table. 384 floats × 4 bytes = 1,536 bytes per chunk (vs 6,144 bytes for OpenAI's 1536-dim model - 4x smaller)
 - **JSON fields** (`frontmatter`, `data`, `pages_updated`): stored as TEXT, parsed in application layer
 - **Slugs** include directory prefix: `people/pedro-franceschi`, `companies/river-ai`, `deals/river-ai-series-a`
-- **Embedding model registry (single source of truth):** Each model gets its own vec0 table (dimension is baked in). The `embedding_models` table is the ONLY authoritative selector for the active model — a partial unique index (`WHERE active = 1`) enforces that exactly one model is active at any time. The `config` keys `embedding_model` and `embedding_dimensions` are derived from the registry at startup and are read-only aliases. Switching models: register new model with `active=0`, run `gbrain embed --all` to populate its vec table, then in a single transaction flip `active=0` on old and `active=1` on new. Old table kept for rollback. `gbrain validate --embeddings` checks: (a) exactly one active model exists, (b) all chunks reference the active model, (c) all vec_rowids resolve correctly.
+- **Embedding model registry (single source of truth):** Each model gets its own vec0 table (dimension is baked in). The `embedding_models` table is the ONLY authoritative selector for the active model — a partial unique index (`WHERE active = 1`) enforces that exactly one model is active at any time. The `config` keys `embedding_model` and `embedding_dimensions` are derived from the registry at startup and are read-only aliases. Switching models: register new model with `active=0`, run `quaid embed --all` to populate its vec table, then in a single transaction flip `active=0` on old and `active=1` on new. Old table kept for rollback. `quaid validate --embeddings` checks: (a) exactly one active model exists, (b) all chunks reference the active model, (c) all vec_rowids resolve correctly.
 - **Assertions:** A temporal fact table with provenance (`subject, predicate, object, valid_from, valid_until, supersedes_id, asserted_by, source_ref, evidence_text`). Each assertion has a surrogate `id`. Tier 2 rewrites supersede old assertions by setting `valid_until` on the prior row AND pointing `supersedes_id` to it in the new row. Contradiction detection queries only current beliefs (`valid_until IS NULL`). `valid_from` is nullable (NULL = unknown). Dedup enforced in application logic.
 - **Chunk types:** `page_embeddings.chunk_type` tracks whether a chunk is a `truth_section` or `timeline_entry`. Timeline entries are embedded individually for hyper-specific temporal retrieval.
 - **Palace hierarchy (`wing`, `room`):** Auto-derived from slug by default. `people/pedro-franceschi` → wing: `pedro-franceschi`, room: derived from section headers (State, Assessment, etc.). Override via frontmatter `wing:` and `room:` fields. Wings map to MemPalace's concept of entity groupings; rooms map to topic sub-areas within an entity.
 - **Summary:** Extracted from the first blockquote (`> ...`) in `compiled_truth` during `put`/`ingest`. Used by progressive retrieval to serve lightweight results without loading full pages.
-- **Temporal links (`valid_from`, `valid_until`, `relationship`):** Links carry typed relationships and temporal validity windows. `valid_until IS NULL` = currently active. `valid_from` is nullable (NULL = unknown start date). Each link has a surrogate `id` used by `brain_link_close` for unambiguous targeting. Multiple intervals with unknown start dates are allowed — dedup and non-overlap enforced in application logic.
+- **Temporal links (`valid_from`, `valid_until`, `relationship`):** Links carry typed relationships and temporal validity windows. `valid_until IS NULL` = currently active. `valid_from` is nullable (NULL = unknown start date). Each link has a surrogate `id` used by `memory_link_close` for unambiguous targeting. Multiple intervals with unknown start dates are allowed — dedup and non-overlap enforced in application logic.
 - **Freshness timestamps:** `updated_at` bumped on any page-scoped mutation. `truth_updated_at` bumped only when `compiled_truth` changes (Tiers 2-4). `timeline_updated_at` bumped only when timeline content or `timeline_entries` change (Tier 1). Staleness = `timeline_updated_at` > `truth_updated_at` by 30+ days.
-- **Contradictions:** Detected by `gbrain check` (CLI) and `brain_check` (MCP). Stored with `resolved_at` for tracking. Unresolved contradictions surface in briefings and maintenance reports.
-- **Knowledge gaps:** Logged by `brain_gap` (MCP) when `brain_query` returns no results or only low-confidence matches (below configurable threshold). **Privacy-safe by default:** only a SHA-256 `query_hash` is stored at detection time; raw `query_text` is `NULL` until explicitly approved. `confidence_score` stores the highest search score from the triggering query. **Sensitivity is always `internal` at creation — `brain_gap` does not accept a sensitivity parameter.** Escalation to `redacted` or `external` requires a separate `brain_gap_approve` call that records `approved_by`, `approved_at`, and optionally populates `query_text` and `redacted_query` (the anonymised version for `redacted` mode). A CHECK constraint enforces that `query_text` can only be non-NULL when an approval audit trail exists. The research skill (`skills/research/SKILL.md`) refuses external calls for any gap without an approval record. When a gap is resolved via ingest, `resolved_at` and `resolved_by_slug` are set. Unresolved gaps surface in briefings alongside contradictions.
+- **Contradictions:** Detected by `quaid check` (CLI) and `memory_check` (MCP). Stored with `resolved_at` for tracking. Unresolved contradictions surface in briefings and maintenance reports.
+- **Knowledge gaps:** Logged by `memory_gap` and auto-logged by `memory_query` on weak results. The shipped public surface stores a SHA-256 `query_hash`, clears caller-provided context before persistence, keeps `query_text` unset, and creates `internal` rows only. The schema already includes approval/audit columns plus resolution fields, but no public gap approval or gap-resolution MCP tool is shipped today. Unresolved gaps still surface in briefings alongside contradictions.
 
 ---
 
@@ -602,16 +607,16 @@ The CLI is a thin dispatcher. Each command maps to a handler in `src/commands/`.
 
 ```
 USAGE:
-    gbrain [OPTIONS] <COMMAND>
+    quaid [OPTIONS] <COMMAND>
 
 OPTIONS:
-    --db <PATH>      Path to brain.db [env: GBRAIN_DB] [default: ./brain.db]
+    --db <PATH>      Path to memory.db [env: QUAID_DB] [default: ~/.quaid/memory.db]
     --json           Output JSON instead of human-readable text
     --version        Print version
     --tools-json     Print MCP tool discovery JSON
 
 COMMANDS:
-    init [PATH]                     Create a new brain.db
+    init [PATH]                     Create a new memory.db
     get <SLUG>                      Read a page by slug
     put <SLUG> [FILE]               Write/update a page (stdin or file)
     search <QUERY>                  FTS5 full-text search
@@ -673,7 +678,7 @@ COMMANDS:
     serve                           Start MCP server (stdio transport)
     call <TOOL> <JSON>              Raw tool call (GL pattern)
     pipe                            JSONL pipe mode (one JSON object per line)
-    validate                        Run integrity checks on brain.db
+    validate                        Run integrity checks on memory.db
       --links                       Check link interval non-overlap, temporal ordering
       --assertions                  Check assertion dedup, supersession chains
       --embeddings                  Check all chunks have valid vec_rowids in active model
@@ -683,27 +688,29 @@ COMMANDS:
     version                         Version info
 ```
 
+`quaid call` uses `src/commands/call.rs`'s fixed dispatcher. It routes all 17 shipped MCP tools, including `memory_collections`.
+
 ### DB path resolution
 
-1. `--db /path/to/brain.db` flag (highest priority)
-2. `GBRAIN_DB` environment variable
-3. `./brain.db` in current directory (default)
+1. `--db /path/to/memory.db` flag (highest priority)
+2. `QUAID_DB` environment variable
+3. `~/.quaid/memory.db` (default)
 
 ### Output formats
 
 - **Default:** Human-readable markdown/text (Claude-friendly)
 - **`--json`:** JSON for programmatic use
-- **`gbrain pipe`:** JSONL streaming mode
-- **`gbrain --tools-json`:** MCP tool discovery format (compatible with Claude Code tool use)
+- **`quaid pipe`:** JSONL streaming mode
+- **`quaid --tools-json`:** MCP tool discovery format (compatible with Claude Code tool use)
 
 ### Usage examples
 
 ```bash
-# Create a new brain
-$ gbrain init ~/my-brain.db
+# Create a new memory store
+$ quaid init ~/.quaid/memory.db
 
 # Import existing markdown directory
-$ gbrain import /data/brain/ --db ~/brain.db
+$ quaid import /data/brain/ --db ~/.quaid/memory.db
 Importing 7,471 files...
   people:    1,222 pages
   companies:   847 pages
@@ -712,26 +719,26 @@ Importing 7,471 files...
   links: 14,329 cross-references extracted
   raw_data: 892 sidecar files loaded
   timeline_entries: 23,441 entries parsed
-Done. brain.db: 487MB
+Done. memory.db: 487MB
 Generating embeddings (7,471 pages, section strategy)...
   Embedded 22,847 chunks in 3m 14s
-brain.db (with embeddings): 521MB
+memory.db (with embeddings): 521MB
 Validation: 7,471 files → 7,471 pages ✓
 
 # Full-text search
-$ gbrain search "River AI"
+$ quaid search "River AI"
 people/ali-partovi.md    (score: 12.3)  ...River AI board member since 2024...
 companies/river-ai.md    (score: 45.7)  ...River AI is building...
 
 # Semantic query
-$ gbrain query "who knows Jensen Huang?"
+$ quaid query "who knows Jensen Huang?"
 Searching 7,471 pages (FTS5 + vec0, set-union merge)...
 people/ali-partovi.md      — mentioned NVIDIA partnership (score: 0.89)
 people/ilya-sutskever.md   — co-presented at NeurIPS (score: 0.84)
 people/marc-andreessen.md  — board connection via Meta (score: 0.81)
 
 # Read a page
-$ gbrain get people/pedro-franceschi
+$ quaid get people/pedro-franceschi
 ---
 title: Pedro Franceschi
 type: person
@@ -741,10 +748,10 @@ type: person
 > Co-founder and CEO of Brex. YC alum (W17)...
 
 # Write/update a page
-$ cat updated-pedro.md | gbrain put people/pedro-franceschi
+$ cat updated-pedro.md | quaid put people/pedro-franceschi
 
 # Stats
-$ gbrain stats
+$ quaid stats
 Pages: 7,471
   people:    1,222
   companies:   847
@@ -758,11 +765,11 @@ Embeddings: 22,847 chunks (bge-small-en-v1.5)
 DB size: 521MB
 
 # Start MCP server
-$ gbrain serve
-GigaBrain MCP server running (stdio)
+$ quaid serve
+Quaid MCP server running (stdio)
 Model: bge-small-en-v1.5 (384-dim, local)
-DB: /Users/garry/brain.db (521MB, 7471 pages)
-Tools: search, get, put, ingest, link, query, timeline, tags, list, stats
+DB: /Users/garry/.quaid/memory.db (521MB, 7471 pages)
+Tools: 17 `memory_*` tools (core read/write, graph, gaps, collections, raw data)
 ```
 
 ---
@@ -771,16 +778,16 @@ Tools: search, get, put, ingest, link, query, timeline, tags, list, stats
 
 ### Transport
 
-Stdio (standard MCP). The client spawns `gbrain serve` as a subprocess and communicates via stdin/stdout JSON-RPC 2.0.
+Stdio (standard MCP). The client spawns `quaid serve` as a subprocess and communicates via stdin/stdout JSON-RPC 2.0.
 
 ### Claude Code config (`~/.claude/mcp.json`)
 
 ```json
 {
   "mcpServers": {
-    "gbrain": {
-      "command": "gbrain",
-      "args": ["serve", "--db", "/path/to/brain.db"]
+    "quaid": {
+      "command": "quaid",
+      "args": ["serve", "--db", "/path/to/memory.db"]
     }
   }
 }
@@ -790,48 +797,36 @@ Stdio (standard MCP). The client spawns `gbrain serve` as a subprocess and commu
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `brain_search` | FTS5 full-text search | `{ query: string, type?: string, wing?: string, limit?: number }` |
-| `brain_query` | Hybrid search (SMS + set-union + progressive retrieval) | `{ question: string, depth?: "summary"\|"section"\|"full"\|"auto", token_budget?: number, wing?: string, limit?: number }` |
-| `brain_get` | Read a page by slug | `{ slug: string }` |
-| `brain_put` | Write/update a page (auto-extracts summary + palace metadata) | `{ slug: string, content: string, expected_version: number, assertions?: Array<{subject, predicate, object, valid_from?, asserted_by?, source_ref?, evidence_text?}> }` or `{ slug: string, compiled_truth?: string, timeline_append?: string, frontmatter?: object, expected_version: number }` |
-| `brain_ingest` | Ingest a source document — **single transactional mutation** | `{ content: string, source_type: string, source_ref: string, force?: boolean, pages: Array<{slug, content, expected_version, assertions?, links?, timeline_entries?, tags?}> }` |
-| `brain_link` | Create a new link interval (returns link ID) | `{ from: string, to: string, relationship?: string, context?: string, valid_from?: string, page_version: number }` |
-| `brain_links` | List outbound links with IDs | `{ slug: string, temporal?: "current"\|"historical"\|"all" }` |
-| `brain_link_close` | Close an existing link interval by ID | `{ link_id: number, valid_until: string, page_version: number }` |
-| `brain_unlink` | Remove cross-reference entirely | `{ from: string, to: string, relationship?: string, page_version: number }` |
-| `brain_timeline` | Get timeline entries | `{ slug: string, limit?: number }` |
-| `brain_timeline_add` | Add timeline entry | `{ slug: string, date: string, summary: string, source?: string, detail?: string, page_version: number }` |
-| `brain_tags` | List tags for a page | `{ slug: string }` |
-| `brain_tag` | Add/remove tag | `{ slug: string, tag: string, remove?: boolean, page_version: number }` |
-| `brain_list` | List pages with filters | `{ type?: string, tag?: string, wing?: string, limit?: number, sort?: string }` |
-| `brain_backlinks` | Pages linking to a slug (temporal filtering) | `{ slug: string, temporal?: "current"\|"historical"\|"all" }` |
-| `brain_graph` | N-hop neighborhood graph (pages + links as JSON) | `{ slug: string, depth?: number, temporal?: "current"\|"historical"\|"all", limit?: number }` |
-| `brain_check` | Run contradiction detection | `{ slug?: string, type?: "temporal"\|"cross_page"\|"stale", resolve?: string }` |
-| `brain_gap` | Log a knowledge gap (always created as `internal` — no caller override) | `{ query_text: string, context?: string, confidence_score?: number }` |
-| `brain_gap_approve` | Escalate gap sensitivity (audited — records approver + timestamp) | `{ gap_id: number, sensitivity: "redacted"\|"external", approver: string, redacted_query?: string }` |
-| `brain_gaps` | List unresolved knowledge gaps | `{ limit?: number, include_resolved?: boolean }` |
-| `brain_stats` | Brain statistics (includes contradiction + gap counts) | `{}` |
-| `brain_raw` | Read/write raw enrichment data | `{ slug: string, source?: string, data?: object, page_version: number }` |
+| `memory_get` | Read a page by slug | `{ slug: string }` |
+| `memory_put` | Create or update a page | `{ slug: string, content: string, expected_version?: number }` |
+| `memory_query` | Hybrid semantic + FTS5 query | `{ query: string, collection?: string, wing?: string, limit?: number, depth?: "auto" }` |
+| `memory_search` | FTS5 full-text search | `{ query: string, collection?: string, wing?: string, limit?: number }` |
+| `memory_list` | List pages with optional filters | `{ collection?: string, wing?: string, page_type?: string, limit?: number }` |
+| `memory_link` | Create a typed temporal link | `{ from_slug: string, to_slug: string, relationship: string, valid_from?: string, valid_until?: string }` |
+| `memory_link_close` | Close a temporal link by ID | `{ link_id: number, valid_until: string }` |
+| `memory_backlinks` | List inbound links to a page | `{ slug: string, limit?: number, temporal?: "active"|"current"|"all"|"history" }` |
+| `memory_graph` | N-hop neighbourhood graph | `{ slug: string, depth?: number, temporal?: "active"|"current"|"all"|"history" }` |
+| `memory_check` | Run contradiction detection | `{ slug?: string }` |
+| `memory_timeline` | Show timeline entries for a page | `{ slug: string, limit?: number }` |
+| `memory_tags` | List, add, or remove tags for a page | `{ slug: string, add?: string[], remove?: string[] }` |
+| `memory_gap` | Log a knowledge gap (internal only) | `{ query: string, slug?: string, context?: string }` |
+| `memory_gaps` | List knowledge gaps | `{ resolved?: boolean, limit?: number }` |
+| `memory_stats` | Brain statistics | `{}` |
+| `memory_collections` | Read-only collection status rows | `{}` |
+| `memory_raw` | Store raw structured data for a page | `{ slug: string, source: string, data: object, overwrite?: boolean }` |
 
-**Concurrency Model:**
+**Behavior notes:**
 
-- **`brain_put`** requires `expected_version`. Mismatch → MCP Tool Error (conflict). Agent must `brain_get`, merge, retry.
-- **`brain_ingest`** is a single server-side transactional mutation. The agent passes all page updates, links, timeline entries, assertions, and tags in one call. The server wraps everything in a SQLite transaction, checks `expected_version` for each page, and either commits all or rolls back all. This eliminates the window where side tables (links, timeline, tags) can desync from page content.
-- **All page-scoped mutators** (`brain_link`, `brain_unlink`, `brain_timeline_add`, `brain_tag`, `brain_raw`) require `page_version`. The server verifies it matches before mutating and bumps `pages.version` on success. Mismatch → same conflict error as `brain_put`. No write path bypasses the version check.
+- **`memory_put`** is the only public MCP mutator with explicit optimistic concurrency. Create without `expected_version`; updates must supply it and retry on conflict.
+- **`memory_query`** auto-logs low-signal gaps. The CLI `quaid query` can override token budget, but MCP `memory_query` does not accept a per-call `token_budget`; when `depth: "auto"` it uses `config.default_token_budget`.
+- **`memory_tags`** is the combined tag surface: omit `add`/`remove` to list current tags, or provide one/both arrays to mutate.
+- **`memory_gap`** always creates `internal` rows, hashes the query, and clears caller-provided context before persistence. No public approval/escalation or resolve tool is shipped.
+- **`memory_raw`** only accepts JSON objects and refuses to replace an existing `(page, source)` row unless `overwrite: true`.
+- **`memory_collections`** is read-only and returns frozen 13-field collection status rows.
 
-### Resources
+### Resources and prompts
 
-| Resource | URI | Description |
-|----------|-----|-------------|
-| Page | `brain://pages/{slug}` | Full page content as markdown |
-| Index | `brain://index` | All page slugs grouped by type |
-
-### Prompts
-
-| Prompt | Description |
-|--------|-------------|
-| `brain_briefing` | Compile a briefing from current brain state |
-| `brain_ingest_meeting` | Guide for ingesting a meeting transcript |
+Current `src/mcp/server.rs` registers no MCP resources or prompt templates. The shipped server surface is tools-only.
 
 ---
 
@@ -954,7 +949,7 @@ For deeper results, see Progressive Retrieval below.
 
 ### Palace filtering impact
 
-MemPalace's published ablation: base retrieval at 60.9% R@5 → 94.8% with wing+room filtering (+34%). gbrain's palace filter is derived from slug structure rather than a separate palace DB, but the principle is identical: constrain the search space before running expensive similarity queries.
+MemPalace's published ablation: base retrieval at 60.9% R@5 → 94.8% with wing+room filtering (+34%). Quaid's palace filter is derived from slug structure rather than a separate palace DB, but the principle is identical: constrain the search space before running expensive similarity queries.
 
 ### Performance targets
 
@@ -969,7 +964,7 @@ MemPalace's published ablation: base retrieval at 60.9% R@5 → 94.8% with wing+
 
 ## Progressive Retrieval
 
-Token-budget-gated expansion. Instead of returning full pages and hoping the agent handles context management, gbrain controls how much content it serves based on a configurable token budget.
+Token-budget-gated expansion. Instead of returning full pages and hoping the agent handles context management, quaid controls how much content it serves based on a configurable token budget.
 
 ### Why this matters
 
@@ -986,7 +981,7 @@ OMNIMEM's ablation (AutoResearchClaw, Apr 2026): removing progressive retrieval 
 
 ### Token budget
 
-Default: 4000 tokens (configurable in `config` table as `default_token_budget`). Override per-query via the `token_budget` parameter.
+Default: 4000 tokens (configurable in `config` table as `default_token_budget`). The CLI can override this with `--token-budget`; MCP `memory_query` uses the configured value when `depth: "auto"`.
 
 ### Algorithm (auto mode)
 
@@ -1004,14 +999,15 @@ Default: 4000 tokens (configurable in `config` table as `default_token_budget`).
 
 ### MCP integration
 
-The `brain_query` tool gains `depth` and `token_budget` parameters:
+`memory_query` currently exposes `query`, `collection`, `wing`, `limit`, and `depth`. Only `depth: "auto"` changes server behaviour; token budget stays server-configured in MCP.
 
 ```json
 {
-  "question": "who knows Jensen Huang?",
-  "token_budget": 4000,
+  "query": "who knows Jensen Huang?",
   "depth": "auto",
-  "wing": null
+  "collection": null,
+  "wing": null,
+  "limit": 10
 }
 ```
 
@@ -1056,7 +1052,7 @@ Heuristic contradiction detection now extracts agent assertions from **structure
 - Structured frontmatter fields: `is_a`, `works_at`, and `founded`.
 
 General body prose is **not** scanned for contradictions. If a page has neither one of the
-supported frontmatter fields nor a `## Assertions` section, `gbrain check` extracts zero agent
+supported frontmatter fields nor a `## Assertions` section, `quaid check` extracts zero agent
 assertions for that page.
 
 Objects shorter than 6 characters are discarded to avoid noise like `is_a: it`.
@@ -1083,7 +1079,7 @@ Alice founded Brain Co.
 Source document (meeting notes, article, transcript)
             │
             ▼
-    gbrain ingest <file> --type meeting
+    quaid ingest <file> --type meeting
             │
             ├─→ Begin ingest transaction
             │     - Compute stable ingest key: SHA-256(source file content)
@@ -1098,7 +1094,7 @@ Source document (meeting notes, article, transcript)
             │     - Identify: participants, companies, topics, decisions, action items
             │
             ├─→ For each entity mentioned (four-tier consolidation):
-            │     ├─ gbrain get <slug>   → exists? update using tier rules:
+            │     ├─ quaid get <slug>   → exists? update using tier rules:
             │     │     Tier 1: Append raw evidence to timeline (ALWAYS — never gated by novelty)
             │     │     Tier 2: Novelty check THEN update State section facts if changed
             │     │       ├─ Jaccard similarity vs existing compiled_truth
@@ -1108,7 +1104,7 @@ Source document (meeting notes, article, transcript)
             │     │       └─ Below thresholds → proceed with Tiers 2-4
             │     │     Tier 3: Re-evaluate Assessment concepts if facts shifted
             │     │     Tier 4: Rewrite executive summary blockquote if picture changed
-            │     └─ doesn't exist?     → gbrain put <slug> (create from template)
+            │     └─ doesn't exist?     → quaid put <slug> (create from template)
             │     Note: page writes use optimistic concurrency — each page has a version
             │     counter; the update fails if the version changed since read (concurrent
             │     agent detected). The caller retries from the read step.
@@ -1120,21 +1116,21 @@ Source document (meeting notes, article, transcript)
             │     room: from section headers or frontmatter override
             │
             ├─→ Extract and create links (with temporal metadata)
-            │     gbrain link <from> <to> --relationship "works_at" --valid-from "2024-01-15" --context "sentence..."
+            │     quaid link <from> <to> --relationship "works_at" --valid-from "2024-01-15" --context "sentence..."
             │
             ├─→ Add structured timeline entries
-            │     gbrain timeline-add <slug> --date YYYY-MM-DD --summary "..."
+            │     quaid timeline-add <slug> --date YYYY-MM-DD --summary "..."
             │     Dedupe: (page_id, date, summary_hash) UNIQUE constraint prevents replay duplicates
             │
             ├─→ Update embeddings for modified pages
-            │     gbrain embed <slug>   (or --stale to batch)
+            │     quaid embed <slug>   (or --stale to batch)
             │
             ├─→ Auto-log to ingest_log table (keyed by ingest SHA)
             │
             └─→ Commit transaction
 ```
 
-The `gbrain ingest` command receives the raw source file. The actual intelligence — how to parse a meeting transcript, which entities get pages, how to rewrite compiled_truth, when to append vs rewrite — lives in `skills/ingest/SKILL.md`. The binary handles novelty checking (Jaccard + cosine, scoped to Tiers 2-4 only — Tier 1 evidence is never suppressed) and palace metadata derivation. Everything else is skill-driven.
+The `quaid ingest` command receives the raw source file. The actual intelligence — how to parse a meeting transcript, which entities get pages, how to rewrite compiled_truth, when to append vs rewrite — lives in `skills/ingest/SKILL.md`. The binary handles novelty checking (Jaccard + cosine, scoped to Tiers 2-4 only — Tier 1 evidence is never suppressed) and palace metadata derivation. Everything else is skill-driven.
 
 ### Novelty check implementation
 
@@ -1169,7 +1165,7 @@ Importing an existing markdown brain (7,471 files at `/data/brain/`):
 
 ### Type mapping
 
-`gbrain import` resolves page types in three tiers:
+`quaid import` resolves page types in three tiers:
 
 1. **Frontmatter `type:` wins** when present and non-blank.
 2. **Top-level folder inference** applies when `type:` is absent, blank, or null.
@@ -1262,7 +1258,7 @@ conn.execute("COMMIT", [])?;
 ### Embedding generation (post-import)
 
 ```bash
-$ gbrain embed --all
+$ quaid embed --all
 ```
 
 Chunks `compiled_truth` at `##` header boundaries (section strategy, `chunk_type: 'truth_section'`).
@@ -1279,7 +1275,7 @@ Chunks `timeline` at individual entries — each `- **YYYY-MM-DD**` line becomes
 # Count links vs parsed wiki links — must match
 # Spot-check 10 random pages: export → diff against original
 # Report any discrepancies
-$ gbrain import /data/brain/ --validate-only   # dry-run validation without writing
+$ quaid import /data/brain/ --validate-only   # dry-run validation without writing
 ```
 
 ### Special files
@@ -1346,16 +1342,16 @@ fn export_normalized(page: &Page) -> String {
 
 ```bash
 # Semantic validation (default): normalized fields must match
-$ gbrain export --dir /tmp/brain-export/
-$ gbrain validate --original /data/brain/ --exported /tmp/brain-export/
+$ quaid export --dir /tmp/brain-export/
+$ quaid validate --original /data/brain/ --exported /tmp/brain-export/
 # Checks: same pages, same frontmatter keys/values, same compiled_truth, same timeline entries
 
 # Byte-exact validation: requires --import-id (raw exports are immutable snapshots)
-$ gbrain export --raw --import-id <ID> --dir /tmp/brain-export-raw/
+$ quaid export --raw --import-id <ID> --dir /tmp/brain-export-raw/
 $ diff -r /data/brain/ /tmp/brain-export-raw/   # should be empty
 
 # --raw without --import-id is an error (prevents accidental stale-byte export)
-$ gbrain export --raw --dir /tmp/brain-export-raw/
+$ quaid export --raw --dir /tmp/brain-export-raw/
 # Error: --raw requires --import-id. Use normalized export for current state.
 ```
 
@@ -1374,7 +1370,7 @@ Skills live in `skills/` at the repo root. Each is a standalone SKILL.md that Cl
 
 ```markdown
 ---
-name: gbrain-ingest
+name: quaid-ingest
 description: |
   Ingest meetings, articles, docs, and conversations into the brain.
   Follows the compiled truth + timeline architecture: update existing
@@ -1389,15 +1385,15 @@ description: |
    Identify: participants, companies, topics, decisions, commitments, action items.
 
 2. **For each entity mentioned (four-tier consolidation):**
-   - `gbrain get <slug>` — does a page exist? Note the `version` number.
+   - `quaid get <slug>` — does a page exist? Note the `version` number.
    - **If yes:** Apply tier-by-tier update:
-     - **Tier 1 (Raw Evidence):** Append to timeline. Always. The exact words, dates, sources. Never summarised. → `gbrain timeline-add`
+     - **Tier 1 (Raw Evidence):** Append to timeline. Always. The exact words, dates, sources. Never summarised. → `quaid timeline-add`
      - **Tier 2 (Extracted Facts):** Update State section with structured assertions derived from evidence. Rewrite when facts change. Extract strict factual assertions (roles, statuses, locations) for the `assertions` table. When a fact changes, set `valid_until` on the old assertion before inserting the new one. → e.g., `{subject: "Pedro Franceschi", predicate: "is_ceo_of", object: "Brex", valid_from: "2018-01-01"}`
      - **Tier 3 (Synthesised Concepts):** Re-evaluate Assessment section if underlying facts shifted. Cross-reference patterns across linked pages. → e.g., "Brex's leadership team has been stable since 2024, with Pedro driving the enterprise pivot"
      - **Tier 4 (Narrative Intelligence):** Rewrite executive summary blockquote ONLY if the overall picture changed. This is the one-sentence answer to "what do we know and why does it matter?" → e.g., `> Pedro Franceschi runs Brex. Strong enterprise traction.`
-     - `gbrain put <slug>` with updated content, `expected_version` from step 2, and `assertions` array. If ConflictError, re-read and merge. The system auto-extracts the summary from the blockquote and derives palace metadata.
+     - `quaid put <slug>` with updated content, `expected_version` from step 2, and `assertions` array. If ConflictError, re-read and merge. The system auto-extracts the summary from the blockquote and derives palace metadata.
    - **If no:** Create page using the appropriate template (see templates below).
-     `gbrain put <slug>` with new content and `assertions`.
+     `quaid put <slug>` with new content and `assertions`.
 
 3. **Extract work-context entities.**
    - For each **decision** made: create/update a `decisions/<slug>` page. Link to stakeholders and projects.
@@ -1410,27 +1406,27 @@ description: |
 
 4. **Extract and create links (with temporal metadata).**
    - For every entity-to-entity reference:
-     `gbrain link <from> <to> --relationship "works_at" --valid-from "2024-01-15" --context "..."`.
+     `quaid link <from> <to> --relationship "works_at" --valid-from "2024-01-15" --context "..."`.
    - Links are bidirectional in meaning but stored directionally. Create both if both pages exist.
    - When evidence shows a relationship ended, close the specific interval by its link ID:
-     `gbrain link-close <link_id> --valid-until "2026-03-01"`.
-     The link ID is returned by `brain_link` on creation and by `brain_backlinks` on query.
+     `quaid link-close <link_id> --valid-until "2026-03-01"`.
+     The link ID is returned by `memory_link` on creation and by `memory_backlinks` on query.
      The binary enforces non-overlapping intervals: rejects close if it would create overlap.
 
 5. **Parse timeline entries.**
    - For each datable event in the source:
-     `gbrain timeline-add <slug> --date YYYY-MM-DD --summary "..." --source "meeting/123"`
+     `quaid timeline-add <slug> --date YYYY-MM-DD --summary "..." --source "meeting/123"`
 
 6. **Log the ingest.**
-   - The system auto-logs to ingest_log. Verify with `gbrain stats`.
+   - The system auto-logs to ingest_log. Verify with `quaid stats`.
 
 7. **Refresh embeddings.**
-   - After all puts: `gbrain embed --stale`
+   - After all puts: `quaid embed --stale`
    - This ensures search reflects the new content immediately.
 
 8. **Handle raw data.**
    - If the source includes structured data (API responses, JSON):
-     `gbrain call brain_raw '{"slug":"...","source":"meeting","data":{...}}'`
+     `quaid call memory_raw '{"slug":"...","source":"meeting","data":{...}}'`
 
 ## Entry criteria
 
@@ -1721,7 +1717,7 @@ The language IS the insight — preserve phrasing, metaphors, and framing.]
 
 ```markdown
 ---
-name: gbrain-query
+name: quaid-query
 description: |
   Answer questions from the brain using FTS5 + semantic search + structured queries.
   Synthesize across multiple pages. Cite sources.
@@ -1731,19 +1727,19 @@ description: |
 
 ## Strategy: Four-layer search
 
-1. **Palace-filtered hybrid search** — `gbrain query "<question>" --wing "<entity>"` —
+1. **Palace-filtered hybrid search** — `quaid query "<question>" --wing "<entity>"` —
    the primary search path. Set-union merging with palace pre-filtering.
    Best for: most questions. The wing filter narrows the search space before
    vector + FTS5 run, dramatically improving precision.
 
-2. **FTS5 keyword search** — `gbrain search "<query>"` — fast, exact matches.
+2. **FTS5 keyword search** — `quaid search "<query>"` — fast, exact matches.
    Best for: names, company names, specific terms, known slugs.
 
-3. **Semantic vector search** — `gbrain query "<question>"` (no wing filter) — meaning-based.
+3. **Semantic vector search** — `quaid query "<question>"` (no wing filter) — meaning-based.
    Best for: cross-cutting queries where the entity isn't known upfront.
 
-4. **Structured queries** — `gbrain list --type person --tag yc-alum` +
-   `gbrain backlinks <slug> --temporal current` — relational navigation.
+4. **Structured queries** — `quaid list --type person --tag yc-alum` +
+   `quaid backlinks <slug> --temporal current` — relational navigation.
    Best for: "all YC founders in batch W25", "who currently works at X?"
 
 ## Workflow
@@ -1751,12 +1747,12 @@ description: |
 1. Decompose the question into search strategies.
 2. Identify target wing(s) from entity names in the question.
 3. Run hybrid query with palace filter and progressive retrieval:
-   `gbrain query "<question>" --wing "<entity>" --depth auto --token-budget 4000`
+   `quaid query "<question>" --wing "<entity>" --depth auto --token-budget 4000`
 4. Review summaries first (Tier 4 narrative). Expand to sections/full only if needed.
 5. For temporal questions, check link validity:
-   `gbrain backlinks <slug> --temporal current` vs `--temporal historical`
+   `quaid backlinks <slug> --temporal current` vs `--temporal historical`
 6. Before surfacing, verify with contradiction check:
-   `gbrain check <slug>` — flag any unresolved contradictions in the answer.
+   `quaid check <slug>` — flag any unresolved contradictions in the answer.
 7. Synthesize answer with citations: `[Pedro Franceschi](people/pedro-franceschi)`
 8. If the answer is valuable enough to persist, consider creating a new source page.
 
@@ -1772,7 +1768,7 @@ Suggest enrichment: "Want me to research X and add them?"
 
 ```markdown
 ---
-name: gbrain-maintain
+name: quaid-maintain
 description: |
   Periodic brain maintenance. Find contradictions, stale info, orphan pages,
   missing cross-references. Keep the knowledge graph healthy.
@@ -1782,7 +1778,7 @@ description: |
 
 ## Lint checks (run every few days)
 
-1. **Contradiction detection** — Run `gbrain check --all` to detect:
+1. **Contradiction detection** — Run `quaid check --all` to detect:
    - **Link vs Assertion:** Current assertions (`valid_until IS NULL`) like `(Pedro, is_ceo, Brex)` where the link to `companies/brex` has a `valid_until` in the past. Pure SQL join.
    - **Temporal contradictions:** Page says "left X in 2025" but link to X has no `valid_until`. Compiled_truth dates vs link validity windows.
    - **Cross-page contradictions:** Multiple current assertions (`valid_until IS NULL`) with the same subject+predicate but different objects across pages. Superseded assertions (with `valid_until` set) are excluded — they're history, not contradictions.
@@ -1792,11 +1788,11 @@ description: |
 2. **Stale info** — Pages where `timeline_updated_at` > `truth_updated_at` by 30+ days.
    Compiled truth is stale relative to new evidence. These need Tier 2 consolidation.
 
-3. **Orphan pages** — `gbrain backlinks <slug>` = 0 inbound links.
+3. **Orphan pages** — `quaid backlinks <slug>` = 0 inbound links.
    Either add links from related pages or flag for deletion.
 
 4. **Missing cross-references** — Scan compiled_truth for mentions of known
-   page titles that aren't formally linked. Add via `gbrain link` with relationship type.
+   page titles that aren't formally linked. Add via `quaid link` with relationship type.
 
 5. **Dead links** — For each link, verify both pages still exist.
 
@@ -1812,12 +1808,12 @@ description: |
    Derive from slug structure and section headers.
 
 10. **Embedding freshness** — Pages updated since last embedding:
-    `gbrain embed --stale`
+    `quaid embed --stale`
 
 ## Output
 
 Write maintenance report:
-`gbrain put sources/maintenance-YYYY-MM-DD` with findings and actions taken.
+`quaid put sources/maintenance-YYYY-MM-DD` with findings and actions taken.
 Include: contradictions found/resolved, stale pages rewritten, orphans linked/flagged, temporal links invalidated.
 ```
 
@@ -1827,7 +1823,7 @@ Include: contradictions found/resolved, stale pages rewritten, orphans linked/fl
 
 ```markdown
 ---
-name: gbrain-enrich
+name: quaid-enrich
 description: |
   Enrich person and company pages from external sources.
   Crustdata, Happenstance, Exa, Captain (Pitchbook). Validation rules enforced.
@@ -1852,7 +1848,7 @@ description: |
 3. Validate before writing:
    - Connection count < 20 → likely wrong person. Save raw_data with flag, don't update page.
    - Name mismatch (different last name) → skip.
-4. Store raw: `gbrain call brain_raw '{"slug":"people/name","source":"crustdata","data":{...}}'`
+4. Store raw: `quaid call memory_raw '{"slug":"people/name","source":"crustdata","data":{...}}'`
 5. Distill to page: update compiled_truth with location, title, company, career arc, top skills.
    DO NOT dump full 90-field data into the page.
 
@@ -1870,7 +1866,7 @@ description: |
 
 ```markdown
 ---
-name: gbrain-briefing
+name: quaid-briefing
 description: |
   Compile a daily briefing from brain state plus real-time sources.
   What changed, what's coming, who's waiting, what needs attention.
@@ -1881,13 +1877,13 @@ description: |
 ## Briefing structure
 
 1. **Calendar** — Today's meetings. For each: pull brain pages for participants using progressive retrieval (`--depth summary`).
-2. **Active deals** — `gbrain list --type deal --tag active`
-3. **Commitments due** — `gbrain list --type commitment --tag open` filtered to due within 7 days. Flag overdue.
-4. **Action items** — `gbrain list --type action_item --tag open` sorted by priority + due date.
+2. **Active deals** — `quaid list --type deal --tag active`
+3. **Commitments due** — `quaid list --type commitment --tag open` filtered to due within 7 days. Flag overdue.
+4. **Action items** — `quaid list --type action_item --tag open` sorted by priority + due date.
 5. **What shifted overnight** — Query assertions where `valid_until` was set in the last 24h (superseded facts, shifted commitments, reversed decisions). This is the "overnight shift report."
 6. **Open threads** — Scan pages for time-sensitive Open Threads items.
-7. **Unresolved contradictions** — `gbrain check --all` → surface any unresolved items from the `contradictions` table.
-8. **Recent brain changes** — `gbrain list --sort updated` filtered to last 24h.
+7. **Unresolved contradictions** — `quaid check --all` → surface any unresolved items from the `contradictions` table.
+8. **Recent brain changes** — `quaid list --sort updated` filtered to last 24h.
 9. **People in play** — Person pages updated in last 7 days with score ≥ 3.
 10. **Stale alerts** — Pages flagged by maintain skill (including temporal link issues).
 
@@ -1904,7 +1900,7 @@ Alert-worthy items are handled by the alerts skill, not the briefing.
 
 ```markdown
 ---
-name: gbrain-alerts
+name: quaid-alerts
 description: |
   Interrupt-driven notification thresholds. Defines what warrants an
   immediate push notification vs. waiting for the next scheduled briefing.
@@ -1926,7 +1922,7 @@ description: |
 - New followers or engagement on our posts
 - Non-urgent replies to monitored threads
 - Routine enrichment completions
-- Knowledge gaps detected by `brain_gap`
+- Knowledge gaps detected by `memory_gap`
 - Stale pages flagged by maintain skill
 
 ### Silent log (no notification, recorded in timeline)
@@ -1941,7 +1937,7 @@ description: |
 2. Agent classifies event against the tier definitions above.
 3. **Immediate:** Format for Telegram delivery (short, no markdown tables, action-oriented). Push immediately.
 4. **Next briefing:** Write to `sources/alerts-queue-YYYY-MM-DD` for the briefing skill to pick up.
-5. **Silent:** Write to relevant page timeline via `gbrain timeline-add`. No notification.
+5. **Silent:** Write to relevant page timeline via `quaid timeline-add`. No notification.
 
 ## Customisation
 
@@ -1955,53 +1951,52 @@ The agent should surface its classification reasoning if borderline ("I classifi
 
 ```markdown
 ---
-name: gbrain-research
+name: quaid-research
 description: |
-  Resolve knowledge gaps logged by brain_gap. Run on schedule or on demand.
-  Respects sensitivity classification: internal gaps resolved from existing
-  brain only, redacted gaps anonymised before external queries, external gaps
-  may use web search and enrichment APIs. Default sensitivity is internal.
+  Resolve knowledge gaps logged by memory_gap. Current shipped CLI/MCP
+  surface only creates internal gaps. Resolve them from existing memory
+  first; if external research is needed, escalate outside the public MCP
+  contract rather than assuming a gap-approval tool exists.
 ---
 
 # Research Skill
 
 ## Workflow
 
-1. **Read gap log.** `gbrain gaps` — list unresolved knowledge gaps.
+1. **Read gap log.** `quaid gaps` — list unresolved knowledge gaps.
 
 2. **Prioritise.** Rank by:
    - Age (older gaps first — they've been unresolved longest)
-   - Context (gaps from high-priority queries rank higher)
-   - Frequency (same query_text appearing multiple times = high demand)
+   - Whether the gap is page-bound (`page_id` set) or global
+   - Context only when it comes from internal/system logging; `memory_gap` clears caller-supplied context before persistence
 
-3. **Check sensitivity classification and approval before researching.**
+3. **Treat the public gap surface as internal-only.**
 
-   | Sensitivity | Approval required? | Allowed research methods |
-   |-------------|-------------------|------------------------|
-   | `internal` (default) | No | Search existing brain pages only (`brain_query`, `brain_search`). No network calls. If the brain can't answer it, leave the gap unresolved and note "requires external research — escalate sensitivity via `brain_gap_approve` to proceed." |
-   | `redacted` | Yes (`brain_gap_approve` with `approved_by`, `redacted_query`) | External search permitted using ONLY the `redacted_query` stored in the approval record (entity names, deal terms, dollar amounts stripped). **Never send the original `query_text` externally.** If no `redacted_query` exists in the approval record, refuse and ask for one. |
-   | `external` | Yes (`brain_gap_approve` with `approved_by`) | External search permitted with the original query text. Use only for non-sensitive topics (public companies, open-source projects, general concepts). |
+   Use existing brain data only:
+   - `memory_query` / `quaid query`
+   - `memory_search`
+   - `memory_backlinks`
+   - `memory_graph`
 
-   **Hard rule:** The research skill MUST verify that `approved_by IS NOT NULL AND approved_at IS NOT NULL` before any external call. If the approval record is missing (which shouldn't happen due to the CHECK constraint, but defense in depth), treat as `internal`.
+   If the brain still cannot answer the question, stop and escalate through an out-of-band operator workflow. The shipped public MCP surface has no public gap approval or gap-resolution tool.
 
-4. **Research each gap (per sensitivity rules above).**
-   - `internal`: re-query brain with alternate phrasing, check backlinks, scan related pages
-   - `redacted`/`external`: Web search (Exa, Brave) for the (redacted or original) query text
-   - If entity-related: check enrichment APIs (Crustdata, Happenstance) — `external` only
-   - If topic-related: search for recent articles, papers, threads
-   - Compile findings into a draft page or update to existing page
+4. **Research each gap with internal data only.**
+   - Re-query the brain with alternate phrasing
+   - Check backlinks and neighbourhood graph
+   - Scan nearby pages in the same collection/entity wing
+   - Compile findings into a draft page or update to an existing page
 
-4. **Ingest findings.** Follow `skills/ingest/SKILL.md` — standard four-tier consolidation.
-   - New entity discovered → create page via `gbrain put`
-   - Existing entity enriched → update via `brain_ingest` with `expected_version`
+5. **Write findings back.** Follow `skills/ingest/SKILL.md` — standard four-tier consolidation.
+   - New entity discovered → create page via `quaid put`
+   - Existing entity enriched → update via `quaid put` or `memory_put` with the current optimistic-concurrency flow
    - Topic research → create `concepts/` or `sources/` page
 
-5. **Resolve gap.** After successful ingest:
-   - The system marks the gap resolved with the slug of the page that filled it
-   - If research yields nothing useful, add a note to the gap context and leave unresolved
+6. **Track closure honestly.**
+   - Public CLI/MCP currently exposes `memory_gap` and `memory_gaps` only; gap resolution is not a shipped public tool
+   - If research yields nothing useful, leave the gap unresolved and note the limitation in your worklog
    - Re-check after 7 days (topics evolve, new sources appear)
 
-6. **Report.** Write research summary to `sources/research-YYYY-MM-DD` for audit trail.
+7. **Report.** Write research summary to `sources/research-YYYY-MM-DD` for audit trail.
 
 ## When to run
 
@@ -2023,9 +2018,9 @@ description: |
 
 ```markdown
 ---
-name: gbrain-upgrade
+name: quaid-upgrade
 description: |
-  Agent-guided upgrade path for the gbrain binary and skills.
+  Agent-guided upgrade path for the quaid binary and skills.
   Inspired by Garry Tan's v0.8.0 "just ask your agent to upgrade" pattern.
   The skill file IS the upgrade guide — the binary handles mechanics.
 ---
@@ -2034,13 +2029,13 @@ description: |
 
 ## Pre-upgrade checklist
 
-1. **Check current version:** `gbrain version`
-2. **Record the resolved DB path:** `echo "${GBRAIN_DB:-./brain.db}"` — needed for rollback.
-3. **Stop MCP server if running:** `pgrep -f "gbrain serve" && echo "STOP: kill gbrain serve before upgrading"`
-4. **Backup:** `gbrain compact` then manual backup if desired (the binary creates its own WAL-safe backup during migration)
-5. **Validate current state:** `gbrain validate --all` — fix any issues before upgrading
+1. **Check current version:** `quaid version`
+2. **Record the resolved DB path:** `echo "${QUAID_DB:-~/.quaid/memory.db}"` — needed for rollback.
+3. **Stop MCP server if running:** `pgrep -f "quaid serve" && echo "STOP: kill quaid serve before upgrading"`
+4. **Backup:** `quaid compact` then manual backup if desired (the binary creates its own WAL-safe backup during migration)
+5. **Validate current state:** `quaid validate --all` — fix any issues before upgrading
 6. **Check for new version:** query GitHub releases API for latest version tag
-7. **Record current binary path:** `which gbrain` — needed for rollback
+7. **Record current binary path:** `which quaid` — needed for rollback
 
 ## Upgrade steps
 
@@ -2048,12 +2043,14 @@ description: |
    ```bash
    TARGET_VERSION="v0.2.0"  # always pin an explicit version, never use 'latest' unverified
    PLATFORM="$(uname -s | tr A-Z a-z)-$(uname -m)"
-   STAGING="/tmp/gbrain-${TARGET_VERSION}"
+   CHANNEL="airgapped"  # airgapped (default, ~180MB, offline) or online (~90MB, downloads model on first use)
+   ASSET="quaid-${PLATFORM}-${CHANNEL}"
+   STAGING="/tmp/quaid-${TARGET_VERSION}"
 
    # Download binary and checksum file
-   curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${TARGET_VERSION}/gbrain-${PLATFORM}" \
+   curl -fsSL "https://github.com/[owner]/quaid/releases/download/${TARGET_VERSION}/${ASSET}" \
      -o "${STAGING}"
-   curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${TARGET_VERSION}/gbrain-${PLATFORM}.sha256" \
+   curl -fsSL "https://github.com/[owner]/quaid/releases/download/${TARGET_VERSION}/${ASSET}.sha256" \
      -o "${STAGING}.sha256"
    ```
 
@@ -2066,25 +2063,25 @@ description: |
 
 3. **Preserve the current binary for rollback, then install:**
    ```bash
-   INSTALL_PATH="$(which gbrain)"
+   INSTALL_PATH="$(which quaid)"
    cp "${INSTALL_PATH}" "${INSTALL_PATH}.rollback"
    cp "${STAGING}" "${INSTALL_PATH}" && chmod +x "${INSTALL_PATH}"
    ```
 
-4. **Run migrations:** `gbrain version` — the binary auto-migrates on startup if needed.
-   It creates a WAL-safe backup via `VACUUM INTO` to `brain.db.backup-v{N}` before any schema migration.
+4. **Run migrations:** `quaid version` — the binary auto-migrates on startup if needed.
+   It creates a WAL-safe backup via `VACUUM INTO` to `memory.db.backup-v{N}` before any schema migration.
    Migration does not proceed until backup succeeds.
 
 5. **Validate post-migration:**
-   - `gbrain validate --all` — all integrity checks pass
-   - `gbrain stats` — page counts match pre-upgrade
-   - `gbrain embed --stale` — re-embed any pages affected by model changes
+   - `quaid validate --all` — all integrity checks pass
+   - `quaid stats` — page counts match pre-upgrade
+   - `quaid embed --stale` — re-embed any pages affected by model changes
 
 6. **Update skills:** Pull latest `skills/` from the repo. External skill files
    in the working directory override embedded defaults.
-   `gbrain skills doctor` — verify resolution order and content hashes.
+   `quaid skills doctor` — verify resolution order and content hashes.
 
-7. **Verify round-trip:** `gbrain import --validate-only` if upgrading from a version
+7. **Verify round-trip:** `quaid import --validate-only` if upgrading from a version
    with schema changes. Confirms no data loss.
 
 8. **Clean up:** Remove staging file and rollback binary if everything passed.
@@ -2100,17 +2097,17 @@ description: |
 
 If anything goes wrong:
 
-1. **Stop all clients.** Ensure no `gbrain serve` process is running. Check:
-   `pgrep -f "gbrain serve"` — kill any running MCP servers before restoring.
+1. **Stop all clients.** Ensure no `quaid serve` process is running. Check:
+   `pgrep -f "quaid serve"` — kill any running MCP servers before restoring.
 
 2. **Restore prior binary:**
-   `cp "$(which gbrain).rollback" "$(which gbrain)"`
+   `cp "$(which quaid).rollback" "$(which quaid)"`
 
 3. **Restore pre-migration DB backup (WAL-safe):**
-   The backup file is the resolved DB path — respect `--db`/`GBRAIN_DB` if set.
+   The backup file is the resolved DB path — respect `--db`/`QUAID_DB` if set.
    ```bash
    # Resolve the actual DB path (same logic as the binary uses)
-   DB_PATH="${GBRAIN_DB:-./brain.db}"
+   DB_PATH="${QUAID_DB:-~/.quaid/memory.db}"
 
    # Delete WAL sidecars — they contain post-migration state that would
    # replay into the restored backup and corrupt the rollback.
@@ -2122,17 +2119,18 @@ If anything goes wrong:
    **Critical:** You MUST delete `-wal` and `-shm` before restoring. Without this,
    SQLite will replay the WAL on next open, re-applying the migration you're trying to undo.
 
-4. **Verify:** `gbrain version` — should show the pre-upgrade version.
-   `gbrain validate --all` — confirm DB integrity.
+4. **Verify:** `quaid version` — should show the pre-upgrade version.
+   `quaid validate --all` — confirm DB integrity.
 
 5. Report what failed for debugging.
 
 ## CI release requirements
 
 Every GitHub release MUST publish:
-- Platform binaries: `gbrain-linux-x86_64`, `gbrain-darwin-arm64`, etc.
-- SHA-256 checksums: `gbrain-linux-x86_64.sha256`, `gbrain-darwin-arm64.sha256`, etc.
-- Each `.sha256` file contains the hex digest only (no filename), one line.
+- Platform binaries: `quaid-<platform>-<channel>` where `<platform>` ∈ `{darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64}` and `<channel>` ∈ `{airgapped, online}`.
+- SHA-256 checksums: `quaid-<platform>-<channel>.sha256`.
+- `.github/release-assets.txt` is the canonical manifest consumed by release validation and release-check tests.
+- Each `.sha256` file contains standard `shasum -a 256` output: `<hex-digest>  <filename>`, one line.
 - The release workflow generates checksums in CI, not locally, to prevent tampering.
 ```
 
@@ -2141,7 +2139,7 @@ Every GitHub release MUST publish:
 ## Repository Structure
 
 ```
-gbrain/
+quaid/
 ├── README.md               # Project overview + quick start
 ├── CLAUDE.md               # Claude Code session instructions
 ├── AGENTS.md               # Generic agent session instructions
@@ -2150,9 +2148,14 @@ gbrain/
 ├── Cargo.lock
 │
 ├── bin/                    # Compiled binaries (gitignored, built in CI)
-│   ├── gbrain-darwin-arm64
-│   ├── gbrain-darwin-x86_64
-│   └── gbrain-linux-x86_64
+│   ├── quaid-darwin-arm64-airgapped
+│   ├── quaid-darwin-arm64-online
+│   ├── quaid-darwin-x86_64-airgapped
+│   ├── quaid-darwin-x86_64-online
+│   ├── quaid-linux-aarch64-airgapped
+│   ├── quaid-linux-aarch64-online
+│   ├── quaid-linux-x86_64-airgapped
+│   └── quaid-linux-x86_64-online
 │
 ├── src/
 │   ├── main.rs             # Entry point: arg parsing + command dispatch (clap)
@@ -2238,9 +2241,9 @@ gbrain/
 ### CLAUDE.md (embedded)
 
 ```markdown
-# GigaBrain
+# Quaid
 
-Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One binary.
+Personal AI memory. SQLite + FTS5 + local vector embeddings. One binary.
 
 ## Architecture
 
@@ -2262,13 +2265,13 @@ Skills (skills/) are fat markdown files - all intelligence lives there.
 - `src/core/chunking.rs`   — temporal sub-chunking: truth sections + individual timeline entries
 - `src/core/palace.rs`     — `derive_wing(slug)`, `derive_room(content)`, `classify_intent(query)`
 - `src/core/markdown.rs`   — parse frontmatter, split compiled_truth/timeline, extract_summary, render
-- `src/mcp/server.rs`      — MCP stdio server exposing all tools (including brain_graph, brain_gap, brain_check)
+- `src/mcp/server.rs`      — MCP stdio server exposing all tools (including memory_graph, memory_gap, memory_check)
 
 ## Build
 
 ```bash
 cargo build --release
-# Output: target/release/gbrain (airgapped channel — default)
+# Output: target/release/quaid (airgapped channel — default)
 
 # Cross-compile
 cargo install cross
@@ -2304,12 +2307,12 @@ Read skills/ before doing brain operations. They contain all workflow logic.
 
 ```toml
 [package]
-name = "gbrain"
+name = "quaid"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "gbrain"
+name = "quaid"
 path = "src/main.rs"
 
 [dependencies]
@@ -2402,12 +2405,12 @@ strategy:
         os: ubuntu-latest
 
 # Post-build verification (release gate):
-# - run: file target/${{ matrix.target }}/release/gbrain
-# - run: ldd target/${{ matrix.target }}/release/gbrain 2>&1 | grep -q "not a dynamic" || exit 1  # Linux
-# - run: otool -L target/${{ matrix.target }}/release/gbrain | grep -qv "\.dylib" || true           # macOS (system libs OK)
+# - run: file target/${{ matrix.target }}/release/quaid
+# - run: ldd target/${{ matrix.target }}/release/quaid 2>&1 | grep -q "not a dynamic" || exit 1  # Linux
+# - run: otool -L target/${{ matrix.target }}/release/quaid | grep -qv "\.dylib" || true           # macOS (system libs OK)
 
 # Post-build: generate SHA-256 checksums for integrity verification
-# - run: shasum -a 256 target/${{ matrix.target }}/release/gbrain | awk '{print $1}' > gbrain-${{ matrix.target }}.sha256
+# - run: shasum -a 256 target/${{ matrix.target }}/release/quaid | awk '{print $1}' > quaid-${{ matrix.target }}.sha256
 # Publish both binary and .sha256 file as release assets
 ```
 
@@ -2415,11 +2418,13 @@ Release artifacts published to GitHub Releases on tag push. Each release include
 
 ```bash
 VERSION="v0.1.0"
-PLATFORM="darwin-arm64"
-curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o /tmp/gbrain
-curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o /tmp/gbrain.sha256
-echo "$(cat /tmp/gbrain.sha256)  /tmp/gbrain" | shasum -a 256 --check
-cp /tmp/gbrain /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
+CHANNEL="airgapped"       # airgapped (default, ~180MB) or online (~90MB)
+ASSET="quaid-${PLATFORM}-${CHANNEL}"
+curl -fsSL "https://github.com/[owner]/quaid/releases/download/${VERSION}/${ASSET}" -o /tmp/quaid
+curl -fsSL "https://github.com/[owner]/quaid/releases/download/${VERSION}/${ASSET}.sha256" -o /tmp/quaid.sha256
+echo "$(cat /tmp/quaid.sha256)  /tmp/quaid" | shasum -a 256 --check
+cp /tmp/quaid /usr/local/bin/quaid && chmod +x /usr/local/bin/quaid
 ```
 
 ---
@@ -2432,17 +2437,17 @@ The spec describes the full vision. Build in phases — earn the right to add co
 
 The smallest thing that proves the value proposition:
 
-- `gbrain init`, `get`, `put`, `list`, `stats`
+- `quaid init`, `get`, `put`, `list`, `stats`
 - `pages` table with `version`, split timestamps
 - `knowledge_gaps` table (schema only — tools in Phase 3)
 - `original` page type (in type mapping, template in ingest skill)
-- FTS5 search (`gbrain search`)
-- Candle embeddings + sqlite-vec (`gbrain embed`, `gbrain query`)
+- FTS5 search (`quaid search`)
+- Candle embeddings + sqlite-vec (`quaid embed`, `quaid query`)
 - SMS exact-match short-circuit
 - Basic set-union hybrid search (no palace filtering yet)
-- `gbrain import` / `gbrain export` (normalized only)
-- `gbrain compact` (WAL checkpoint)
-- MCP server with `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
+- `quaid import` / `quaid export` (normalized only)
+- `quaid compact` (WAL checkpoint)
+- MCP server with `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 - Transactional ingest with idempotency
 - Embedded default skills (including source attribution format and filing disambiguation in ingest skill)
 - Round-trip test, corpus-reality tests, static binary verification
@@ -2451,10 +2456,10 @@ The smallest thing that proves the value proposition:
 
 ### Phase 2: Intelligence Layer
 
-- Temporal links (`brain_link`, `brain_link_close`, backlinks with `--temporal`)
-- Graph neighborhood traversal (`brain_graph`, `gbrain graph`)
+- Temporal links (`memory_link`, `memory_link_close`, backlinks with `--temporal`)
+- Graph neighborhood traversal (`memory_graph`, `quaid graph`)
 - Assertions with provenance
-- Contradiction detection (`gbrain check`)
+- Contradiction detection (`quaid check`)
 - Progressive retrieval with token budgets
 - Novelty checking (Tiers 2-4 gating)
 - Work-context entities (decision, commitment, action_item)
@@ -2467,12 +2472,12 @@ The smallest thing that proves the value proposition:
 - Briefing skill with "what shifted" report
 - Alerts skill (interrupt-driven notifications vs scheduled briefings)
 - Research skill (knowledge gap resolution)
-- Knowledge gap detection (`brain_gap`, `brain_gaps` MCP tools, `gbrain gaps` CLI)
+- Knowledge gap detection (`memory_gap`, `memory_gaps` MCP tools, `quaid gaps` CLI)
 - Upgrade skill (agent-guided binary + skill updates)
 - Enrichment skill
 - LongMemEval, LoCoMo, BEIR, Ragas benchmarks
-- `gbrain skills doctor`
-- `gbrain validate --all` integrity checker
+- `quaid skills doctor`
+- `quaid validate --all` integrity checker
 - `--json` output on all commands
 - `pipe` mode
 - CI/CD release pipeline with all gates
@@ -2482,8 +2487,8 @@ The smallest thing that proves the value proposition:
 - **First-class chunks table:** The current `page_embeddings` table serves as both chunk metadata and embedding join table. This is intentionally not split into a separate `chunks` table for v1 — the enriched columns (content_hash, token_count, heading_path) are sufficient. If progressive retrieval, re-embedding, or chunk lifecycle management becomes painful at scale, promote chunks to their own table in a future version. This is a deliberate deferral, not an oversight.
 - **Room-level palace filtering:** Deferred until benchmarks on real corpus prove it helps. Wing-only in v1.
 - **LLM-assisted contradiction detection:** Binary stays dumb. Cross-page semantic reasoning happens via the maintain skill.
-- **WASM compilation:** Rust has strong WASM support. PGLite proves browser portability is viable. If we ever need gbrain in a browser or serverless context, WASM is the path. Not a current priority.
-- **Overnight consolidation cycle:** Garry's DREAMS.md pattern (overnight entity sweep, enrichment, citation fixing) is powerful but is agent configuration, not gbrain binary. Could be a skill added post-v1.
+- **WASM compilation:** Rust has strong WASM support. PGLite proves browser portability is viable. If we ever need quaid in a browser or serverless context, WASM is the path. Not a current priority.
+- **Overnight consolidation cycle:** Garry's DREAMS.md pattern (overnight entity sweep, enrichment, citation fixing) is powerful but is agent configuration, not quaid binary. Could be a skill added post-v1.
 
 ---
 
@@ -2498,7 +2503,7 @@ The smallest thing that proves the value proposition:
 - [ ] `src/core/palace.rs` — `derive_wing(slug)`, `derive_room(content)` — auto-derive palace metadata from slug structure and section headers
 - [ ] Unit tests for markdown parsing (round-trip frontmatter, compiled_truth/timeline split, summary extraction)
 - [ ] `src/main.rs` — clap CLI scaffold, command dispatch
-- [ ] `src/commands/init.rs` — create new brain.db (v4 schema with palace + temporal + contradictions + knowledge_gaps)
+- [ ] `src/commands/init.rs` — create new memory.db (v4 schema with palace + temporal + contradictions + knowledge_gaps)
 - [ ] `src/commands/get.rs` — read page by slug
 - [ ] `src/commands/put.rs` — write/update page (auto-extract summary, auto-derive wing/room)
 - [ ] `src/commands/list.rs` — list pages with filters (including `--wing`)
@@ -2506,7 +2511,7 @@ The smallest thing that proves the value proposition:
 - [ ] `src/commands/tags.rs` + tag/untag — tag operations
 - [ ] `src/commands/link.rs` + unlink + backlinks — with `--relationship`, `--valid-from`, `--valid-until`, `--temporal` flags
 
-**Checkpoint:** `gbrain init`, `gbrain put` (with auto-summary/palace), `gbrain get`, `gbrain list`, `gbrain stats`, `gbrain link --relationship works_at --valid-from 2024-01-15` all working.
+**Checkpoint:** `quaid init`, `quaid put` (with auto-summary/palace), `quaid get`, `quaid list`, `quaid stats`, `quaid link --relationship works_at --valid-from 2024-01-15` all working.
 
 ### Week 2 - Search + Progressive Retrieval
 
@@ -2520,7 +2525,7 @@ The smallest thing that proves the value proposition:
 - [ ] `src/commands/query.rs` — semantic query command with `--depth`, `--token-budget`, `--wing` flags
 - [ ] Unit tests for set-union vs RRF merge correctness, progressive retrieval token counting
 
-**Checkpoint:** `gbrain search "River AI"` and `gbrain query "who knows Jensen Huang?" --depth auto --token-budget 4000` both return ranked results with progressive expansion. Set-union merge is default, RRF switchable via `gbrain config set search_merge_strategy rrf`.
+**Checkpoint:** `quaid search "River AI"` and `quaid query "who knows Jensen Huang?" --depth auto --token-budget 4000` both return ranked results with progressive expansion. Set-union merge is default, RRF switchable via `quaid config set search_merge_strategy rrf`.
 
 ### Week 3 - Ingest + MCP + Integrity
 
@@ -2536,13 +2541,13 @@ The smallest thing that proves the value proposition:
 - [ ] `src/core/assertions.rs` — heuristic contradiction detection via assertions table: link vs assertion, temporal staleness
 - [ ] `src/core/graph.rs` — `neighborhood_graph(slug, depth, db)`: N-hop BFS over links table with temporal filtering
 - [ ] `src/core/gaps.rs` — `log_gap()`, `list_gaps()`, `resolve_gap()`: knowledge gap tracking
-- [ ] `src/commands/check.rs` — `gbrain check [SLUG] --all --type temporal|cross_page|stale`
-- [ ] `src/commands/graph.rs` — `gbrain graph <SLUG> --depth N --temporal current|historical|all`
-- [ ] `src/commands/gaps.rs` — `gbrain gaps --limit N --resolved`
-- [ ] `src/mcp/server.rs` — MCP stdio server with all tools (including `brain_graph`, `brain_gap`, `brain_gaps`, `brain_check`, progressive `brain_query`, temporal `brain_backlinks`)
+- [ ] `src/commands/check.rs` — `quaid check [SLUG] --all --type temporal|cross_page|stale`
+- [ ] `src/commands/graph.rs` — `quaid graph <SLUG> --depth N --temporal current|historical|all`
+- [ ] `src/commands/gaps.rs` — `quaid gaps --limit N --resolved`
+- [ ] `src/mcp/server.rs` — MCP stdio server with all tools (including `memory_graph`, `memory_gap`, `memory_gaps`, `memory_check`, progressive `memory_query`, temporal `memory_backlinks`)
 - [ ] `src/commands/serve.rs` — start MCP server
 
-**Checkpoint:** `gbrain import /data/brain/` completes with zero diff (palace metadata populated). `gbrain ingest` rejects duplicates (Jaccard > 0.85). `gbrain check --all` detects temporal contradictions. `gbrain graph people/pedro-franceschi --depth 2` returns the 2-hop neighborhood as JSON. `gbrain serve` connects to Claude Code with all 20 MCP tools.
+**Checkpoint:** `quaid import /data/brain/` completes with zero diff (palace metadata populated). `quaid ingest` rejects duplicates (Jaccard > 0.85). `quaid check --all` detects temporal contradictions. `quaid graph people/pedro-franceschi --depth 2` returns the 2-hop neighborhood as JSON. `quaid serve` connects to Claude Code with all 20 MCP tools.
 
 ### Week 4 - Polish + Release
 
@@ -2556,8 +2561,8 @@ The smallest thing that proves the value proposition:
 - [ ] `skills/` markdown files finalized (four-tier consolidation + source attribution + filing disambiguation in ingest, palace-aware query, contradiction-aware maintain/briefing, alerts, research, upgrade)
 - [ ] `CLAUDE.md`, `AGENTS.md`, `README.md`
 - [ ] CI/CD: `cargo test` + cross-compile matrix → GitHub Releases
-- [ ] `gbrain import --validate-only` dry-run mode
-- [ ] `gbrain embed --stale` incremental re-embedding
+- [ ] `quaid import --validate-only` dry-run mode
+- [ ] `quaid embed --stale` incremental re-embedding
 
 **Checkpoint:** Full test suite passes. Cross-compiled binaries on GitHub Releases. Round-trip validated against production brain. Contradiction detection runs clean on imported data.
 
@@ -2580,7 +2585,7 @@ The smallest thing that proves the value proposition:
   - Dataset: `https://github.com/xiaowu0162/LongMemEval` — pin commit in `benchmarks/datasets.lock`
   - Harness: official `evaluate_qa.py` (requires `OPENAI_API_KEY` for LLM judge)
   - Metrics: R@5 (Recall at 5). Target: ≥ 85%
-  - Adapter: `benchmarks/longmemeval_adapter.py` converts gbrain queries to LongMemEval format
+  - Adapter: `benchmarks/longmemeval_adapter.py` converts quaid queries to LongMemEval format
 - [ ] **LoCoMo** — Long conversational memory benchmark.
   - Dataset: `https://github.com/snap-research/locomo` — pin commit in `benchmarks/datasets.lock`
   - Harness: official evaluation scripts (API-dependent)
@@ -2598,10 +2603,10 @@ The smallest thing that proves the value proposition:
   - Normalized export → reimport → normalized export → semantic diff = zero (idempotent round-trip)
   - Run 100 queries against imported corpus → measure p50/p95 latency (target: p95 < 250ms)
 - [ ] **Concurrency and crash-safety stress tests** — CI gate for safety invariants.
-  - Parallel writers: 4 threads calling `brain_put` on the same slug with stale `expected_version` → all but one must get ConflictError, zero data corruption
+  - Parallel writers: 4 threads calling `memory_put` on the same slug with stale `expected_version` → all but one must get ConflictError, zero data corruption
   - Overlapping ingest: 2 threads ingesting the same source simultaneously → exactly one succeeds (idempotency key), zero duplicate timeline/assertion rows
   - Kill-before-commit: start ingest, `kill -9` before COMMIT, retry → clean state, no partial mutations, ingest_log has no stale rows
-  - WAL compact under load: run `gbrain compact` while a reader holds an open query → compact succeeds, reader gets consistent snapshot
+  - WAL compact under load: run `quaid compact` while a reader holds an open query → compact succeeds, reader gets consistent snapshot
   - Invariants: monotonic `pages.version`, no lost timeline rows, no duplicate side-table rows across all stress scenarios
 - [ ] **Embedding model migration correctness** — CI gate for vec search contract.
   - Embed corpus with model A, run 20 queries, record top-5 results per query
@@ -2611,11 +2616,11 @@ The smallest thing that proves the value proposition:
   - Rollback: flip active flag back to model A → verify original top-5 results return identically
   - Gate: zero cross-model contamination across all queries
 - [ ] **Round-trip integrity** — CI gate (two separate tests).
-  - **Semantic:** Import corpus → normalized export → `gbrain validate` against original. Checks same pages, same frontmatter keys/values, same compiled_truth, same timeline entries. MUST pass.
+  - **Semantic:** Import corpus → normalized export → `quaid validate` against original. Checks same pages, same frontmatter keys/values, same compiled_truth, same timeline entries. MUST pass.
   - **Byte-exact:** Import corpus → `export --raw --import-id <ID>` → `diff -r` against original source. MUST pass. Only valid for the specific import batch, not after mutations.
 - [ ] **Static binary verification** — CI release gate.
   - `ldd` / `file` / `otool` on every release artifact. Reject any binary with dynamic library dependencies.
-  - Gate: `file gbrain-linux-x86_64 | grep "statically linked"` must succeed.
+  - Gate: `file quaid-linux-x86_64 | grep "statically linked"` must succeed.
 
 **Checkpoint:** All offline CI gates pass: BEIR nDCG regression, corpus-reality tests, concurrency stress tests, round-trip integrity (both semantic and raw), static binary verification. API-dependent benchmarks (LongMemEval R@5 ≥ 85%, LoCoMo F1, Ragas) run manually before major releases. A failing offline gate blocks the release; API-dependent benchmarks are advisory.
 
@@ -2631,7 +2636,7 @@ The smallest thing that proves the value proposition:
 
 **Qdrant/Chroma/Pinecone:** External services. Require network. Require containers or API keys. A personal brain shouldn't need a sidecar container or a paid API to do semantic search. sqlite-vec gives native cosine similarity in the same file, same connection, same query.
 
-**The fundamental principle:** `brain.db` is a 500MB file you can `scp`, `rsync`, back up to S3, or carry on a USB stick. No connection strings. No Docker. No managed database.
+**The fundamental principle:** `memory.db` is a 500MB file you can `scp`, `rsync`, back up to S3, or carry on a USB stick. No connection strings. No Docker. No managed database.
 
 ### Why candle over fastembed (ONNX)
 
@@ -2654,7 +2659,7 @@ Garry's spec uses `text-embedding-3-small` (OpenAI API, 1536 dims, $0.02/1M toke
 
 **Trade-off:** Slightly lower quality on some retrieval benchmarks vs OpenAI text-embedding-3-large. Acceptable for a personal knowledge base where recall@10 matters more than recall@1.
 
-**Future:** The `model` column in `page_embeddings` and `embedding_models` registry table allow swapping models. Upgrade path: register new model, run `gbrain embed --all`, flip active flag.
+**Future:** The `model` column in `page_embeddings` and `embedding_models` registry table allow swapping models. Upgrade path: register new model, run `quaid embed --all`, flip active flag.
 
 ### Why Rust over TypeScript/Bun
 
@@ -2689,8 +2694,8 @@ Formula: `RRF(d) = Σ 1/(k + rank(d, r))` where k=60, summed over result sets r.
 A different DB file = a different brain. No application-level complexity.
 
 ```bash
-GBRAIN_DB=/path/to/work.db gbrain stats
-GBRAIN_DB=/path/to/personal.db gbrain serve --port 3001
+QUAID_DB=/path/to/work.db quaid stats
+QUAID_DB=/path/to/personal.db quaid serve --port 3001
 ```
 
 ### Why set-union over RRF (v2 change)
@@ -2703,9 +2708,9 @@ Set-union merging starts with vector results, which means searching for "Pedro F
 
 ### Why palace filtering (v2 addition)
 
-MemPalace's ablation: 60.9% → 94.8% R@5 with wing+room pre-filtering (+34%). Constraining the search space before running expensive vector queries is cheaper and more effective than post-hoc re-ranking. gbrain's palace metadata is auto-derived from slug structure (zero manual effort) with frontmatter override for custom taxonomies.
+MemPalace's ablation: 60.9% → 94.8% R@5 with wing+room pre-filtering (+34%). Constraining the search space before running expensive vector queries is cheaper and more effective than post-hoc re-ranking. Quaid's palace metadata is auto-derived from slug structure (zero manual effort) with frontmatter override for custom taxonomies.
 
-**Caveat:** The +34% improvement is from MemPalace's synthetic benchmark, not validated on gbrain's corpus. Wing-level filtering ships in v1 as a low-cost bet (auto-derived, zero manual effort). Room-level filtering is deferred until benchmark results on real data confirm it helps. If benchmarks show palace filtering doesn't materially improve retrieval on a personal knowledge corpus, demote it to optional.
+**Caveat:** The +34% improvement is from MemPalace's synthetic benchmark, not validated on Quaid's corpus. Wing-level filtering ships in v1 as a low-cost bet (auto-derived, zero manual effort). Room-level filtering is deferred until benchmark results on real data confirm it helps. If benchmarks show palace filtering doesn't materially improve retrieval on a personal knowledge corpus, demote it to optional.
 
 ### Why progressive retrieval (v2 addition)
 
@@ -2721,28 +2726,28 @@ OMNIMEM's three principles: selective ingestion, multimodal atomic units, progre
 
 ### Why SQLite over PGLite (v4 validation)
 
-Garry Tan's GBrain v0.8.0 (Apr 2026) moved from Supabase to PGLite — an in-process Postgres that runs in a browser or Node.js via WASM. Same principle as our SQLite choice: zero external dependencies, fully local. Three independent teams in the same week (us with SQLite, Garry with PGLite, @ansubkhan with Fastify/SQLite) converged on local embedded databases for agent memory. The architecture is validated.
+Garry Tan's v0.8.0 knowledge-brain system (Apr 2026) moved from Supabase to PGLite — an in-process Postgres that runs in a browser or Node.js via WASM. Same principle as our SQLite choice: zero external dependencies, fully local. Three independent teams in the same week (us with SQLite, Garry with PGLite, @ansubkhan with Fastify/SQLite) converged on local embedded databases for agent memory. The architecture is validated.
 
-| | SQLite (gbrain) | PGLite (Garry's GBrain) |
+| | SQLite (quaid) | PGLite (Garry Tan's system) |
 |---|---|---|
-| Transport | `cp brain.db` / `scp` / USB stick | Requires WASM runtime to read |
+| Transport | `cp memory.db` / `scp` / USB stick | Requires WASM runtime to read |
 | Runtime | None (statically linked into Rust binary) | Node.js/Bun + WASM |
-| True single file | Yes (after `gbrain compact`) | No (PGLite has its own data directory) |
+| True single file | Yes (after `quaid compact`) | No (PGLite has its own data directory) |
 | Vector search | sqlite-vec (statically linked) | pgvector via WASM |
 | Cross-compile | `cargo cross` to any musl target | Requires WASM-compatible platform |
 | Browser portability | No (desktop binary) | Yes (WASM) |
 
-Both are good choices for their respective stacks. We chose SQLite because `cp brain.db` is the entire backup and migration story. PGLite's browser portability is a future option for us via Rust→WASM compilation, but not a current priority.
+Both are good choices for their respective stacks. We chose SQLite because `cp memory.db` is the entire backup and migration story. PGLite's browser portability is a future option for us via Rust→WASM compilation, but not a current priority.
 
 ### The links table as a graph layer (v4 positioning)
 
-gbrain's `links` table with typed relationships and temporal validity windows is a knowledge graph without Neo4j. Combined with `brain_graph` (N-hop neighborhood traversal), `brain_backlinks` (temporal filtering), and palace-style hierarchy (wing/room), gbrain provides GraphRAG capabilities in a single SQLite file — no separate graph database required.
+Quaid's `links` table with typed relationships and temporal validity windows is a knowledge graph without Neo4j. Combined with `memory_graph` (N-hop neighborhood traversal), `memory_backlinks` (temporal filtering), and palace-style hierarchy (wing/room), quaid provides GraphRAG capabilities in a single SQLite file — no separate graph database required.
 
-This is worth calling out because the "separate graph + vector store" problem is a known pain point in the GraphRAG community. Every implementation (nano-graphrag, LangChain GraphRAG, etc.) makes you choose between a graph database and a vector store. gbrain doesn't — wikilink traversal in the links table, vector similarity in sqlite-vec, FTS5 keyword search, all in one file, one connection, one query.
+This is worth calling out because the "separate graph + vector store" problem is a known pain point in the GraphRAG community. Every implementation (nano-graphrag, LangChain GraphRAG, etc.) makes you choose between a graph database and a vector store. quaid doesn't — wikilink traversal in the links table, vector similarity in sqlite-vec, FTS5 keyword search, all in one file, one connection, one query.
 
 ### No file watcher (v1)
 
-The brain is written by AI agents using the CLI or MCP. There's no "file on disk changed" event to watch for. `gbrain import` and `gbrain put` are explicit writes. A `gbrain watch` command that syncs a markdown directory to the DB is a v2 feature.
+The brain is written by AI agents using the CLI or MCP. There's no "file on disk changed" event to watch for. `quaid import` and `quaid put` are explicit writes. A `quaid watch` command that syncs a markdown directory to the DB is a v2 feature.
 
 ---
 
@@ -2754,9 +2759,9 @@ The `config` table stores `version` (currently `'4'`). On startup, the binary co
 |----------|----------|
 | DB version == binary version | Normal operation |
 | DB version < binary version | Acquire exclusive write lock, WAL-safe backup, then run entire migration chain + version bump in a single transaction. Rollback on any error. The binary ships with a migration chain (v1→v2, v2→v3, etc.). **No concurrent writers during migration.** |
-| DB version > binary version | Refuse to open. Print error: "brain.db is version N, but this binary supports up to version M. Upgrade gbrain." |
+| DB version > binary version | Refuse to open. Print error: "memory.db is version N, but this binary supports up to version M. Upgrade quaid." |
 
-Migrations are tested by importing a fixture brain at each prior schema version and verifying post-migration integrity via `gbrain validate --all`.
+Migrations are tested by importing a fixture brain at each prior schema version and verifying post-migration integrity via `quaid validate --all`.
 
 ```rust
 fn migrate(conn: &Connection, db_path: &Path) -> Result<()> {
@@ -2764,7 +2769,7 @@ fn migrate(conn: &Connection, db_path: &Path) -> Result<()> {
     let target_version: u32 = SCHEMA_VERSION;  // compiled into binary
 
     if db_version > target_version {
-        bail!("brain.db v{} is newer than this binary (supports up to v{})", db_version, target_version);
+        bail!("memory.db v{} is newer than this binary (supports up to v{})", db_version, target_version);
     }
 
     if db_version == target_version {
@@ -2813,31 +2818,31 @@ fn migrate(conn: &Connection, db_path: &Path) -> Result<()> {
 3. **Atomic migration chain:** All migration steps + version bump run inside the same transaction. If any step fails, `ROLLBACK` restores the DB to its pre-migration state — no partial migration possible.
 4. **Rollback safety:** The backup file is a complete, self-contained SQLite database (no WAL sidecars). Restoring it requires replacing the DB file AND deleting any `-wal`/`-shm` sidecars (see rollback procedure below).
 
-**Important:** Migration requires no concurrent clients. The MCP server should not be running during migration. The CLI handles this naturally (single process), but the upgrade skill should verify no `gbrain serve` process is active before proceeding.
+**Important:** Migration requires no concurrent clients. The MCP server should not be running during migration. The CLI handles this naturally (single process), but the upgrade skill should verify no `quaid serve` process is active before proceeding.
 
 ---
 
 ## Security and Data Sensitivity
 
-brain.db contains sensitive personal intelligence: deal assessments, people evaluations, relationship context, business strategy. The security model:
+memory.db contains sensitive personal intelligence: deal assessments, people evaluations, relationship context, business strategy. The security model:
 
 **At rest:**
-- brain.db is a regular file. Protect it with filesystem permissions (`chmod 600`).
-- For encryption at rest, use OS-level full-disk encryption (FileVault, LUKS) or SQLite's SEE extension (commercial). gbrain does not implement its own encryption — that's a footgun.
-- `gbrain compact` before transport to ensure no WAL sidecar contains unencrypted data.
+- memory.db is a regular file. Protect it with filesystem permissions (`chmod 600`).
+- For encryption at rest, use OS-level full-disk encryption (FileVault, LUKS) or SQLite's SEE extension (commercial). quaid does not implement its own encryption — that's a footgun.
+- `quaid compact` before transport to ensure no WAL sidecar contains unencrypted data.
 
 **In transit:**
 - MCP server runs on stdio (local pipes only). No network listener. No remote access by default.
 - `scp`/`rsync` for transfer. Use encrypted channels.
 
 **Operational:**
-- No telemetry. No analytics. No phone-home. The gbrain binary itself makes zero network calls at runtime.
+- No telemetry. No analytics. No phone-home. The quaid binary itself makes zero network calls at runtime.
 - Skills are local markdown files. The binary does not exfiltrate data.
-- **Network boundary for agent-driven skills:** The enrichment skill (`skills/enrich/SKILL.md`) and research skill (`skills/research/SKILL.md`) instruct the agent to call external APIs (Crustdata, Exa, Brave, Happenstance). These network calls are made by the agent, not by the gbrain binary — but the effect is the same: brain content (queries, entity names) can reach third-party services. The `knowledge_gaps.sensitivity` field controls this: gaps default to `internal` (no external research), and must be explicitly upgraded to `redacted` or `external` before the research skill will issue network calls. Raw query text (`query_text`) is never retained at detection time — only a `query_hash` is stored; `query_text` is populated only after explicit approval. Agents must respect this classification.
-- `gbrain export` writes plaintext markdown. Treat export directories with the same sensitivity as the DB.
-- `.env` files or API keys for enrichment skills (Crustdata, Exa) are the user's responsibility. gbrain never stores them in brain.db.
+- **Network boundary for agent-driven skills:** The enrichment skill (`skills/enrich/SKILL.md`) and some operator-driven research workflows may call external APIs (Crustdata, Exa, Brave, Happenstance). Those network calls are made by the agent, not by the quaid binary. The shipped public gap surface does not expose approval/escalation tools; `memory_gap` only creates internal rows with `query_hash`, so any decision to send brain-derived queries to third parties must happen outside the public MCP contract.
+- `quaid export` writes plaintext markdown. Treat export directories with the same sensitivity as the DB.
+- `.env` files or API keys for enrichment skills (Crustdata, Exa) are the user's responsibility. quaid never stores them in memory.db.
 
-**Non-goals:** gbrain does not implement user auth, access control, audit logging, or data classification. It is a single-user tool on a single machine. If the machine is compromised, the brain is compromised.
+**Non-goals:** quaid does not implement user auth, access control, audit logging, or data classification. It is a single-user tool on a single machine. If the machine is compromised, the brain is compromised.
 
 ---
 
@@ -2848,7 +2853,7 @@ brain.db contains sensitive personal intelligence: deal assessments, people eval
 | Candle model fails to load | Fatal on startup. Binary refuses to serve if embeddings can't work. Clear error message with path to model weights. |
 | sqlite-vec not available | Fall back to pure-Rust cosine similarity (O(n) scan). Log warning. Performance degrades but search still works. |
 | Skill file missing | Use embedded default. If embedded default also missing (shouldn't happen), warn and continue — the binary still works for read/write/search, just without agent workflows. |
-| DB file corrupt | `gbrain validate --all` reports errors. `gbrain` refuses destructive operations on a corrupt DB. Recommend restore from backup. |
+| DB file corrupt | `quaid validate --all` reports errors. `quaid` refuses destructive operations on a corrupt DB. Recommend restore from backup. |
 | WAL sidecar missing | SQLite handles this — rolls back uncommitted transactions, creates fresh WAL. No data loss for committed writes. |
 | Disk full during write | SQLite transaction rolls back cleanly. No partial state. Error surfaced to caller. |
 | Concurrent writer conflict | ConflictError returned to caller with current version. Caller retries. No data corruption. |
@@ -2859,25 +2864,25 @@ brain.db contains sensitive personal intelligence: deal assessments, people eval
 
 ## Comparison Table
 
-| | Garry's GBrain (v0.8) | This spec (v4) | MemPalace | agentmemory | Obsidian | Notion |
+| | Garry Tan's v0.8 | This spec (v4) | MemPalace | agentmemory | Obsidian | Notion |
 |---|---|---|---|---|---|---|
 | Language | TypeScript/Bun | Rust | Python | Node.js | Electron | Web/Cloud |
 | Binary | ~10MB + API dep | ~90MB self-contained | pip install | npm install | Heavy app | SaaS |
 | Embeddings | PGLite (local, v0.8) | BGE-small local (free) | ChromaDB (local) | BM25 + vector | Plugin | Built-in AI |
 | Storage | PGLite (local Postgres) | Single SQLite | ChromaDB + SQLite | SQLite | Markdown files | Cloud DB |
 | Search | FTS5 + vector + weighted | Set-union + palace filter + progressive | Palace-filtered semantic | Triple-stream (BM25+vec+KG) | Plugin | Cloud |
-| Graph traversal | No | Yes (N-hop `brain_graph`) | No | Yes (KG edges) | No | No |
+| Graph traversal | No | Yes (N-hop `memory_graph`) | No | Yes (KG edges) | No | No |
 | Retrieval | Full pages | Progressive (budget-gated) | Closet → drawer drill-down | Context injection + budget | Manual | Full pages |
 | Dedup/novelty | None | Jaccard + cosine | None published | TTL + importance eviction | None | None |
 | Temporal graph | No | Yes (valid_from/until) | Yes (KG triples) | Yes (versioned) | No | No |
 | Contradiction detection | No | Yes (CLI + MCP) | Yes (fact_checker.py) | Yes (cascading staleness) | No | No |
-| Knowledge gap detection | No | Yes (`brain_gap` + research skill) | No | No | No | No |
+| Knowledge gap detection | No | Yes (`memory_gap` + research skill) | No | No | No | No |
 | Memory tiers | 2 (truth + timeline) | 4 (evidence → fact → concept → narrative) | 4 (L0-L3) | 4 (observation → narrative) | 1 (flat notes) | 1 (pages) |
 | Knowledge model | Compiled truth + timeline | Compiled truth + timeline (tiered) | Palace (wings/halls/rooms) | Knowledge graph | Flat notes | Pages + DBs |
 | LongMemEval | Not published | Est. 85-92% R@5 | 96.6% R@5 (raw mode) | 64% Recall@10 | N/A | N/A |
 | Air-gapped | No (PGLite OK, but Bun runtime) | Yes (true static binary) | Yes | No (needs MCP client) | Yes | No |
 | API keys | None (v0.8) | None | None | None | None | None |
-| Backup story | PGLite data dir | `cp brain.db` | ChromaDB dir | SQLite file | rsync | Cloud |
+| Backup story | PGLite data dir | `cp memory.db` | ChromaDB dir | SQLite file | rsync | Cloud |
 
 ---
 
@@ -2926,9 +2931,9 @@ BGE-small-en-v1.5 = 384 dims. BGE-base = 768 dims. BGE-large = 1024 dims.
 
 ### 5. Ingest command UX
 
-Does `gbrain ingest <file>` attempt to parse entities itself (requiring an LLM call), or is it a pass-through that stores the file and expects the agent (via MCP `brain_ingest` tool) to do the parsing?
+Does `quaid ingest <file>` attempt to parse entities itself (requiring an LLM call), or is it a pass-through that stores the file and expects the agent to follow `skills/ingest/SKILL.md` and then apply updates via `quaid put` / `memory_put`?
 
-**Recommendation:** `gbrain ingest` stores the raw source + auto-logs it + runs novelty check. The actual entity extraction and page creation happens via the agent following `skills/ingest/SKILL.md`. This keeps the binary dumb and the intelligence in markdown.
+**Recommendation:** `quaid ingest` stores the raw source + auto-logs it + runs novelty check. The actual entity extraction and page creation happens via the agent following `skills/ingest/SKILL.md`. This keeps the binary dumb and the intelligence in markdown.
 
 ### 6. Palace room derivation granularity (v2)
 
@@ -2954,16 +2959,17 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 
 | Date | Event |
 |------|-------|
-| 2026-04-05 | Garry Tan specs GBrain v1 (TypeScript/Bun, OpenAI embeddings). Inspired by hitting git scaling limits at 7,471 files / 2.3GB. |
+| 2026-04-05 | Garry Tan publishes a compiled-knowledge model spec v1 (TypeScript/Bun, OpenAI embeddings). Inspired by hitting git scaling limits at 7,471 files / 2.3GB. |
 | 2026-04-05 | Garry posts spec to GitHub Gist. Architecture: SQLite + FTS5 + vector, thin CLI, fat skills, MCP-first. |
 | 2026-04-06 | Initial architecture review of Garry's spec. Key improvements identified: Rust over TypeScript, local BGE-small-en-v1.5 over OpenAI embeddings, sqlite-vec over pure-JS cosine similarity, RRF over weighted sum. |
 | 2026-04-06 | Full standalone spec written (v1). Incorporates Garry's schema verbatim (adapted for 384-dim vectors), all CLI commands, all skill files. Adds: Rust implementation details, cross-compile CI, embedding decision rationale. |
 | 2026-04-08 | Memory research integration (v2). Incorporated techniques from MemPalace (500/500 LongMemEval), UNC AutoResearchClaw/OMNIMEM (+411% F1), agentmemory (92% token reduction), and Obsidian Mind. Seven changes: (1) palace-style hierarchical filtering (+34% retrieval), (2) set-union hybrid search replacing RRF (+44% F1), (3) progressive retrieval with token budgets, (4) selective ingestion via Jaccard/cosine novelty checks, (5) temporal knowledge graph with validity windows, (6) contradiction detection (CLI + MCP), (7) four-tier memory consolidation in ingest skill. Schema version bumped to v2. |
 | 2026-04-08 | **v3 Architecture Review.** Five changes: (1) Exact-Match Short-Circuit (SMS) ensures title/slug matches always rank first, (2) Temporal sub-chunking embeds timeline entries individually instead of as one blob, (3) Assertions table enables pure-SQL heuristic contradiction detection, (4) Strict optimistic concurrency with `expected_version` on MCP writes, (5) Switched from `fastembed`/ONNX to pure-Rust `candle` for true `musl` static binary. Also: embedding model registry for safe model upgrades, temporal link uniqueness fix, ingest idempotency, semantic round-trip contract, raw_imports table. |
 | 2026-04-09 | **Work-context entity types.** Inspired by Rowboat (rowboatlabs/rowboat) knowledge-graph-vs-wiki insight: added `decision`, `commitment`, `action_item` as first-class page types with templates. Updated ingest skill to extract work-context entities from meetings. Updated briefing skill with commitments due, action items, and "what shifted overnight" report (superseded assertions in last 24h). |
-| 2026-04-09 | **External review integration.** Accepted 11 of 12 findings from adversarial review. Added: Non-Goals section, Phased Delivery (core → intelligence → polish), WAL/single-file honesty (`gbrain compact`), embedded skills with external override + `skills doctor`, enriched chunk model (content_hash, token_count, heading_path, last_embedded_at), assertion provenance (asserted_by, source_ref, evidence_text), `brain_link_close` for targeted temporal closure, corpus-reality benchmarks alongside leaderboard benchmarks, palace filtering caveat. Rejected: `valid_from = 'unknown'` sentinel replacement (alternatives add complexity for marginal benefit). |
-| 2026-04-13 | **v4 Community Research + Garry v0.8.0 integration.** Reviewed new research notes from Apr 9-12. Eight spec changes: (1) `knowledge_gaps` table + `brain_gap`/`brain_gaps` MCP tools for self-improving knowledge base — agent detects what it doesn't know and logs it for research skill resolution. (2) `brain_graph` MCP tool + `gbrain graph` CLI for N-hop neighborhood traversal — returns pages + links as JSON for UI/graph visualization. (3) `original` as first-class page type with template — distinguishes the user's own thinking from world concepts. (4) Standardised source attribution format with authority hierarchy — inline citation format, URL requirement for social refs, source conflict rules. (5) Filing disambiguation rules in ingest skill — concept vs original vs idea vs project decision tree. (6) Richer person template with optional enrichment sections (What They Believe, Hobby Horses, Trajectory, Network) for Tier 1 contacts. (7) Three new skills: `alerts/SKILL.md` (interrupt-driven vs scheduled notifications), `research/SKILL.md` (knowledge gap resolution), `upgrade/SKILL.md` (agent-guided binary + skill updates inspired by Garry's v0.8.0 auto-upgrade UX). (8) "Why SQLite over PGLite" design decision + links-table-as-graph-layer positioning. Comparison table updated for Garry v0.8.0 + PGLite. Schema version bumped to v4. |
+| 2026-04-09 | **External review integration.** Accepted 11 of 12 findings from adversarial review. Added: Non-Goals section, Phased Delivery (core → intelligence → polish), WAL/single-file honesty (`quaid compact`), embedded skills with external override + `skills doctor`, enriched chunk model (content_hash, token_count, heading_path, last_embedded_at), assertion provenance (asserted_by, source_ref, evidence_text), `memory_link_close` for targeted temporal closure, corpus-reality benchmarks alongside leaderboard benchmarks, palace filtering caveat. Rejected: `valid_from = 'unknown'` sentinel replacement (alternatives add complexity for marginal benefit). |
+| 2026-04-13 | **v4 Community Research + Garry v0.8.0 integration.** Reviewed new research notes from Apr 9-12. Eight spec changes: (1) `knowledge_gaps` table + `memory_gap`/`memory_gaps` MCP tools for self-improving knowledge base — agent detects what it doesn't know and logs it for research skill resolution. (2) `memory_graph` MCP tool + `quaid graph` CLI for N-hop neighborhood traversal — returns pages + links as JSON for UI/graph visualization. (3) `original` as first-class page type with template — distinguishes the user's own thinking from world concepts. (4) Standardised source attribution format with authority hierarchy — inline citation format, URL requirement for social refs, source conflict rules. (5) Filing disambiguation rules in ingest skill — concept vs original vs idea vs project decision tree. (6) Richer person template with optional enrichment sections (What They Believe, Hobby Horses, Trajectory, Network) for Tier 1 contacts. (7) Three new skills: `alerts/SKILL.md` (interrupt-driven vs scheduled notifications), `research/SKILL.md` (knowledge gap resolution), `upgrade/SKILL.md` (agent-guided binary + skill updates inspired by Garry's v0.8.0 auto-upgrade UX). (8) "Why SQLite over PGLite" design decision + links-table-as-graph-layer positioning. Comparison table updated for Garry v0.8.0 + PGLite. Schema version bumped to v4. |
 
 ---
 
-*This spec is designed to stand alone. Everything needed to build GigaBrain is above — no prior context required. It is explicitly inspired by Garry Tan's GBrain work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 GBrain skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
+*This spec is designed to stand alone. Everything needed to build Quaid is above — no prior context required. It is explicitly inspired by Garry Tan's compiled-knowledge model work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
+

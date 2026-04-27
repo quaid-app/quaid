@@ -1,0 +1,91 @@
+---
+title: Errors
+description: MCP JSON-RPC error codes returned by quaid serve.
+guide:
+  eyebrow: Reference
+  accentBar: true
+---
+
+The MCP server uses standard JSON-RPC 2.0 error envelopes plus a small set of extended codes specific to Quaid. CLI commands surface the same conditions on stderr (and as JSON when `--json` is set).
+
+## Error envelope
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": <request_id>,
+  "error": {
+    "code": -32009,
+    "message": "expected_version 7 does not match current 9",
+    "data": { "current_version": 9, "expected_version": 7 }
+  }
+}
+```
+
+The `data` field is best-effort: when populated it carries machine-readable detail (current versions, conflicting slugs, recovery hints).
+
+## Extended codes
+
+| Code | Name | When |
+| ---- | ---- | ---- |
+| `-32001` | `NotFound` | A referenced page, link, collection, or gap doesn't exist. |
+| `-32002` | `Ambiguity` | A bare slug matches pages in more than one attached collection. Re-issue with `<collection>::<slug>`. |
+| `-32003` | `Internal` | Unexpected server-side or database failure. Treat as transient and retry; if persistent, file an issue. |
+| `-32009` | `Conflict` | OCC mismatch on `memory_put`, unique-constraint violation, or concurrent rename. |
+| `-32010` | `CollectionRestoringError` | The target collection is mid-restore or carries `needs_full_sync = 1`. Mutations are gated until reconciliation completes. |
+| `-32011` | `CollectionReadOnlyError` | The target collection is not writable. Either it's flagged read-only at attach time or another `serve` session holds the write lease. |
+| `-32602` | `InvalidParams` | Standard JSON-RPC code for parameter validation failures (e.g. invalid slug characters, unknown tool name, malformed dates). |
+
+## Standard JSON-RPC codes
+
+| Code | Name | When |
+| ---- | ---- | ---- |
+| `-32700` | `ParseError` | Body wasn't valid JSON. |
+| `-32600` | `InvalidRequest` | Request envelope didn't match JSON-RPC 2.0. |
+| `-32601` | `MethodNotFound` | Unknown method (e.g. wrong tool name on `tools/call`). |
+| `-32603` | `InternalError` | Generic JSON-RPC internal error (rare; we prefer `-32003`). |
+
+## OCC conflicts in detail
+
+`memory_put` accepts an optional `expected_version` for safe updates. Two failure modes:
+
+| Condition | Response |
+| --------- | -------- |
+| Page exists, you supplied no `expected_version` | Treated as create-only; returns `Conflict` because the page already exists. |
+| Page exists, your `expected_version` doesn't match | Returns `Conflict` with `data.current_version` set. Re-fetch the page, rebase your edit, retry. |
+| Page doesn't exist, you supplied an `expected_version` | Returns `Conflict` (you expected an update; there's nothing to update). |
+| Page doesn't exist, no `expected_version` | Creates the page at version 1. |
+
+A typical agent loop:
+
+```text
+fetch        → version v
+construct    → new content from v
+memory_put    → expected_version = v
+  on Conflict:
+    fetch again → version v'
+    rebase edit on v'
+    retry with expected_version = v'
+```
+
+## Slug ambiguity
+
+When more than one collection is attached, the same slug may exist in two of them. A bare slug returns `Ambiguity` with a `data.candidates` list. Resolve by qualifying:
+
+```bash
+# bare slug
+quaid get people/alice
+# → Ambiguity: candidates: ["work::people/alice", "personal::people/alice"]
+
+# qualified
+quaid get work::people/alice
+```
+
+## Retryability
+
+| Code | Retry? |
+| ---- | :----: |
+| `Internal` (`-32003`) | Yes, with backoff. |
+| `Conflict` (`-32009`) | Yes, **after** re-fetching state and rebasing. Bare retries are pointless. |
+| `CollectionRestoringError` | Yes, after the collection finishes restoring (poll `memory_collections` or watch state). |
+| Everything else | No — fix the request and resubmit. |

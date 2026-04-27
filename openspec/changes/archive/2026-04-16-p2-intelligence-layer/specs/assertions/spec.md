@@ -49,14 +49,14 @@ When `--all` is passed it iterates every page, calls `extract_assertions` then
 Output lists each detected contradiction with page slug, type, and description.
 
 #### Scenario: Check a single page
-- **WHEN** `gbrain check --slug people/alice` is called
+- **WHEN** `quaid check --slug people/alice` is called
 - **THEN** stdout lists any unresolved contradictions for alice, or "No contradictions found" if clean
 
-#### Scenario: Full brain scan
-- **WHEN** `gbrain check --all` is called
+#### Scenario: Full memory scan
+- **WHEN** `quaid check --all` is called
 - **THEN** every page is processed; summary line shows "N contradiction(s) found across M pages"
 
 #### Scenario: JSON output
-- **WHEN** `gbrain check --all --json` is called
+- **WHEN** `quaid check --all --json` is called
 - **THEN** stdout is a JSON array where each element has `page_slug`, `other_page_slug`,
   `type`, `description`, `detected_at`

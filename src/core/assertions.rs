@@ -22,7 +22,7 @@ pub struct Triple {
     pub object: String,
 }
 
-/// A stored contradiction row surfaced by `gbrain check`.
+/// A stored contradiction row surfaced by `quaid check`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Contradiction {
     pub page_slug: String,

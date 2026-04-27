@@ -1,8 +1,8 @@
 ## Context
 
-GigaBrain is preparing a `v0.9.0` test release. Pre-built binaries are produced for four
+Quaid is preparing a `v0.9.0` test release. Pre-built binaries are produced for four
 targets: `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`. GitHub Releases
-assets follow the pattern `gbrain-<platform>` (binary) and `gbrain-<platform>.sha256`
+assets follow the pattern `quaid-<platform>` (binary) and `quaid-<platform>.sha256`
 (checksum).
 
 This change adds a live shell installer for the test release, plus npm package scaffolding
@@ -23,9 +23,9 @@ assuming bash.
 
 ### 2. Version resolution: GitHub API + env override
 
-**Decision:** When `GBRAIN_VERSION` is not set, the installer queries the GitHub Releases API
-(`https://api.github.com/repos/macro88/gigabrain/releases/latest`) and parses the `tag_name`
-field with `sed`. When `GBRAIN_VERSION` is set, it is used directly.
+**Decision:** When `QUAID_VERSION` is not set, the installer queries the GitHub Releases API
+(`https://api.github.com/repos/quaid-app/quaid/releases/latest`) and parses the `tag_name`
+field with `sed`. When `QUAID_VERSION` is set, it is used directly.
 
 **Rationale:** Users who want a specific version can pin it. CI and reproducible installs
 benefit from explicit pinning. Default "latest" is the right behaviour for one-liners.
@@ -35,9 +35,9 @@ extraction uses `grep` + `sed` on the raw JSON string.
 
 ### 3. Default install directory: `~/.local/bin`, no sudo
 
-**Decision:** The installer writes to `${GBRAIN_INSTALL_DIR:-$HOME/.local/bin}`. It creates
+**Decision:** The installer writes to `${QUAID_INSTALL_DIR:-$HOME/.local/bin}`. It creates
 the directory if it does not exist. It prints a PATH hint if the directory is not in `$PATH`.
-It does not attempt `sudo` unless `GBRAIN_INSTALL_DIR` points to a root-owned path.
+It does not attempt `sudo` unless `QUAID_INSTALL_DIR` points to a root-owned path.
 
 **Rationale:** Developer tools should not require root. `~/.local/bin` is the XDG-standard
 user binary directory and is in `$PATH` on modern Linux distros and macOS with typical
@@ -45,7 +45,7 @@ shell configs.
 
 ### 4. Checksum verification: sidecar `.sha256` file
 
-**Decision:** The installer downloads `gbrain-<platform>.sha256` alongside the binary and
+**Decision:** The installer downloads `quaid-<platform>.sha256` alongside the binary and
 verifies with `shasum -a 256 --check` (macOS) or `sha256sum --check` (Linux), detected via
 `uname -s`.
 
@@ -54,7 +54,7 @@ instructions. Checksum files are already uploaded as release assets. No addition
 
 ### 5. npm package: postinstall download, no binary bundled
 
-**Decision:** The npm package (`packages/gbrain-npm/`) contains only:
+**Decision:** The npm package (`packages/quaid-npm/`) contains only:
 - `package.json` — package metadata, bin entry, postinstall hook
 - `scripts/postinstall.js` — Node.js script using only built-in modules (`https`, `fs`, `crypto`, `path`, `os`, `child_process`)
 - `bin/.gitkeep` — placeholder; actual binary written here at install time
@@ -78,7 +78,7 @@ dependencies would create a chicken-and-egg problem.
 
 **Decision:** `.github/workflows/publish-npm.yml` triggers on `push` events with tags
 matching `v[0-9]*.[0-9]*.[0-9]*` (same pattern as `release.yml`). It `cd`s into
-`packages/gbrain-npm/`, runs `npm version` to sync the version from the git tag (with
+`packages/quaid-npm/`, runs `npm version` to sync the version from the git tag (with
 `--allow-same-version` for idempotency), validates the package structure via `npm pack
 --dry-run`, and only runs `npm publish --access public` when `NPM_TOKEN` is present.
 If the secret is absent, the workflow emits a notice and exits successfully.
@@ -93,7 +93,7 @@ rollout.
 ### 8. `scripts/install.sh` hosted on `main` branch
 
 **Decision:** The canonical one-liner references the `main` branch raw URL:
-`https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh`
+`https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh`
 
 The script is also uploaded as a release asset for reproducible installs against a specific
 version.
@@ -111,45 +111,45 @@ binary. Users who want reproducibility can download the script directly from a r
 1. Detect OS (uname -s): Linux | Darwin | other → error
 2. Detect arch (uname -m): x86_64 | aarch64 | arm64 → normalise arm64 to aarch64
 3. Map OS+arch → platform string (linux-x86_64 | linux-aarch64 | darwin-x86_64 | darwin-arm64)
-4. Resolve version: $GBRAIN_VERSION or GitHub API latest
+4. Resolve version: $QUAID_VERSION or GitHub API latest
 5. Construct URLs: binary URL + checksum URL
-6. Set INSTALL_DIR: $GBRAIN_INSTALL_DIR or $HOME/.local/bin
+6. Set INSTALL_DIR: $QUAID_INSTALL_DIR or $HOME/.local/bin
 7. mkdir -p $INSTALL_DIR
-8. curl download binary to $INSTALL_DIR/gbrain.tmp
-9. curl download checksum to $INSTALL_DIR/gbrain.sha256.tmp
+8. curl download binary to $INSTALL_DIR/quaid.tmp
+9. curl download checksum to $INSTALL_DIR/quaid.sha256.tmp
 10. Verify: cd into INSTALL_DIR, rename files, run sha256 check
-11. chmod +x $INSTALL_DIR/gbrain
+11. chmod +x $INSTALL_DIR/quaid
 12. Cleanup temp files
 13. Print success message + PATH hint if needed
-14. $INSTALL_DIR/gbrain version (smoke test)
-15. Print GBRAIN_DB tip (see below)
+14. $INSTALL_DIR/quaid version (smoke test)
+15. Print QUAID_DB tip (see below)
 ```
 
-#### GBRAIN_DB post-install tip
+#### QUAID_DB post-install tip
 
-The binary already supports `GBRAIN_DB` as an env var (`#[arg(long, env = "GBRAIN_DB", global = true)]`
-in `src/main.rs`). Without it, the default database path is `./brain.db` (current working
+The binary already supports `QUAID_DB` as an env var (`#[arg(long, env = "QUAID_DB", global = true)]`
+in `src/main.rs`). Without it, the default database path is `./memory.db` (current working
 directory), which is unhelpful for a globally-installed CLI.
 
 The installer prints but does **not** write to any shell config file:
 
 ```
-Tip: Set GBRAIN_DB in your shell profile to avoid passing --db on every command:
-  echo 'export GBRAIN_DB="$HOME/brain.db"' >> ~/.zshrc
+Tip: Set QUAID_DB in your shell profile to avoid passing --db on every command:
+  echo 'export QUAID_DB="$HOME/memory.db"' >> ~/.zshrc
   # or for bash:
-  echo 'export GBRAIN_DB="$HOME/brain.db"' >> ~/.bashrc
+  echo 'export QUAID_DB="$HOME/memory.db"' >> ~/.bashrc
 ```
 
 The npm postinstall script prints the same tip after a successful binary install.
 
-### `packages/gbrain-npm/package.json` shape
+### `packages/quaid-npm/package.json` shape
 
 ```json
 {
-  "name": "gbrain",
+  "name": "quaid",
   "version": "0.9.0",
-  "description": "GigaBrain — personal knowledge brain CLI",
-  "bin": { "gbrain": "bin/gbrain" },
+  "description": "Quaid — personal AI memory CLI",
+  "bin": { "quaid": "bin/quaid" },
   "scripts": { "postinstall": "node scripts/postinstall.js" },
   "engines": { "node": ">=16" },
   "os": ["darwin", "linux"],
@@ -159,19 +159,19 @@ The npm postinstall script prints the same tip after a successful binary install
 }
 ```
 
-### `packages/gbrain-npm/scripts/postinstall.js` logic
+### `packages/quaid-npm/scripts/postinstall.js` logic
 
 ```
 1. Map process.platform (darwin/linux) + process.arch (x64/arm64) → platform string
 2. Read package version from ../package.json → derive release tag (v<version>)
-3. Construct binary URL: https://github.com/macro88/gigabrain/releases/download/v<ver>/gbrain-<platform>
+3. Construct binary URL: https://github.com/quaid-app/quaid/releases/download/v<ver>/quaid-<platform>
 4. Construct checksum URL: <binary_url>.sha256
-5. Download binary to bin/gbrain (or bin/gbrain.exe on win32) using https.get with redirect follow
+5. Download binary to bin/quaid (or bin/quaid.exe on win32) using https.get with redirect follow
 6. Download checksum file
 7. Compute SHA-256 of downloaded binary using crypto.createHash('sha256')
 8. Compare. If mismatch: delete binary, process.exit(1) with clear error message
 9. fs.chmodSync(binaryPath, 0o755)
-10. console.log('gbrain installed successfully')
+10. console.log('quaid installed successfully')
 ```
 
 Graceful failure: if the download fails (network error, unsupported platform), print a
@@ -200,18 +200,18 @@ jobs:
       - name: Sync version from tag
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          cd packages/gbrain-npm
+          cd packages/quaid-npm
           npm version "$TAG" --no-git-tag-version --allow-same-version
       - name: Skip when token is absent
         if: env.NPM_TOKEN == ''
         run: echo "::notice::NPM_TOKEN is not configured; skipping npm publish for this release."
       - name: Validate package (dry-run)
-        working-directory: packages/gbrain-npm
+        working-directory: packages/quaid-npm
         run: npm pack --dry-run
       - name: Publish
         if: env.NPM_TOKEN != ''
         run: npm publish --access public
-        working-directory: packages/gbrain-npm
+        working-directory: packages/quaid-npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
@@ -223,10 +223,10 @@ jobs:
 | File | Action |
 |------|--------|
 | `scripts/install.sh` | Create — POSIX curl installer |
-| `packages/gbrain-npm/package.json` | Create — npm package metadata |
-| `packages/gbrain-npm/scripts/postinstall.js` | Create — binary download + verify |
-| `packages/gbrain-npm/bin/.gitkeep` | Create — placeholder for installed binary |
-| `packages/gbrain-npm/README.md` | Create — npm package readme |
+| `packages/quaid-npm/package.json` | Create — npm package metadata |
+| `packages/quaid-npm/scripts/postinstall.js` | Create — binary download + verify |
+| `packages/quaid-npm/bin/.gitkeep` | Create — placeholder for installed binary |
+| `packages/quaid-npm/README.md` | Create — npm package readme |
 | `.github/workflows/publish-npm.yml` | Create — automated npm publish on tag |
 | `README.md` | Update — shell installer live, npm rollout staged |
 | `website/src/content/docs/guides/install.md` | Update — shell-first test release guidance |

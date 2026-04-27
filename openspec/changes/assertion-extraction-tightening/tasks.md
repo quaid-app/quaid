@@ -38,7 +38,7 @@ Related: #55
   convention, the supported frontmatter fields (`is_a`, `works_at`, `founded`), and explain
   that general body text is not scanned.
 
-- [x] B.2 Update `gbrain check --help` text (in `src/commands/check.rs` or equivalent) to
+- [x] B.2 Update `quaid check --help` text (in `src/commands/check.rs` or equivalent) to
   mention that assertions are extracted from structured zones only.
 
 ---
@@ -62,7 +62,7 @@ Related: #55
 - [x] E.1 Run `cargo test --test assertions` — all new unit tests pass.
 - [x] E.2 Run `cargo test --test corpus_reality conflicting_ingest_contradiction_is_detected -- --exact`
   — genuine same-entity contradiction is still detected.
-- [ ] E.3 On a representative real vault (350+ pages), run `gbrain check --all` after extraction
+- [ ] E.3 On a representative real vault (350+ pages), run `quaid check --all` after extraction
   tightening lands. Confirm: (a) no contradiction flood from unrelated prose-only pages;
   (b) at least one genuine contradiction between pages sharing an entity is still reported.
 - [ ] E.4 (#55 rerun gate) After E.3, review whether false positives materially survive. If

@@ -1,0 +1,105 @@
+---
+title: Agent quickstart
+description: One-page primer for an agent connecting to a memory over MCP.
+guide:
+  eyebrow: For agents
+  accentBar: true
+---
+
+You are an agent connecting to a Quaid via the MCP server. Read this once, then refer to the linked pages for detail. Everything you need to operate is in three places: the [tool catalog](/agents/tool-catalog/), the [skill workflows](/agents/skill-workflows/), and the [sensitivity contract](/agents/sensitivity-contract/).
+
+## What this memory is
+
+A single SQLite file (`memory.db`) on the user's machine, exposed over stdio JSON-RPC 2.0 by `quaid serve`. Seventeen `memory_*` tools cover every supported operation. There is no other API; you cannot reach external services through the memory.
+
+The memory holds:
+
+- **Pages** with frontmatter, compiled truth, and an append-only timeline.
+- **Links** between pages with typed relationships and temporal validity.
+- **Assertions** for contradiction detection.
+- **Knowledge gaps** logged when retrieval was insufficient.
+- **Tags**, **timeline entries**, and optional **raw data** (API responses).
+
+See [Compiled truth + timeline](/explanation/page-model/) for the page model.
+
+## Connection
+
+The user has already wired the MCP server. Your runtime spawned `quaid serve` and exchanged the standard MCP `initialize` and `tools/list` handshake. You should see seventeen `memory_*` tools registered.
+
+If a tool call fails before any work happens, the most likely reason is a model mismatch (the memory's model doesn't match the runtime's). Surface the error to the user; do not retry.
+
+## Recommended startup sequence
+
+When connecting to a memory you haven't seen before:
+
+1. **`memory_stats`** — get page count, link count, gap count, active embedding model. Two calls in: you know the scale.
+2. **`memory_collections`** — list attached collections. Decide whether to use a default-collection bare slug or qualify with `<collection>::<slug>`.
+3. **`memory_gaps`** with `resolved: false` — see what the user is currently stuck on. This often informs the right opening question.
+
+Don't write before you read. The memory has its own structure; learn it before you contribute.
+
+## Read paths
+
+| Goal | Tool | Notes |
+| ---- | ---- | ----- |
+| Look up a specific page | `memory_get` | Use collection-qualified slugs if `Ambiguity` is returned. |
+| Find pages by keyword | `memory_search` | FTS5 only. Fast, exact. |
+| Find pages by meaning | `memory_query` | Hybrid (FTS5 + vector). Use this for natural-language questions. |
+| Assemble context for an LLM | `memory_query` with `depth: "auto"` | Progressive retrieval up to the active token budget. |
+| List | `memory_list` | Filter by `wing`, `page_type`, `collection`. |
+| Walk relationships | `memory_graph` | N-hop BFS; default depth 2. |
+| See inbound links | `memory_backlinks` | Use to find context for a page. |
+| Read history | `memory_timeline` | Append-only timeline rows. |
+
+## Write paths
+
+Every mutation is gated by the collection write contract. If a collection is `restoring` or has `needs_full_sync = 1`, writes return `CollectionRestoringError`. If a collection is read-only, writes return `CollectionReadOnlyError`. Don't retry these blindly.
+
+| Goal | Tool | Notes |
+| ---- | ---- | ----- |
+| Create or update a page | `memory_put` | **Always** read first; pass `expected_version` for updates. |
+| Create a typed link | `memory_link` | Both endpoints must exist. Use `valid_from`/`valid_until` aggressively. |
+| Close a link interval | `memory_link_close` | Prefer this over deleting links. |
+| Tag a page | `memory_tags` | `add` and `remove` are repeatable. |
+| Store raw API output | `memory_raw` | Idempotent per `(slug, source)` unless `overwrite: true`. |
+| Log a knowledge gap | `memory_gap` | Hash-only by default — see sensitivity contract. |
+
+## OCC contract
+
+`memory_put` accepts `expected_version`. The right loop is:
+
+```text
+fetch         → memory_get            (note version v)
+construct     → modify content
+write         → memory_put expected_version=v
+on Conflict:
+  fetch       → memory_get            (note new version v')
+  rebase      → reapply your edits on v'
+  retry       → memory_put expected_version=v'
+```
+
+Bare retries with the same `expected_version` will always fail. Always rebase.
+
+## Sensitivity defaults
+
+Every `memory_gap` defaults to `sensitivity: internal` and stores **only** the SHA-256 hash of the query. The raw text is **not** persisted unless explicitly approved. Before escalating a gap to `external` (e.g. via the `enrich` skill), you must transition the sensitivity tier with explicit approval.
+
+Read the [Sensitivity contract](/agents/sensitivity-contract/). It's two screens; non-negotiable.
+
+## Skill load order
+
+The user has eight default skills (`ingest`, `query`, `maintain`, `enrich`, `briefing`, `alerts`, `research`, `upgrade`) extracted to `~/.quaid/skills/` and overridable per-project. When deciding what to do:
+
+1. If the user has a project `SKILL.md` in cwd, follow it.
+2. Else, follow `~/.quaid/skills/<skill-name>/SKILL.md`.
+3. Else, follow the embedded default.
+
+`quaid skills doctor` prints the resolution chain and SHA-256 hashes if you need to confirm.
+
+## Where to go next
+
+- [Tool catalog](/agents/tool-catalog/) — annotated index of every `memory_*` tool with "use when" hints.
+- [Skill workflows](/agents/skill-workflows/) — what each of the eight default skills triggers and outputs.
+- [Sensitivity contract](/agents/sensitivity-contract/) — how to transition a gap from internal → redacted → external.
+- [MCP tool reference](/reference/mcp/) — exact parameter schemas.
+- [Errors](/reference/errors/) — every error code you'll see.

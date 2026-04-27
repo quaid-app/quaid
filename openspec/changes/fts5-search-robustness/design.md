@@ -7,34 +7,34 @@ treats `?`, `*`, `+`, `(`, `)`, `"` as syntax operators and `'` as a SQL string 
 Queries containing these characters produce SQLite FTS5 syntax errors.
 
 `sanitize_fts_query` already exists in `src/core/fts.rs` and is applied by `hybrid_search`
-in `src/core/search.rs` before calling `search_fts`. The `gbrain query` command (which uses
-`hybrid_search`) is therefore safe. `gbrain search` and the MCP `brain_search` tool are not.
+in `src/core/search.rs` before calling `search_fts`. The `quaid query` command (which uses
+`hybrid_search`) is therefore safe. `quaid search` and the MCP `memory_search` tool are not.
 
-When `gbrain search --json` is active and `search_fts` returns an error, the `?` operator
+When `quaid search --json` is active and `search_fts` returns an error, the `?` operator
 in `run()` propagates the error to the top-level error handler, which prints to stderr.
 Stdout has no JSON output, so downstream JSON consumers receive malformed/empty output.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- `gbrain search` handles natural-language queries without crashing on punctuation or
+- `quaid search` handles natural-language queries without crashing on punctuation or
   special characters by default.
-- `gbrain search --json` always produces valid JSON, even on error paths.
-- The MCP `brain_search` tool handles natural-language agent queries safely.
+- `quaid search --json` always produces valid JSON, even on error paths.
+- The MCP `memory_search` tool handles natural-language agent queries safely.
 - Expert FTS5 users retain full syntax access via an explicit `--raw` flag.
 
 **Non-Goals:**
-- Adding `--raw` to MCP `brain_search` (agents are natural-language callers by design).
+- Adding `--raw` to MCP `memory_search` (agents are natural-language callers by design).
 - Changing the `search_fts` function itself — it stays as the raw expert interface.
 - Adding Unicode or language-specific tokenization improvements.
-- Changing `gbrain query` — it already sanitizes.
+- Changing `quaid query` — it already sanitizes.
 
 ## Decisions
 
 ### 1. Sanitize in the command layer, not inside search_fts
 
 **Decision:** Apply `sanitize_fts_query` in `src/commands/search.rs::run()` and in the
-MCP `brain_search` handler, not inside `search_fts`.
+MCP `memory_search` handler, not inside `search_fts`.
 
 **Rationale:** `search_fts` is intentionally the raw expert interface — its documented
 contract is "propagates FTS5 syntax errors." Changing its contract would break any caller
@@ -43,7 +43,7 @@ belongs at the consumer layer.
 
 ### 2. --raw flag to opt out of sanitization
 
-**Decision:** Add a `--raw` boolean flag to `gbrain search`. When set, skip sanitization
+**Decision:** Add a `--raw` boolean flag to `quaid search`. When set, skip sanitization
 and pass the query verbatim to `search_fts`. Default is sanitized (natural-language safe).
 
 **Rationale:** Some users want to write expert FTS5 queries like `"exact phrase" AND term*`.
@@ -59,9 +59,9 @@ with malformed FTS5), output `{"error": "<message>"}` to stdout instead of propa
 envelope is the standard API error pattern and makes the `--json` contract reliable.
 Without `--raw`, this path is never triggered — sanitized queries don't produce FTS5 errors.
 
-### 4. No --raw equivalent for MCP brain_search
+### 4. No --raw equivalent for MCP memory_search
 
-**Decision:** MCP `brain_search` always sanitizes. No raw mode for MCP.
+**Decision:** MCP `memory_search` always sanitizes. No raw mode for MCP.
 
 **Rationale:** MCP consumers are agents sending natural-language queries. There is no
 scenario where an MCP client would need raw FTS5 expert syntax. Keeping MCP always-safe
@@ -73,4 +73,4 @@ simplifies the tool contract and avoids exposing error paths to agent consumers.
   `gpt-5.4` gets `gpt 5 4` in FTS5 → Acceptable: the tokens still find relevant content.
   The `--raw` opt-out covers edge cases where exact syntax matters.
 - [--raw is easily forgotten] Power users may not know about `--raw` → Mitigation: document
-  in `gbrain search --help` that default mode sanitizes, `--raw` for FTS5 expert syntax.
+  in `quaid search --help` that default mode sanitizes, `--raw` for FTS5 expert syntax.

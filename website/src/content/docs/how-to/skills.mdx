@@ -1,0 +1,129 @@
+---
+title: Customize and override skills
+description: How embedded skills are resolved, and how to drop in your own.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+Skills are markdown workflow files. The binary ships eight defaults, extracts them on first run, and lets you override any of them at the user or project level. This recipe covers the override mechanics.
+
+For the design, see [The skills system](/explanation/skills-system/).
+
+## See what's active
+
+```bash
+quaid skills list
+```
+
+Shows every skill name, its current resolution path, and what's shadowing what.
+
+```bash
+quaid skills doctor
+```
+
+Prints SHA-256 hashes for each skill at every resolution layer, so you can tell whether a "custom" skill is meaningfully different from the embedded default or just a copy.
+
+## Resolution order
+
+The binary looks for `<skill-name>/SKILL.md` in this order:
+
+1. **Working directory** — `./SKILL.md` or `./<skill-name>/SKILL.md`. Project-scoped.
+2. **`~/.quaid/skills/<skill-name>/SKILL.md`** — user-scoped override.
+3. **Embedded default** — what shipped in the binary.
+
+The first hit wins. The other layers are still listed by `skills doctor`.
+
+## Override at the user level
+
+The first time you run `quaid` after install, the embedded skills are extracted to `~/.quaid/skills/`:
+
+```
+~/.quaid/skills/
+├── ingest/SKILL.md
+├── query/SKILL.md
+├── maintain/SKILL.md
+├── enrich/SKILL.md
+├── briefing/SKILL.md
+├── alerts/SKILL.md
+├── research/SKILL.md
+└── upgrade/SKILL.md
+```
+
+Edit any of these. Next agent run picks up your changes — no rebuild.
+
+## Override at the project level
+
+Drop a `SKILL.md` in your project root or in a `<skill-name>/SKILL.md` subdirectory. The resolver checks the working directory before `~/.quaid/`, so a project-scoped skill always wins.
+
+This is useful when:
+
+- A repo has its own ingestion conventions.
+- A team wants to share a custom workflow via git.
+- An agent runs in a sandboxed cwd and shouldn't see the user's overrides.
+
+## Reset to defaults
+
+If you've broken an override, blow it away:
+
+```bash
+rm -rf ~/.quaid/skills/<skill-name>
+quaid skills list   # the next read re-extracts the embedded copy
+```
+
+Embedded defaults are immutable — they're bytes inside the binary. You can't lose them by editing.
+
+## Authoring conventions
+
+A `SKILL.md` is plain markdown with a small header:
+
+```markdown
+---
+name: <skill-name>
+description: One sentence — when an agent should use this skill.
+when_to_use: |
+  - Trigger 1
+  - Trigger 2
+calls: [memory_query, memory_search, memory_link]
+---
+
+# <Skill Name>
+
+## Steps
+
+1. …
+
+## Decision rules
+
+- …
+
+## Exit conditions
+
+- …
+```
+
+The `calls` list is a hint to readers about which surfaces the skill touches; it's not enforced.
+
+## What skills should do
+
+- **Workflow only.** Decision rules, sequencing, when-to-escalate. Real work happens through CLI/MCP calls.
+- **No code.** A skill is a doc, not a script. Agents read it; humans read it; both follow it.
+- **Cite surfaces.** When a skill says "search the memory for X," it should say "via `memory_search`".
+
+## What skills shouldn't do
+
+- **Hardcode memory contents.** Skills don't carry your data; they carry behavior.
+- **Bypass the sensitivity contract.** When a skill needs external research, it must transition the gap sensitivity tier explicitly. See [Sensitivity contract](/agents/sensitivity-contract/).
+- **Re-implement the binary.** If a skill needs new surface area, that's an issue against the repo, not a skill change.
+
+## Validate after editing
+
+```bash
+quaid skills doctor
+```
+
+Confirms your override resolves above the default. If you see a hash mismatch you didn't expect, an upgrade may have changed the embedded default — re-read it via `quaid skills doctor` for the diff hint and decide whether to keep your override or restart from the new default.
+
+## Sharing skills across machines
+
+Your `~/.quaid/skills/` directory is just files. Sync it via your usual dotfiles mechanism (a git repo, `chezmoi`, etc.). The SHA-256 in `skills doctor` lets you spot-check that two machines are running the same set.

@@ -1,4 +1,4 @@
-//! Corpus-reality integration tests — validates end-to-end brain behaviour
+//! Corpus-reality integration tests — validates end-to-end memory behaviour
 //! against the fixture corpus.
 //!
 //! Scenarios tested:
@@ -14,13 +14,13 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use gbrain::commands::check;
-use gbrain::commands::embed;
-use gbrain::core::assertions;
-use gbrain::core::db;
-use gbrain::core::fts::search_fts;
-use gbrain::core::migrate::{export_dir, import_dir};
-use gbrain::core::search::hybrid_search;
+use quaid::commands::check;
+use quaid::commands::embed;
+use quaid::core::assertions;
+use quaid::core::db;
+use quaid::core::fts::search_fts;
+use quaid::core::migrate::{export_dir, import_dir};
+use quaid::core::search::hybrid_search;
 
 fn open_test_db() -> rusqlite::Connection {
     db::open(":memory:").expect("open in-memory DB")
@@ -28,7 +28,7 @@ fn open_test_db() -> rusqlite::Connection {
 
 fn open_disk_db() -> (rusqlite::Connection, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().expect("create temp dir");
-    let db_path = dir.path().join("brain.db");
+    let db_path = dir.path().join("memory.db");
     let conn = db::open(db_path.to_str().unwrap()).expect("open DB");
     (conn, dir)
 }
@@ -111,7 +111,7 @@ fn sms_exact_slug_returns_page_as_top_1() {
         "people/henrique-dubugras",
         "companies/brex",
         "companies/acme",
-        "projects/gigabrain",
+        "projects/quaid",
     ];
 
     for slug in &slugs {
@@ -142,7 +142,7 @@ fn timeline_retrieval_known_fact_appears_in_top_5() {
             "corporate card financial infrastructure startups",
             "companies/brex",
         ),
-        ("knowledge brain SQLite embeddings", "projects/gigabrain"),
+        ("memory SQLite embeddings", "projects/quaid"),
     ];
 
     for (query, expected_slug) in &cases {
@@ -214,8 +214,8 @@ fn conflicting_ingest_contradiction_is_detected() {
     );
 
     // Extract assertions from both pages
-    let page_a = gbrain::commands::get::get_page(&conn, "people/alice").expect("get alice");
-    let page_b = gbrain::commands::get::get_page(&conn, "sources/update").expect("get update");
+    let page_a = quaid::commands::get::get_page(&conn, "people/alice").expect("get alice");
+    let page_b = quaid::commands::get::get_page(&conn, "sources/update").expect("get update");
     assertions::extract_assertions(&page_a, &conn).expect("extract assertions alice");
     assertions::extract_assertions(&page_b, &conn).expect("extract assertions update");
 
@@ -371,7 +371,7 @@ fn latency_100_queries_p95_under_250ms() {
     let queries = [
         "who founded brex",
         "technology company developer tools",
-        "knowledge brain sqlite embeddings",
+        "memory sqlite embeddings",
         "corporate card fintech startup",
         "brazilian entrepreneur yc",
         "rust sqlite vector search",
@@ -427,7 +427,7 @@ fn fts5_search_finds_all_fixture_pages_by_distinctive_terms() {
         ("Franceschi", "people/pedro-franceschi"),
         ("Dubugras", "people/henrique-dubugras"),
         ("Brex", "companies/brex"),
-        ("GigaBrain", "projects/gigabrain"),
+        ("Quaid", "projects/quaid"),
     ];
 
     for (term, expected_slug) in cases {

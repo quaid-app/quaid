@@ -17,12 +17,12 @@ against a pinned baseline; regression greater than 2% SHALL fail the CI gate.
 
 ### Requirement: LongMemEval multi-session memory benchmark
 
-The LongMemEval adapter SHALL convert gbrain queries to LongMemEval format and evaluate
+The LongMemEval adapter SHALL convert quaid queries to LongMemEval format and evaluate
 R@5 (Recall at 5). Target: ≥ 85%. This is advisory (requires API key for LLM judge).
 
 #### Scenario: LongMemEval evaluation
 - **WHEN** `python benchmarks/longmemeval_adapter.py` is executed with `OPENAI_API_KEY` set
-- **THEN** it imports LongMemEval sessions, runs retrieval queries through gbrain, and
+- **THEN** it imports LongMemEval sessions, runs retrieval queries through quaid, and
   reports R@5
 
 ### Requirement: LoCoMo conversational memory benchmark
@@ -57,7 +57,7 @@ Corpus-reality tests SHALL validate:
 
 #### Scenario: Import completeness
 - **WHEN** a 7K+ file corpus is imported
-- **THEN** `gbrain stats` shows the same number of pages as source files
+- **THEN** `quaid stats` shows the same number of pages as source files
 
 #### Scenario: Idempotent round-trip
 - **WHEN** a corpus is exported, reimported, and re-exported
@@ -66,10 +66,10 @@ Corpus-reality tests SHALL validate:
 ### Requirement: Concurrency stress tests
 
 Concurrency tests SHALL validate OCC safety invariants:
-1. 4 threads calling `brain_put` on same slug with stale version → all but one get ConflictError
+1. 4 threads calling `memory_put` on same slug with stale version → all but one get ConflictError
 2. 2 threads ingesting same source → exactly one succeeds
 3. kill -9 before COMMIT → clean state on retry
-4. `gbrain compact` during open reader → both succeed
+4. `quaid compact` during open reader → both succeed
 
 #### Scenario: Parallel OCC enforcement
 - **WHEN** 4 threads write to the same page with stale `expected_version`

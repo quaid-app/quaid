@@ -2,9 +2,9 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde::Serialize;
 
-/// Brain statistics summary.
+/// Memory statistics summary.
 #[derive(Debug, Serialize)]
-struct BrainStats {
+struct MemoryStats {
     total_pages: i64,
     pages_by_type: Vec<TypeCount>,
     total_links: i64,
@@ -19,7 +19,7 @@ struct TypeCount {
     count: i64,
 }
 
-/// Gather and print brain statistics.
+/// Gather and print memory statistics.
 pub fn run(db: &Connection, json: bool) -> Result<()> {
     let stats = gather_stats(db)?;
 
@@ -44,7 +44,7 @@ pub fn run(db: &Connection, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn gather_stats(db: &Connection) -> Result<BrainStats> {
+fn gather_stats(db: &Connection) -> Result<MemoryStats> {
     let total_pages: i64 = db.query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))?;
 
     let mut stmt = db.prepare("SELECT type, COUNT(*) FROM pages GROUP BY type ORDER BY type")?;
@@ -73,7 +73,7 @@ fn gather_stats(db: &Connection) -> Result<BrainStats> {
     )?;
     let db_size_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
 
-    Ok(BrainStats {
+    Ok(MemoryStats {
         total_pages,
         pages_by_type,
         total_links,
@@ -90,7 +90,7 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         std::mem::forget(dir);
         conn

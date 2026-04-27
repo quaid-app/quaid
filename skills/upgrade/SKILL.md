@@ -1,5 +1,5 @@
 ---
-name: gbrain-upgrade
+name: quaid-upgrade
 description: |
   Agent-guided binary and skill updates: version check, download, SHA-256 verify,
   post-upgrade validation, rollback on failure.
@@ -10,9 +10,9 @@ min_binary_version: "0.3.0"
 
 ## Overview
 
-The upgrade skill guides an agent through safely replacing the `gbrain` binary and
+The upgrade skill guides an agent through safely replacing the `quaid` binary and
 refreshing bundled skill files. It is conservative by default: it keeps a `.bak` copy
-of the previous binary, verifies checksums before replacing, and runs `gbrain validate --all`
+of the previous binary, verifies checksums before replacing, and runs `quaid validate --all`
 before declaring success. If validation fails, it rolls back automatically.
 
 ---
@@ -20,10 +20,10 @@ before declaring success. If validation fails, it rolls back automatically.
 ## Commands
 
 ```bash
-gbrain version                          # print current binary version
-gbrain validate --all --json            # post-upgrade integrity check
-gbrain skills list --json               # list active skills after upgrade
-gbrain skills doctor --json             # verify skill resolution and hashes
+quaid version                          # print current binary version
+quaid validate --all --json            # post-upgrade integrity check
+quaid skills list --json               # list active skills after upgrade
+quaid skills doctor --json             # verify skill resolution and hashes
 ```
 
 ---
@@ -33,10 +33,10 @@ gbrain skills doctor --json             # verify skill resolution and hashes
 ### Step 1 — Check current version
 
 ```bash
-gbrain version
+quaid version
 ```
 
-Output: `gbrain 0.2.0 (commit abc1234)`
+Output: `quaid 0.2.0 (commit abc1234)`
 
 Record `current_version` for comparison.
 
@@ -45,7 +45,7 @@ Record `current_version` for comparison.
 Query the GitHub Releases API (no authentication required for public repos):
 
 ```
-GET https://api.github.com/repos/macro88/gigabrain/releases/latest
+GET https://api.github.com/repos/quaid-app/quaid/releases/latest
 ```
 
 Extract from response:
@@ -57,17 +57,17 @@ Extract from response:
 
 | Platform | Asset filename |
 |----------|---------------|
-| Linux x86_64 | `gbrain-x86_64-unknown-linux-musl` |
-| Linux ARM64 | `gbrain-aarch64-unknown-linux-musl` |
-| macOS x86_64 | `gbrain-x86_64-apple-darwin` |
-| macOS ARM64 | `gbrain-aarch64-apple-darwin` |
+| Linux x86_64 | `quaid-x86_64-unknown-linux-musl` |
+| Linux ARM64 | `quaid-aarch64-unknown-linux-musl` |
+| macOS x86_64 | `quaid-x86_64-apple-darwin` |
+| macOS ARM64 | `quaid-aarch64-apple-darwin` |
 
 If no asset matches the current platform, abort and report: `Error: no release asset for <platform>`.
 
 ### Step 3 — Compare versions
 
 If `current_version == latest_version`:
-- Print: `gbrain is already up to date (v<version>). No action taken.`
+- Print: `quaid is already up to date (v<version>). No action taken.`
 - Exit.
 
 If `latest_version` is older than `current_version` (downgrade):
@@ -77,8 +77,8 @@ If `latest_version` is older than `current_version` (downgrade):
 ### Step 4 — Download binary and checksum
 
 ```bash
-curl -fL "<binary_url>" -o gbrain.new
-curl -fL "<sha256_url>" -o gbrain.new.sha256
+curl -fL "<binary_url>" -o quaid.new
+curl -fL "<sha256_url>" -o quaid.new.sha256
 ```
 
 Do NOT replace the existing binary yet.
@@ -86,56 +86,56 @@ Do NOT replace the existing binary yet.
 ### Step 5 — Verify checksum
 
 ```bash
-sha256sum -c gbrain.new.sha256
+sha256sum -c quaid.new.sha256
 ```
 
 If verification fails:
-- Delete `gbrain.new` and `gbrain.new.sha256`
+- Delete `quaid.new` and `quaid.new.sha256`
 - Abort: `Error: checksum verification failed. Downloaded binary is corrupt or tampered.`
 - Do NOT proceed.
 
 ### Step 6 — Back up existing binary
 
 ```bash
-cp "$(which gbrain)" "$(which gbrain).bak"
+cp "$(which quaid)" "$(which quaid).bak"
 ```
 
-If `$(which gbrain)` is not writable (e.g., installed in `/usr/local/bin` without sudo):
+If `$(which quaid)` is not writable (e.g., installed in `/usr/local/bin` without sudo):
 - Report the path and instruct the user to run the replacement step with elevated privileges.
-- Provide the exact command: `sudo cp gbrain.new $(which gbrain) && sudo chmod +x $(which gbrain)`
+- Provide the exact command: `sudo cp quaid.new $(which quaid) && sudo chmod +x $(which quaid)`
 
 ### Step 7 — Replace binary
 
 ```bash
-chmod +x gbrain.new
-mv gbrain.new "$(which gbrain)"
+chmod +x quaid.new
+mv quaid.new "$(which quaid)"
 ```
 
 ### Step 8 — Post-upgrade validation
 
 ```bash
-gbrain version          # confirm new version reports correctly
-gbrain validate --all --json
+quaid version          # confirm new version reports correctly
+quaid validate --all --json
 ```
 
 If `validate --all` exits with code 1 (violations found):
 - **Automatically roll back** (see Rollback Procedure below).
-- Report: `Upgrade validation failed. Rolled back to v<previous>. Run 'gbrain validate --all' to inspect violations.`
+- Report: `Upgrade validation failed. Rolled back to v<previous>. Run 'quaid validate --all' to inspect violations.`
 
 If `validate --all` exits with code 0:
-- Print: `Upgrade complete. gbrain v<new_version> is active.`
+- Print: `Upgrade complete. quaid v<new_version> is active.`
 
 ### Step 9 — Update skills
 
 If the new release bundles updated skill files (check release notes for mention of `SKILL.md` changes):
 
 ```bash
-gbrain skills doctor --json
+quaid skills doctor --json
 ```
 
 Review the output for skills where `embedded_hash != previous_hash`. The new embedded
 skills are automatically active for the embedded resolution tier. External overrides
-(`~/.gbrain/skills/` or `./skills/`) take precedence and are NOT automatically updated
+(`~/.quaid/skills/` or `./skills/`) take precedence and are NOT automatically updated
 — the agent should alert the user if an external override exists for a skill that changed.
 
 ---
@@ -145,14 +145,14 @@ skills are automatically active for the embedded resolution tier. External overr
 If post-upgrade validation fails or the new binary does not start:
 
 ```bash
-mv "$(which gbrain)" "$(which gbrain).failed"
-cp "$(which gbrain).bak" "$(which gbrain)"
-gbrain version    # confirm rollback succeeded
+mv "$(which quaid)" "$(which quaid).failed"
+cp "$(which quaid).bak" "$(which quaid)"
+quaid version    # confirm rollback succeeded
 ```
 
 If the rollback binary also fails to start:
-- The `.bak` file is preserved as `gbrain.failed` is moved aside.
-- Report: `Critical: rollback binary also failed. Manual recovery required. Backup at: $(which gbrain).bak`
+- The `.bak` file is preserved as `quaid.failed` is moved aside.
+- Report: `Critical: rollback binary also failed. Manual recovery required. Backup at: $(which quaid).bak`
 
 ---
 
@@ -161,10 +161,10 @@ If the rollback binary also fails to start:
 Skills declare a minimum binary version via the `min_binary_version` frontmatter field.
 The upgrade skill enforces this:
 
-1. After upgrade, run `gbrain skills doctor --json`.
+1. After upgrade, run `quaid skills doctor --json`.
 2. For each skill, check `min_binary_version` against the installed version.
 3. If any skill requires a higher version than installed, report:
-   `Warning: skill <name> requires gbrain >= <version>. Current: <installed>. Upgrade to satisfy.`
+   `Warning: skill <name> requires quaid >= <version>. Current: <installed>. Upgrade to satisfy.`
 
 The binary will still run; this is a warning, not a hard block.
 

@@ -1,6 +1,6 @@
-# GigaBrain Roadmap
+# Quaid Roadmap
 
-GigaBrain is built in phases. Each phase has a hard ship gate — no phase begins until the previous one passes.
+Quaid is built in phases. Each phase has a hard ship gate — no phase begins until the previous one passes.
 
 ---
 
@@ -33,7 +33,7 @@ Sprint 0 establishes the full repository structure before any core implementatio
 
 **Release:** `v0.1.0`
 
-The smallest complete slice that proves GigaBrain's value proposition. When Phase 1 ships, a real user can import their markdown brain, search it semantically and by keyword, export without data loss, and connect any MCP-compatible agent via `gbrain serve`.
+The smallest complete slice that proves Quaid's value proposition. When Phase 1 ships, a real user can import their markdown brain, search it semantically and by keyword, export without data loss, and connect any MCP-compatible agent via `quaid serve`.
 
 **Workstream 1 — Foundation (Week 1):**
 - All core types (`src/core/types.rs`)
@@ -52,7 +52,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 **Workstream 3 — Ingest and MCP (Week 3):**
 - Novelty checking — Jaccard + cosine dedup (`src/core/novelty.rs`)
 - `import` / `export` with normalized markdown round-trip (`src/core/migrate.rs`)
-- MCP stdio server with 5 core tools: `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
+- MCP stdio server with 5 core tools: `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 - CLI command: `serve`
 
 **Workstream 4 — Polish (Week 4):**
@@ -63,8 +63,8 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 
 **Ship gate (all passed — Phase 2 unblocked):**
 1. `cargo test` passes
-2. `gbrain import <corpus>` → `gbrain export` → semantic diff = 0
-3. `gbrain serve` connects to Claude Code with all 5 MCP tools responding correctly
+2. `quaid import <corpus>` → `quaid export` → semantic diff = 0
+3. `quaid serve` connects to Claude Code with all 5 MCP tools responding correctly
 4. Static binary: `ldd` confirms no dynamic dependencies on Linux musl build
 5. BEIR nDCG@10 baseline established
 
@@ -78,19 +78,19 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 
 **Release:** `v0.2.0`
 
-Phase 2 adds cross-reference traversal, temporal reasoning, and memory-consolidation capabilities that separate GigaBrain from a glorified FTS5 wrapper.
+Phase 2 adds cross-reference traversal, temporal reasoning, and memory-consolidation capabilities that separate Quaid from a glorified FTS5 wrapper.
 
 **Deliverables:**
-- Temporal links with validity windows: `gbrain link`, `gbrain link` close via `--valid-until`
-- N-hop graph neighbourhood traversal: `gbrain graph <slug> --depth N --temporal active|all [--json]`
-- Assertions table with provenance + heuristic contradiction detection: `gbrain check [--slug SLUG] [--all] [--json]`
-- Progressive retrieval with full token-budget gating: `gbrain query "..." --depth auto`
+- Temporal links with validity windows: `quaid link`, `quaid link` close via `--valid-until`
+- N-hop graph neighbourhood traversal: `quaid graph <slug> --depth N --temporal active|all [--json]`
+- Assertions table with provenance + heuristic contradiction detection: `quaid check [--slug SLUG] [--all] [--json]`
+- Progressive retrieval with full token-budget gating: `quaid query "..." --depth auto`
 - Novelty checking — ingest skips near-duplicate content (Jaccard ≥ 0.85 or cosine above threshold)
 - Palace room classification via `##`-heading-based `derive_room` in `src/core/palace.rs`
-- Knowledge gap detection and listing: `gbrain gaps [--resolved] [--limit N] [--json]`; auto-logged on low-result queries
+- Knowledge gap detection and listing: `quaid gaps [--resolved] [--limit N] [--json]`; auto-logged on low-result queries
 - Work-context page types: `decision`, `commitment`, `action_item`
-- Full MCP write surface with optimistic concurrency (version check on `brain_put`)
-- MCP Phase 2 tools: `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
+- Full MCP write surface with optimistic concurrency (version check on `memory_put`)
+- MCP Phase 2 tools: `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`
 
 **Key modules added:**
 - `src/core/graph.rs` — N-hop BFS over links with temporal filtering
@@ -101,7 +101,7 @@ Phase 2 adds cross-reference traversal, temporal reasoning, and memory-consolida
 **Ship gate (all passed — Phase 3 unblocked):**
 1. `cargo test` passes
 2. Graph BFS returns correct N-hop neighbourhood with temporal filtering
-3. `gbrain check --all` detects conflicting assertions
+3. `quaid check --all` detects conflicting assertions
 4. Novelty check rejects near-duplicate ingest (Jaccard ≥ 0.85)
 5. All Phase 2 MCP tools respond correctly
 6. No regression on BEIR baseline
@@ -123,7 +123,7 @@ Phase 3 was delivered in two OpenSpec slices:
 **Delivered:**
 - 5 production-ready agent skills: `briefing`, `alerts`, `research`, `upgrade`, `enrich` — all 8 skills are now production-ready
 - CLI stub completion: `validate --all/--links/--assertions/--embeddings`, `call`, `pipe`, `skills list`, `skills doctor`
-- MCP Phase 3 tools: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` — 16 tools total
+- MCP Phase 3 tools: `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw` — 16 tools total
 - `--json` flag coverage across all commands
 - Benchmark harnesses: BEIR (nDCG@10), corpus-reality, concurrency stress, embedding migration, LongMemEval, LoCoMo, Ragas
 - CI benchmark gate wiring in `.github/workflows/ci.yml`
@@ -166,33 +166,33 @@ These are known design choices that are _not_ oversights:
 **Branch:** `spec/vault-sync-engine`
 **OpenSpec:** [`openspec/changes/vault-sync-engine/`](../openspec/changes/vault-sync-engine/)
 
-Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, quarantine lifecycle, and a fully safe write-through path for `brain_put` on Unix.
+Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, quarantine lifecycle, and a fully safe write-through path for `memory_put` on Unix.
 
 ### What has landed
 
-- **Schema v5** — `collections`, `file_state`, `raw_imports`, `embedding_jobs`, quarantine indexes; v4 brains refuse with re-init instructions
-- **Collection management** — `gbrain collection add|list|info|sync|restore|restore-reset|reconcile-reset`
-- **Ignore patterns** — `gbrain collection ignore add|remove|list|clear --confirm`; atomic-parse `.gbrainignore` with mirror refresh; built-in defaults (`.git/**`, `node_modules/**`, etc.) always applied
-- **Quarantine lifecycle** — `gbrain collection quarantine list|export|discard`; auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30); pages with DB-only state (links, assertions, knowledge gaps, contradictions, raw_data) are quarantined rather than hard-deleted; `discard --force` or post-export discard available
+- **Schema v6** — `collections`, `file_state`, `raw_imports`, `embedding_jobs`, quarantine indexes; older brains refuse with re-init instructions
+- **Collection management** — `quaid collection add|list|info|sync|restore|restore-reset|reconcile-reset`
+- **Ignore patterns** — `quaid collection ignore add|remove|list|clear --confirm`; atomic-parse `.quaidignore` with mirror refresh; built-in defaults (`.git/**`, `node_modules/**`, etc.) always applied
+- **Quarantine lifecycle** — `quaid collection quarantine list|export|discard|restore` (restore is a narrow Unix-only seam); auto-sweep TTL (`QUAID_QUARANTINE_TTL_DAYS`, default 30); pages with DB-only state (links, assertions, knowledge gaps, contradictions, raw_data) are quarantined rather than hard-deleted; `discard --force` or post-export discard available
 - **Reconciler** — stat-diff walk, UUID identity resolution, rename detection (native pair → UUID match → content-hash uniqueness), delete-vs-quarantine classifier, 500-file batch commit
-- **File watcher** — one `notify` watcher per active collection in `gbrain serve`; 1.5 s debounce (`GBRAIN_WATCH_DEBOUNCE_MS`); reconcile-backed flushes; path+hash self-write suppression with TTL expiry
-- **Write-through `brain_put`** *(Unix)* — full rename-before-commit sequence (recovery sentinel → tempfile → `renameat` → fsync parent dir → single SQLite tx); mandatory `expected_version` for updates; `check_fs_precondition` four-field CAS
+- **File watcher** — one `notify` watcher per active collection in `quaid serve` (Unix/macOS/Linux in `v0.9.6`); 1.5 s debounce (`QUAID_WATCH_DEBOUNCE_MS`); reconcile-backed flushes; path+hash self-write suppression with TTL expiry
+- **Write-through `memory_put`** *(Unix)* — full rename-before-commit sequence (recovery sentinel → tempfile → `renameat` → fsync parent dir → single SQLite tx); mandatory `expected_version` for updates; `check_fs_precondition` four-field CAS
 - **Write interlock** — `state='restoring'` or `needs_full_sync=1` blocks all mutating CLI/MCP ops with `CollectionRestoringError`
-- **Offline restore** — `gbrain collection restore <name> <target>` → Tx-A → atomic rename → Tx-B; `sync --finalize-pending` drives full-hash reconcile and reopens writes
-- **`brain_collections` MCP tool** — frozen 13-field per-collection object; truthful state, recovery, and ignore-diagnostic surfacing (17 MCP tools total)
-- **Collection filter** — `brain_search`, `brain_query`, `brain_list` accept an optional `collection` filter; default to the sole active collection when exactly one exists
+- **Offline restore** — `quaid collection restore <name> <target>` → Tx-A → atomic rename → Tx-B; `sync --finalize-pending` drives full-hash reconcile and reopens writes
+- **`memory_collections` MCP tool** — frozen 13-field per-collection object; truthful state, recovery, and ignore-diagnostic surfacing (17 MCP tools total)
+- **Collection filter** — `memory_search`, `memory_query`, `memory_list` accept an optional `collection` filter; default to the sole active collection when exactly one exists
 - **Collection-aware slug routing** — all slug-bearing CLI/MCP surfaces accept `<collection>::<slug>`; ambiguous bare slugs return a stable `AmbiguityError` with candidates
 
 ### Explicitly deferred (not yet shipped)
 
 | Item | Why deferred |
 | ---- | ------------ |
-| `quarantine restore` | Requires crash-durable post-unlink cleanup and a no-replace install path; reopened until a safe slice lands |
+| Windows `quarantine restore`, IPC socket restore proxying, and online restore handshake | The narrow Unix restore seam shipped in `v0.9.6`; non-Unix restore hosting and live-handshake routing remain deferred |
 | IPC socket write proxying (`12.6*`) | Full trust-boundary design for `SO_PEERCRED` peer auth still in progress |
-| Per-event-type watcher handlers (`6.5–6.11`) | Create/Modify/Delete/Rename handlers; overflow recovery, `.gbrainignore` live reload, and watcher supervisor not yet wired |
+| Per-event-type watcher handlers (`6.5–6.11`) | Create/Modify/Delete/Rename handlers; overflow recovery, `.quaidignore` live reload, and watcher supervisor not yet wired |
 | Embedding job queue (`8.*`) | Async background embedding worker not yet implemented |
-| `gbrain collection remove` | Detach + optional purge not yet implemented |
-| `gbrain stats` per-collection augmentation | Per-collection row + aggregate totals pending |
+| `quaid collection remove` | Detach + optional purge not yet implemented |
+| `quaid stats` per-collection augmentation | Per-collection row + aggregate totals pending |
 | Online restore handshake (`17.5pp/qq*`) | Live-serve ack protocol not yet implemented |
-| Opt-in UUID write-back (`5a.5`, `migrate-uuids`) | `--write-gbrain-id` and `migrate-uuids` CLI not yet implemented |
-| Legacy `gbrain import` removal (`15.*`) | Import path remains until reconciler covers all ingest use cases |
+| Opt-in UUID write-back (`5a.5`, `migrate-uuids`) | `--write-quaid-id` and `migrate-uuids` CLI not yet implemented |
+| Legacy `quaid import` removal (`15.*`) | Import path remains until reconciler covers all ingest use cases |

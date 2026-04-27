@@ -7,15 +7,15 @@ keys, and load the sqlite-vec extension. The database SHALL be ready for read an
 after `open()` returns.
 
 #### Scenario: First-time init on empty path
-- **WHEN** `db::open("/path/to/new/brain.db")` is called and the file does not exist
+- **WHEN** `db::open("/path/to/new/memory.db")` is called and the file does not exist
 - **THEN** SQLite creates the file, applies all DDL from `schema.sql`, sets `PRAGMA journal_mode = WAL`, sets `PRAGMA foreign_keys = ON`, loads sqlite-vec, and returns `Ok(Connection)`
 
 #### Scenario: Re-open existing database
-- **WHEN** `db::open("/path/to/existing/brain.db")` is called and the file exists
+- **WHEN** `db::open("/path/to/existing/memory.db")` is called and the file exists
 - **THEN** the function returns `Ok(Connection)` without re-running DDL (all `CREATE TABLE IF NOT EXISTS` guards fire but are no-ops)
 
 #### Scenario: Path directory does not exist
-- **WHEN** `db::open("/nonexistent/dir/brain.db")` is called
+- **WHEN** `db::open("/nonexistent/dir/memory.db")` is called
 - **THEN** the function returns `Err(DbError::PathNotFound)` and the file is not created
 
 ### Requirement: v4 schema completeness

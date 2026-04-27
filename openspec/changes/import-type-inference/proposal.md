@@ -13,7 +13,7 @@ closes: ["#40"]
 
 ## Why
 
-`gbrain import` assigns every page the type `concept` unless the page's frontmatter contains
+`quaid import` assigns every page the type `concept` unless the page's frontmatter contains
 an explicit `type:` field. For the dominant Obsidian PKM structure — PARA (Projects, Areas,
 Resources, Archives) — this means ~99% of pages land as `concept`, making type-filtered
 queries useless and the stats output misleading.
@@ -69,7 +69,7 @@ Imported people/alice (inferred type: person)
 
 - `docs/getting-started.md`: add a "Page types and PARA structure" section documenting the
   folder-to-type mapping and how to override it with a frontmatter `type:` field.
-- `gbrain import --help` text: add a note that types are inferred from folder structure when
+- `quaid import --help` text: add a note that types are inferred from folder structure when
   not set in frontmatter.
 
 ## Non-Goals
@@ -79,7 +79,7 @@ Imported people/alice (inferred type: person)
   PARA mapping covers the majority of users.
 - Changing how types are stored in the database — the `type` column is unchanged.
 - Retroactively re-typing already-imported pages — users who want updated types must
-  re-import or use `gbrain put` to update individual pages.
+  re-import or use `quaid put` to update individual pages.
 
 ## Impact
 

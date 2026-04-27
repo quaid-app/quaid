@@ -1,10 +1,10 @@
-# Getting Started with GigaBrain
+# Getting Started with Quaid
 
-> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.4` adds FTS5 search hardening and assertion extraction tightening; the dual-release channels (`airgapped` embedded and `online`) shipped in `v0.9.2`.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. `v0.9.8` keeps the current vault-sync release surface and adds the Issue #81 watcher-startup hotfix for legacy blank-root collections.
 
 ## What it does
 
-GigaBrain stores your knowledge as structured pages in a single `brain.db` file. Each page follows the **compiled-truth / timeline** model:
+Quaid stores your knowledge as structured pages in a single `memory.db` file. Each page follows the **compiled-truth / timeline** model:
 
 - **Above the line — compiled truth.** Always current. Rewritten when new information arrives. What you know now.
 - **Below the line — timeline.** Append-only. Never rewritten. What happened and when.
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete.** The current release is `v0.9.4`: FTS5 search hardening and assertion extraction tightening, with `airgapped` and `online` assets shipped from the same release line.
+> **Phase 3 is complete, and the first vault-sync slice is shipped.** The current release is `v0.9.8`: it preserves the current vault-sync surface and fixes `quaid serve` startup when legacy active collections still carry blank root paths.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -26,21 +26,21 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.4` airgapped + online assets |
-| `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
-| One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for online |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.8` airgapped + online assets |
+| `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
+| One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
-> **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `GBRAIN_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
+> **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
 
 ---
 
 ## Build from source
 
 ```bash
-git clone https://github.com/macro88/gigabrain
-cd gigabrain
+git clone https://github.com/quaid-app/quaid
+cd quaid
 cargo build --release
-# Binary at: target/release/gbrain (airgapped channel — default; embeds BGE-small-en-v1.5)
+# Binary at: target/release/quaid (airgapped channel — default; embeds BGE-small-en-v1.5)
 
 # Online channel (downloads/caches BGE-small on first semantic use)
 cargo build --release --no-default-features --features bundled,online-model
@@ -58,66 +58,75 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ---
 
-## Your first brain
+## Your first memory store
 
 > **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use all features now; see [Status](#status) and [Install options](#install-options) above.
 
-> **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `GBRAIN_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
+> **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
 > export PATH="$HOME/.local/bin:$PATH"
-> export GBRAIN_DB="$HOME/brain.db"
+> export QUAID_DB="$HOME/.quaid/memory.db"
 > ```
-> For CI/agent environments that manage PATH externally, skip profile writes with `GBRAIN_NO_PROFILE=1`.
+> For CI/agent environments that manage PATH externally, skip profile writes with `QUAID_NO_PROFILE=1`.
 
 ### 1. Initialize
 
 ```bash
-gbrain init ~/brain.db
+quaid init ~/.quaid/memory.db
 ```
 
-This creates a new `brain.db` file with the full v5 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (on the vault-sync-engine branch) collections, file_state, and raw_imports tables.
+This creates a new `memory.db` file with the full v6 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (in `v0.9.6`) collections, file_state, and raw_imports tables.
 
-### 2. Import an existing markdown directory
+### 2. Import or attach an existing markdown directory
 
 ```bash
-gbrain import /path/to/notes/ --db ~/brain.db
+quaid import /path/to/notes/ --db ~/.quaid/memory.db
 ```
 
-GigaBrain ingests each markdown file, parses frontmatter, splits compiled-truth from timeline, generates embeddings, and writes to the database. Ingest is idempotent — re-running the same file is safe.
+Quaid ingests each markdown file, parses frontmatter, splits compiled-truth from timeline, generates embeddings, and writes to the database. Ingest is idempotent — re-running the same file is safe.
+
+> **`v0.9.6` note:** Use collections for ongoing vault sync. The old workflow was `quaid import <path>`. The new workflow is `quaid collection add <name> <path>` and then `quaid serve`, which starts the live watcher automatically on macOS/Linux.
+>
+> ```bash
+> quaid collection add notes /path/to/notes
+> quaid serve
+> ```
+>
+> Use `quaid import` for one-shot bulk ingest. Use collections when you want Quaid to stay in sync with a markdown or Obsidian vault. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
 
 ### 3. Search
 
 ```bash
 # Full-text keyword search (FTS5)
-gbrain search "machine learning"
+quaid search "machine learning"
 
 # Semantic / hybrid query (FTS5 + vector with set-union merge)
-gbrain query "who has worked with Jensen Huang?"
+quaid query "who has worked with Jensen Huang?"
 ```
 
 ### 4. Read and write pages
 
 ```bash
 # Read a page
-gbrain get people/pedro-franceschi
+quaid get people/pedro-franceschi
 
 # Write or update a page
-cat updated.md | gbrain put people/pedro-franceschi
+cat updated.md | quaid put people/pedro-franceschi
 ```
 
 ### 5. Work with the knowledge graph
 
 ```bash
 # Create a typed, temporal link
-gbrain link people/pedro-franceschi companies/brex \
+quaid link people/pedro-franceschi companies/brex \
   --relationship founded \
   --valid-from 2017-01-01
 
 # Explore graph neighbourhood (2-hop)
-gbrain graph people/pedro-franceschi --depth 2
+quaid graph people/pedro-franceschi --depth 2
 
 # Close a link that is no longer current
-gbrain link people/pedro-franceschi companies/brex \
+quaid link people/pedro-franceschi companies/brex \
   --relationship founded \
   --valid-until 2022-12-31
 ```
@@ -125,30 +134,30 @@ gbrain link people/pedro-franceschi companies/brex \
 ### 6. Brain health
 
 ```bash
-gbrain stats           # page counts, index sizes
-gbrain check --all     # contradiction detection
-gbrain gaps            # unresolved knowledge gaps
+quaid stats           # page counts, index sizes
+quaid check --all     # contradiction detection
+quaid gaps            # unresolved knowledge gaps
 ```
 
 ### 7. Compact for backup or transport
 
 ```bash
-gbrain compact         # WAL checkpoint → true single-file brain.db
+quaid compact         # WAL checkpoint → true single-file memory.db
 ```
 
 ---
 
 ## Connect an AI agent via MCP
 
-Add GigaBrain to your MCP client config (e.g., Claude Code's `~/.claude/mcp_config.json`):
+Add Quaid to your MCP client config (e.g., Claude Code's `~/.claude/mcp_config.json`):
 
 ```json
 {
   "mcpServers": {
-    "gbrain": {
-      "command": "gbrain",
+    "quaid": {
+      "command": "quaid",
       "args": ["serve"],
-      "env": { "GBRAIN_DB": "/path/to/brain.db" }
+      "env": { "QUAID_DB": "/path/to/memory.db" }
     }
   }
 }
@@ -157,32 +166,36 @@ Add GigaBrain to your MCP client config (e.g., Claude Code's `~/.claude/mcp_conf
 Then start the server:
 
 ```bash
-gbrain serve
+quaid serve
 ```
+
+> **Platform note.** `quaid serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `quaid serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`memory_get`, `memory_put`, etc.) work on all platforms.
 
 The MCP server exposes tools over stdio JSON-RPC 2.0.
 
-**Phase 1 tools (core read/write):** `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
+> For OpenClaw, put the same server definition under `mcp.servers` in `openclaw.json`. See [openclaw-harness.md](openclaw-harness.md) for the full harness setup, collections-based vault sync, and `memory_collections` health checks.
 
-**Phase 2 tools (intelligence layer):** `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
+**Phase 1 tools (core read/write):** `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 
-**Phase 3 tools (gaps, stats, raw data):** `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
+**Phase 2 tools (intelligence layer):** `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`
 
-**vault-sync-engine tools:** `brain_collections` *(in `spec/vault-sync-engine` branch)* — read-only per-collection status including state, ignore diagnostics, and recovery flags
+**Phase 3 tools (gaps, stats, raw data):** `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
 
-All 16 tools are live in the current `v0.9.4` release; 17 tools in the vault-sync-engine branch. See [spec.md](spec.md#mcp-server) for tool signatures.
+**vault-sync tools:** `memory_collections` — read-only per-collection status including state, ignore diagnostics, and recovery flags
+
+All 17 tools are live in the current `v0.9.6` release. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
 ## Skills
 
-Skills are markdown files that tell agents _how_ to use GigaBrain. The binary embeds default skills and extracts them to `~/.gbrain/skills/` on first run. Drop a custom `SKILL.md` in your working directory to override any default.
+Skills are markdown files that tell agents _how_ to use Quaid. The binary embeds default skills and extracts them to `~/.quaid/skills/` on first run. Drop a custom `SKILL.md` in your working directory to override any default.
 
 All 8 skills are production-ready as of Phase 3.
 
 ```bash
-gbrain skills list     # show all active skills with source paths
-gbrain skills doctor   # verify skill hashes and detect shadowing
+quaid skills list     # show all active skills with source paths
+quaid skills doctor   # verify skill hashes and detect shadowing
 ```
 
 | Skill | Purpose |
@@ -206,10 +219,10 @@ The `original` type is for your own thinking — distinct from compiled external
 
 ### Page types and PARA folder structure
 
-When you run `gbrain import`, page types are resolved in three tiers:
+When you run `quaid import`, page types are resolved in three tiers:
 
 1. **Frontmatter `type:` field** — if your markdown file includes `type: project` (or any non-blank type) in the YAML frontmatter, that value is used. Frontmatter always wins. Blank (`type: `) or null (`type: null`) values are treated as absent and fall through to tier 2.
-2. **Top-level folder inference** — if no usable `type:` field is present, GigaBrain infers the type from the first folder in the relative path. This supports the PARA method and common Obsidian vault layouts:
+2. **Top-level folder inference** — if no usable `type:` field is present, Quaid infers the type from the first folder in the relative path. This supports the PARA method and common Obsidian vault layouts:
 
 | Folder name | Inferred type |
 |-------------|---------------|
@@ -235,8 +248,8 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
-| `GBRAIN_DB` | `./brain.db` | Path to the active brain database |
-| `GBRAIN_NO_PROFILE` | `0` | Set to `1` to skip shell profile writes during install |
+| `QUAID_DB` | `~/.quaid/memory.db` | Path to the active memory database |
+| `QUAID_NO_PROFILE` | `0` | Set to `1` to skip shell profile writes during install |
 
 ---
 
@@ -252,13 +265,13 @@ Walk the knowledge graph from any page, up to N hops out:
 
 ```bash
 # 2-hop neighbourhood, active links only (default)
-gbrain graph people/alice --depth 2
+quaid graph people/alice --depth 2
 
 # 3-hop including expired links
-gbrain graph people/alice --depth 3 --temporal all
+quaid graph people/alice --depth 3 --temporal all
 
 # JSON output for programmatic use
-gbrain graph people/alice --depth 2 --json
+quaid graph people/alice --depth 2 --json
 ```
 
 Example output:
@@ -275,13 +288,13 @@ Check one page or every page in the brain for conflicting assertions:
 
 ```bash
 # Check a single page
-gbrain check --slug people/alice
+quaid check --slug people/alice
 
 # Check the entire brain
-gbrain check --all
+quaid check --all
 
 # JSON output
-gbrain check --all --json
+quaid check --all --json
 ```
 
 Example output:
@@ -292,20 +305,20 @@ Example output:
 
 ### Knowledge gaps
 
-GigaBrain automatically records low-confidence queries as knowledge gaps. List and triage them:
+Quaid automatically records low-confidence queries as knowledge gaps. List and triage them:
 
 ```bash
 # List unresolved gaps (default)
-gbrain gaps
+quaid gaps
 
 # Include resolved gaps
-gbrain gaps --resolved
+quaid gaps --resolved
 
 # Limit output
-gbrain gaps --limit 10
+quaid gaps --limit 10
 
 # JSON output for scripting
-gbrain gaps --json
+quaid gaps --json
 ```
 
 Example output:
@@ -315,7 +328,7 @@ Example output:
 2 gap(s) found.
 ```
 
-Use the `skills/research/` skill to resolve gaps: the research workflow queries external sources, writes new pages, and calls `brain_gap` to mark each gap resolved.
+Use the `skills/research/` skill to resolve gaps: the research workflow queries external sources, writes new pages, and calls `memory_gap` to mark each gap resolved.
 
 ---
 
@@ -329,15 +342,15 @@ Check the brain for broken links, duplicate assertions, or stale embeddings:
 
 ```bash
 # Run all integrity checks
-gbrain validate --all
+quaid validate --all
 
 # Targeted checks
-gbrain validate --links        # referential integrity and interval overlaps
-gbrain validate --assertions   # assertion dedup and supersession chains
-gbrain validate --embeddings   # embedding model consistency
+quaid validate --links        # referential integrity and interval overlaps
+quaid validate --assertions   # assertion dedup and supersession chains
+quaid validate --embeddings   # embedding model consistency
 
 # JSON output for scripting
-gbrain validate --all --json
+quaid validate --all --json
 ```
 
 Example output:
@@ -351,12 +364,13 @@ Exit 0 means clean; exit 1 means violations were found.
 
 ### Raw MCP tool invocation
 
-Call any MCP tool directly from the CLI without starting the server:
+Call MCP tools directly from the CLI without starting the server. The dispatcher covers all 17 shipped MCP tools, including `memory_collections`.
 
 ```bash
-gbrain call brain_stats '{}'
-gbrain call brain_get '{"slug": "people/alice"}'
-gbrain call brain_gap '{"query": "who founded acme corp"}'
+quaid call memory_stats '{}'
+quaid call memory_get '{"slug": "people/alice"}'
+quaid call memory_gap '{"query": "who founded acme corp"}'
+quaid call memory_collections '{}'
 ```
 
 ### JSONL pipeline mode
@@ -364,54 +378,54 @@ gbrain call brain_gap '{"query": "who founded acme corp"}'
 Stream tool calls via stdin, one JSON object per line:
 
 ```bash
-echo '{"tool":"brain_search","input":{"query":"machine learning"}}' | gbrain pipe
-cat queries.jsonl | gbrain pipe > results.jsonl
+echo '{"tool":"memory_search","input":{"query":"machine learning"}}' | quaid pipe
+cat queries.jsonl | quaid pipe > results.jsonl
 ```
 
 ### Skill inspection
 
 ```bash
-gbrain skills list     # list active skills with source resolution path
-gbrain skills doctor   # verify SHA-256 hashes, detect override shadowing
+quaid skills list     # list active skills with source resolution path
+quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 ```
 
 ---
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands are implemented on the `spec/vault-sync-engine` branch. They are not yet in a tagged release.
+> These commands are shipped in `v0.9.6`. The current release line exposes the landed vault-sync slice while keeping Windows `serve` hosting and IPC follow-ons explicitly deferred.
 
 ### Attach a vault
 
 ```bash
 # Attach a directory as a named collection
-gbrain collection add work /path/to/my-obsidian-vault
+quaid collection add work /path/to/my-obsidian-vault
 
 # List all collections
-gbrain collection list
+quaid collection list
 
 # Show extended status: ignore errors, quarantine count, recovery flags
-gbrain collection info work
+quaid collection info work
 ```
 
-Once attached, `gbrain serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
+Once attached, `quaid serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 
-> **Platform note.** `gbrain serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `gbrain serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`brain_get`, `brain_put`, `brain_query`, etc.) work on all platforms.
+> **Platform note.** `quaid serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `quaid serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`memory_get`, `memory_put`, `memory_query`, etc.) work on all platforms.
 
 ### Ignore patterns
 
 ```bash
-# Add a glob to .gbrainignore (dry-run validates before writing)
-gbrain collection ignore add work "drafts/**"
+# Add a glob to .quaidignore (dry-run validates before writing)
+quaid collection ignore add work "drafts/**"
 
 # List active patterns
-gbrain collection ignore list work
+quaid collection ignore list work
 
 # Remove a pattern
-gbrain collection ignore remove work "drafts/**"
+quaid collection ignore remove work "drafts/**"
 
 # Clear all user patterns (built-in defaults remain)
-gbrain collection ignore clear work --confirm
+quaid collection ignore clear work --confirm
 ```
 
 ### Collection-aware slugs
@@ -419,31 +433,25 @@ gbrain collection ignore clear work --confirm
 When multiple collections are active, prefix slugs with the collection name:
 
 ```bash
-gbrain get "work::people/alice"
-gbrain put "work::people/alice" < page.md
+quaid get "work::people/alice"
+quaid put "work::people/alice" < page.md
 ```
 
-`brain_search`, `brain_query`, and `brain_list` accept an optional `collection` filter; they default to the only active collection when exactly one exists.
+`memory_search`, `memory_query`, and `memory_list` accept an optional `collection` filter; they default to the only active collection when exactly one exists.
 
 ### Quarantine
 
 Pages that are deleted or renamed while holding DB-only state (links, assertions, knowledge gaps, contradictions, or `raw_data`) are quarantined rather than hard-deleted.
 
 ```bash
-gbrain collection quarantine list work
-gbrain collection quarantine export work --out quarantine.json
-gbrain collection quarantine discard work <page-slug>
+quaid collection quarantine list work
+quaid collection quarantine export work --out quarantine.json
+quaid collection quarantine discard work <page-slug>
 ```
 
-> **Unix only.** `gbrain collection quarantine restore` is implemented and available on Unix (macOS/Linux). On Windows it returns `UnsupportedPlatformError`. Restore moves a quarantined page back to active status and re-registers its slug in the collection:
->
-> ```bash
-> gbrain collection quarantine restore work <page-slug> <relative-path>
-> ```
->
-> The IPC/online-handshake path (automatic restore on watcher reconnect) remains deferred and is not yet wired.
+> Quarantine restore is deferred in the current release. The safe landed surface is `list`, `export`, and `discard` only.
 
-Auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30) silently discards clean quarantined pages only — pages with DB-only state are never auto-discarded.
+Auto-sweep TTL (`QUAID_QUARANTINE_TTL_DAYS`, default 30) silently discards clean quarantined pages only — pages with DB-only state are never auto-discarded.
 
 ---
 

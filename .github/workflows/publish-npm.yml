@@ -1,9 +1,11 @@
 name: Publish npm package
+# npm is not yet a live release channel. This workflow is staged for when
+# the quaid npm package is ready to publish. Until then it must not fire
+# automatically on release tags — trigger it manually when the npm channel
+# is officially opened.
 
 on:
-  push:
-    tags:
-      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -19,7 +21,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Sync version from tag
-        working-directory: packages/gbrain-npm
+        working-directory: packages/quaid-npm
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           npm version "$TAG" --no-git-tag-version --allow-same-version
@@ -29,12 +31,12 @@ jobs:
         run: echo "::notice::NPM_TOKEN is not configured; skipping npm publish for this release."
 
       - name: Validate package (dry-run)
-        working-directory: packages/gbrain-npm
+        working-directory: packages/quaid-npm
         run: npm pack --dry-run
 
       - name: Publish to npm
         if: env.NPM_TOKEN != ''
-        working-directory: packages/gbrain-npm
+        working-directory: packages/quaid-npm
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -12,14 +12,14 @@ All tasks execute on branch `phase2/p2-intelligence-layer`.
 Run `cargo test` after every group. `cargo clippy -- -D warnings` and `cargo fmt --check` must
 stay clean throughout. Do NOT start until Professor and Nibbler have signed off the Phase 1 gate.
 
-OCC on `brain_put` is already complete — do not re-implement.
+OCC on `memory_put` is already complete — do not re-implement.
 
 ---
 
 ## Group 1 — Graph Core (`src/core/graph.rs`)
 
 - [x] 1.1  Define `TemporalFilter` enum (`Active`, `All`) and `GraphNode` / `GraphEdge` / `GraphResult` structs in `src/core/graph.rs`. Derive `Serialize` on all output types.
-- [x] 1.2  Implement `neighborhood_graph(slug: &str, depth: u32, filter: TemporalFilter, conn: &Connection) -> Result<GraphResult, GraphError>` using iterative BFS with `HashSet<i64>` visited set. Hard-cap depth at 10. **Contract: outbound links only** — inbound reachability is the domain of `gbrain backlinks`.
+- [x] 1.2  Implement `neighborhood_graph(slug: &str, depth: u32, filter: TemporalFilter, conn: &Connection) -> Result<GraphResult, GraphError>` using iterative BFS with `HashSet<i64>` visited set. Hard-cap depth at 10. **Contract: outbound links only** — inbound reachability is the domain of `quaid backlinks`.
 - [x] 1.3  Add temporal filter SQL: `Active` clause `WHERE (l.valid_from IS NULL OR l.valid_from <= date('now')) AND (l.valid_until IS NULL OR l.valid_until >= date('now'))` — excludes both past-closed and future links; `TemporalFilter::All` omits the clause.
 - [x] 1.4  Add `GraphError` enum (`PageNotFound`, `Sqlite(rusqlite::Error)`) using `thiserror`. Ensure `PageNotFound` is returned when the root slug doesn't exist.
 - [x] 1.5  Write unit tests: zero-hop returns root only; single-hop returns direct outbound neighbours; cycle between A↔B terminates without infinite loop; temporal Active filter excludes past-closed links; temporal Active filter excludes future-dated links; `All` filter includes past-closed links; unknown slug returns `PageNotFound`.
@@ -53,7 +53,7 @@ OCC on `brain_put` is already complete — do not re-implement.
 - [x] 5.1  Implement `progressive_retrieve(initial: Vec<SearchResult>, budget: usize, depth: u32, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>`. Token approximation: `len(page.compiled_truth) / 4`. Hard cap depth at 3. Dedup by slug using `HashSet<String>`.
 - [x] 5.2  Expansion loop: for each result in the current frontier (starting with `initial`), fetch the page's outbound links, retrieve linked pages, add to result list if budget permits.
 - [x] 5.3  Read `default_token_budget` from the `config` table in `query.rs` and pass it to `progressive_retrieve` when `--depth auto` is specified.
-- [x] 5.4  Add `--depth` arg to CLI `gbrain query` (already has a placeholder clap arg with `/// Phase 2: deferred` comment — remove the comment and wire it).
+- [x] 5.4  Add `--depth` arg to CLI `quaid query` (already has a placeholder clap arg with `/// Phase 2: deferred` comment — remove the comment and wire it).
 - [x] 5.5  Add `depth` field to `BrainQueryInput` MCP struct (optional string, `"auto"` triggers expansion).
 - [x] 5.6  Write unit tests: budget exhausted before depth cap stops expansion; depth cap stops expansion before budget; empty initial returns empty; duplicates from expansion are deduplicated; zero depth returns initial results unchanged.
 
@@ -67,7 +67,7 @@ OCC on `brain_put` is already complete — do not re-implement.
 
 - [x] 7.1  Replace the stub body of `derive_room(content: &str) -> String` with: find the first line matching `^## (.+)`, lowercase it, replace spaces with hyphens, strip non-`[a-z0-9-]` characters. Return `""` if no `##` heading found.
 - [x] 7.2  Remove the `#![allow(dead_code)]` attribute from `palace.rs` if still present.
-- [x] 7.3  Update `src/commands/put.rs`, `src/commands/ingest.rs`, and `src/mcp/server.rs` (brain_put handler) to pass `derive_room(&compiled_truth)` instead of the current `palace::derive_room(&compiled_truth)` stub (no call-site change needed — verify the result is actually non-empty for headed content).
+- [x] 7.3  Update `src/commands/put.rs`, `src/commands/ingest.rs`, and `src/mcp/server.rs` (memory_put handler) to pass `derive_room(&compiled_truth)` instead of the current `palace::derive_room(&compiled_truth)` stub (no call-site change needed — verify the result is actually non-empty for headed content).
 - [x] 7.4  Write tests: h2 heading produces kebab-case room; no heading returns `""`; heading with special characters is cleaned; second h2 heading is ignored.
 
 ## Group 8 — Knowledge Gaps (`src/core/gaps.rs` + `src/commands/gaps.rs`)
@@ -75,31 +75,31 @@ OCC on `brain_put` is already complete — do not re-implement.
 - [x] 8.1  Implement `log_gap(query: &str, context: &str, confidence_score: Option<f64>, conn: &Connection) -> Result<(), GapsError>` in `src/core/gaps.rs`: insert into `knowledge_gaps` with `query_hash = sha256_hex(query)`, `sensitivity = 'internal'`, `query_text = NULL`. Use `INSERT OR IGNORE` to be idempotent on the same query hash.
 - [x] 8.2  Implement `list_gaps(resolved: bool, limit: usize, conn: &Connection) -> Result<Vec<KnowledgeGap>, GapsError>`.
 - [x] 8.3  Implement `resolve_gap(id: i64, resolved_by_slug: &str, conn: &Connection) -> Result<(), GapsError>`.
-- [x] 8.4  In `src/commands/query.rs` and `src/mcp/server.rs` (brain_query handler), after `hybrid_search`, if `results.len() < 2` or all scores < 0.3, call `log_gap`. On success print to stderr "Knowledge gap logged."
+- [x] 8.4  In `src/commands/query.rs` and `src/mcp/server.rs` (memory_query handler), after `hybrid_search`, if `results.len() < 2` or all scores < 0.3, call `log_gap`. On success print to stderr "Knowledge gap logged."
 - [x] 8.5  Implement `run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()>` in `src/commands/gaps.rs` calling `core::gaps::list_gaps`.
 - [x] 8.6  Wire `gaps::run` into `src/main.rs` dispatch (currently has a `todo!`).
 - [x] 8.7  Write tests: `log_gap` inserts a row; duplicate query is idempotent; `list_gaps` returns only unresolved by default; `resolve_gap` sets resolved_at; low-result query auto-logs gap.
 
 ## Group 9 — MCP Phase 2 Write Surface (`src/mcp/server.rs`)
 
-- [x] 9.1  Add `BrainLinkInput` struct and `brain_link` tool method. Delegate to `commands::link::run`. Map anyhow errors to `ErrorCode(-32001)` for page-not-found, `-32003` for other db errors.
-- [x] 9.2  Add `BrainLinkCloseInput` struct and `brain_link_close` tool method. Delegate to `commands::link::close`. Return `-32001` if link not found.
-- [x] 9.3  Add `BrainBacklinksInput` struct and `brain_backlinks` tool method. Delegate to `commands::link::backlinks`. Return JSON array. Validate slug with `validate_slug`.
-- [x] 9.4  Add `BrainGraphInput` struct and `brain_graph` tool method. Delegate to `core::graph::neighborhood_graph`. Validate slug. Return JSON `{"nodes": [...], "edges": [...]}`. Cap depth at 10.
-- [x] 9.5  Add `BrainCheckInput` struct and `brain_check` tool method. Delegate to `core::assertions::check_assertions` (single slug) or iterate all pages (no slug). Return JSON array of contradictions.
-- [x] 9.6  Add `BrainTimelineInput` struct and `brain_timeline` tool method. Delegate to `commands::timeline::run` (JSON mode). Validate slug. Default limit 20, max 1000.
-- [x] 9.7  Add `BrainTagsInput` struct and `brain_tags` tool method. Delegate to `commands::tags`. If both `add` and `remove` are absent, list tags. Return JSON array of current tags after operation.
+- [x] 9.1  Add `BrainLinkInput` struct and `memory_link` tool method. Delegate to `commands::link::run`. Map anyhow errors to `ErrorCode(-32001)` for page-not-found, `-32003` for other db errors.
+- [x] 9.2  Add `BrainLinkCloseInput` struct and `memory_link_close` tool method. Delegate to `commands::link::close`. Return `-32001` if link not found.
+- [x] 9.3  Add `BrainBacklinksInput` struct and `memory_backlinks` tool method. Delegate to `commands::link::backlinks`. Return JSON array. Validate slug with `validate_slug`.
+- [x] 9.4  Add `BrainGraphInput` struct and `memory_graph` tool method. Delegate to `core::graph::neighborhood_graph`. Validate slug. Return JSON `{"nodes": [...], "edges": [...]}`. Cap depth at 10.
+- [x] 9.5  Add `BrainCheckInput` struct and `memory_check` tool method. Delegate to `core::assertions::check_assertions` (single slug) or iterate all pages (no slug). Return JSON array of contradictions.
+- [x] 9.6  Add `BrainTimelineInput` struct and `memory_timeline` tool method. Delegate to `commands::timeline::run` (JSON mode). Validate slug. Default limit 20, max 1000.
+- [x] 9.7  Add `BrainTagsInput` struct and `memory_tags` tool method. Delegate to `commands::tags`. If both `add` and `remove` are absent, list tags. Return JSON array of current tags after operation.
 - [x] 9.8  Update `get_info_enables_tools_capability` test (or add a new test) to reference the 7 new Phase 2 tool method signatures, confirming they compile and are accessible.
-- [x] 9.9  Write MCP tests: `brain_link` with unknown from_slug returns -32001; `brain_link_close` with unknown id returns -32001; `brain_backlinks` returns link array; `brain_graph` returns nodes+edges JSON; `brain_check` on clean page returns `[]`; `brain_timeline` on unknown slug returns -32001; `brain_tags` list/add/remove round-trip.
+- [x] 9.9  Write MCP tests: `memory_link` with unknown from_slug returns -32001; `memory_link_close` with unknown id returns -32001; `memory_backlinks` returns link array; `memory_graph` returns nodes+edges JSON; `memory_check` on clean page returns `[]`; `memory_timeline` on unknown slug returns -32001; `memory_tags` list/add/remove round-trip.
 
 ## Group 10 — Phase 2 Ship Gate
 
 - [x] 10.1  `cargo test` — all tests pass (target: 200+ unit tests).
 - [x] 10.2  `cargo clippy -- -D warnings` — zero warnings.
 - [x] 10.3  `cargo fmt --check` — clean.
-- [x] 10.4  Manual smoke test: `gbrain graph people/alice --depth 2`, `gbrain check --all`, `gbrain gaps`, `gbrain query "test" --depth auto`.
+- [x] 10.4  Manual smoke test: `quaid graph people/alice --depth 2`, `quaid check --all`, `quaid gaps`, `quaid query "test" --depth auto`.
 - [x] 10.5  Phase 1 round-trip tests (`tests/roundtrip_semantic.rs`, `tests/roundtrip_raw.rs`) still pass with no regressions.
 - [x] 10.6  Professor review: `src/core/graph.rs` BFS correctness, `src/core/progressive.rs` budget logic, OCC protocol unchanged.
 - [x] 10.7  Nibbler review: MCP Phase 2 write surface adversarial check (link injection, graph depth abuse, contradiction table poisoning).
 - [x] 10.8  Mom review: temporal link edge cases (valid_from > valid_until rejected by schema CHECK, zero-hop graph, null valid_from).
-- [x] 10.9  Bender sign-off: ingest novelty-skip scenario, contradictions round-trip (ingest conflicting pages → `gbrain check` detects).
+- [x] 10.9  Bender sign-off: ingest novelty-skip scenario, contradictions round-trip (ingest conflicting pages → `quaid check` detects).

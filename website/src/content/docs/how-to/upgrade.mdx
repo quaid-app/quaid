@@ -1,0 +1,131 @@
+---
+title: Upgrade your binary
+description: Bump to a new quaid release with SHA-256 verification and a working rollback.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The `upgrade` skill walks an agent through this; this page is the same workflow for humans. It covers the version check, the safe-replace, and the post-upgrade validation.
+
+<Aside type="danger" title="Hard break — no in-place upgrade path from pre-rename releases">
+**If you are on any pre-rename release, this is not a routine patch.** Every user-facing
+surface changed at once: the binary name, all environment variables, all MCP tool names,
+the default database path, and the internal schema configuration table. There are no shims,
+no aliases, and no automatic migration.
+
+**You cannot upgrade in place. You must start fresh:**
+
+1. Install `quaid` via the shell installer or GitHub Releases.
+2. Rebuild every MCP client config (`command: quaid`, `args: ["serve"]`, `memory_*` tool prefix). Clients silently expose zero tools until this is done.
+3. Update shell profile exports to `QUAID_DB`, `QUAID_MODEL`, `QUAID_CHANNEL`, etc.
+4. Pre-rename databases are schema-incompatible with `quaid` (`SCHEMA_VERSION` is now `6`). To recover data, use your pre-rename binary to export pages, then run `quaid init` and `quaid import`. If you no longer have that binary, consult the GitHub Release history for that project — this repository does not carry a migration tool.
+
+No shims, no aliases, no automatic migration. Full surface reference: [`MIGRATION.md`](https://github.com/quaid-app/quaid/blob/main/MIGRATION.md).
+</Aside>
+
+## Check what you have
+
+```bash
+quaid version
+quaid stats
+```
+
+Note the binary version and the schema version on the memory (`schema_version` in `quaid_config`, currently `6`).
+
+## Find the new release
+
+```bash
+# Latest
+curl -fsSL https://api.github.com/repos/quaid-app/quaid/releases/latest | jq -r '.tag_name'
+
+# Or pin
+QUAID_VERSION=v0.9.8
+```
+
+Read the release notes before upgrading. Schema bumps require a migration window.
+
+## Re-run the installer
+
+The shell installer is the supported upgrade path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+  | QUAID_VERSION=v0.9.8 sh
+```
+
+It:
+
+1. Downloads the matching asset for your platform.
+2. Verifies the SHA-256 checksum.
+3. Stages a tempfile in the install directory.
+4. Atomically renames it over the existing `quaid` binary.
+5. Runs `quaid version` to confirm.
+
+If you installed manually, repeat the manual steps:
+
+```bash
+ASSET="quaid-darwin-arm64-airgapped"
+VERSION="v0.9.8"
+curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
+curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ASSET}.sha256" -o "${ASSET}.sha256"
+shasum -a 256 -c "${ASSET}.sha256"
+chmod +x "${ASSET}"
+mv "${ASSET}" ~/.local/bin/quaid
+```
+
+## Stop the MCP server first
+
+If `quaid serve` is running (under Claude Code, Cursor, or anywhere else), stop it before swapping the binary:
+
+- macOS: quit Claude Code entirely, then upgrade.
+- Linux: `pkill quaid` (or quit the parent process).
+
+The atomic `mv` is safe even with the binary in use, but the running process keeps the old version until restarted. Cleaner to stop, swap, restart.
+
+## Validate post-upgrade
+
+```bash
+quaid version                                # should show new version
+quaid validate --db ~/.quaid/memory.db        # all integrity checks
+quaid stats --db ~/.quaid/memory.db           # confirm schema_version
+quaid skills doctor                          # confirm embedded skills updated correctly
+quaid query "any test query" --db ~/.quaid/memory.db  # smoke test
+```
+
+If any check fails, **stop and roll back.** Don't try to fix forward; the release notes will tell you whether the failure is expected (e.g. a schema migration that needs manual approval) or a regression.
+
+## Roll back
+
+If you kept the previous binary or you can re-download it from the GitHub releases page:
+
+```bash
+# Reinstall the previous version
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+  | QUAID_VERSION=v0.9.7 sh
+
+quaid version    # confirm
+```
+
+Memory databases written by a newer version may carry forward-incompatible state (a future schema, an unrecognized config row). Rolling back works cleanly if no migration ran; if a migration did run, restore your `~/.quaid/memory.db` backup (or the custom path from `QUAID_DB` / `--db`).
+
+## Schema migrations
+
+When the schema version bumps:
+
+1. The release notes will say so explicitly.
+2. The first command run against an old memory will refuse to proceed — no implicit migrations.
+3. Use `quaid validate` first (it'll surface what needs to change).
+4. Then run the documented migration.
+
+We don't auto-migrate. Auto-migrations are how databases die.
+
+## Skill upgrades
+
+When the binary upgrades, the embedded skills upgrade with it. Your overrides at `~/.quaid/skills/` and in working directories survive — they always win. `quaid skills doctor` shows you whether your override is now diverged from the new embedded default; review and decide whether to refresh.
+
+## Embedding model upgrades
+
+A binary upgrade does **not** change the embedding model recorded in your memory. Switching models requires the export/import dance — see [Switch embedding models](/how-to/switch-embedding-model/).

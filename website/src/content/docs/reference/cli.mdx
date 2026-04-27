@@ -1,448 +1,347 @@
 ---
-title: CLI Reference
-description: Planned `gbrain` commands, options, and examples.
+title: CLI reference
+description: Every quaid subcommand, flag, and exit-code, grouped by domain.
+guide:
+  eyebrow: Reference
+  accentBar: true
 ---
 
-import { Tabs, TabItem } from "@astrojs/starlight/components";
-
-> All commands are implemented as of Phase 3 (`v0.9.2`). Use `gbrain --help` or `gbrain <command> --help` for the authoritative flag list for your installed version.
+`quaid` is a single binary that exposes the entire memory over a Unix-style CLI. This page documents every subcommand grouped by domain. For the authoritative flag list on your installed version, run `quaid --help` or `quaid <command> --help`.
 
 ## Global options
 
-| Option         | Description                                                  |
-| -------------- | ------------------------------------------------------------ |
-| `--db <PATH>`  | Path to `brain.db` (env: `GBRAIN_DB`, default: `./brain.db`) |
-| `--json`       | JSON output instead of human-readable text                   |
-| `--version`    | Print version                                                |
-| `--tools-json` | Print MCP tool discovery JSON                                |
+These flags apply to every subcommand and may appear before or after the command name.
 
-## Commands
+| Flag | Description |
+| ---- | ----------- |
+| `--db <PATH>` | Database path. Env: `QUAID_DB`. Default: `./memory.db`. |
+| `--model <ALIAS\|HF_ID>` | Embedding model. Env: `QUAID_MODEL`. Default: `small`. Recognized aliases: `small`, `base`, `large`, `m3`. Any other value is treated as a Hugging Face model ID (online build only). |
+| `--json` | Emit JSON instead of human-readable text. Most commands honor this. |
+| `--help`, `-h` | Print help. Works at root or per-command. |
+| `--version`, `-V` | Print version and exit. |
 
-| Command                 | What it does                             |
-| ----------------------- | ---------------------------------------- |
-| `init [PATH]`           | Create a new `brain.db`                  |
-| `get <SLUG>`            | Read a page by slug                      |
-| `put <SLUG> [FILE]`     | Write/update a page (stdin or file)      |
-| `search <QUERY>`        | Full-text keyword search (FTS5)          |
-| `query <QUESTION>`      | Hybrid search (FTS5 + vectors)           |
-| `ingest <FILE>`         | Ingest a source document                 |
-| `import <DIR>`          | Import a markdown directory              |
-| `export [--dir <PATH>]` | Export a brain to a markdown directory   |
-| `embed [<SLUG>]`        | Generate/regenerate embeddings           |
-| `link <FROM> <TO>`      | Create a typed, temporal cross-reference |
-| `link-close <LINK_ID>`  | Close a link interval by ID              |
-| `links <SLUG>`          | List outbound links (with IDs)           |
-| `unlink <FROM> <TO>`    | Remove a cross-reference                 |
-| `backlinks <SLUG>`      | Show pages linking to a slug             |
-| `graph <SLUG>`          | N-hop neighborhood graph as JSON         |
-| `timeline <SLUG>`       | Show timeline entries                    |
-| `timeline-add <SLUG>`   | Add a structured timeline entry          |
-| `tags <SLUG>`           | List tags for a page                     |
-| `tag <SLUG> <TAG>`      | Add a tag                                |
-| `untag <SLUG> <TAG>`    | Remove a tag                             |
-| `list`                  | List pages with filters                  |
-| `stats`                 | Brain statistics                         |
-| `check [SLUG]`          | Run contradiction checks                 |
-| `gaps`                  | List unresolved knowledge gaps           |
-| `validate`              | Run integrity checks                     |
-| `compact`               | Checkpoint WAL → single file             |
-| `config get\|set\|list` | Read/write/list config                   |
-| `skills`                | List active skills (embedded + external) |
-| `skills doctor`         | Show skill resolution order + hashes     |
-| `serve`                 | Start MCP server (stdio)                 |
-| `version`               | Version info (and migration state)       |
-| `call <TOOL> <JSON>`    | Raw MCP tool call                        |
-| `pipe`                  | JSONL streaming mode                     |
+## Data — read and write
 
----
+### `init [PATH]`
 
-## Command details
-
-### `init`
-
-Create a new brain database.
+Create a new memory database. Records the active embedding model in `quaid_config` so subsequent opens validate against it.
 
 ```bash
-gbrain init ~/brain.db
+quaid init ~/memory.db
+quaid init ~/memory-large.db --model large   # online build only
 ```
 
-### `get`
+### `get <SLUG>`
 
-Read a page by slug.
+Read a page by slug. Slugs may be collection-qualified (`<collection>::<slug>`) when more than one collection is attached.
 
 ```bash
-gbrain get people/pedro-franceschi
+quaid get people/alice
+quaid get research::people/alice
 ```
 
-### `put`
+### `put <SLUG>`
 
-Write/update a page from stdin (or a file).
+Write or update a page from stdin. For updates, supply `--expected-version` to enable optimistic concurrency (OCC). On a conflict the call fails and you must re-fetch before retrying.
 
 ```bash
-cat updated.md | gbrain put people/pedro-franceschi
+cat updated.md | quaid put people/alice --expected-version 7
 ```
 
-### `search`
-
-FTS5 keyword search.
-
-```bash
-gbrain search "river ai"
-```
-
-### `query`
-
-Hybrid search combining FTS5 + vector similarity. Use `--depth auto` to enable progressive retrieval — the engine expands context until its token budget is exhausted, returning richer results for complex questions.
-
-```bash
-# Standard hybrid query
-gbrain query "who knows Jensen Huang?"
-
-# Progressive retrieval — expands context breadth automatically
-gbrain query "who works at Acme Corp?" --depth auto
-
-# JSON output
-gbrain query "people at Acme" --depth auto --json
-```
-
-**Options:**
-
-| Option         | Description                               |
-| -------------- | ----------------------------------------- |
-| `--depth auto` | Enable token-budget progressive retrieval |
-| `--limit N`    | Max results (default: 10)                 |
-| `--json`       | Emit JSON result array                    |
-
-### `ingest`
-
-Ingest a source document (meeting/article/doc/conversation).
-
-```bash
-gbrain ingest ./notes/meeting.md --type meeting
-```
-
-### `import`
-
-Import a markdown directory into the brain.
-
-```bash
-gbrain import /path/to/notes/ --db ~/brain.db
-```
-
-### `export`
-
-Export a brain to a markdown directory.
-
-```bash
-gbrain export --dir ./export/
-```
-
-### `embed`
-
-Generate embeddings for one page or in batches.
-
-```bash
-gbrain embed people/pedro-franceschi
-gbrain embed --stale
-gbrain embed --all
-```
-
-### `link`
-
-Create a typed, temporal cross-reference.
-
-```bash
-gbrain link people/pedro-franceschi companies/brex --relationship founded --valid-from 2017-01-01
-```
-
-### `link-close`
-
-Close a link interval by link ID.
-
-```bash
-gbrain link-close 123 --valid-until 2021-01-01
-```
-
-### `links`
-
-List outbound links (optionally include IDs + temporal metadata).
-
-```bash
-gbrain links people/pedro-franceschi --temporal all --json
-```
-
-### `unlink`
-
-Remove a cross-reference entirely.
-
-```bash
-gbrain unlink people/pedro-franceschi companies/brex --relationship founded
-```
-
-### `backlinks`
-
-Find pages that link **to** a slug.
-
-```bash
-gbrain backlinks companies/brex
-```
-
-### `graph`
-
-Traverse the N-hop neighborhood from a page, showing all linked pages and edges.
-
-```bash
-# Human-readable tree (default)
-gbrain graph people/alice --depth 2
-
-# Include historical (closed) links
-gbrain graph people/alice --depth 2 --temporal all
-
-# JSON output for programmatic use
-gbrain graph people/alice --depth 2 --json
-```
-
-**Options:**
-
-| Option                   | Default  | Description                                              |
-| ------------------------ | -------- | -------------------------------------------------------- |
-| `--depth N`              | `1`      | Number of hops to traverse                               |
-| `--temporal active\|all` | `active` | `active` = only open links; `all` = include closed links |
-| `--json`                 | —        | Emit JSON with `nodes` and `edges` arrays                |
-
-**Example JSON output:**
-
-````json
-{
-  "nodes": [
-    { "slug": "people/alice", "page_type": "person", "summary": "Engineer at Acme." },
-    { "slug": "companies/acme", "page_type": "company", "summary": "Enterprise software." }
-  ],
-  "edges": [
-    {
-      "from": "people/alice",
-      "to": "companies/acme",
-      "relationship": "works_at",
-      "valid_from": "2023-01-01",
-      "valid_until": null
-    }
-  ]
-}
-
-### `timeline`
-
-Show timeline entries for a page.
-
-```bash
-gbrain timeline people/pedro-franceschi
-````
-
-### `timeline-add`
-
-Add a structured timeline entry.
-
-```bash
-gbrain timeline-add people/pedro-franceschi --date 2026-04-14 --summary "Met at demo day" --source meeting/42
-```
-
-### `tags`, `tag`, `untag`
-
-Work with tags.
-
-```bash
-gbrain tags people/pedro-franceschi
-gbrain tag people/pedro-franceschi yc-alum
-gbrain untag people/pedro-franceschi yc-alum
-```
+| Flag | Type | Default | Notes |
+| ---- | ---- | ------- | ----- |
+| `--expected-version <N>` | i64 | none | Required for safe updates; absent means "create only". |
 
 ### `list`
 
-List pages with filters.
+List pages with optional filters.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--wing <NAME>` | string | none |
+| `--type <TYPE>` | string | none |
+| `--limit <N>` | u32 | 50 |
+
+### `search <QUERY>`
+
+FTS5 full-text search. By default the input is sanitized so natural-language queries with `?`, `!`, etc. work without escaping. Pass `--raw` to send the query verbatim and use FTS5 expert syntax (quoted phrases, boolean operators, prefix wildcards).
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--wing <NAME>` | string | none |
+| `--limit <N>` | u32 | 10 |
+| `--raw` | flag | false |
 
 ```bash
-gbrain list --type person --tag yc-alum --limit 50 --sort updated
+quaid search "river ai"
+quaid search '"local-first" AND (sqlite OR fts5)' --raw
 ```
 
-### `stats`
+### `query <QUERY>`
 
-Show brain statistics.
+Hybrid retrieval: FTS5 + vector similarity, fused via set-union. Use `--depth auto` to enable progressive expansion — the engine grows the context window until the token budget is exhausted.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--depth <auto\|''>` | string | `auto` |
+| `--limit <N>` | u32 | 10 |
+| `--token-budget <N>` | u32 | 4000 |
+| `--wing <NAME>` | string | none |
 
 ```bash
-gbrain stats
+quaid query "who is interested in offline-first knowledge systems?"
 ```
 
-### `check`
+## Ingest — import, export, embed
 
-Run contradiction detection by extracting assertions and comparing them for conflicts.
+### `ingest <PATH>`
+
+Single-file ingestion with SHA-256 idempotency. Re-running on the same file is a no-op unless `--force` is set.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--force` | flag | false |
+
+### `import <PATH>`
+
+Batch import a markdown directory. Page types are inferred from a PARA-style folder layout (`projects/`, `areas/`, `resources/`, `archives/`).
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--validate-only` | flag | false |
+
+### `export <PATH>`
+
+Export every page to a markdown directory.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--raw` | flag | false |
+| `--import-id <ID>` | string | none |
+
+`--raw` writes byte-for-byte the original ingested content (preserves frontmatter ordering and whitespace); without it, the export is the canonicalized form.
+
+### `embed [SLUG]`
+
+Generate or refresh embeddings.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--all` | flag | false |
+| `--stale` | flag | false |
 
 ```bash
-# Check a single page
-gbrain check --slug people/alice
-
-# Scan entire brain
-gbrain check --all
-
-# JSON output with full contradiction records
-gbrain check --all --json
+quaid embed people/alice          # one page
+quaid embed --stale                # only re-embed pages whose chunks changed
+quaid embed --all                  # rebuild every embedding
 ```
 
-**Options:**
+## Graph — links and backlinks
 
-| Option        | Description                                |
-| ------------- | ------------------------------------------ |
-| `--slug SLUG` | Check a single page                        |
-| `--all`       | Check all pages in the brain               |
-| `--json`      | Emit a JSON array of contradiction records |
+### `link <FROM> <TO>`
 
-**Example JSON output:**
+Create a typed temporal cross-reference. Both ends must exist as pages.
 
-```json
-[
-  {
-    "page_slug": "people/alice",
-    "other_page_slug": "sources/alice-profile",
-    "type": "assertion_conflict",
-    "description": "Conflicting 'employer' values: 'Acme' vs 'Beta Corp'",
-    "detected_at": "2026-04-15T10:00:00Z"
-  }
-]
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--relationship <NAME>` | string | `related` |
+| `--valid-from <DATE>` | ISO-8601 | none (open-start) |
+| `--valid-until <DATE>` | ISO-8601 | none (open-end) |
+
+### `link-close <LINK_ID>`
+
+Close an open temporal link interval by setting `valid_until`.
+
+| Flag | Type |
+| ---- | ---- |
+| `--valid-until <DATE>` (required) | ISO-8601 |
+
+### `links <SLUG>`
+
+List outbound links from a page, with link IDs.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--temporal <current\|all>` | string | `current` |
+
+### `unlink <FROM> <TO>`
+
+Remove a cross-reference entirely. With `--relationship`, only that edge is removed.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--relationship <NAME>` | string | none (remove all) |
+
+### `backlinks <SLUG>`
+
+List inbound links to a page.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--temporal <current\|all>` | string | `current` |
+
+### `graph <SLUG>`
+
+N-hop neighbourhood graph from a page (BFS over `links`, with temporal filtering).
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--depth <N>` | u32 | 2 |
+| `--temporal <current\|all>` | string | `current` |
+
+## Tags and timeline
+
+### `tags <SLUG>`
+
+Manage tags. Both `--add` and `--remove` are repeatable.
+
+```bash
+quaid tags people/alice                       # list
+quaid tags people/alice --add infra --add ops # add two tags
+quaid tags people/alice --remove ops          # remove one
 ```
+
+### `timeline <SLUG>`
+
+Show timeline entries for a page.
+
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--limit <N>` | u32 | 20 |
+
+### `timeline-add <SLUG>`
+
+Append a structured timeline entry. `--date` and `--summary` are required.
+
+| Flag | Type | Required |
+| ---- | ---- | -------- |
+| `--date <DATE>` | ISO-8601 | yes |
+| `--summary <TEXT>` | string | yes |
+| `--source <REF>` | string | no |
+| `--detail <TEXT>` | string | no |
+
+## Intelligence — checks and gaps
+
+### `check [SLUG]`
+
+Run contradiction detection on a single page or, with `--all`, every page. Heuristic; backed by the `assertions` table.
+
+| Flag | Type |
+| ---- | ---- |
+| `--all` | flag |
+| `--type <TYPE>` | string |
 
 ### `gaps`
 
-List knowledge gaps — queries the brain couldn't answer with high confidence. Gaps are auto-logged when `query` returns low-result or low-confidence results.
+List unresolved knowledge gaps. By default only unresolved gaps are returned.
 
-```bash
-# List unresolved gaps
-gbrain gaps
+| Flag | Type | Default |
+| ---- | ---- | ------- |
+| `--limit <N>` | u32 | 20 |
+| `--resolved` | flag | false |
 
-# Show more
-gbrain gaps --limit 50
-
-# Include already-resolved gaps
-gbrain gaps --resolved
-
-# JSON output
-gbrain gaps --json
-```
-
-**Options:**
-
-| Option       | Default | Description                          |
-| ------------ | ------- | ------------------------------------ |
-| `--limit N`  | `20`    | Max number of gaps to return         |
-| `--resolved` | —       | Include gaps that have been resolved |
-| `--json`     | —       | Emit a JSON array of gap records     |
-
-**Example JSON output:**
-
-```json
-[
-  {
-    "id": 42,
-    "query_hash": "who-funds-acme",
-    "context": "who funds acme corp?",
-    "confidence_score": 0.12,
-    "sensitivity": "internal",
-    "resolved_at": null,
-    "detected_at": "2026-04-15T08:30:00Z"
-  }
-]
-```
+## Maintenance
 
 ### `validate`
 
-Integrity checks (links/assertions/embeddings/etc.).
+Memory integrity checks. With no flags, all checks run.
 
-```bash
-gbrain validate --all
-```
+| Flag | Type |
+| ---- | ---- |
+| `--all` | flag |
+| `--links` | flag |
+| `--assertions` | flag |
+| `--embeddings` | flag |
 
 ### `compact`
 
-Checkpoint WAL so the brain is transportable as one file.
+Checkpoint the SQLite WAL into a single file. Safe to run while no writers are active.
+
+### `stats`
+
+Memory statistics: page count, link count, gap count, active embedding model.
 
 ```bash
-gbrain compact
+quaid stats
+quaid stats --json
 ```
+
+## Collections — vault sync (Unix, v0.9.6)
+
+`collection` groups all vault-sync subcommands. See [Manage collections](/how-to/collections/) for end-to-end guidance.
+
+```bash
+quaid collection add notes ~/Documents/Obsidian --writable
+quaid collection list
+quaid collection info notes
+quaid collection sync notes
+quaid collection ignore add notes "_attachments/**"
+quaid collection quarantine list notes
+```
+
+Subcommands: `add` · `list` · `info` · `sync` · `restore` · `restore-reset` · `reconcile-reset` · `ignore add|remove|list|clear` · `quarantine list|export|discard|restore`.
+
+## Configuration
 
 ### `config`
 
-Read/write/list config.
+Read or write runtime config keys.
 
 ```bash
-gbrain config list
-gbrain config get search_merge_strategy
-gbrain config set search_merge_strategy set-union
+quaid config get default_token_budget
+quaid config set default_token_budget 6000
+quaid config reset default_token_budget
 ```
 
-### `skills`
+Subcommands: `get <KEY>` · `set <KEY> <VALUE>` · `reset <KEY>`.
 
-Inspect skill resolution order and hashes.
+See [Configuration](/reference/configuration/) for the full key list.
 
-```bash
-gbrain skills
-gbrain skills doctor
-```
+## System — serve, skills, raw
 
 ### `serve`
 
-Start the MCP server (stdio).
+Start the MCP stdio server. Connects any MCP client to this memory.
 
 ```bash
-gbrain serve
+QUAID_DB=~/memory.db quaid serve
 ```
 
-### `version`
+`serve` ships on macOS and Linux today; Windows parity is on the roadmap.
 
-Print version info (and migration state).
+### `skills`
+
+Skills are agent-shaped markdown files embedded in the binary, extractable to `~/.quaid/skills/`, and overridable from the working directory.
 
 ```bash
-gbrain version
+quaid skills list      # show resolution order
+quaid skills doctor    # verify hashes; report shadowing
 ```
 
-### `call`
+Subcommands: `list` · `doctor`.
 
-Raw tool call helper (good for debugging).
+### `call <TOOL> [PARAMS_JSON]`
+
+Invoke a raw MCP tool from the CLI. Useful for debugging and for shell scripts.
 
 ```bash
-gbrain call brain_search '{\"query\":\"river ai\",\"limit\":10}'
+quaid call memory_search '{"query":"alice","limit":3}'
 ```
 
 ### `pipe`
 
-JSONL streaming mode (one JSON object per line).
+JSONL streaming mode. Reads one JSON request object per line on stdin, writes one response per line on stdout. Designed for shell pipelines and lightweight harnesses.
 
-```bash
-cat requests.jsonl | gbrain pipe
-```
+### `version`
 
-## Examples
+Print the version and the memory's schema-version state.
 
-<Tabs>
-  <TabItem label="Create + search">
-    ```bash
-    gbrain init ~/brain.db
-    gbrain import /path/to/notes/ --db ~/brain.db
-    gbrain search "river ai"
-    gbrain query "who has worked with Jensen Huang?"
-    ```
-  </TabItem>
-  <TabItem label="Read + write">
-    ```bash
-    gbrain get people/pedro-franceschi
-    cat updated.md | gbrain put people/pedro-franceschi
-    ```
-  </TabItem>
-  <TabItem label="Links + graph">
-    ```bash
-    gbrain link people/pedro-franceschi companies/brex --relationship founded --valid-from 2017-01-01
-    gbrain graph people/pedro-franceschi --depth 2
-    ```
-  </TabItem>
-  <TabItem label="MCP">
-    ```bash
-    GBRAIN_DB=~/brain.db gbrain serve
-    ```
-  </TabItem>
-</Tabs>
+## Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Success |
+| `1` | General failure (validation, IO, business-rule violation) |
+| `2` | Argument or flag parsing error |
+
+When `--json` is set, errors are also emitted as a JSON object with an `error` field on stderr.

@@ -15,7 +15,7 @@ related_issues: ["#55"]
 
 ## Why
 
-`gbrain check --all` produces a flood of false-positive contradiction reports on real vaults.
+`quaid check --all` produces a flood of false-positive contradiction reports on real vaults.
 The root cause is in `src/core/assertions.rs`: `extract_from_content` runs broad regex patterns
 (is_a, works_at, founded) across the full `compiled_truth` section of every page. Any prose
 sentence that happens to match — analysis text, summaries, quoted sources — becomes an
@@ -44,7 +44,7 @@ an explicit `## Assertions` section (if present) and structured frontmatter fiel
 Extraction rules (in priority order):
 
 1. **Frontmatter fields** (highest trust): `is_a: founder`, `works_at: Acme Corp`,
-   `founded: Brain Co` — parse as typed assertions without regex.
+   `founded: Memory Co` — parse as typed assertions without regex.
 2. **`## Assertions` section** (explicit opt-in): if the page's `compiled_truth` contains a
    `## Assertions` heading, extract only from the content between that heading and the next
    `##`-level heading. Regex patterns continue to apply within this scoped zone.
@@ -72,7 +72,7 @@ path; manual assertions are unaffected.
   - The `## Assertions` heading convention.
   - Supported frontmatter assertion fields (`is_a`, `works_at`, `founded`).
   - The decision to not extract from general body text.
-- `README.md` or `gbrain check --help`: update the check command description to mention that
+- `README.md` or `quaid check --help`: update the check command description to mention that
   assertions are extracted from structured zones only.
 
 ## Non-Goals
@@ -81,7 +81,7 @@ path; manual assertions are unaffected.
 - Implementing `[[is_a: X]]` inline syntax — deferred to a future lane.
 - Changing contradiction-matching logic — only the extraction side is affected.
 - Re-extracting assertions for already-imported pages automatically — users will need to
-  re-run `gbrain check` or re-import; no migration script is required.
+  re-run `quaid check` or re-import; no migration script is required.
 - Implementing a semantic-similarity gate for cross-page assertion comparison (#55) — this
   is deferred. Land extraction tightening first, rerun Doug's corpus to confirm whether
   false positives materially survive, and only open a new lane for #55 if the rerun shows

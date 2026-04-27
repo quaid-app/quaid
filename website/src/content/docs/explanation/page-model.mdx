@@ -1,0 +1,101 @@
+---
+title: Compiled truth + timeline
+description: Why every page splits into an always-current top half and an append-only bottom half.
+guide:
+  eyebrow: Explanation
+  accentBar: true
+---
+
+Quaid pages have a peculiar shape: a top half that is always current and a bottom half that is append-only. This isn't just a markdown convention — it's the central design choice that makes a personal memory coherent over years.
+
+## The split
+
+Every page renders, in order:
+
+1. **Frontmatter** — typed metadata (title, type, slug, tags, links).
+2. **Compiled truth** — the body above the line. Edited in place. Treated as the canonical, always-current statement.
+3. **A horizontal rule** — the literal `---` separator.
+4. **Timeline** — append-only entries below the line. Treated as evidence.
+
+```markdown
+---
+title: Alice Example
+type: person
+---
+
+# Alice Example
+
+Founder at RiverAI. Works on offline-first knowledge systems.
+Met through a shared project in Q1 2026; reliably thoughtful in
+asynchronous threads.
+
+---
+
+## Timeline
+
+- 2026-04-14 — Met at a demo day. Interested in offline-first knowledge.
+- 2026-04-22 — Replied to outreach; warm intro to Bob.
+- 2026-05-03 — Co-authored a draft on local embeddings; sharp edits.
+```
+
+The compiled-truth section answers "what is true about Alice today?" The timeline answers "how do we know?"
+
+## Why two halves
+
+A single notebook entry can either describe the world *now* or record *what happened*. Most note systems force you to pick:
+
+- A wiki page is always-current — but you lose the audit trail.
+- A daily journal is append-only — but you lose the synthesized view.
+- A messy mix of both, and you lose both.
+
+The compiled-truth + timeline split is borrowed from Andrej Karpathy's compiled-knowledge model: above the line is the model's parameters, below the line is the training data. When new evidence arrives, you append to the timeline and re-compile the top.
+
+The benefits compound:
+
+- **Always-current summary at the top.** Search results and snippet displays use this; you don't get stale fragments.
+- **Audit trail at the bottom.** Provenance, dates, sources — all preserved.
+- **Cheap synthesis.** Re-compiling truth is editing one paragraph, not rewriting the whole page.
+- **Honest uncertainty.** When the timeline disagrees, contradiction detection catches it; you don't have to.
+
+## What this means for retrieval
+
+Hybrid search treats the two halves differently:
+
+- The compiled-truth section is **chunked by heading** and embedded as a coherent unit. Vector search returns these.
+- Each timeline entry is embedded **individually**. Date-anchored questions ("what happened in April?") return the relevant entries directly.
+
+The result: a query about a person's current title returns the compiled section; a query about *when* something happened returns timeline rows. You don't have to design two indexes — the page model gives you both for free.
+
+## What this means for writing
+
+The first time you write a page, you write the timeline. The compiled truth comes later, when you have something to compile.
+
+A typical lifecycle:
+
+1. **Capture.** Drop a timeline-style line: `- 2026-04-14 — Met Alice at a demo day. Offline-first knowledge.`
+2. **Accumulate.** Two or three more entries arrive over weeks.
+3. **Compile.** Edit the top of the page to summarize: *"Alice founded RiverAI; works on offline-first knowledge."*
+4. **Repeat.** Each new piece of evidence appends to the timeline; the compiled truth gets edited in place when needed.
+
+`quaid timeline-add` and the `memory_put` MCP tool both make this easy. You never write to the timeline by hand if you don't want to.
+
+## What this means for assertions
+
+Contradiction detection (`memory_check`) reads triples out of the body and the frontmatter. When the compiled truth says "Alice is at RiverAI" and a recent timeline entry says "Alice left RiverAI," the assertion machinery flags the mismatch.
+
+This is why we keep both halves: the timeline is the corpus the assertion engine compares against, and the compiled truth is what it audits.
+
+## What this isn't
+
+- **Not version control.** Git is fine for that. The timeline is editorial; rolling back the compiled truth is just an edit.
+- **Not a journal.** Journal pages exist (`type: journal`) but they're a special case — the entire body is a timeline entry.
+- **Not a graph.** The graph is in the `links` table. The page model is about the *content* shape, not the structure between pages.
+
+## Summary
+
+Two halves, one page:
+
+- **Above the line:** what is true now. Edited in place.
+- **Below the line:** how we know. Append-only.
+
+Everything else — search, contradiction detection, ingestion, ergonomics — falls out of that split.

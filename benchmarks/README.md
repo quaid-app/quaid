@@ -1,6 +1,6 @@
-# GigaBrain Benchmarks
+# Quaid Benchmarks
 
-This directory contains the benchmark harness for GigaBrain.
+This directory contains the benchmark harness for Quaid.
 
 ## Overview
 
@@ -42,7 +42,7 @@ These run entirely locally with no API keys required. They are wired into CI to 
 - **Queries:** 8 synthetic queries with ground-truth relevance judgments
 - **Metric:** nDCG@10 (normalized discounted cumulative gain at rank 10, binary relevance)
 - **Search mode:** Hybrid (FTS5 + vector, set-union merge)
-- **Implementation:** `gbrain query` with default parameters
+- **Implementation:** `quaid query` with default parameters
 
 ### Query Set & Results
 
@@ -50,10 +50,10 @@ These run entirely locally with no API keys required. They are wired into CI to 
 |---|-------|-------------------|--------------|-------|-------|---------|
 | 1 | who founded brex | people/pedro-franceschi OR people/henrique-dubugras | people/pedro-franceschi | ✓ | ✓ | 1.0000 |
 | 2 | technology company developer tools | companies/acme | companies/acme | ✓ | ✓ | 1.0000 |
-| 3 | knowledge brain sqlite embeddings | projects/gigabrain | projects/gigabrain | ✓ | ✓ | 1.0000 |
+| 3 | quaid memory sqlite embeddings | projects/quaid | projects/quaid | ✓ | ✓ | 1.0000 |
 | 4 | corporate card fintech startup | companies/brex | companies/brex | ✓ | ✓ | 1.0000 |
 | 5 | brazilian entrepreneur yc | people/pedro-franceschi OR people/henrique-dubugras | people/henrique-dubugras | ✓ | ✓ | 1.0000 |
-| 6 | rust sqlite vector search | projects/gigabrain | projects/gigabrain | ✓ | ✓ | 1.0000 |
+| 6 | rust sqlite vector search | projects/quaid | projects/quaid | ✓ | ✓ | 1.0000 |
 | 7 | developer productivity apis | companies/acme | companies/acme | ✓ | ✓ | 1.0000 |
 | 8 | brex cto technical leadership | people/henrique-dubugras | people/henrique-dubugras | ✓ | ✓ | 1.0000 |
 
@@ -124,9 +124,9 @@ To update pins after downloading new archive versions:
 ```bash
 # Reproduce Phase 1 baseline — 5 fixture pages, 8 synthetic queries
 cargo build --release
-./target/release/gbrain --db bench_brain.db init
-./target/release/gbrain --db bench_brain.db import tests/fixtures/
-./target/release/gbrain --db bench_brain.db query "who founded brex"
+./target/release/quaid --db bench_memory.db init
+./target/release/quaid --db bench_memory.db import tests/fixtures/
+./target/release/quaid --db bench_memory.db query "who founded brex"
 # ... repeat for all 8 queries in baselines/beir.json
 ```
 
@@ -175,7 +175,7 @@ pip install -r benchmarks/requirements.txt
 OPENAI_API_KEY=sk-... python benchmarks/longmemeval_adapter.py
 
 # Point at an existing brain
-python benchmarks/longmemeval_adapter.py --db ~/brain.db --limit 200
+python benchmarks/longmemeval_adapter.py --db ~/memory.db --limit 200
 
 # JSON output for logging
 python benchmarks/longmemeval_adapter.py --json > results/longmemeval.json
@@ -194,7 +194,7 @@ python benchmarks/locomo_eval.py
 python benchmarks/locomo_eval.py --baseline-only
 
 # Point at existing brain
-python benchmarks/locomo_eval.py --db ~/brain.db --limit 50 --json
+python benchmarks/locomo_eval.py --db ~/memory.db --limit 50 --json
 ```
 
 Expected runtime: ~2–10 minutes.  
@@ -220,7 +220,7 @@ python benchmarks/ragas_eval.py --llm ollama
 python benchmarks/ragas_eval.py --dry-run
 
 # Custom brain
-OPENAI_API_KEY=sk-... python benchmarks/ragas_eval.py --db ~/brain.db --limit 20
+OPENAI_API_KEY=sk-... python benchmarks/ragas_eval.py --db ~/memory.db --limit 20
 ```
 
 **Ollama setup:**

@@ -17,17 +17,17 @@ flag SHALL restrict results to pages matching the given wing.
 - **WHEN** `search_fts("anything", None, &conn)` is called on a fresh database
 - **THEN** an empty result set is returned without error
 
-### Requirement: gbrain search command
-`gbrain search "<QUERY>"` SHALL invoke FTS5 search and print results as slug + summary
+### Requirement: quaid search command
+`quaid search "<QUERY>"` SHALL invoke FTS5 search and print results as slug + summary
 lines, ordered by relevance. `--wing <WING>` filters results. `--limit <N>` caps output
 (default: 10).
 
 #### Scenario: Search from CLI
-- **WHEN** `gbrain search "venture capital"` is called
+- **WHEN** `quaid search "venture capital"` is called
 - **THEN** up to 10 results are printed as `<slug>: <summary>` lines, most relevant first
 
 #### Scenario: No results
-- **WHEN** `gbrain search "zzzznonexistent"` is called
+- **WHEN** `quaid search "zzzznonexistent"` is called
 - **THEN** "No results found." is printed and the command exits 0
 
 ### Requirement: SMS exact-match short-circuit
@@ -51,7 +51,7 @@ vector search. If the query string exactly matches a page slug (or is wrapped in
 The `hybrid_search` function SHALL combine FTS5 and vector search results using
 set-union merge: deduplicate by slug, score each result as a weighted combination of
 BM25 rank and cosine similarity. The merge strategy SHALL be configurable via
-`gbrain config set search_merge_strategy rrf` to switch to Reciprocal Rank Fusion.
+`quaid config set search_merge_strategy rrf` to switch to Reciprocal Rank Fusion.
 
 #### Scenario: Set-union deduplication
 - **WHEN** FTS5 returns `[A, B, C]` and vector search returns `[B, C, D]`

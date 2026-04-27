@@ -1,7 +1,7 @@
 ---
-name: gbrain-ingest
+name: quaid-ingest
 description: |
-  Ingest meeting notes, articles, documents, and conversations into GigaBrain.
+  Ingest meeting notes, articles, documents, and conversations into Quaid.
   Handles idempotent ingestion with SHA-256 deduplication.
 ---
 
@@ -18,8 +18,8 @@ file is a no-op unless `--force` is used.
 ### Single file ingest
 
 ```bash
-gbrain ingest /path/to/document.md
-gbrain ingest /path/to/document.md --force  # re-ingest even if hash matches
+quaid ingest /path/to/document.md
+quaid ingest /path/to/document.md --force  # re-ingest even if hash matches
 ```
 
 The file must be valid markdown with optional YAML frontmatter. Frontmatter
@@ -29,8 +29,8 @@ defaults are derived from the file name and content.
 ### Batch import
 
 ```bash
-gbrain import /path/to/directory/          # import all .md files
-gbrain import /path/to/directory/ --validate-only  # parse-only, no writes
+quaid import /path/to/directory/          # import all .md files
+quaid import /path/to/directory/ --validate-only  # parse-only, no writes
 ```
 
 Walks the directory recursively for `.md` files. SHA-256 hashes are checked
@@ -40,7 +40,7 @@ After import, embeddings are automatically refreshed.
 ### Export
 
 ```bash
-gbrain export /path/to/output/
+quaid export /path/to/output/
 ```
 
 Exports all pages as canonical markdown files to the output directory.

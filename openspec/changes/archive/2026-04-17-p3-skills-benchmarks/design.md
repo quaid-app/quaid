@@ -10,7 +10,7 @@ What remains: the agent-facing intelligence layer (skills), the evaluation infra
 **Current state:**
 - 8 SKILL.md files exist; 3 are production-ready (ingest, query, maintain), 5 are stubs
 - 4 CLI commands are `todo!()`: validate, call, pipe, skills (partially)
-- 4 MCP tools are unimplemented: brain_gap, brain_gaps, brain_stats, brain_raw
+- 4 MCP tools are unimplemented: memory_gap, memory_gaps, memory_stats, memory_raw
 - `--json` flag exists globally but some commands may not fully honour it
 - benchmarks/ has a README with Phase 1 baseline but no executable harnesses
 - version.rs works (prints version)
@@ -43,14 +43,14 @@ What remains: the agent-facing intelligence layer (skills), the evaluation infra
 
 **Decision:** Skills are SKILL.md files consumed by agents at session start. Authoring
 production skills requires no Rust code changes. The `skills doctor` command inspects
-resolution order (embedded → `~/.gbrain/skills/` → working directory) and content hashes.
+resolution order (embedded → `~/.quaid/skills/` → working directory) and content hashes.
 
 **Rationale:** "Thin harness, fat skills" — the spec principle. Agent intelligence should
 not be compiled into the binary.
 
 ### 2. validate command: modular check architecture
 
-**Decision:** `gbrain validate` runs check modules independently:
+**Decision:** `quaid validate` runs check modules independently:
 - `--links`: non-overlapping intervals, temporal ordering, referential integrity
 - `--assertions`: dedup, supersession chain validity, dangling references
 - `--embeddings`: active model exists, all chunks reference active model, vec_rowid resolution
@@ -61,24 +61,24 @@ Each check returns a list of violations. Exit code 0 = clean, 1 = violations fou
 JSON mode outputs structured violation objects.
 
 **Rationale:** Users and the upgrade skill need targeted checks. Running all checks on a
-large brain is slow; targeted checks are fast.
+large memory is slow; targeted checks are fast.
 
 ### 3. call command: direct MCP tool invocation
 
-**Decision:** `gbrain call <TOOL> <JSON>` invokes the MCP tool handler directly without
+**Decision:** `quaid call <TOOL> <JSON>` invokes the MCP tool handler directly without
 starting the MCP server. It deserializes the JSON input, calls the tool function, and
 prints the result. This is the "GL pattern" from the spec.
 
 **Rationale:** Enables shell scripting with MCP tools without an MCP client. Useful for
-`gbrain call brain_raw '{"slug":"...","source":"meeting","data":{...}}'`.
+`quaid call memory_raw '{"slug":"...","source":"meeting","data":{...}}'`.
 
 ### 4. pipe mode: JSONL on stdin/stdout
 
-**Decision:** `gbrain pipe` reads one JSON object per line from stdin. Each object is
+**Decision:** `quaid pipe` reads one JSON object per line from stdin. Each object is
 `{"tool": "<tool_name>", "input": {...}}`. Results are written as one JSON object per line
 to stdout. Errors are JSON objects with an `error` field.
 
-**Rationale:** Shell pipelines (`cat commands.jsonl | gbrain pipe`) enable batch processing
+**Rationale:** Shell pipelines (`cat commands.jsonl | quaid pipe`) enable batch processing
 without MCP protocol overhead.
 
 ### 5. Benchmark harness: Rust for offline, Python for advisory
@@ -92,16 +92,16 @@ without MCP protocol overhead.
 **Rationale:** Offline gates must run in CI without external dependencies. Python is the
 standard for ML evaluation frameworks (Ragas, LongMemEval official scripts).
 
-### 6. MCP Phase 3 tools: brain_gap, brain_gaps, brain_stats, brain_raw
+### 6. MCP Phase 3 tools: memory_gap, memory_gaps, memory_stats, memory_raw
 
 **Decision:**
-- `brain_gap`: wraps `core::gaps::log_gap()`. Accepts query string and context. Always
+- `memory_gap`: wraps `core::gaps::log_gap()`. Accepts query string and context. Always
   stores with `sensitivity = 'internal'`. Returns gap ID.
-- `brain_gaps`: wraps `core::gaps::list_gaps()`. Accepts `resolved` bool and `limit`.
+- `memory_gaps`: wraps `core::gaps::list_gaps()`. Accepts `resolved` bool and `limit`.
   Returns JSON array.
-- `brain_stats`: wraps `commands::stats::run()` in JSON mode. Returns page count, link
+- `memory_stats`: wraps `commands::stats::run()` in JSON mode. Returns page count, link
   count, assertion count, contradiction count, gap count, embedding count.
-- `brain_raw`: INSERT into `raw_data` table. Accepts slug, source, and arbitrary JSON data.
+- `memory_raw`: INSERT into `raw_data` table. Accepts slug, source, and arbitrary JSON data.
   Returns row ID.
 
 **Error codes:** `-32001` for not-found, `-32003` for DB errors, consistent with Phase 2.
@@ -124,7 +124,7 @@ No schema migration. All changes are additive:
 
 ## Open Questions
 
-1. **brain_gap_approve**: The spec defines a separate approval tool for gap sensitivity
+1. **memory_gap_approve**: The spec defines a separate approval tool for gap sensitivity
    escalation. Should this be a Phase 3 MCP tool or deferred? **Decision: defer.**
    The research skill documents the workflow; the tool can be added when needed.
 

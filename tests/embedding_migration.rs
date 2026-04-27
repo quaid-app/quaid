@@ -17,13 +17,13 @@
 //! separate vec0 virtual table. The test verifies DB-level routing logic,
 //! not model quality.
 
-use gbrain::commands::embed;
-use gbrain::core::db;
-use gbrain::core::inference::{embed as embed_text, embedding_to_blob};
+use quaid::commands::embed;
+use quaid::core::db;
+use quaid::core::inference::{embed as embed_text, embedding_to_blob};
 
 fn open_test_db() -> rusqlite::Connection {
     let dir = tempfile::TempDir::new().expect("create temp dir");
-    let db_path = dir.path().join("brain.db");
+    let db_path = dir.path().join("memory.db");
     let conn = db::open(db_path.to_str().unwrap()).expect("open DB");
     // Leak TempDir to keep file alive
     std::mem::forget(dir);
@@ -37,7 +37,7 @@ fn insert_page(conn: &rusqlite::Connection, slug: &str, title: &str, truth: &str
          VALUES (?1, ?2, 'person', ?3, '', ?4, '', '{}', 'people', '', 1)",
         rusqlite::params![
             slug,
-            gbrain::core::page_uuid::generate_uuid_v7(),
+            quaid::core::page_uuid::generate_uuid_v7(),
             title,
             truth
         ],
@@ -157,9 +157,9 @@ fn embedding_migration_zero_cross_model_contamination() {
             "Brex provides corporate cards and financial infrastructure for startups.",
         ),
         (
-            "projects/gbrain",
-            "GBrain",
-            "GBrain is a personal knowledge brain using SQLite and embeddings.",
+            "projects/quaid",
+            "Quaid",
+            "Quaid is a local-first personal memory using SQLite and embeddings.",
         ),
     ];
 
@@ -217,9 +217,8 @@ fn embedding_migration_zero_cross_model_contamination() {
     set_active_model(&conn, &model_b_name);
     assert_eq!(active_model_name(&conn), model_b_name);
 
-    let results_b =
-        gbrain::core::inference::search_vec("knowledge brain embeddings", 10, None, None, &conn)
-            .expect("search with model B");
+    let results_b = quaid::core::inference::search_vec("memory embeddings", 10, None, None, &conn)
+        .expect("search with model B");
 
     // All results should come from model B's embeddings
     if !results_b.is_empty() {
@@ -247,7 +246,7 @@ fn embedding_migration_zero_cross_model_contamination() {
     set_active_model(&conn, &model_a);
     assert_eq!(active_model_name(&conn), model_a);
 
-    let results_a = gbrain::core::inference::search_vec(
+    let results_a = quaid::core::inference::search_vec(
         "software engineer distributed systems",
         10,
         None,
@@ -370,7 +369,7 @@ fn vec_search_on_empty_model_returns_no_results() {
     )
     .expect("deactivate others");
 
-    let results = gbrain::core::inference::search_vec("anything", 10, None, None, &conn)
+    let results = quaid::core::inference::search_vec("anything", 10, None, None, &conn)
         .expect("search empty model");
 
     assert!(

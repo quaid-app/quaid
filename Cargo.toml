@@ -1,16 +1,16 @@
 [package]
-name = "gbrain"
-version = "0.9.4"
+name = "quaid"
+version = "0.9.8"
 edition = "2021"
-description = "Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One static binary."
+description = "Local-first personal memory. SQLite + FTS5 + local vector embeddings. One static binary."
 license = "MIT"
-repository = "https://github.com/macro88/gigabrain"
+repository = "https://github.com/quaid-app/quaid"
 readme = "README.md"
 keywords = ["knowledge-base", "sqlite", "embeddings", "mcp", "rag"]
 categories = ["command-line-utilities", "database"]
 
 [[bin]]
-name = "gbrain"
+name = "quaid"
 path = "src/main.rs"
 
 [dependencies]

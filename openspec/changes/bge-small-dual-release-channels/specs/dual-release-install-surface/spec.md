@@ -1,25 +1,25 @@
 ## ADDED Requirements
 
 ### Requirement: Shell installer defaults to the airgapped channel
-`scripts/install.sh` SHALL resolve `airgapped` assets by default and SHALL accept `GBRAIN_CHANNEL=airgapped|online` to override the selected release channel.
+`scripts/install.sh` SHALL resolve `airgapped` assets by default and SHALL accept `QUAID_CHANNEL=airgapped|online` to override the selected release channel.
 
 #### Scenario: Default shell install chooses the offline-safe asset
-- **WHEN** a user runs `curl .../install.sh | sh` without setting `GBRAIN_CHANNEL`
-- **THEN** the installer downloads `gbrain-<platform>-airgapped` and its checksum for the resolved platform
+- **WHEN** a user runs `curl .../install.sh | sh` without setting `QUAID_CHANNEL`
+- **THEN** the installer downloads `quaid-<platform>-airgapped` and its checksum for the resolved platform
 
 #### Scenario: Shell installer override chooses the online asset
-- **WHEN** a user sets `GBRAIN_CHANNEL=online` before invoking `install.sh`
-- **THEN** the installer downloads `gbrain-<platform>-online` and its checksum for the resolved platform
+- **WHEN** a user sets `QUAID_CHANNEL=online` before invoking `install.sh`
+- **THEN** the installer downloads `quaid-<platform>-online` and its checksum for the resolved platform
 
 ### Requirement: npm postinstall uses the online channel only
 The npm package SHALL download the `online` release asset for the current supported platform and SHALL not bundle either release binary in the npm tarball.
 
 #### Scenario: npm install resolves the online asset
-- **WHEN** `packages/gbrain-npm/scripts/postinstall.js` runs on a supported platform
-- **THEN** it downloads `gbrain-<platform>-online`, verifies its checksum, and installs it as the package binary
+- **WHEN** `packages/quaid-npm/scripts/postinstall.js` runs on a supported platform
+- **THEN** it downloads `quaid-<platform>-online`, verifies its checksum, and installs it as the package binary
 
 #### Scenario: npm package stays slim
-- **WHEN** `npm pack --dry-run` is executed for the `gbrain` package
+- **WHEN** `npm pack --dry-run` is executed for the `quaid` package
 - **THEN** the packed files exclude downloaded binaries and only include the wrapper/package metadata needed to fetch the `online` channel at install time
 
 ### Requirement: Install docs explain both channels and their defaults

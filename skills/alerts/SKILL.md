@@ -1,5 +1,5 @@
 ---
-name: gbrain-alerts
+name: quaid-alerts
 description: |
   Interrupt-driven alerts: detect and surface new contradictions, stale pages,
   resolved gaps, and embedding drift. Priority-classified with deduplication.
@@ -12,7 +12,7 @@ min_binary_version: "0.3.0"
 
 The alerts skill monitors brain state and surfaces actionable notifications.
 It is designed to be called periodically (e.g., on a cron schedule or after
-`brain_put` / `brain_link` operations) rather than interactively.
+`memory_put` / `memory_link` operations) rather than interactively.
 
 Alerts are written to **stdout as structured JSON** — one alert object per line
 — so they can be piped to any downstream handler (logger, MCP client, dashboard).
@@ -23,35 +23,35 @@ Alerts are written to **stdout as structured JSON** — one alert object per lin
 
 | Alert Type | Priority | Trigger Condition |
 |------------|----------|-------------------|
-| `contradiction_new` | **high** | `gbrain check --all` returns a contradiction not seen in the previous run |
+| `contradiction_new` | **high** | `quaid check --all` returns a contradiction not seen in the previous run |
 | `gap_resolved` | **low** | A gap transitions from `resolved_at IS NULL` to `resolved_at IS NOT NULL` |
 | `page_stale` | **medium** | Page has `timeline_updated_at > truth_updated_at` by 30+ days AND has > 5 inbound links |
 | `embedding_drift` | **low** | Any `page_embeddings` row references a `model_id` that is not the current active model |
 
 Priority ladder (highest to lowest): `critical` → `high` → `medium` → `low`.
 Currently no trigger reaches `critical`; reserve that level for future use
-(e.g., data corruption detected by `gbrain validate`).
+(e.g., data corruption detected by `quaid validate`).
 
 ---
 
 ## Commands
 
-The alerts skill orchestrates existing commands. There is no standalone `gbrain alerts`
+The alerts skill orchestrates existing commands. There is no standalone `quaid alerts`
 command; the agent runs these and synthesises results.
 
 ```bash
 # Check for new contradictions
-gbrain check --all --json
+quaid check --all --json
 
 # Check for recently resolved gaps (compare against last known state)
-gbrain gaps --resolved true --json
+quaid gaps --resolved true --json
 
 # List pages for stale-risk check
-gbrain list --json
-gbrain graph <slug> --depth 1 --json   # check inbound link count per candidate page
+quaid list --json
+quaid graph <slug> --depth 1 --json   # check inbound link count per candidate page
 
 # Check embedding model consistency
-gbrain validate --embeddings --json
+quaid validate --embeddings --json
 ```
 
 ---
@@ -108,7 +108,7 @@ predicate value pair changes — it will fire again. This is intentional.
 ### Contradiction alerts
 
 ```
-1. Run: gbrain check --all --json
+1. Run: quaid check --all --json
 2. For each contradiction in the response:
    a. Compute dedup_key = "contradiction_new::<slug>::<predicate>"
    b. Check suppression log for key within last 24h
@@ -118,11 +118,11 @@ predicate value pair changes — it will fire again. This is intentional.
 ### Stale page alerts
 
 ```
-1. Run: gbrain list --json
+1. Run: quaid list --json
 2. Filter pages where:
      (now - timeline_updated_at > 30 days) AND (truth_updated_at < timeline_updated_at)
 3. For each candidate slug:
-   a. Run: gbrain graph <slug> --depth 1 --json
+   a. Run: quaid graph <slug> --depth 1 --json
    b. Count inbound links (edges where target == slug)
    c. If inbound_links > 5:
       - Compute dedup_key = "page_stale::<slug>"
@@ -132,7 +132,7 @@ predicate value pair changes — it will fire again. This is intentional.
 ### Gap resolved alerts
 
 ```
-1. Run: gbrain gaps --resolved true --json
+1. Run: quaid gaps --resolved true --json
 2. For each gap with resolved_at != null:
    a. Compute dedup_key = "gap_resolved::<gap_id>"
    b. If NOT in suppression log: emit low alert, record key
@@ -141,7 +141,7 @@ predicate value pair changes — it will fire again. This is intentional.
 ### Embedding drift alerts
 
 ```
-1. Run: gbrain validate --embeddings --json
+1. Run: quaid validate --embeddings --json
 2. Parse "passed" field
 3. If passed == false:
    a. Compute dedup_key = "embedding_drift::global"
@@ -176,9 +176,9 @@ Write one JSON alert object per line to stdout:
 ```
 
 Downstream handlers consume this stream. Examples:
-- Log to a brain page: `gbrain alerts | gbrain put logs/alerts-<date>`
-- Filter by priority: `gbrain alerts | jq 'select(.priority == "high")'`
-- Count today's alerts: `gbrain alerts | jq -s 'length'`
+- Log to a brain page: `quaid alerts | quaid put logs/alerts-<date>`
+- Filter by priority: `quaid alerts | jq 'select(.priority == "high")'`
+- Count today's alerts: `quaid alerts | jq -s 'length'`
 
 ---
 
@@ -186,7 +186,7 @@ Downstream handlers consume this stream. Examples:
 
 | Condition | Behaviour |
 |-----------|-----------|
-| `gbrain check --all` DB error | Emit one `critical`-priority alert with `type: "check_failed"` and the error message |
-| `gbrain validate --embeddings` fails to run | Skip embedding drift check; log warning to stderr |
+| `quaid check --all` DB error | Emit one `critical`-priority alert with `type: "check_failed"` and the error message |
+| `quaid validate --embeddings` fails to run | Skip embedding drift check; log warning to stderr |
 | Suppression log unreadable | Emit all alerts (fail open — missing suppression is safer than missing alerts) |
 | No brain pages exist | All checks return empty; emit no alerts |

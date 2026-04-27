@@ -25,19 +25,19 @@ then expansion results by link distance).
 - **WHEN** two initial results both link to the same page
 - **THEN** that page appears exactly once in the expanded result set
 
-### Requirement: brain_query depth flag triggers progressive retrieval
-`brain_query` (both CLI and MCP) SHALL accept `--depth auto` (CLI) or `"depth": "auto"` (MCP).
+### Requirement: memory_query depth flag triggers progressive retrieval
+`memory_query` (both CLI and MCP) SHALL accept `--depth auto` (CLI) or `"depth": "auto"` (MCP).
 When depth is `auto`, the query pipeline calls `progressive_retrieve` after `hybrid_search`
 using the `default_token_budget` value from the `config` table.
 When depth is absent or `0`, behaviour is unchanged from Phase 1 (no expansion).
 
-#### Scenario: brain_query --depth auto expands results
-- **WHEN** `gbrain query "who runs Acme" --depth auto` is called against a brain where
+#### Scenario: memory_query --depth auto expands results
+- **WHEN** `quaid query "who runs Acme" --depth auto` is called against a memory where
   companies/acme links to people/alice
 - **THEN** the output includes both the companies/acme result and the people/alice expansion
 
-#### Scenario: brain_query without depth is unchanged
-- **WHEN** `gbrain query "who runs Acme"` is called (no --depth flag)
+#### Scenario: memory_query without depth is unchanged
+- **WHEN** `quaid query "who runs Acme"` is called (no --depth flag)
 - **THEN** behaviour is identical to Phase 1: only direct hybrid_search results are returned
 
 ### Requirement: Palace room classification
@@ -54,5 +54,5 @@ except hyphens). Pages with no `##` heading SHALL return `""` (unchanged from Ph
 - **THEN** `derive_room` returns `""`
 
 #### Scenario: derive_room updates are persisted on put and ingest
-- **WHEN** a page is written with `brain_put` or ingested with `gbrain ingest`
+- **WHEN** a page is written with `memory_put` or ingested with `quaid ingest`
 - **THEN** the `room` column in the `pages` table reflects the value of `derive_room(compiled_truth)`

@@ -38,14 +38,14 @@ caller-supplied argument. A `HashSet<i64>` visited set SHALL prevent cycles.
 JSON output emits `{"nodes": [...], "edges": [...]}`.
 
 #### Scenario: Human-readable graph output
-- **WHEN** `gbrain graph people/alice --depth 2` is called
+- **WHEN** `quaid graph people/alice --depth 2` is called
 - **THEN** stdout shows the root slug, then indented reachable slugs with their relationship label
 
 #### Scenario: JSON graph output
-- **WHEN** `gbrain graph people/alice --depth 2 --json` is called
+- **WHEN** `quaid graph people/alice --depth 2 --json` is called
 - **THEN** stdout is a valid JSON object with `nodes` array (each with `slug`, `type`, `title`)
   and `edges` array (each with `from`, `to`, `relationship`, `valid_from`, `valid_until`)
 
 #### Scenario: Unknown page exits with an error message
-- **WHEN** `gbrain graph nobody/ghost` is called
+- **WHEN** `quaid graph nobody/ghost` is called
 - **THEN** stderr shows "page not found: nobody/ghost" and exit code is non-zero

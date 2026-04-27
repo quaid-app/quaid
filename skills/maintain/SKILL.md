@@ -1,5 +1,5 @@
 ---
-name: gbrain-maintain
+name: quaid-maintain
 description: |
   Maintain brain integrity: detect contradictions, resolve knowledge gaps,
   find orphaned pages, and clean stale assertions.
@@ -11,9 +11,9 @@ description: |
 
 ## Operations
 
-- `gbrain check --all` — run full contradiction detection across all assertions
-- `gbrain validate --all` — check referential integrity, stale embeddings, broken links
-- `gbrain gaps` — list unresolved knowledge gaps
+- `quaid check --all` — run full contradiction detection across all assertions
+- `quaid validate --all` — check referential integrity, stale embeddings, broken links
+- `quaid gaps` — list unresolved knowledge gaps
 - Manual orphan review: pages with no links in or out
 
 ## TODO

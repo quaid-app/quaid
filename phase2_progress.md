@@ -3,7 +3,7 @@
 **Session:** Final handoff  
 **Date:** 2026-04-16  
 **Branch:** `phase2/p2-intelligence-layer`  
-**PR:** [#22](https://github.com/macro88/gigabrain/pull/22)  
+**PR:** [#22](https://github.com/quaid-app/quaid/pull/22)  
 
 ---
 
@@ -24,7 +24,7 @@
 - **Group 5 (Progressive retrieval):** Token-budget expansion with depth gating. ✅ Landed
 - **Group 6–7 (Novelty + palace):** Ingest dedup wiring, room classification. ✅ Landed
 - **Group 8 (Knowledge gaps):** Query logging, gap listing, resolution workflow. ✅ Landed
-- **Group 9 (MCP Phase 2 write surface):** 7 new tools — `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`. ✅ Landed in commit `a1d1593`
+- **Group 9 (MCP Phase 2 write surface):** 7 new tools — `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`. ✅ Landed in commit `a1d1593`
 
 ### In-Flight Work (Uncommitted)
 
@@ -42,7 +42,7 @@
 
 **Last known state:**
 - Commit `a1d1593` compiles cleanly: `cargo test` passes all tests
-- Current working directory: **FAILS TO COMPILE** with E0599 errors in `src/mcp/server.rs` — missing method stubs for `brain_tags` and related tests
+- Current working directory: **FAILS TO COMPILE** with E0599 errors in `src/mcp/server.rs` — missing method stubs for `memory_tags` and related tests
 
 **Note:** The uncommitted changes appear to be from a documentation-sync task that was in progress. Do NOT attempt to recover or complete this work in the next session without full re-review.
 
@@ -69,7 +69,7 @@
    - Stash and discard these changes (`git checkout -- .`)
    - OR merge and fix them directly
 
-2. **Incomplete MCP test stubs:** `src/mcp/server.rs` tests reference `brain_tags` method that exists in impl but tests may have stale signatures. Verify test expectations match implementation after cleaning working directory.
+2. **Incomplete MCP test stubs:** `src/mcp/server.rs` tests reference `memory_tags` method that exists in impl but tests may have stale signatures. Verify test expectations match implementation after cleaning working directory.
 
 3. **Mom's temporal edge-case review:** Still pending. Must sign off before Phase 2 ship gate opens.
 
@@ -121,10 +121,10 @@ Once working directory is clean and tests pass:
 1. Obtain Mom's temporal edge-case sign-off (review `src/core/graph.rs` valid_from/valid_until filtering)
 2. Obtain Bender's integration test sign-off (run ingest novelty scenario and verify contradiction detection)
 3. Run full smoke test suite:
-   - `gbrain graph people/alice --depth 2`
-   - `gbrain check --all`
-   - `gbrain gaps`
-   - `gbrain query "test" --depth auto`
+   - `quaid graph people/alice --depth 2`
+   - `quaid check --all`
+   - `quaid gaps`
+   - `quaid query "test" --depth auto`
 4. Verify Phase 1 roundtrip tests (`roundtrip_semantic.rs`, `roundtrip_raw.rs`) still pass
 5. Merge PR and tag `v0.2.0-phase2`
 

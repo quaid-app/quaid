@@ -4,8 +4,8 @@
 // `migrate::import_dir()` remains the live ingest path until then.
 //
 // Planned responsibilities:
-// - Cold-start reconciliation on `gbrain serve` startup
-// - On-demand sync via `gbrain collection sync`
+// - Cold-start reconciliation on `quaid serve` startup
+// - On-demand sync via `quaid collection sync`
 // - Rename detection (native events, UUID match, content-hash uniqueness)
 // - Delete-vs-quarantine classification via `has_db_only_state`
 
@@ -236,7 +236,7 @@ pub(crate) fn reconcile_with_native_events(
         ignore_patterns::reload_patterns(conn, collection.id, Path::new(&collection.root_path))
             .map_err(|err| {
                 ReconcileError::Other(format!(
-                    "reconcile: refusing to walk with stale .gbrainignore state: {err}"
+                    "reconcile: refusing to walk with stale .quaidignore state: {err}"
                 ))
             })?;
         let walked = walk_collection(conn, &root_fd, collection)?;
@@ -340,8 +340,8 @@ fn walk_collection(
 /// Full-hash reconciliation: ignore stat fields, hash every file.
 ///
 /// Used by:
-/// - `gbrain collection sync --remap-root` (task 5.8)
-/// - `gbrain collection restore` (task 5.8)
+/// - `quaid collection sync --remap-root` (task 5.8)
+/// - `quaid collection restore` (task 5.8)
 /// - Fresh attach (task 5.9)
 /// - Periodic audit (task 4.6)
 ///
@@ -374,7 +374,7 @@ pub fn full_hash_reconcile_authorized(
         let root_fd = fs_safety::open_root_fd(root_path)?;
         ignore_patterns::reload_patterns(conn, collection.id, root_path).map_err(|err| {
             ReconcileError::Other(format!(
-                "full_hash_reconcile: refusing to walk with stale .gbrainignore state: {err}"
+                "full_hash_reconcile: refusing to walk with stale .quaidignore state: {err}"
             ))
         })?;
         let walked = walk_collection(conn, &root_fd, &collection)?;
@@ -596,7 +596,7 @@ fn raw_import_invariant_result(
 }
 
 fn default_restore_stability_max_iters() -> usize {
-    std::env::var("GBRAIN_RESTORE_STABILITY_MAX_ITERS")
+    std::env::var("QUAID_RESTORE_STABILITY_MAX_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value != 0)
@@ -759,7 +759,7 @@ fn take_stat_snapshot(
         ignore_patterns::reload_patterns(conn, collection.id, Path::new(&collection.root_path))
             .map_err(|err| {
                 ReconcileError::Other(format!(
-                    "take_stat_snapshot: refusing to walk with stale .gbrainignore state: {err}"
+                    "take_stat_snapshot: refusing to walk with stale .quaidignore state: {err}"
                 ))
             })?;
         Ok(walk_collection(conn, &root_fd, collection)?.files)
@@ -1212,7 +1212,7 @@ pub fn stat_diff(
         let root_fd = fs_safety::open_root_fd(root_path)?;
         ignore_patterns::reload_patterns(conn, collection_id, root_path).map_err(|err| {
             ReconcileError::Other(format!(
-                "stat_diff: refusing to walk with stale .gbrainignore state: {err}"
+                "stat_diff: refusing to walk with stale .quaidignore state: {err}"
             ))
         })?;
         let walked = walk_root(conn, collection_id, root_path, &root_fd)?;
@@ -1677,7 +1677,7 @@ fn load_new_tree_identities(
         let (compiled_truth, timeline) = markdown::split_content(&body);
         let uuid = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "resolve_rename_resolution: {} has invalid gbrain_id: {err}",
+                "resolve_rename_resolution: {} has invalid memory_id: {err}",
                 path.display()
             ))
         })?;
@@ -1717,7 +1717,7 @@ fn detect_duplicate_uuids_in_tree(
         let (frontmatter, _) = markdown::parse_frontmatter(&raw);
         if let Some(uuid) = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "detect_duplicate_uuids_in_tree: {} has invalid gbrain_id: {err}",
+                "detect_duplicate_uuids_in_tree: {} has invalid memory_id: {err}",
                 relative_path.display()
             ))
         })? {
@@ -2574,7 +2574,7 @@ impl std::fmt::Display for ReconcileError {
                 sample_paths,
             } => write!(
                 f,
-                "UuidMigrationRequiredError: collection={} affected={} sample_paths={} run `gbrain collection migrate-uuids {}` before retrying",
+                "UuidMigrationRequiredError: collection={} affected={} sample_paths={} run `quaid collection migrate-uuids {}` before retrying",
                 collection_name,
                 affected_count,
                 sample_paths.join(","),
@@ -2683,7 +2683,7 @@ mod tests {
 
     fn open_test_db_file() -> (TempDir, PathBuf, rusqlite::Connection) {
         let dir = TempDir::new().unwrap();
-        let db_path = dir.path().join("brain.db");
+        let db_path = dir.path().join("memory.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch(include_str!("../schema.sql")).unwrap();
         (dir, db_path, conn)
@@ -3868,7 +3868,7 @@ mod tests {
         );
         fs::write(
             root.path().join("note.md"),
-            "---\nslug: notes/note\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Note\ntype: concept\n---\nA long enough body to stay non-trivial for the shared helper.\n",
+            "---\nslug: notes/note\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Note\ntype: concept\n---\nA long enough body to stay non-trivial for the shared helper.\n",
         )
         .unwrap();
         let stat = stat_for(root.path(), "note.md");
@@ -3934,7 +3934,7 @@ mod tests {
             true,
         );
         let original =
-            "---\nslug: notes/note\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Note\ntype: concept\n---\nDetached body.\n";
+            "---\nslug: notes/note\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Note\ntype: concept\n---\nDetached body.\n";
         fs::write(root.path().join("note.md"), original).unwrap();
         let stat = stat_for(root.path(), "note.md");
         let sha256 = file_state::hash_file(&root.path().join("note.md")).unwrap();
@@ -3981,7 +3981,7 @@ mod tests {
         )
         .unwrap();
         fs::write(root.path().join("notes").join("new.md"), "# new").unwrap();
-        fs::write(root.path().join(".gbrainignore"), "ignored/**\n").unwrap();
+        fs::write(root.path().join(".quaidignore"), "ignored/**\n").unwrap();
         fs::create_dir_all(root.path().join("ignored")).unwrap();
         fs::write(root.path().join("ignored").join("skip.md"), "# skip").unwrap();
 
@@ -4143,7 +4143,7 @@ mod tests {
         let collection = insert_collection(&conn, root.path());
         let uuid = "01969f11-9448-7d79-8d3f-c68f54761234";
         let content = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/renamed\ntitle: Rename me\ntype: concept\n---\nThis is a long enough body to satisfy conservative rename inference guards.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/renamed\ntitle: Rename me\ntype: concept\n---\nThis is a long enough body to satisfy conservative rename inference guards.\n"
         );
         fs::write(root.path().join("nested").join("renamed.md"), content).unwrap();
         let stat = stat_for(root.path(), "nested/renamed.md");
@@ -4326,16 +4326,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn reconcile_halts_when_two_files_share_the_same_gbrain_id() {
+    fn reconcile_halts_when_two_files_share_the_same_memory_id() {
         let conn = open_test_db();
         let root = TempDir::new().unwrap();
         let collection = insert_collection(&conn, root.path());
         let uuid = "01969f11-9448-7d79-8d3f-c68f54769999";
         let note_a = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is long enough to avoid the trivial-content path.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is long enough to avoid the trivial-content path.\n"
         );
         let note_b = format!(
-            "---\ngbrain_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis other body is also long enough to avoid the trivial-content path.\n"
+            "---\nmemory_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis other body is also long enough to avoid the trivial-content path.\n"
         );
         fs::write(root.path().join("a.md"), note_a).unwrap();
         fs::write(root.path().join("b.md"), note_b).unwrap();
@@ -5380,7 +5380,7 @@ mod tests {
         }
         fs::write(
             root.path().join("note-500.md"),
-            "---\ngbrain_id: not-a-uuid\nslug: notes/500\ntitle: Broken\ntype: concept\n---\nBroken body.\n",
+            "---\nmemory_id: not-a-uuid\nslug: notes/500\ntitle: Broken\ntype: concept\n---\nBroken body.\n",
         )
         .unwrap();
 
@@ -5393,7 +5393,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(error.contains("invalid gbrain_id"));
+        assert!(error.contains("invalid memory_id"));
         assert_eq!(committed_count, 0);
     }
 }

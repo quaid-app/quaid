@@ -1,10 +1,10 @@
 ## Context
 
-GigaBrain already has two partial ingredients for dual distribution, but no coherent contract:
+Quaid already has two partial ingredients for dual distribution, but no coherent contract:
 
 - `Cargo.toml` names `embed-model` and `online-model` features.
 - `src/core/inference.rs` already has an online download path and a cache-only fallback path.
-- `release.yml`, `scripts/install.sh`, and `packages/gbrain-npm/scripts/postinstall.js` still assume one asset per platform.
+- `release.yml`, `scripts/install.sh`, and `packages/quaid-npm/scripts/postinstall.js` still assume one asset per platform.
 
 The active team decision is narrower than the earlier distribution discussion: `v0.9.1` ships only BGE-small in two release channels. That keeps the embedding dimension fixed at 384, preserves DB compatibility, and avoids inventing runtime `--model` selection or base/large support before the project has a migration story for multi-model brains.
 
@@ -39,23 +39,23 @@ No runtime flag chooses between them. Users pick a release asset or install path
 
 ### 2. Use explicit channel suffixes in release assets
 
-**Decision:** Release assets SHALL be named `gbrain-<platform>-airgapped` and `gbrain-<platform>-online`, with matching `.sha256` sidecars.
+**Decision:** Release assets SHALL be named `quaid-<platform>-airgapped` and `quaid-<platform>-online`, with matching `.sha256` sidecars.
 
 Examples:
-- `gbrain-darwin-arm64-airgapped`
-- `gbrain-darwin-arm64-airgapped.sha256`
-- `gbrain-linux-x86_64-online`
-- `gbrain-linux-x86_64-online.sha256`
+- `quaid-darwin-arm64-airgapped`
+- `quaid-darwin-arm64-airgapped.sha256`
+- `quaid-linux-x86_64-online`
+- `quaid-linux-x86_64-online.sha256`
 
 **Rationale:** Suffixing the existing platform-oriented name keeps the current install contract recognizable while making the channel visible everywhere: release UI, scripts, checksums, and docs.
 
-**Alternative considered:** Prefix the channel (`gbrain-airgapped-<platform>`) or use separate tag/release names. Rejected because it makes platform matching harder in the existing installer/npm code and creates unnecessary release fragmentation.
+**Alternative considered:** Prefix the channel (`quaid-airgapped-<platform>`) or use separate tag/release names. Rejected because it makes platform matching harder in the existing installer/npm code and creates unnecessary release fragmentation.
 
 ### 3. Installer defaults follow audience, not symmetry
 
 **Decision:**
-- `scripts/install.sh` defaults to `airgapped` and accepts `GBRAIN_CHANNEL=airgapped|online`.
-- `packages/gbrain-npm/scripts/postinstall.js` downloads the `online` asset only and points users to GitHub Releases if they need the offline-safe build.
+- `scripts/install.sh` defaults to `airgapped` and accepts `QUAID_CHANNEL=airgapped|online`.
+- `packages/quaid-npm/scripts/postinstall.js` downloads the `online` asset only and points users to GitHub Releases if they need the offline-safe build.
 - README/docs/release notes document both channels and state those defaults explicitly.
 
 **Rationale:** The curl installer is the easiest path for shell users who often want a self-contained binary; npm users already have networked Node environments and benefit most from the slimmer package/download path. This keeps one npm package and one shell installer instead of multiplying wrappers.
@@ -111,7 +111,7 @@ The reported model family remains BGE-small-en-v1.5 and the DB/vector metadata r
 4. Update `scripts/install.sh`, npm postinstall, and all install/release docs against the new asset names and defaults.
 5. Run the dual-channel validation gates and collect Bender/Kif/Leela sign-off before tagging `v0.9.1`.
 
-Rollback is straightforward: revert the dual-channel workflow/installer/docs changes and delete the `v0.9.1` release assets before re-tagging. No schema migration or brain-data rewrite is involved.
+Rollback is straightforward: revert the dual-channel workflow/installer/docs changes and delete the `v0.9.1` release assets before re-tagging. No schema migration or memory-data rewrite is involved.
 
 ## Open Questions
 

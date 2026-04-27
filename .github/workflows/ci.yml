@@ -44,6 +44,47 @@ jobs:
       - name: Cargo check
         run: cargo check --all-targets
 
+  release-macos-preflight:
+    name: Release macOS preflight
+    runs-on: macos-latest
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            features: bundled,embedded-model
+            channel: airgapped
+          - target: x86_64-apple-darwin
+            features: bundled,embedded-model
+            channel: airgapped
+          - target: aarch64-apple-darwin
+            features: bundled,online-model
+            channel: online
+          - target: x86_64-apple-darwin
+            features: bundled,online-model
+            channel: online
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-${{ matrix.channel }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-check-
+
+      - name: Cargo check release target
+        run: cargo check --target ${{ matrix.target }} --no-default-features --features ${{ matrix.features }}
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -70,10 +111,16 @@ jobs:
       - name: Run tests (online channel)
         run: cargo test --verbose --no-default-features --features bundled,online-model
         env:
-          GBRAIN_FORCE_HASH_SHIM: "1"
+          QUAID_FORCE_HASH_SHIM: "1"
 
       - name: Run installer profile tests
         run: sh tests/install_profile.sh
+
+      - name: Run release asset parity tests
+        run: sh tests/release_asset_parity.sh
+
+      - name: Run installer release seam tests
+        run: sh tests/install_release_seam.sh
 
   benchmarks:
     name: Offline Benchmarks

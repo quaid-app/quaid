@@ -1,7 +1,7 @@
 ## Context
 
-Phase 1 implements the first complete slice of GigaBrain: from empty database to a functional
-knowledge brain that can be searched by keyword and semantics, accessed via MCP, and
+Phase 1 implements the first complete slice of Quaid: from empty database to a functional
+AI memory that can be searched by keyword and semantics, accessed via MCP, and
 round-tripped without data loss.
 
 The repository scaffold (Sprint 0) exists: `Cargo.toml` with all declared dependencies,
@@ -27,15 +27,15 @@ to replace stubs with working implementations in dependency order.
 **Goals:**
 - Replace all Phase 1 stubs with correct implementations
 - Pass `cargo test` with round-trip and search correctness tests
-- `gbrain import <corpus>` → `gbrain export` produces semantic-equivalent output
-- `gbrain serve` connects to any MCP client exposing 5 core tools
+- `quaid import <corpus>` → `quaid export` produces semantic-equivalent output
+- `quaid serve` connects to any MCP client exposing 5 core tools
 - Static binary verifiable via `ldd` on Linux musl build
 - OCC enforced on all write paths (version column, compare-and-swap)
 
 **Non-Goals:**
 - Graph traversal, assertions, contradiction detection (Phase 2)
 - Progressive retrieval, palace room-level filtering (Phase 2)
-- Knowledge gap tools in MCP (`brain_gap`, `brain_gaps`) (Phase 3)
+- Knowledge gap tools in MCP (`memory_gap`, `memory_gaps`) (Phase 3)
 - BEIR leaderboard benchmarks (Phase 3)
 - `--json` on all commands, `pipe` mode, `call`, `version` polish (Phase 3)
 - Room-level palace filtering; wing-only in Phase 1
@@ -47,7 +47,7 @@ to replace stubs with working implementations in dependency order.
 **Decision:** Open a single `rusqlite::Connection` per CLI invocation; pass it by mutable
 reference through the call stack. No connection pool.
 
-**Rationale:** GigaBrain is single-writer. CLI commands are short-lived processes. MCP
+**Rationale:** Quaid is single-writer. CLI commands are short-lived processes. MCP
 server is long-lived but still single-writer. A pool adds complexity for no benefit. WAL
 mode handles concurrent readers at the OS level.
 
@@ -76,16 +76,16 @@ initializes on first call.
 
 **Rationale:** Model init (tokenizer load + weight deserialization) takes ~500ms. We
 don't want that cost on every command that happens not to use embeddings. Lazy init
-keeps `gbrain get` and `gbrain search` fast.
+keeps `quaid get` and `quaid search` fast.
 
-**Alternative considered:** Separate `gbrain embed --daemon` process. Over-engineered
+**Alternative considered:** Separate `quaid embed --daemon` process. Over-engineered
 for v1; model init is a one-time cost per invocation.
 
 ### 4. Model weights: `include_bytes!` for offline default, `online-model` feature for smaller binary
 
 **Decision:** Default build embeds BGE-small-en-v1.5 weights via `include_bytes!`
 (~90MB binary). `--features online-model` skips embedding weights; binary downloads to
-`~/.gbrain/models/` on first inference call.
+`~/.quaid/models/` on first inference call.
 
 **Rationale:** Spec requirement: zero network at runtime by default. The `online-model`
 feature is for CI and developer builds where binary size matters.
@@ -98,7 +98,7 @@ feature is for CI and developer builds where binary size matters.
 2. **FTS5 + vec0 fan-out**: run both in parallel (sequential is fine for v1, parallelism
    deferred), collect ranked result sets.
 3. **Set-union merge**: combine result sets by slug deduplication, score by FTS5 BM25 +
-   cosine similarity weighted sum. RRF available via `gbrain config set search_merge_strategy rrf`.
+   cosine similarity weighted sum. RRF available via `quaid config set search_merge_strategy rrf`.
 
 **Alternative considered:** Reciprocal Rank Fusion (RRF) as default. RRF normalizes rank
 positions well but loses absolute score magnitude. Set-union preserves BM25 signal and is
@@ -107,10 +107,10 @@ simpler to reason about for a personal KB. Either can be selected at runtime.
 ### 6. MCP server: rmcp crate, stdio transport, sequential tool dispatch
 
 **Decision:** Use `rmcp` 0.1 with the stdio transport. Register all 5 Phase 1 tools
-(`brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`). Handle each
+(`memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`). Handle each
 tool call by delegating to the same core functions used by the CLI.
 
-**Rationale:** The spec mandates `gbrain serve` connects to Claude Code via MCP. `rmcp`
+**Rationale:** The spec mandates `quaid serve` connects to Claude Code via MCP. `rmcp`
 is already declared in `Cargo.toml` and implements the MCP stdio protocol. Reusing
 core functions (not duplicating logic) means CLI and MCP always behave identically.
 
@@ -119,7 +119,7 @@ Wrap the `main` of `serve` in `#[tokio::main]`.
 
 ### 7. OCC (Optimistic Concurrency Control) enforcement
 
-**Decision:** All write paths (`put`, `import`, `ingest`, MCP `brain_put`) use a
+**Decision:** All write paths (`put`, `import`, `ingest`, MCP `memory_put`) use a
 compare-and-swap on the `version` column:
 ```sql
 UPDATE pages SET ..., version = version + 1, updated_at = ...
@@ -128,7 +128,7 @@ WHERE slug = ? AND version = ?
 If `rows_affected == 0`, return `ConflictError` with current version. CLI exits with
 code 1. MCP returns JSON-RPC error code `-32009` with current version in data.
 
-`brain_put` accepts optional `expected_version`. Omitted = treat as create (INSERT OR
+`memory_put` accepts optional `expected_version`. Omitted = treat as create (INSERT OR
 IGNORE, then compare-and-swap with version=1 if row already exists is an error on
 first-write paths; insert is unconditional for new pages).
 
@@ -186,21 +186,21 @@ no audio). Track binary size in CI as informational metric.
 ## Migration Plan
 
 Phase 1 is greenfield — no existing users, no existing database files. No migration
-required. The `gbrain init` command creates a new `brain.db` from scratch.
+required. The `quaid init` command creates a new `memory.db` from scratch.
 
 For development iteration:
-- Delete and re-init `brain.db` is the migration strategy during Phase 1 development.
+- Delete and re-init `memory.db` is the migration strategy during Phase 1 development.
 - Schema versioning (`PRAGMA user_version`) is set to `4` in `schema.sql`; Phase 2
   will add migration logic if schema changes are needed.
 
 ## Open Questions
 
-1. **candle device selection**: Should `gbrain` auto-detect CUDA/Metal and use GPU
+1. **candle device selection**: Should `quaid` auto-detect CUDA/Metal and use GPU
    acceleration, or always use CPU? Decision: CPU only for Phase 1. GPU detection deferred
    to Phase 3 (adds `candle-core/cuda` + `candle-core/metal` feature flags and complex
    device selection logic).
 
-2. **import concurrency**: Should `gbrain import` spawn multiple threads for embedding
+2. **import concurrency**: Should `quaid import` spawn multiple threads for embedding
    generation? Decision: single-threaded for Phase 1 (correctness first, performance later).
    Add `--jobs N` flag in Phase 3 if import is too slow on large corpora.
 

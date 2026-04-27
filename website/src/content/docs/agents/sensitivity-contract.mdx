@@ -1,0 +1,139 @@
+---
+title: Sensitivity contract
+description: How knowledge gaps move from internal (hash-only) to redacted to external — and what each tier authorizes.
+guide:
+  eyebrow: For agents
+  accentBar: true
+---
+
+The `knowledge_gaps` table is privacy-safe by construction. This page is the contract you must follow before letting any gap-derived text leave the memory. Read it before you call `memory_gap`. Read it again before you escalate one.
+
+## The default
+
+When you call `memory_gap`, the row is created with:
+
+- `query_hash` — SHA-256 of the original query. Always populated.
+- `query_text` — **NULL.**
+- `sensitivity` — `internal`.
+- `approved_by` — NULL.
+- `approved_at` — NULL.
+
+Database CHECK constraints enforce this:
+
+```sql
+CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+CHECK (sensitivity = 'internal' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+```
+
+There is no code path that stores raw text without an approval pair. None.
+
+## The three tiers
+
+### `internal`
+
+> Hash-only. Default. No raw query stored.
+
+**Authorizes** — keeping a record that *some* query failed, dedup of repeated failures, internal counters and stats. Nothing leaves the memory.
+
+**Use when** — the gap is part of normal retrieval bookkeeping. No external research needed.
+
+### `redacted`
+
+> Sanitized variant stored. Original text not retained.
+
+**Authorizes** — sharing the redacted form with an external system (e.g. an `enrich` skill that fetches reference material), keeping a human-readable record without storing PII.
+
+**Use when** — you need to communicate the *kind* of gap externally without disclosing the original wording. The user (or a policy workflow) provided a sanitized variant.
+
+**Required to set** — `approved_by`, `approved_at`, and `redacted_query` populated.
+
+### `external`
+
+> Raw query stored. May be sent to external services.
+
+**Authorizes** — external API calls with the raw query (e.g. asking a third-party search service for context).
+
+**Use when** — the user has explicitly approved the original query for external research, and the gap can't be resolved with redaction.
+
+**Required to set** — `approved_by`, `approved_at`, and `query_text` populated.
+
+## How escalation works
+
+You, the agent, do not unilaterally escalate. Escalation is an **approval workflow**, not a tool call. Specifically:
+
+1. You detect the gap and call `memory_gap`. The gap is now `internal`.
+2. If retrieval fails repeatedly and the user wants to escalate, **the user (or a policy workflow) approves**.
+3. The approval populates `approved_by` and `approved_at`. It also sets:
+   - For `redacted`: `redacted_query`, leaving `query_text` NULL.
+   - For `external`: `query_text` with the original query.
+4. Only after the row carries an approval pair may an external call proceed.
+
+There is no `memory_gap_approve` MCP tool yet. Approval is currently effected by the user (or a policy workflow) updating the row directly, or via a future tool. Don't fake approvals.
+
+## What you must not do
+
+- **Don't write `query_text` from your own decision.** That CHECK constraint will reject the write; even if it didn't, doing so violates the contract.
+- **Don't escalate `sensitivity` from `internal` without an approval pair.** Same.
+- **Don't send the raw query to an external service while sensitivity is `internal` or `redacted`.** The raw query has not been authorized.
+- **Don't infer approval from "the user seemed to want me to."** An approval is structured: `approved_by` and `approved_at` set in the row. If they're not set, you do not have approval.
+
+## What you may do without escalation
+
+- Log every weak query as a gap (hash-only).
+- Aggregate hashes (count distinct, dedup, see whether you've hit the same gap twice).
+- Surface the gap count to the user (`memory_gaps` returns counts; raw text is hidden).
+- Suggest escalation, with an explanation of which tier is appropriate and why.
+
+## Example flows
+
+### Pure internal
+
+```text
+memory_query "compliance contact for Belgium"
+  → no strong results
+memory_gap query="compliance contact for Belgium" context="quarterly review"
+  → row created, sensitivity=internal, query_text=NULL
+memory_gaps resolved=false
+  → 1 unresolved gap (hash + context only)
+```
+
+User decides not to escalate. Nothing leaves the memory.
+
+### Redacted escalation
+
+```text
+gap created sensitivity=internal, hash=H
+user approves redaction with redacted_query="who covers EU compliance?"
+  → sets approved_by, approved_at, sensitivity=redacted, redacted_query=...
+enrich skill fetches a reference list using the redacted variant
+memory_raw stores the response
+memory_put extracts facts into a new page
+gap resolved by linking resolved_by_slug=concepts/eu-compliance
+```
+
+Original wording never leaves the memory.
+
+### External escalation
+
+```text
+gap created sensitivity=internal, hash=H
+user approves with query_text="Who is our partner contact at Acme?"
+  → sets approved_by, approved_at, sensitivity=external, query_text populated
+research skill calls an external API with the raw query
+findings ingested as a new page
+gap resolved
+```
+
+Used sparingly. The raw query is now in the memory and may have been transmitted; both states require explicit consent.
+
+## Logging
+
+The MCP server logs `memory_gap` calls with the **hash**, not the text — matching the table policy. If you redirect logs to a SIEM or off-machine destination, no raw query text is in them by default.
+
+When sensitivity is `external` and `query_text` is populated, log behavior does not change at the server level. If you write your own audit log, you must respect the same defaults.
+
+## Why this is structured this way
+
+The blast radius of "agent leaked a sensitive query to a third-party API" is large and irreversible. The contract makes it impossible by construction in the default case, and explicit-and-auditable in the exceptional case. This is the price of letting agents act on the memory.
+
+If you find yourself wishing the contract were looser, you're probably the wrong abstraction layer for the work. Either escalate to the user, or accept the gap.

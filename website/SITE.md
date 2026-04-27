@@ -1,7 +1,7 @@
-# GigaBrain Documentation Site
+# Quaid Documentation Site
 
 ## 1. Site Vision
-The primary interface for GigaBrain documentation. It should feel robust, fully offline-first conceptually, but deeply professional mirroring the stark brutalist cleanliness of Anthropic's platform documentation.
+The primary interface for Quaid documentation. It should feel robust, fully offline-first conceptually, but deeply professional mirroring the stark brutalist cleanliness of Anthropic's platform documentation.
 
 ## 2. Project Context
 - **Target Audience:** Developers who want an offline, local vector-embedded SQLite knowledge base.
@@ -16,7 +16,7 @@ The primary interface for GigaBrain documentation. It should feel robust, fully 
 - `[x]` guides/quick-start
 - `[x]` guides/getting-started
 - `[x]` guides/how-it-works
-- `[x]` guides/why-gigabrain
+- `[x]` guides/why-quaid
 
 ## 5. Roadmap
 - All initial documentation tasks completed.

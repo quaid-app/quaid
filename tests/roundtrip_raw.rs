@@ -1,13 +1,13 @@
 use std::fs;
 
-use gbrain::core::db;
-use gbrain::core::migrate::{export_dir, import_dir};
+use quaid::core::db;
+use quaid::core::migrate::{export_dir, import_dir};
 
 #[test]
 fn export_reproduces_canonical_markdown_fixture_byte_for_byte() {
     let canonical = concat!(
         "---\n",
-        "gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\n",
+        "memory_id: 01969f11-9448-7d79-8d3f-c68f54761234\n",
         "slug: notes/canonical-person\n",
         "title: Canonical Person\n",
         "type: person\n",
@@ -25,7 +25,7 @@ fn export_reproduces_canonical_markdown_fixture_byte_for_byte() {
     fs::write(&fixture_path, canonical).unwrap();
 
     let db_root = tempfile::TempDir::new().unwrap();
-    let db_path = db_root.path().join("brain.db");
+    let db_path = db_root.path().join("memory.db");
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
 
     let import_stats = import_dir(&conn, fixture_root.path(), false).unwrap();

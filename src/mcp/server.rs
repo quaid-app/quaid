@@ -400,11 +400,11 @@ fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp:
 }
 
 #[derive(Clone)]
-pub struct GigaBrainServer {
+pub struct QuaidServer {
     db: DbRef,
 }
 
-impl GigaBrainServer {
+impl QuaidServer {
     pub fn new(conn: Connection) -> Self {
         Self {
             db: Arc::new(Mutex::new(conn)),
@@ -413,13 +413,13 @@ impl GigaBrainServer {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainGetInput {
+pub struct MemoryGetInput {
     /// Page slug to retrieve
     pub slug: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainPutInput {
+pub struct MemoryPutInput {
     /// Page slug to create or update
     pub slug: String,
     /// Markdown content of the page
@@ -429,7 +429,7 @@ pub struct BrainPutInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainQueryInput {
+pub struct MemoryQueryInput {
     /// Search query string
     pub query: String,
     /// Optional collection filter
@@ -443,7 +443,7 @@ pub struct BrainQueryInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainSearchInput {
+pub struct MemorySearchInput {
     /// FTS5 search query string
     pub query: String,
     /// Optional collection filter
@@ -455,7 +455,7 @@ pub struct BrainSearchInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainListInput {
+pub struct MemoryListInput {
     /// Optional collection filter
     pub collection: Option<String>,
     /// Optional wing filter
@@ -467,7 +467,7 @@ pub struct BrainListInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainLinkInput {
+pub struct MemoryLinkInput {
     pub from_slug: String,
     pub to_slug: String,
     pub relationship: String,
@@ -476,45 +476,45 @@ pub struct BrainLinkInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainLinkCloseInput {
+pub struct MemoryLinkCloseInput {
     pub link_id: u64,
     pub valid_until: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainBacklinksInput {
+pub struct MemoryBacklinksInput {
     pub slug: String,
     pub limit: Option<u32>,
     pub temporal: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainGraphInput {
+pub struct MemoryGraphInput {
     pub slug: String,
     pub depth: Option<u32>,
     pub temporal: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainCheckInput {
+pub struct MemoryCheckInput {
     pub slug: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainTimelineInput {
+pub struct MemoryTimelineInput {
     pub slug: String,
     pub limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainTagsInput {
+pub struct MemoryTagsInput {
     pub slug: String,
     pub add: Option<Vec<String>>,
     pub remove: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainGapInput {
+pub struct MemoryGapInput {
     /// Query string to log as a knowledge gap
     pub query: String,
     /// Optional page slug to bind the gap to
@@ -524,7 +524,7 @@ pub struct BrainGapInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainGapsInput {
+pub struct MemoryGapsInput {
     /// Include resolved gaps (default: false)
     pub resolved: Option<bool>,
     /// Maximum number of gaps to return (default: 20, max: 1000)
@@ -532,13 +532,13 @@ pub struct BrainGapsInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainStatsInput {}
+pub struct MemoryStatsInput {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainCollectionsInput {}
+pub struct MemoryCollectionsInput {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BrainRawInput {
+pub struct MemoryRawInput {
     /// Page slug to attach raw data to
     pub slug: String,
     /// Source identifier (e.g. "crustdata", "exa", "meeting")
@@ -550,11 +550,11 @@ pub struct BrainRawInput {
 }
 
 #[tool(tool_box)]
-impl GigaBrainServer {
+impl QuaidServer {
     #[tool(description = "Get a page by slug")]
-    pub fn brain_get(
+    pub fn memory_get(
         &self,
-        #[tool(aggr)] input: BrainGetInput,
+        #[tool(aggr)] input: MemoryGetInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -565,9 +565,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Write or update a page")]
-    pub fn brain_put(
+    pub fn memory_put(
         &self,
-        #[tool(aggr)] input: BrainPutInput,
+        #[tool(aggr)] input: MemoryPutInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         validate_content(&input.content)?;
@@ -650,9 +650,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Hybrid semantic + FTS5 query")]
-    pub fn brain_query(
+    pub fn memory_query(
         &self,
-        #[tool(aggr)] input: BrainQueryInput,
+        #[tool(aggr)] input: MemoryQueryInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let collection_filter =
@@ -709,9 +709,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "FTS5 full-text search")]
-    pub fn brain_search(
+    pub fn memory_search(
         &self,
-        #[tool(aggr)] input: BrainSearchInput,
+        #[tool(aggr)] input: MemorySearchInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let collection_filter =
@@ -734,9 +734,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List pages with optional filters")]
-    pub fn brain_list(
+    pub fn memory_list(
         &self,
-        #[tool(aggr)] input: BrainListInput,
+        #[tool(aggr)] input: MemoryListInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let collection_filter =
@@ -799,9 +799,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Create a typed temporal link between two pages")]
-    pub fn brain_link(
+    pub fn memory_link(
         &self,
-        #[tool(aggr)] input: BrainLinkInput,
+        #[tool(aggr)] input: MemoryLinkInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.from_slug)?;
         validate_slug(&input.to_slug)?;
@@ -835,9 +835,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Close a temporal link by its database ID")]
-    pub fn brain_link_close(
+    pub fn memory_link_close(
         &self,
-        #[tool(aggr)] input: BrainLinkCloseInput,
+        #[tool(aggr)] input: MemoryLinkCloseInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_temporal_value(&input.valid_until, "valid_until")?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -851,9 +851,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List inbound backlinks for a page")]
-    pub fn brain_backlinks(
+    pub fn memory_backlinks(
         &self,
-        #[tool(aggr)] input: BrainBacklinksInput,
+        #[tool(aggr)] input: MemoryBacklinksInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let filter = parse_temporal_filter(input.temporal.as_deref())?;
@@ -911,9 +911,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "N-hop neighbourhood graph from a page")]
-    pub fn brain_graph(
+    pub fn memory_graph(
         &self,
-        #[tool(aggr)] input: BrainGraphInput,
+        #[tool(aggr)] input: MemoryGraphInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -938,9 +938,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Run contradiction detection on a page or all pages")]
-    pub fn brain_check(
+    pub fn memory_check(
         &self,
-        #[tool(aggr)] input: BrainCheckInput,
+        #[tool(aggr)] input: MemoryCheckInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         if let Some(slug) = input.slug.as_deref() {
             validate_slug(slug)?;
@@ -1036,9 +1036,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Show timeline entries for a page")]
-    pub fn brain_timeline(
+    pub fn memory_timeline(
         &self,
-        #[tool(aggr)] input: BrainTimelineInput,
+        #[tool(aggr)] input: MemoryTimelineInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -1111,9 +1111,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List, add, or remove tags on a page")]
-    pub fn brain_tags(
+    pub fn memory_tags(
         &self,
-        #[tool(aggr)] input: BrainTagsInput,
+        #[tool(aggr)] input: MemoryTagsInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -1174,9 +1174,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Log a knowledge gap (privacy-safe: stores query_hash, not raw query)")]
-    pub fn brain_gap(
+    pub fn memory_gap(
         &self,
-        #[tool(aggr)] input: BrainGapInput,
+        #[tool(aggr)] input: MemoryGapInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         if input.query.trim().is_empty() {
             return Err(invalid_params("query must not be empty"));
@@ -1237,9 +1237,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List knowledge gaps")]
-    pub fn brain_gaps(
+    pub fn memory_gaps(
         &self,
-        #[tool(aggr)] input: BrainGapsInput,
+        #[tool(aggr)] input: MemoryGapsInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let resolved = input.resolved.unwrap_or(false);
         let limit = input.limit.unwrap_or(20).min(MAX_LIMIT) as usize;
@@ -1255,9 +1255,9 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "Brain statistics (page count, link count, etc.)")]
-    pub fn brain_stats(
+    pub fn memory_stats(
         &self,
-        #[tool(aggr)] _input: BrainStatsInput,
+        #[tool(aggr)] _input: MemoryStatsInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -1324,21 +1324,21 @@ impl GigaBrainServer {
     }
 
     #[tool(description = "List collection status for MCP clients")]
-    pub fn brain_collections(
+    pub fn memory_collections(
         &self,
-        #[tool(aggr)] _input: BrainCollectionsInput,
+        #[tool(aggr)] _input: MemoryCollectionsInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let collections = vault_sync::list_brain_collections(&db).map_err(map_vault_sync_error)?;
+        let collections = vault_sync::list_memory_collections(&db).map_err(map_vault_sync_error)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&collections).unwrap(),
         )]))
     }
 
     #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
-    pub fn brain_raw(
+    pub fn memory_raw(
         &self,
-        #[tool(aggr)] input: BrainRawInput,
+        #[tool(aggr)] input: MemoryRawInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         if input.source.is_empty() {
@@ -1402,10 +1402,10 @@ impl GigaBrainServer {
 }
 
 #[tool(tool_box)]
-impl ServerHandler for GigaBrainServer {
+impl ServerHandler for QuaidServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            instructions: Some("GigaBrain personal knowledge brain".into()),
+            instructions: Some("Quaid personal memory".into()),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
@@ -1414,7 +1414,7 @@ impl ServerHandler for GigaBrainServer {
 
 /// Run the MCP stdio server with the given database connection.
 pub async fn run(conn: Connection) -> anyhow::Result<()> {
-    let server = GigaBrainServer::new(conn);
+    let server = QuaidServer::new(conn);
     let transport = (tokio::io::stdin(), tokio::io::stdout());
     let _service = server.serve(transport).await?;
     _service.waiting().await?;
@@ -1516,37 +1516,34 @@ mod tests {
     #[test]
     fn get_info_enables_tools_capability_and_exposes_core_tool_methods() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
-        let info = <GigaBrainServer as ServerHandler>::get_info(&server);
+        let server = QuaidServer::new(conn);
+        let info = <QuaidServer as ServerHandler>::get_info(&server);
 
         let _tool_methods = (
-            GigaBrainServer::brain_get
-                as fn(&GigaBrainServer, BrainGetInput) -> Result<CallToolResult, rmcp::Error>,
-            GigaBrainServer::brain_put
-                as fn(&GigaBrainServer, BrainPutInput) -> Result<CallToolResult, rmcp::Error>,
-            GigaBrainServer::brain_query
-                as fn(&GigaBrainServer, BrainQueryInput) -> Result<CallToolResult, rmcp::Error>,
-            GigaBrainServer::brain_search
-                as fn(&GigaBrainServer, BrainSearchInput) -> Result<CallToolResult, rmcp::Error>,
-            GigaBrainServer::brain_list
-                as fn(&GigaBrainServer, BrainListInput) -> Result<CallToolResult, rmcp::Error>,
-            GigaBrainServer::brain_collections
-                as fn(
-                    &GigaBrainServer,
-                    BrainCollectionsInput,
-                ) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_get
+                as fn(&QuaidServer, MemoryGetInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_put
+                as fn(&QuaidServer, MemoryPutInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_query
+                as fn(&QuaidServer, MemoryQueryInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_search
+                as fn(&QuaidServer, MemorySearchInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_list
+                as fn(&QuaidServer, MemoryListInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_collections
+                as fn(&QuaidServer, MemoryCollectionsInput) -> Result<CallToolResult, rmcp::Error>,
         );
 
         assert!(info.capabilities.tools.is_some());
     }
 
     #[test]
-    fn brain_get_returns_not_found_error_code_for_missing_slug() {
+    fn memory_get_returns_not_found_error_code_for_missing_slug() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_get(BrainGetInput {
+            .memory_get(MemoryGetInput {
                 slug: "definitely-does-not-exist".to_string(),
             })
             .unwrap_err();
@@ -1555,10 +1552,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_get_returns_structured_ambiguity_payload_for_colliding_bare_slug() {
+    fn memory_get_returns_structured_ambiguity_payload_for_colliding_bare_slug() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "memory", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -1572,7 +1569,7 @@ mod tests {
         );
 
         let error = server
-            .brain_get(BrainGetInput {
+            .memory_get(MemoryGetInput {
                 slug: "people/alice".to_string(),
             })
             .unwrap_err();
@@ -1597,10 +1594,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_get_explicit_collection_slug_reads_resolved_page_when_slug_collides() {
+    fn memory_get_explicit_collection_slug_reads_resolved_page_when_slug_collides() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "memory", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -1614,7 +1611,7 @@ mod tests {
         );
 
         let result = server
-            .brain_get(BrainGetInput {
+            .memory_get(MemoryGetInput {
                 slug: "memory::people/alice".to_string(),
             })
             .unwrap();
@@ -1626,12 +1623,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_put_returns_occ_conflict_error_with_current_version_for_stale_write() {
+    fn memory_put_returns_occ_conflict_error_with_current_version_for_stale_write() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/test".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nInitial content\n".to_string(),
                 expected_version: None,
@@ -1639,7 +1636,7 @@ mod tests {
             .unwrap();
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/test".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nUpdated content\n".to_string(),
                 expected_version: Some(0),
@@ -1651,12 +1648,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_put_rejects_update_without_expected_version() {
+    fn memory_put_rejects_update_without_expected_version() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/occ".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nInitial\n".to_string(),
                 expected_version: None,
@@ -1664,7 +1661,7 @@ mod tests {
             .unwrap();
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/occ".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nSneaky overwrite\n".to_string(),
                 expected_version: None,
@@ -1677,13 +1674,13 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn brain_put_existing_page_without_expected_version_conflicts_before_vault_mutation() {
+    fn memory_put_existing_page_without_expected_version_conflicts_before_vault_mutation() {
         let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let original = "---\ntitle: Existing\ntype: note\n---\nOriginal body\n";
 
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/existing".to_string(),
                 content: original.to_string(),
                 expected_version: None,
@@ -1691,7 +1688,7 @@ mod tests {
             .unwrap();
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/existing".to_string(),
                 content: "---\ntitle: Existing\ntype: note\n---\nUnexpected overwrite\n"
                     .to_string(),
@@ -1711,13 +1708,13 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn brain_put_stale_expected_version_conflicts_before_vault_mutation() {
+    fn memory_put_stale_expected_version_conflicts_before_vault_mutation() {
         let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let original = "---\ntitle: Stale\ntype: note\n---\nOriginal body\n";
 
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/stale".to_string(),
                 content: original.to_string(),
                 expected_version: None,
@@ -1725,7 +1722,7 @@ mod tests {
             .unwrap();
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/stale".to_string(),
                 content: "---\ntitle: Stale\ntype: note\n---\nStale overwrite\n".to_string(),
                 expected_version: Some(0),
@@ -1743,9 +1740,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_put_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+    fn memory_put_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let db = server.db.lock().unwrap();
         db.execute(
             "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
@@ -1755,7 +1752,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/blocked".to_string(),
                 content: "---\ntitle: Blocked\ntype: note\n---\nBlocked\n".to_string(),
                 expected_version: None,
@@ -1767,12 +1764,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_get_rejects_invalid_slug() {
+    fn memory_get_rejects_invalid_slug() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_get(BrainGetInput {
+            .memory_get(MemoryGetInput {
                 slug: "Invalid/SLUG!".to_string(),
             })
             .unwrap_err();
@@ -1781,13 +1778,13 @@ mod tests {
     }
 
     #[test]
-    fn brain_put_rejects_oversized_content() {
+    fn memory_put_rejects_oversized_content() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let large_content = "x".repeat(1_048_577);
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "test/large".to_string(),
                 content: large_content,
                 expected_version: None,
@@ -1798,12 +1795,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_put_rejects_empty_slug() {
+    fn memory_put_rejects_empty_slug() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "".to_string(),
                 content: "content".to_string(),
                 expected_version: None,
@@ -1814,13 +1811,13 @@ mod tests {
     }
 
     #[test]
-    fn brain_put_rejects_create_with_expected_version_when_page_does_not_exist() {
+    fn memory_put_rejects_create_with_expected_version_when_page_does_not_exist() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         // Page does not exist; supplying expected_version is a client bug — reject as OCC conflict.
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/ghost".to_string(),
                 content: "---\ntitle: Ghost\ntype: note\n---\nContent\n".to_string(),
                 expected_version: Some(3),
@@ -1832,19 +1829,19 @@ mod tests {
     }
 
     #[test]
-    fn brain_get_renders_persisted_gbrain_id_after_update_omits_frontmatter_uuid() {
+    fn memory_get_renders_persisted_memory_id_after_update_omits_frontmatter_uuid() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/uuid".to_string(),
-                content: "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
+                content: "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
                 expected_version: None,
             })
             .unwrap();
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/uuid".to_string(),
                 content: "---\ntitle: UUID\ntype: note\n---\nUpdated\n".to_string(),
                 expected_version: Some(1),
@@ -1852,24 +1849,24 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_get(BrainGetInput {
+            .memory_get(MemoryGetInput {
                 slug: "notes/uuid".to_string(),
             })
             .unwrap();
         let rendered = extract_text(&result);
 
-        assert!(rendered.contains("gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
+        assert!(rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
         assert!(rendered.contains("slug: default::notes/uuid"));
         assert!(rendered.contains("Updated"));
     }
 
     #[test]
-    fn brain_query_logs_gap_for_weak_results() {
+    fn memory_query_logs_gap_for_weak_results() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let result = server
-            .brain_query(BrainQueryInput {
+            .memory_query(MemoryQueryInput {
                 query: "who runs the moon colony".to_string(),
                 collection: None,
                 wing: None,
@@ -1889,9 +1886,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_query_auto_depth_expands_linked_results() {
+    fn memory_query_auto_depth_expands_linked_results() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "concepts/root",
@@ -1903,7 +1900,7 @@ mod tests {
             "---\ntitle: Child\ntype: concept\n---\nlinked expansion result\n",
         );
         server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "concepts/root".to_string(),
                 to_slug: "concepts/child".to_string(),
                 relationship: "related".to_string(),
@@ -1913,7 +1910,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_query(BrainQueryInput {
+            .memory_query(MemoryQueryInput {
                 query: "alpha".to_string(),
                 collection: None,
                 wing: None,
@@ -1930,10 +1927,10 @@ mod tests {
 
     // 13.5 contract: depth="auto" must NOT expand across collection boundaries
     #[test]
-    fn brain_query_auto_depth_does_not_expand_across_collections() {
+    fn memory_query_auto_depth_does_not_expand_across_collections() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "work", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         // Anchor page in "default" — will match the query
         create_page(
@@ -1950,7 +1947,7 @@ mod tests {
         );
         // Cross-collection link: default::concepts/anchor -> work::concepts/outside
         server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "default::concepts/anchor".to_string(),
                 to_slug: "work::concepts/outside".to_string(),
                 relationship: "related".to_string(),
@@ -1960,7 +1957,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_query(BrainQueryInput {
+            .memory_query(MemoryQueryInput {
                 query: "cross collection fence anchor".to_string(),
                 collection: Some("default".to_string()),
                 wing: None,
@@ -1979,9 +1976,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_search_returns_matching_pages() {
+    fn memory_search_returns_matching_pages() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "companies/acme",
@@ -1989,7 +1986,7 @@ mod tests {
         );
 
         let result = server
-            .brain_search(BrainSearchInput {
+            .memory_search(MemorySearchInput {
                 query: "fundraising".to_string(),
                 collection: None,
                 wing: None,
@@ -2001,14 +1998,14 @@ mod tests {
         assert_eq!(rows[0]["slug"], "default::companies/acme");
     }
 
-    // D.6 — brain_search with natural-language '?' query returns valid JSON-RPC response
+    // D.6 — memory_search with natural-language '?' query returns valid JSON-RPC response
     #[test]
-    fn brain_search_natural_language_question_mark_returns_valid_response() {
+    fn memory_search_natural_language_question_mark_returns_valid_response() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
-        // '?' would be invalid FTS5 syntax if passed raw — brain_search must sanitize.
-        let result = server.brain_search(BrainSearchInput {
+        // '?' would be invalid FTS5 syntax if passed raw — memory_search must sanitize.
+        let result = server.memory_search(MemorySearchInput {
             query: "what is CLARITY?".to_string(),
             collection: None,
             wing: None,
@@ -2017,22 +2014,22 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "brain_search with '?' must not return an MCP error: {result:?}"
+            "memory_search with '?' must not return an MCP error: {result:?}"
         );
         // The response content must parse as a JSON array (empty or populated).
         let text = extract_text(&result.unwrap());
         let parsed: serde_json::Value =
-            serde_json::from_str(&text).expect("brain_search response must be valid JSON");
+            serde_json::from_str(&text).expect("memory_search response must be valid JSON");
         assert!(
             parsed.is_array(),
-            "brain_search response must be a JSON array"
+            "memory_search response must be a JSON array"
         );
     }
 
     #[test]
-    fn brain_list_applies_wing_and_type_filters() {
+    fn memory_list_applies_wing_and_type_filters() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2045,7 +2042,7 @@ mod tests {
         );
 
         let result = server
-            .brain_list(BrainListInput {
+            .memory_list(MemoryListInput {
                 collection: None,
                 wing: Some("people".to_string()),
                 page_type: Some("person".to_string()),
@@ -2059,10 +2056,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_search_explicit_collection_filter_returns_only_named_collection() {
+    fn memory_search_explicit_collection_filter_returns_only_named_collection() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "work", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/default-hit",
@@ -2076,7 +2073,7 @@ mod tests {
         );
 
         let result = server
-            .brain_search(BrainSearchInput {
+            .memory_search(MemorySearchInput {
                 query: "shared".to_string(),
                 collection: Some("work".to_string()),
                 wing: None,
@@ -2090,10 +2087,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_query_explicit_collection_filter_returns_only_named_collection() {
+    fn memory_query_explicit_collection_filter_returns_only_named_collection() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "work", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/default-hit",
@@ -2107,7 +2104,7 @@ mod tests {
         );
 
         let result = server
-            .brain_query(BrainQueryInput {
+            .memory_query(MemoryQueryInput {
                 query: "robotics leadership".to_string(),
                 collection: Some("work".to_string()),
                 wing: None,
@@ -2122,10 +2119,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_list_explicit_collection_filter_returns_only_named_collection() {
+    fn memory_list_explicit_collection_filter_returns_only_named_collection() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "work", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2139,7 +2136,7 @@ mod tests {
         );
 
         let result = server
-            .brain_list(BrainListInput {
+            .memory_list(MemoryListInput {
                 collection: Some("work".to_string()),
                 wing: Some("people".to_string()),
                 page_type: Some("person".to_string()),
@@ -2155,10 +2152,10 @@ mod tests {
     #[test]
     fn read_tools_unknown_collection_filter_errors_clearly() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let query_error = server
-            .brain_query(BrainQueryInput {
+            .memory_query(MemoryQueryInput {
                 query: "anything".to_string(),
                 collection: Some("missing".to_string()),
                 wing: None,
@@ -2172,7 +2169,7 @@ mod tests {
             .contains("collection not found: missing"));
 
         let search_error = server
-            .brain_search(BrainSearchInput {
+            .memory_search(MemorySearchInput {
                 query: "anything".to_string(),
                 collection: Some("missing".to_string()),
                 wing: None,
@@ -2185,7 +2182,7 @@ mod tests {
             .contains("collection not found: missing"));
 
         let list_error = server
-            .brain_list(BrainListInput {
+            .memory_list(MemoryListInput {
                 collection: Some("missing".to_string()),
                 wing: None,
                 page_type: None,
@@ -2197,11 +2194,11 @@ mod tests {
     }
 
     #[test]
-    fn brain_search_defaults_to_single_active_collection() {
+    fn memory_search_defaults_to_single_active_collection() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "work", false);
         set_collection_state(&conn, "default", "detached");
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page_in_collection(
             &server,
             "work",
@@ -2210,7 +2207,7 @@ mod tests {
         );
 
         let result = server
-            .brain_search(BrainSearchInput {
+            .memory_search(MemorySearchInput {
                 query: "sole".to_string(),
                 collection: None,
                 wing: None,
@@ -2224,10 +2221,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_query_defaults_to_write_target_when_multiple_collections_are_active() {
+    fn memory_query_defaults_to_write_target_when_multiple_collections_are_active() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "work", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/default-target",
@@ -2241,7 +2238,7 @@ mod tests {
         );
 
         let result = server
-            .brain_query(BrainQueryInput {
+            .memory_query(MemoryQueryInput {
                 query: "shared semantic marker".to_string(),
                 collection: None,
                 wing: None,
@@ -2256,10 +2253,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_list_defaults_to_write_target_when_multiple_collections_are_active() {
+    fn memory_list_defaults_to_write_target_when_multiple_collections_are_active() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "work", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/default-target",
@@ -2273,7 +2270,7 @@ mod tests {
         );
 
         let result = server
-            .brain_list(BrainListInput {
+            .memory_list(MemoryListInput {
                 collection: None,
                 wing: Some("notes".to_string()),
                 page_type: Some("note".to_string()),
@@ -2288,9 +2285,9 @@ mod tests {
 
     // ── Phase 2 MCP tests ────────────────────────────────────
 
-    fn create_page(server: &GigaBrainServer, slug: &str, content: &str) {
+    fn create_page(server: &QuaidServer, slug: &str, content: &str) {
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: slug.to_string(),
                 content: content.to_string(),
                 expected_version: None,
@@ -2299,13 +2296,13 @@ mod tests {
     }
 
     fn create_page_in_collection(
-        server: &GigaBrainServer,
+        server: &QuaidServer,
         collection_name: &str,
         slug: &str,
         content: &str,
     ) {
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: format!("{collection_name}::{slug}"),
                 content: content.to_string(),
                 expected_version: None,
@@ -2316,7 +2313,7 @@ mod tests {
     fn insert_collection(conn: &Connection, id: i64, name: &str, is_write_target: bool) {
         let root_path = std::env::temp_dir()
             .join(format!(
-                "gbrain-mcp-{id}-{name}-{}-{}",
+                "quaid-mcp-{id}-{name}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -2500,12 +2497,12 @@ mod tests {
         }
     }
 
-    // ── brain_link ───────────────────────────────────────────
+    // ── memory_link ───────────────────────────────────────────
 
     #[test]
-    fn brain_link_with_unknown_from_slug_returns_not_found() {
+    fn memory_link_with_unknown_from_slug_returns_not_found() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "companies/acme",
@@ -2513,7 +2510,7 @@ mod tests {
         );
 
         let error = server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/ghost".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2526,9 +2523,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_link_creates_link_between_existing_pages() {
+    fn memory_link_creates_link_between_existing_pages() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2541,7 +2538,7 @@ mod tests {
         );
 
         let result = server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2557,9 +2554,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_link_rejects_invalid_relationship() {
+    fn memory_link_rejects_invalid_relationship() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2572,7 +2569,7 @@ mod tests {
         );
 
         let error = server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works at".to_string(),
@@ -2584,15 +2581,15 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32602));
     }
 
-    // ── brain_link_close ─────────────────────────────────────
+    // ── memory_link_close ─────────────────────────────────────
 
     #[test]
-    fn brain_link_close_with_unknown_id_returns_not_found() {
+    fn memory_link_close_with_unknown_id_returns_not_found() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_link_close(BrainLinkCloseInput {
+            .memory_link_close(MemoryLinkCloseInput {
                 link_id: 99999,
                 valid_until: "2025-06".to_string(),
             })
@@ -2602,9 +2599,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_link_close_sets_valid_until_on_existing_link() {
+    fn memory_link_close_sets_valid_until_on_existing_link() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2617,7 +2614,7 @@ mod tests {
         );
 
         server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2635,7 +2632,7 @@ mod tests {
         };
 
         let result = server
-            .brain_link_close(BrainLinkCloseInput {
+            .memory_link_close(MemoryLinkCloseInput {
                 link_id: link_id as u64,
                 valid_until: "2025-06".to_string(),
             })
@@ -2646,12 +2643,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_link_close_rejects_invalid_temporal_value() {
+    fn memory_link_close_rejects_invalid_temporal_value() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_link_close(BrainLinkCloseInput {
+            .memory_link_close(MemoryLinkCloseInput {
                 link_id: 1,
                 valid_until: "not-a-date".to_string(),
             })
@@ -2660,12 +2657,12 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32602));
     }
 
-    // ── brain_backlinks ──────────────────────────────────────
+    // ── memory_backlinks ──────────────────────────────────────
 
     #[test]
-    fn brain_backlinks_returns_link_array() {
+    fn memory_backlinks_returns_link_array() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2678,7 +2675,7 @@ mod tests {
         );
 
         server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2688,7 +2685,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_backlinks(BrainBacklinksInput {
+            .memory_backlinks(MemoryBacklinksInput {
                 slug: "companies/acme".to_string(),
                 limit: None,
                 temporal: None,
@@ -2704,12 +2701,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_backlinks_unknown_slug_returns_not_found() {
+    fn memory_backlinks_unknown_slug_returns_not_found() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_backlinks(BrainBacklinksInput {
+            .memory_backlinks(MemoryBacklinksInput {
                 slug: "nobody/ghost".to_string(),
                 limit: None,
                 temporal: None,
@@ -2720,9 +2717,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_backlinks_applies_limit() {
+    fn memory_backlinks_applies_limit() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "companies/acme",
@@ -2736,7 +2733,7 @@ mod tests {
                 &format!("---\ntitle: {slug}\ntype: person\n---\n{slug}\n"),
             );
             server
-                .brain_link(BrainLinkInput {
+                .memory_link(MemoryLinkInput {
                     from_slug: slug.to_string(),
                     to_slug: "companies/acme".to_string(),
                     relationship: "works_at".to_string(),
@@ -2747,7 +2744,7 @@ mod tests {
         }
 
         let result = server
-            .brain_backlinks(BrainBacklinksInput {
+            .memory_backlinks(MemoryBacklinksInput {
                 slug: "companies/acme".to_string(),
                 limit: Some(2),
                 temporal: None,
@@ -2760,9 +2757,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_backlinks_temporal_all_includes_closed_links() {
+    fn memory_backlinks_temporal_all_includes_closed_links() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2775,7 +2772,7 @@ mod tests {
         );
 
         server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2785,7 +2782,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_backlinks(BrainBacklinksInput {
+            .memory_backlinks(MemoryBacklinksInput {
                 slug: "companies/acme".to_string(),
                 limit: None,
                 temporal: Some("all".to_string()),
@@ -2797,12 +2794,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_backlinks_rejects_invalid_temporal_filter() {
+    fn memory_backlinks_rejects_invalid_temporal_filter() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_backlinks(BrainBacklinksInput {
+            .memory_backlinks(MemoryBacklinksInput {
                 slug: "people/alice".to_string(),
                 limit: None,
                 temporal: Some("future".to_string()),
@@ -2812,12 +2809,12 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32602));
     }
 
-    // ── brain_graph ──────────────────────────────────────────
+    // ── memory_graph ──────────────────────────────────────────
 
     #[test]
-    fn brain_graph_returns_nodes_and_edges_json() {
+    fn memory_graph_returns_nodes_and_edges_json() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2830,7 +2827,7 @@ mod tests {
         );
 
         server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2840,7 +2837,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_graph(BrainGraphInput {
+            .memory_graph(MemoryGraphInput {
                 slug: "people/alice".to_string(),
                 depth: Some(2),
                 temporal: None,
@@ -2863,12 +2860,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_graph_unknown_slug_returns_not_found() {
+    fn memory_graph_unknown_slug_returns_not_found() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_graph(BrainGraphInput {
+            .memory_graph(MemoryGraphInput {
                 slug: "people/ghost".to_string(),
                 depth: None,
                 temporal: None,
@@ -2879,9 +2876,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_graph_temporal_all_includes_closed_links() {
+    fn memory_graph_temporal_all_includes_closed_links() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2894,7 +2891,7 @@ mod tests {
         );
 
         server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2904,7 +2901,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_graph(BrainGraphInput {
+            .memory_graph(MemoryGraphInput {
                 slug: "people/alice".to_string(),
                 depth: None,
                 temporal: Some("all".to_string()),
@@ -2915,12 +2912,12 @@ mod tests {
         assert_eq!(parsed["edges"].as_array().unwrap().len(), 1);
     }
 
-    // ── brain_check ──────────────────────────────────────────
+    // ── memory_check ──────────────────────────────────────────
 
     #[test]
-    fn brain_check_on_clean_page_returns_empty_array() {
+    fn memory_check_on_clean_page_returns_empty_array() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2928,7 +2925,7 @@ mod tests {
         );
 
         let result = server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("people/alice".to_string()),
             })
             .unwrap();
@@ -2939,9 +2936,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_check_detects_contradiction_on_page() {
+    fn memory_check_detects_contradiction_on_page() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2949,7 +2946,7 @@ mod tests {
         );
 
         let result = server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("people/alice".to_string()),
             })
             .unwrap();
@@ -2960,9 +2957,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_check_filters_output_to_requested_slug() {
+    fn memory_check_filters_output_to_requested_slug() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -2975,13 +2972,13 @@ mod tests {
         );
 
         server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("people/bob".to_string()),
             })
             .unwrap();
 
         let result = server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("people/alice".to_string()),
             })
             .unwrap();
@@ -2996,10 +2993,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_check_explicit_collection_slug_filters_to_resolved_page_when_slug_collides() {
+    fn memory_check_explicit_collection_slug_filters_to_resolved_page_when_slug_collides() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "memory", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3013,13 +3010,13 @@ mod tests {
         );
 
         server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("default::people/alice".to_string()),
             })
             .unwrap();
 
         let result = server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("memory::people/alice".to_string()),
             })
             .unwrap();
@@ -3029,10 +3026,10 @@ mod tests {
     }
 
     #[test]
-    fn brain_tags_explicit_collection_slug_updates_only_resolved_page_when_slug_collides() {
+    fn memory_tags_explicit_collection_slug_updates_only_resolved_page_when_slug_collides() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "memory", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3046,7 +3043,7 @@ mod tests {
         );
 
         server
-            .brain_tags(BrainTagsInput {
+            .memory_tags(MemoryTagsInput {
                 slug: "memory::people/alice".to_string(),
                 add: Some(vec!["memory".to_string()]),
                 remove: None,
@@ -3088,9 +3085,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_check_without_slug_returns_all_unresolved_contradictions() {
+    fn memory_check_without_slug_returns_all_unresolved_contradictions() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3102,21 +3099,23 @@ mod tests {
             "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
         );
 
-        let result = server.brain_check(BrainCheckInput { slug: None }).unwrap();
+        let result = server
+            .memory_check(MemoryCheckInput { slug: None })
+            .unwrap();
 
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
         assert_eq!(parsed.len(), 2);
     }
 
-    // ── brain_timeline ───────────────────────────────────────
+    // ── memory_timeline ───────────────────────────────────────
 
     #[test]
-    fn brain_timeline_on_unknown_slug_returns_not_found() {
+    fn memory_timeline_on_unknown_slug_returns_not_found() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_timeline(BrainTimelineInput {
+            .memory_timeline(MemoryTimelineInput {
                 slug: "nobody/ghost".to_string(),
                 limit: None,
             })
@@ -3126,9 +3125,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_timeline_returns_entries_for_page_with_timeline() {
+    fn memory_timeline_returns_entries_for_page_with_timeline() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3136,7 +3135,7 @@ mod tests {
         );
 
         let result = server
-            .brain_timeline(BrainTimelineInput {
+            .memory_timeline(MemoryTimelineInput {
                 slug: "people/alice".to_string(),
                 limit: Some(10),
             })
@@ -3148,9 +3147,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_timeline_prefers_structured_entries_and_applies_limit() {
+    fn memory_timeline_prefers_structured_entries_and_applies_limit() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3170,7 +3169,7 @@ mod tests {
         }
 
         let result = server
-            .brain_timeline(BrainTimelineInput {
+            .memory_timeline(MemoryTimelineInput {
                 slug: "people/alice".to_string(),
                 limit: Some(1),
             })
@@ -3181,9 +3180,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_timeline_returns_empty_entries_for_page_without_timeline_data() {
+    fn memory_timeline_returns_empty_entries_for_page_without_timeline_data() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3191,7 +3190,7 @@ mod tests {
         );
 
         let result = server
-            .brain_timeline(BrainTimelineInput {
+            .memory_timeline(MemoryTimelineInput {
                 slug: "people/alice".to_string(),
                 limit: None,
             })
@@ -3201,12 +3200,12 @@ mod tests {
         assert!(parsed["entries"].as_array().unwrap().is_empty());
     }
 
-    // ── brain_tags ───────────────────────────────────────────
+    // ── memory_tags ───────────────────────────────────────────
 
     #[test]
-    fn brain_tags_list_add_remove_round_trip() {
+    fn memory_tags_list_add_remove_round_trip() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3215,7 +3214,7 @@ mod tests {
 
         // List tags — should be empty
         let result = server
-            .brain_tags(BrainTagsInput {
+            .memory_tags(MemoryTagsInput {
                 slug: "people/alice".to_string(),
                 add: None,
                 remove: None,
@@ -3227,7 +3226,7 @@ mod tests {
 
         // Add tags
         let result = server
-            .brain_tags(BrainTagsInput {
+            .memory_tags(MemoryTagsInput {
                 slug: "people/alice".to_string(),
                 add: Some(vec!["investor".to_string(), "founder".to_string()]),
                 remove: None,
@@ -3239,7 +3238,7 @@ mod tests {
 
         // Remove a tag
         let result = server
-            .brain_tags(BrainTagsInput {
+            .memory_tags(MemoryTagsInput {
                 slug: "people/alice".to_string(),
                 add: None,
                 remove: Some(vec!["investor".to_string()]),
@@ -3251,12 +3250,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_tags_unknown_slug_returns_not_found() {
+    fn memory_tags_unknown_slug_returns_not_found() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_tags(BrainTagsInput {
+            .memory_tags(MemoryTagsInput {
                 slug: "nobody/ghost".to_string(),
                 add: Some(vec!["tag".to_string()]),
                 remove: None,
@@ -3267,9 +3266,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_tags_rejects_invalid_tag_values() {
+    fn memory_tags_rejects_invalid_tag_values() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3277,7 +3276,7 @@ mod tests {
         );
 
         let error = server
-            .brain_tags(BrainTagsInput {
+            .memory_tags(MemoryTagsInput {
                 slug: "people/alice".to_string(),
                 add: Some(vec!["bad tag".to_string()]),
                 remove: None,
@@ -3289,15 +3288,15 @@ mod tests {
 
     // ── Phase 3 MCP tests ────────────────────────────────────
 
-    // ── brain_gap ────────────────────────────────────────────
+    // ── memory_gap ────────────────────────────────────────────
 
     #[test]
-    fn brain_gap_with_empty_query_returns_invalid_params() {
+    fn memory_gap_with_empty_query_returns_invalid_params() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "".to_string(),
                 slug: None,
                 context: None,
@@ -3308,12 +3307,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_stores_gap_with_null_query_text_and_internal_sensitivity() {
+    fn memory_gap_stores_gap_with_null_query_text_and_internal_sensitivity() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let result = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "who invented quantum socks".to_string(),
                 slug: None,
                 context: Some("test context".to_string()),
@@ -3340,19 +3339,19 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_duplicate_is_idempotent() {
+    fn memory_gap_duplicate_is_idempotent() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let r1 = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "same query".to_string(),
                 slug: None,
                 context: None,
             })
             .unwrap();
         let r2 = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "same query".to_string(),
                 slug: None,
                 context: None,
@@ -3365,12 +3364,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_context_is_redacted_in_listings() {
+    fn memory_gap_context_is_redacted_in_listings() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "sensitive query".to_string(),
                 slug: None,
                 context: Some("sensitive query with extra details".to_string()),
@@ -3378,7 +3377,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_gaps(BrainGapsInput {
+            .memory_gaps(MemoryGapsInput {
                 resolved: None,
                 limit: None,
             })
@@ -3390,16 +3389,16 @@ mod tests {
         assert!(context.is_empty());
     }
 
-    // ── brain_gaps ───────────────────────────────────────────
+    // ── memory_gaps ───────────────────────────────────────────
 
     #[test]
-    fn brain_gaps_returns_array_with_limit() {
+    fn memory_gaps_returns_array_with_limit() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         for i in 0..5 {
             server
-                .brain_gap(BrainGapInput {
+                .memory_gap(MemoryGapInput {
                     query: format!("gap query {i}"),
                     slug: None,
                     context: None,
@@ -3408,7 +3407,7 @@ mod tests {
         }
 
         let result = server
-            .brain_gaps(BrainGapsInput {
+            .memory_gaps(MemoryGapsInput {
                 resolved: None,
                 limit: Some(3),
             })
@@ -3419,12 +3418,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_gaps_defaults_to_unresolved() {
+    fn memory_gaps_defaults_to_unresolved() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "unresolved gap".to_string(),
                 slug: None,
                 context: None,
@@ -3432,7 +3431,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .brain_gaps(BrainGapsInput {
+            .memory_gaps(MemoryGapsInput {
                 resolved: None,
                 limit: None,
             })
@@ -3443,19 +3442,19 @@ mod tests {
         assert!(parsed[0]["resolved_at"].is_null());
     }
 
-    // ── brain_stats ──────────────────────────────────────────
+    // ── memory_stats ──────────────────────────────────────────
 
     #[test]
-    fn brain_stats_returns_all_expected_fields() {
+    fn memory_stats_returns_all_expected_fields() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
             "---\ntitle: Alice\ntype: person\n---\nAlice\n",
         );
 
-        let result = server.brain_stats(BrainStatsInput {}).unwrap();
+        let result = server.memory_stats(MemoryStatsInput {}).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
         assert_eq!(parsed["page_count"], 1);
@@ -3469,11 +3468,11 @@ mod tests {
     }
 
     #[test]
-    fn brain_collections_is_read_only_and_returns_frozen_schema_fields() {
+    fn memory_collections_is_read_only_and_returns_frozen_schema_fields() {
         let (_dir, conn) = open_test_db();
         insert_collection(&conn, 2, "archive", false);
         insert_collection(&conn, 3, "restore", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/default-page",
@@ -3531,7 +3530,9 @@ mod tests {
             .unwrap();
         drop(db);
 
-        let result = server.brain_collections(BrainCollectionsInput {}).unwrap();
+        let result = server
+            .memory_collections(MemoryCollectionsInput {})
+            .unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
 
         let db = server.db.lock().unwrap();
@@ -3618,7 +3619,7 @@ mod tests {
     }
 
     #[test]
-    fn brain_collections_surfaces_status_flags_and_terminal_precedence() {
+    fn memory_collections_surfaces_status_flags_and_terminal_precedence() {
         const QUEUED_ID: i64 = 20_002;
         const RUNNING_ID: i64 = 20_003;
         const TAMPERED_ID: i64 = 20_004;
@@ -3643,7 +3644,7 @@ mod tests {
         insert_collection(&conn, ESCALATED_ID, "escalated", false);
         insert_collection(&conn, PRECEDENCE_ID, "precedence", false);
         insert_collection(&conn, ABSENT_ID, "absent", false);
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let db = server.db.lock().unwrap();
         db.execute(
@@ -3739,14 +3740,16 @@ mod tests {
              WHERE id = ?1",
             rusqlite::params![
                 ABSENT_ID,
-                r#"[{"code":"file_stably_absent_but_clear_not_confirmed","line":0,"raw":"","message":".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly"}]"#
+                r#"[{"code":"file_stably_absent_but_clear_not_confirmed","line":0,"raw":"","message":".quaidignore absent but prior mirror exists; use `quaid collection ignore clear <name> --confirm` to clear explicitly"}]"#
             ],
         )
         .unwrap();
         drop(db);
 
         vault_sync::set_collection_recovery_in_progress_for_test(RUNNING_ID, true);
-        let result = server.brain_collections(BrainCollectionsInput {}).unwrap();
+        let result = server
+            .memory_collections(MemoryCollectionsInput {})
+            .unwrap();
         vault_sync::set_collection_recovery_in_progress_for_test(RUNNING_ID, false);
 
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
@@ -3820,19 +3823,19 @@ mod tests {
         assert!(absent_errors[0]["raw"].is_null());
         assert_eq!(
             absent_errors[0]["message"].as_str(),
-            Some(".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly")
+            Some(".quaidignore absent but prior mirror exists; use `quaid collection ignore clear <name> --confirm` to clear explicitly")
         );
     }
 
-    // ── brain_raw ────────────────────────────────────────────
+    // ── memory_raw ────────────────────────────────────────────
 
     #[test]
-    fn brain_raw_with_unknown_slug_returns_not_found() {
+    fn memory_raw_with_unknown_slug_returns_not_found() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "nobody/ghost".to_string(),
                 source: "test".to_string(),
                 data: json!({"key": "value"}),
@@ -3844,9 +3847,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_with_valid_slug_stores_row() {
+    fn memory_raw_with_valid_slug_stores_row() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3854,7 +3857,7 @@ mod tests {
         );
 
         let result = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"funding": "$10M", "headcount": 50}),
@@ -3878,9 +3881,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_rejects_empty_source() {
+    fn memory_raw_rejects_empty_source() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3888,7 +3891,7 @@ mod tests {
         );
 
         let error = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "".to_string(),
                 data: json!({}),
@@ -3900,12 +3903,12 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_rejects_invalid_slug() {
+    fn memory_raw_rejects_invalid_slug() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let error = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "Invalid/SLUG!".to_string(),
                 source: "test".to_string(),
                 data: json!({}),
@@ -3917,9 +3920,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_rejects_array_payload() {
+    fn memory_raw_rejects_array_payload() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3927,7 +3930,7 @@ mod tests {
         );
 
         let error = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!([1, 2, 3]),
@@ -3940,9 +3943,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_rejects_scalar_payload() {
+    fn memory_raw_rejects_scalar_payload() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3951,7 +3954,7 @@ mod tests {
 
         for bad in [json!("string"), json!(42), json!(true), json!(null)] {
             let error = server
-                .brain_raw(BrainRawInput {
+                .memory_raw(MemoryRawInput {
                     slug: "people/alice".to_string(),
                     source: "crustdata".to_string(),
                     data: bad,
@@ -3963,9 +3966,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_rejects_duplicate_source_without_overwrite() {
+    fn memory_raw_rejects_duplicate_source_without_overwrite() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -3973,7 +3976,7 @@ mod tests {
         );
 
         server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 1}),
@@ -3983,7 +3986,7 @@ mod tests {
 
         // Second write without overwrite must fail.
         let error = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 2}),
@@ -3996,9 +3999,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_overwrites_when_flag_is_true() {
+    fn memory_raw_overwrites_when_flag_is_true() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -4006,7 +4009,7 @@ mod tests {
         );
 
         server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 1}),
@@ -4016,7 +4019,7 @@ mod tests {
 
         // Explicit overwrite must succeed and persist new data.
         server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 2}),
@@ -4037,9 +4040,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_raw_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+    fn memory_raw_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -4054,7 +4057,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 1}),
@@ -4067,13 +4070,13 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_rejects_oversized_context() {
+    fn memory_gap_rejects_oversized_context() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let big_context = "x".repeat(501);
         let error = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "who invented quantum socks".to_string(),
                 slug: None,
                 context: Some(big_context),
@@ -4085,13 +4088,13 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_accepts_context_at_max_length() {
+    fn memory_gap_accepts_context_at_max_length() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let exact_context = "y".repeat(500);
         server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "boundary test query".to_string(),
                 slug: None,
                 context: Some(exact_context),
@@ -4100,9 +4103,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_without_slug_succeeds_while_collection_is_restoring() {
+    fn memory_gap_without_slug_succeeds_while_collection_is_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let db = server.db.lock().unwrap();
         db.execute(
             "UPDATE collections SET state = 'restoring' WHERE id = 1",
@@ -4112,7 +4115,7 @@ mod tests {
         drop(db);
 
         let result = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "record this globally".to_string(),
                 slug: None,
                 context: None,
@@ -4134,9 +4137,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_with_slug_refuses_while_collection_is_restoring() {
+    fn memory_gap_with_slug_refuses_while_collection_is_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/restore-gap",
@@ -4151,7 +4154,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "page-bound gap".to_string(),
                 slug: Some("notes/restore-gap".to_string()),
                 context: None,
@@ -4163,9 +4166,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_with_slug_binds_gap_to_page_id() {
+    fn memory_gap_with_slug_binds_gap_to_page_id() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/bound-gap",
@@ -4173,7 +4176,7 @@ mod tests {
         );
 
         let result = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "page-bound gap".to_string(),
                 slug: Some("notes/bound-gap".to_string()),
                 context: None,
@@ -4197,9 +4200,9 @@ mod tests {
     }
 
     #[test]
-    fn brain_gap_with_slug_refuses_when_collection_needs_full_sync() {
+    fn memory_gap_with_slug_refuses_when_collection_needs_full_sync() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/needs-sync-gap",
@@ -4214,7 +4217,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "page-bound gap".to_string(),
                 slug: Some("notes/needs-sync-gap".to_string()),
                 context: None,
@@ -4227,11 +4230,11 @@ mod tests {
     }
 
     // ── 17.5s2 write-interlock mutator matrix ────────────────
-    // brain_put + state='restoring'
+    // memory_put + state='restoring'
     #[test]
-    fn brain_put_refuses_when_collection_is_restoring() {
+    fn memory_put_refuses_when_collection_is_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let db = server.db.lock().unwrap();
         db.execute(
             "UPDATE collections SET state = 'restoring' WHERE id = 1",
@@ -4241,7 +4244,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/blocked".to_string(),
                 content: "---\ntitle: Blocked\ntype: note\n---\nBlocked\n".to_string(),
                 expected_version: None,
@@ -4251,15 +4254,15 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(
             error.message.contains("CollectionRestoringError"),
-            "brain_put must refuse with CollectionRestoringError when state=restoring: {error:?}"
+            "memory_put must refuse with CollectionRestoringError when state=restoring: {error:?}"
         );
     }
 
-    // ── 17.5s5 brain_link refused during restoring ───────────
+    // ── 17.5s5 memory_link refused during restoring ───────────
     #[test]
-    fn brain_link_refuses_when_collection_is_restoring() {
+    fn memory_link_refuses_when_collection_is_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/alice",
@@ -4279,7 +4282,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -4291,15 +4294,15 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(
             error.message.contains("CollectionRestoringError"),
-            "brain_link must refuse with CollectionRestoringError when state=restoring: {error:?}"
+            "memory_link must refuse with CollectionRestoringError when state=restoring: {error:?}"
         );
     }
 
-    // brain_link + needs_full_sync=1
+    // memory_link + needs_full_sync=1
     #[test]
-    fn brain_link_refuses_when_collection_needs_full_sync() {
+    fn memory_link_refuses_when_collection_needs_full_sync() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/bob",
@@ -4319,7 +4322,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_link(BrainLinkInput {
+            .memory_link(MemoryLinkInput {
                 from_slug: "people/bob".to_string(),
                 to_slug: "companies/initech".to_string(),
                 relationship: "works_at".to_string(),
@@ -4331,16 +4334,16 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(
             error.message.contains("CollectionRestoringError"),
-            "brain_link must refuse with CollectionRestoringError when needs_full_sync=1: {error:?}"
+            "memory_link must refuse with CollectionRestoringError when needs_full_sync=1: {error:?}"
         );
         assert!(error.message.contains("needs_full_sync=true"));
     }
 
-    // ── 17.5s5 brain_check refused during restoring ──────────
+    // ── 17.5s5 memory_check refused during restoring ──────────
     #[test]
-    fn brain_check_refuses_when_collection_is_restoring() {
+    fn memory_check_refuses_when_collection_is_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/check-restoring",
@@ -4355,7 +4358,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("notes/check-restoring".to_string()),
             })
             .unwrap_err();
@@ -4363,15 +4366,15 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(
             error.message.contains("CollectionRestoringError"),
-            "brain_check must refuse with CollectionRestoringError when state=restoring: {error:?}"
+            "memory_check must refuse with CollectionRestoringError when state=restoring: {error:?}"
         );
     }
 
-    // brain_check + needs_full_sync=1
+    // memory_check + needs_full_sync=1
     #[test]
-    fn brain_check_refuses_when_collection_needs_full_sync() {
+    fn memory_check_refuses_when_collection_needs_full_sync() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/check-needs-sync",
@@ -4386,7 +4389,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_check(BrainCheckInput {
+            .memory_check(MemoryCheckInput {
                 slug: Some("notes/check-needs-sync".to_string()),
             })
             .unwrap_err();
@@ -4394,16 +4397,16 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(
             error.message.contains("CollectionRestoringError"),
-            "brain_check must refuse with CollectionRestoringError when needs_full_sync=1: {error:?}"
+            "memory_check must refuse with CollectionRestoringError when needs_full_sync=1: {error:?}"
         );
         assert!(error.message.contains("needs_full_sync=true"));
     }
 
-    // ── 17.5s5 brain_raw refused during restoring ────────────
+    // ── 17.5s5 memory_raw refused during restoring ────────────
     #[test]
-    fn brain_raw_refuses_when_collection_is_restoring() {
+    fn memory_raw_refuses_when_collection_is_restoring() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "people/carol",
@@ -4418,7 +4421,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_raw(BrainRawInput {
+            .memory_raw(MemoryRawInput {
                 slug: "people/carol".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 1}),
@@ -4429,16 +4432,16 @@ mod tests {
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(
             error.message.contains("CollectionRestoringError"),
-            "brain_raw must refuse with CollectionRestoringError when state=restoring: {error:?}"
+            "memory_raw must refuse with CollectionRestoringError when state=restoring: {error:?}"
         );
     }
 
     // ── M1b-ii ordering proofs: interlock wins over OCC ──────
     // Collection restoring + page EXISTS + no expected_version → CollectionRestoringError, not "already exists"
     #[test]
-    fn brain_put_collection_interlock_wins_over_update_without_expected_version() {
+    fn memory_put_collection_interlock_wins_over_update_without_expected_version() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/interlock-exists",
@@ -4453,7 +4456,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/interlock-exists".to_string(),
                 content: "---\ntitle: Interlock\ntype: note\n---\novewrite attempt\n".to_string(),
                 expected_version: None,
@@ -4469,9 +4472,9 @@ mod tests {
 
     // Collection restoring + page ABSENT + expected_version supplied → CollectionRestoringError, not "does not exist at version N"
     #[test]
-    fn brain_put_collection_interlock_wins_over_ghost_expected_version() {
+    fn memory_put_collection_interlock_wins_over_ghost_expected_version() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let db = server.db.lock().unwrap();
         db.execute(
             "UPDATE collections SET state = 'restoring' WHERE id = 1",
@@ -4481,7 +4484,7 @@ mod tests {
         drop(db);
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/ghost-version".to_string(),
                 content: "---\ntitle: Ghost\ntype: note\n---\ncontent\n".to_string(),
                 expected_version: Some(1),
@@ -4497,16 +4500,16 @@ mod tests {
 
     // ── 17.5qq11 MCP path ────────────────────────────────────
     #[test]
-    fn brain_put_refuses_when_collection_is_read_only() {
+    fn memory_put_refuses_when_collection_is_read_only() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let db = server.db.lock().unwrap();
         db.execute("UPDATE collections SET writable = 0 WHERE id = 1", [])
             .unwrap();
         drop(db);
 
         let error = server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/read-only-page".to_string(),
                 content: "---\ntitle: Read Only\ntype: note\n---\nhello\n".to_string(),
                 expected_version: None,
@@ -4515,27 +4518,27 @@ mod tests {
 
         assert!(
             error.message.contains("CollectionReadOnlyError"),
-            "brain_put must surface CollectionReadOnlyError when collection is read-only: {error:?}"
+            "memory_put must surface CollectionReadOnlyError when collection is read-only: {error:?}"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn brain_put_happy_path_updates_file_and_clears_mechanical_artifacts() {
+    fn memory_put_happy_path_updates_file_and_clears_mechanical_artifacts() {
         let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         let original = "---\ntitle: Happy\ntype: note\n---\nOriginal body\n";
         let updated = "---\ntitle: Happy\ntype: note\n---\nUpdated body\n";
 
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/happy".to_string(),
                 content: original.to_string(),
                 expected_version: None,
             })
             .unwrap();
         server
-            .brain_put(BrainPutInput {
+            .memory_put(MemoryPutInput {
                 slug: "notes/happy".to_string(),
                 content: updated.to_string(),
                 expected_version: Some(1),
@@ -4554,9 +4557,9 @@ mod tests {
 
     // ── 1.1b response completeness ───────────────────────────
     #[test]
-    fn brain_gap_with_slug_response_includes_page_id() {
+    fn memory_gap_with_slug_response_includes_page_id() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
         create_page(
             &server,
             "notes/response-gap",
@@ -4564,7 +4567,7 @@ mod tests {
         );
 
         let result = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "gap with page bound".to_string(),
                 slug: Some("notes/response-gap".to_string()),
                 context: None,
@@ -4574,17 +4577,17 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
         assert!(
             parsed["page_id"].as_i64().is_some(),
-            "brain_gap with slug must return page_id in response: {parsed}"
+            "memory_gap with slug must return page_id in response: {parsed}"
         );
     }
 
     #[test]
-    fn brain_gap_without_slug_response_has_null_page_id() {
+    fn memory_gap_without_slug_response_has_null_page_id() {
         let (_dir, conn) = open_test_db();
-        let server = GigaBrainServer::new(conn);
+        let server = QuaidServer::new(conn);
 
         let result = server
-            .brain_gap(BrainGapInput {
+            .memory_gap(MemoryGapInput {
                 query: "global gap no page".to_string(),
                 slug: None,
                 context: None,
@@ -4594,7 +4597,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
         assert!(
             parsed["page_id"].is_null(),
-            "brain_gap without slug must return null page_id: {parsed}"
+            "memory_gap without slug must return null page_id: {parsed}"
         );
     }
 

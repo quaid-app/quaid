@@ -18,10 +18,10 @@ contradictions, top knowledge gaps, and upcoming timeline entries.
 ### Requirement: Alerts skill defines interrupt-driven notification triggers
 
 The alerts skill SHALL define trigger conditions, priority levels, delivery mechanisms,
-and deduplication rules for brain state changes.
+and deduplication rules for memory state changes.
 
 #### Scenario: New contradiction alert
-- **WHEN** `gbrain check --all` detects a new unresolved contradiction
+- **WHEN** `quaid check --all` detects a new unresolved contradiction
 - **THEN** the alerts skill classifies it as high-priority and outputs it
 
 #### Scenario: Stale page alert
@@ -35,10 +35,10 @@ sensitivity, generating research queries, ingesting findings, and marking gaps r
 
 #### Scenario: Internal-only research
 - **WHEN** a gap has `sensitivity = 'internal'`
-- **THEN** the research skill uses only brain-internal search (no external queries)
+- **THEN** the research skill uses only memory-internal search (no external queries)
 
 #### Scenario: Approved external research
-- **WHEN** a gap has been approved via `brain_gap_approve` with `sensitivity = 'external'`
+- **WHEN** a gap has been approved via `memory_gap_approve` with `sensitivity = 'external'`
 - **THEN** the research skill may use Exa or web search with the approved query
 
 ### Requirement: Upgrade skill guides binary and skill updates
@@ -48,12 +48,12 @@ release metadata, downloading and verifying binaries, running post-upgrade valid
 and updating skills.
 
 #### Scenario: Version check
-- **WHEN** the agent runs `gbrain version`
+- **WHEN** the agent runs `quaid version`
 - **THEN** the upgrade skill compares against the latest GitHub Release
 
 #### Scenario: Post-upgrade validation
 - **WHEN** a new binary is installed
-- **THEN** the upgrade skill runs `gbrain validate --all` to confirm DB compatibility
+- **THEN** the upgrade skill runs `quaid validate --all` to confirm DB compatibility
 
 ### Requirement: Enrichment skill patterns for external data
 
@@ -64,12 +64,12 @@ enrichment data flows into `raw_data` table and how facts are extracted into
 
 #### Scenario: Crustdata enrichment
 - **WHEN** the agent enriches a company page
-- **THEN** it uses `brain_raw` to store Crustdata response and updates compiled_truth
+- **THEN** it uses `memory_raw` to store Crustdata response and updates compiled_truth
 
 ### Requirement: Skills doctor command
 
-`gbrain skills doctor` SHALL display the active skill resolution order (embedded defaults →
-`~/.gbrain/skills/` → working directory `./skills/`), content hashes (SHA-256) for each
+`quaid skills doctor` SHALL display the active skill resolution order (embedded defaults →
+`~/.quaid/skills/` → working directory `./skills/`), content hashes (SHA-256) for each
 resolved skill file, and version compatibility notes.
 
 #### Scenario: Default resolution

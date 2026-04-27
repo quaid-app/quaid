@@ -1,0 +1,169 @@
+---
+title: Troubleshoot common errors
+description: The errors you're most likely to hit, what they mean, and how to fix them.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+This page is sorted by symptom. If your symptom isn't here, run `quaid validate` and check `quaid stats` first — both surface most underlying issues. For anything weirder, file a GitHub issue with `quaid version` output and a minimal reproduction.
+
+## "command not found: quaid"
+
+The shell installer puts the binary at `~/.local/bin/quaid` and adds it to your shell profile. Either:
+
+- Open a new shell (the profile change only takes effect on next login).
+- `source ~/.zshrc` (or `~/.bashrc`).
+- Add it manually: `export PATH="$HOME/.local/bin:$PATH"`.
+
+If `~/.local/bin/quaid` doesn't exist, the install failed. Re-run the installer; it prints the failure cause.
+
+## "model mismatch" on every command
+
+Looks like:
+
+```
+error: memory initialized with BAAI/bge-small-en-v1.5 (alias: small),
+       but BAAI/bge-large-en-v1.5 (alias: large) was requested.
+       Memory model is fixed at init; create a new memory or open with --model small.
+```
+
+You're either:
+
+- Passing `--model X` (or `QUAID_MODEL=X`) when the memory was initialized with model `Y`.
+- Trying to use a non-default model on the airgapped build.
+
+Fix:
+
+- For `--model` on the right memory: drop the flag or set `QUAID_MODEL` to the recorded value.
+- For switching to a different model: see [Switch embedding models](/how-to/switch-embedding-model/).
+
+## "database is locked"
+
+Two writers hit the same `memory.db` at once. SQLite WAL allows one writer; everyone else gets `database is locked`.
+
+Common causes:
+
+- `quaid serve` is running and you're also running `quaid put` from a terminal.
+- An aborted process left a stale `.db-wal` lock.
+
+Fix:
+
+- Stop the other writer (`pkill quaid` if needed).
+- Run `quaid compact` to checkpoint the WAL.
+- If a stale lock persists, restart the SQLite client (the file itself is fine; WAL replays are automatic).
+
+## "missing vec table `page_embeddings_vec_<DIM>`"
+
+The memory was initialized but the dimension-specific vec0 table wasn't created. This typically only happens when copying a partial memory.
+
+Fix: re-run `quaid init` against a fresh path and re-import.
+
+## MCP server won't start
+
+```
+error: serve is unsupported on this platform
+```
+
+Windows. `quaid serve` is currently macOS / Linux only. Use WSL2.
+
+```
+error: missing collection lease
+```
+
+Another `serve` session has the lease. Stop it (`pkill quaid`) and retry. Stale leases are reaped on the next start, so a single retry is usually enough.
+
+## "Conflict: expected_version 7 does not match current 9"
+
+OCC violation. Someone — or your past self in another terminal — wrote between your `get` and `put`.
+
+Fix:
+
+```bash
+quaid get <slug>                        # re-fetch with current version
+# rebase your edits
+quaid put <slug> --expected-version 9   # use the new version
+```
+
+Bare retries with the same `expected_version` will always fail; the rebase is mandatory.
+
+## "Ambiguity: candidates: …"
+
+You're using a bare slug and more than one collection has it.
+
+Fix: qualify the slug — `<collection>::<slug>` — or filter your call to one collection.
+
+## Slug validation rejects valid characters
+
+Slugs are ASCII lowercase + digits + `-`, `_`, and `/`. Common rejections:
+
+- Capital letters → lowercase them.
+- Spaces → use dashes.
+- Unicode characters → ASCII-fold or rename.
+
+The validation runs at the MCP boundary (`memory_put`, `memory_link`, etc.) and at import time. The error message includes the offending character.
+
+## Import says "0 pages updated" but you have files
+
+`import` is idempotent. If the SHA-256 of every file matches what's already in `ingest_log`, nothing is updated. To force re-ingest:
+
+```bash
+quaid ingest <file> --force                       # one file
+# Or remove the ingest_log entry, then import
+```
+
+If you're using vault-sync collections, the watcher is the right path — `import` and the reconciler can fight over which one writes last.
+
+## Embedding queue is backed up
+
+```bash
+quaid embed --stale       # process anything whose chunks changed
+```
+
+Or, for a memory that's been idle through a model swap or a chunking-strategy change:
+
+```bash
+quaid embed --all
+```
+
+`quaid stats` shows the embedding count vs page chunk count; large gaps mean queue backlog.
+
+## "CollectionRestoringError"
+
+The collection is mid-restore or has `needs_full_sync = 1`. All mutations are gated until the reconciler finishes.
+
+Fix: wait for the restore to complete (`quaid collection info <name>` shows progress), or — if it's stuck:
+
+```bash
+quaid collection restore-reset <name> --confirm
+quaid collection sync <name> --finalize-pending
+```
+
+Read what's going on first. `restore-reset` is a recovery primitive, not a routine fix.
+
+## Search returns nothing for an obvious match
+
+Probably one of:
+
+- The page is **quarantined**. FTS5 triggers exclude quarantined pages — `quaid collection quarantine list <collection>` to confirm.
+- The page hasn't been **embedded** yet (vector lane will silently miss it). `quaid embed --stale`.
+- The query is in a different **wing** than the page. Drop `--wing` filters.
+- FTS5 syntax conflict. Try `quaid search '<query>' --raw` to see if your query needs escaping.
+
+## "validate" reports broken links
+
+```bash
+quaid validate --links --db ~/memory.db
+```
+
+Lists every link with a missing endpoint. Fix:
+
+- Pages were renamed or removed without updating links: re-run `quaid link` / `quaid unlink` to repoint.
+- A page was quarantined: restore it (vault-sync) or remove the link if obsolete.
+
+## Anything else
+
+- `quaid version` — confirm what you're running.
+- `quaid stats` — confirm what's in the memory.
+- `quaid validate --all` — run every integrity check.
+- File a GitHub issue at `https://github.com/quaid-app/quaid/issues` with all three outputs and a minimal repro.

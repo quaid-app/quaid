@@ -1,0 +1,100 @@
+---
+title: Build a knowledge graph
+description: Create typed temporal links, traverse them, and see what links into a page.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+Quaid's `links` table holds typed, temporal cross-references between pages. This recipe shows how to create them at the CLI, traverse them, and use temporal validity to capture relationships that change over time.
+
+## Create a typed link
+
+```bash
+quaid link people/alice companies/river-ai \
+  --relationship founder_of \
+  --valid-from 2024-01-15 \
+  --db ~/memory.db
+```
+
+Both ends must already exist as pages. `--relationship` is free-form; conventions like `founder_of`, `mentions`, `supersedes`, `manages` are common. `--valid-from` and `--valid-until` are optional ISO-8601 dates.
+
+If you omit `--relationship`, it defaults to `related`.
+
+## Wiki-style links inside the body
+
+`[[other-page]]` syntax in a page body is parsed at write/import time into `links` rows with `source_kind = 'wiki_link'`. Programmatic links (the `quaid link` CLI or `memory_link` MCP tool) carry `source_kind = 'programmatic'`. Both are returned by `links` and `backlinks`.
+
+## Close an interval
+
+Alice leaves RiverAI. Don't delete the link — close it:
+
+```bash
+quaid links people/alice --db ~/memory.db   # find the link_id
+quaid link-close <LINK_ID> --valid-until 2026-04-01 --db ~/memory.db
+```
+
+The link still exists in the database; subsequent traversal with `--temporal current` excludes it, but `--temporal all` keeps it.
+
+## List outbound and inbound links
+
+```bash
+quaid links people/alice --db ~/memory.db                    # outbound
+quaid backlinks companies/river-ai --db ~/memory.db          # inbound
+quaid links people/alice --temporal all --db ~/memory.db     # include closed intervals
+```
+
+## Traverse the neighbourhood
+
+```bash
+quaid graph people/alice --depth 2 --db ~/memory.db
+```
+
+Returns a JSON object with `nodes` and `edges` for an N-hop BFS from the seed slug. `--temporal current` (default) honors `valid_from`/`valid_until`; `--temporal all` traverses everything.
+
+```bash
+quaid graph people/alice --depth 2 --temporal all --db ~/memory.db
+```
+
+## Remove a link
+
+```bash
+quaid unlink people/alice companies/river-ai --db ~/memory.db
+quaid unlink people/alice companies/river-ai --relationship founder_of --db ~/memory.db
+```
+
+Without `--relationship`, every edge between the two pages is removed. With it, only that specific edge.
+
+We recommend `link-close` over `unlink` when the relationship was real but ended — the historical record is what makes graph traversal useful over time.
+
+## Useful relationships to standardize
+
+There's no enforced taxonomy, but these are common:
+
+| Relationship | Meaning |
+| ------------ | ------- |
+| `founder_of`, `employed_by`, `joined`, `left` | Person ↔ Company |
+| `mentions`, `cites`, `references` | Page ↔ Page (lightweight) |
+| `supersedes`, `superseded_by` | Decision ↔ Decision |
+| `manages`, `reports_to` | Person ↔ Person |
+| `partnered_with`, `acquired`, `acquired_by` | Company ↔ Company |
+| `commits_to`, `committed_by` | Person ↔ Commitment |
+
+Pick a small vocabulary and stick to it; the temporal fields encode the *when*, the relationship encodes the *what*.
+
+## See it via MCP
+
+For agents, the same surface lives at:
+
+- `memory_link` — create
+- `memory_link_close` — close interval
+- `memory_backlinks` — inbound
+- `memory_graph` — traverse
+
+See the [MCP tool reference](/reference/mcp/) for parameters.
+
+## Tips
+
+- **Temporal links over deletion.** Closed intervals are queryable history; deleted links are gone.
+- **Use `valid_from`/`valid_until` aggressively.** They cost nothing and unlock "who was at RiverAI in April 2026?" queries.
+- **Run `quaid validate --links`.** Detects dangling endpoints (e.g. when a page was renamed and a link wasn't updated).

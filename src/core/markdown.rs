@@ -143,7 +143,7 @@ pub fn render_page(page: &Page) -> String {
     let mut out = String::new();
     let mut rendered_frontmatter = page.frontmatter.clone();
     if !page.uuid.trim().is_empty() {
-        rendered_frontmatter.insert("gbrain_id".to_string(), page.uuid.clone());
+        rendered_frontmatter.insert("memory_id".to_string(), page.uuid.clone());
     }
 
     out.push_str("---\n");
@@ -297,12 +297,12 @@ mod tests {
         }
 
         #[test]
-        fn preserves_gbrain_id_frontmatter_field_when_present() {
-            let input = "---\ngbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\ntitle: Alice\n---\n# Alice\n";
+        fn preserves_memory_id_frontmatter_field_when_present() {
+            let input = "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\ntitle: Alice\n---\n# Alice\n";
             let (map, body) = parse_frontmatter(input);
 
             assert_eq!(
-                map.get("gbrain_id").map(String::as_str),
+                map.get("memory_id").map(String::as_str),
                 Some("0195c7c0-2d06-7df0-bf59-acde48001122")
             );
             assert_eq!(body, "# Alice\n");
@@ -466,13 +466,13 @@ mod tests {
 
             assert_eq!(
                 rendered,
-                "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\nsource: manual\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme."
+                "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\nsource: manual\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme."
             );
         }
 
         #[test]
         fn render_parse_render_is_idempotent_for_canonical_page() {
-            let canonical = "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\nsource: manual\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme.\n";
+            let canonical = "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\nsource: manual\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme.\n";
 
             let (map, body) = parse_frontmatter(canonical);
             let (truth, timeline) = split_content(&body);
@@ -485,17 +485,17 @@ mod tests {
         }
 
         #[test]
-        fn render_parse_render_keeps_gbrain_id_in_canonical_frontmatter() {
-            let canonical = "---\ngbrain_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nsource: vault\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme.\n";
+        fn render_parse_render_keeps_memory_id_in_canonical_frontmatter() {
+            let canonical = "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nsource: vault\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme.\n";
 
             let (map, body) = parse_frontmatter(canonical);
             let (truth, timeline) = split_content(&body);
 
             let mut page = make_page(vec![], &truth, &timeline);
             page.uuid = map
-                .get("gbrain_id")
+                .get("memory_id")
                 .cloned()
-                .expect("gbrain_id should remain available");
+                .expect("memory_id should remain available");
             page.frontmatter = map;
 
             let rendered = render_page(&page);
@@ -503,10 +503,10 @@ mod tests {
         }
 
         #[test]
-        fn preserves_page_uuid_when_frontmatter_gbrain_id_is_stale() {
+        fn preserves_page_uuid_when_frontmatter_memory_id_is_stale() {
             let page = make_page(
                 vec![
-                    ("gbrain_id", "01969f11-9448-7d79-8d3f-c68f54760000"),
+                    ("memory_id", "01969f11-9448-7d79-8d3f-c68f54760000"),
                     ("title", "Alice"),
                 ],
                 "# Alice\n",
@@ -515,18 +515,18 @@ mod tests {
 
             let rendered = render_page(&page);
 
-            assert!(rendered.contains("gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
-            assert!(!rendered.contains("gbrain_id: 01969f11-9448-7d79-8d3f-c68f54760000"));
+            assert!(rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
+            assert!(!rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54760000"));
         }
 
         #[test]
-        fn renders_persisted_uuid_even_when_frontmatter_map_lacks_gbrain_id() {
+        fn renders_persisted_uuid_even_when_frontmatter_map_lacks_memory_id() {
             let page = make_page(vec![("title", "Alice")], "# Alice\n", "");
 
             let rendered = render_page(&page);
 
             assert!(
-                rendered.contains("gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
+                rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
                 "render_page must not let agents strip a persisted page UUID from frontmatter"
             );
         }
@@ -538,7 +538,7 @@ mod tests {
 
             assert_eq!(
                 rendered,
-                "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Solo\n---\nJust truth.\n---\n"
+                "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Solo\n---\nJust truth.\n---\n"
             );
         }
 
@@ -549,31 +549,31 @@ mod tests {
 
             assert_eq!(
                 rendered,
-                "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\n---\nPlain content.\n---\nTimeline entry."
+                "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\n---\nPlain content.\n---\nTimeline entry."
             );
         }
 
         #[test]
-        fn parses_and_renders_gbrain_id_frontmatter() {
-            let canonical = "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\n# Alice\n";
+        fn parses_and_renders_memory_id_frontmatter() {
+            let canonical = "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\n# Alice\n";
             let (frontmatter, body) = parse_frontmatter(canonical);
 
             assert_eq!(
-                frontmatter.get("gbrain_id"),
+                frontmatter.get("memory_id"),
                 Some(&"01969f11-9448-7d79-8d3f-c68f54761234".to_string())
             );
 
             let mut page = make_page(vec![], &body, "");
             page.uuid = frontmatter
-                .get("gbrain_id")
+                .get("memory_id")
                 .cloned()
-                .expect("gbrain_id should remain available");
+                .expect("memory_id should remain available");
             let rendered = render_page(&Page {
                 frontmatter,
                 ..page
             });
 
-            assert!(rendered.contains("gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
+            assert!(rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
         }
     }
 }

@@ -115,8 +115,8 @@ fn prune_inactive_rows(conn: &Connection, page_id: i64) -> rusqlite::Result<()> 
         return Ok(());
     }
 
-    let keep = integer_env("GBRAIN_RAW_IMPORTS_KEEP", DEFAULT_KEEP).max(0);
-    let ttl_days = integer_env("GBRAIN_RAW_IMPORTS_TTL_DAYS", DEFAULT_TTL_DAYS).max(0);
+    let keep = integer_env("QUAID_RAW_IMPORTS_KEEP", DEFAULT_KEEP).max(0);
+    let ttl_days = integer_env("QUAID_RAW_IMPORTS_TTL_DAYS", DEFAULT_TTL_DAYS).max(0);
     let ttl_cutoff = format!("-{ttl_days} days");
     let mut stmt = conn.prepare(
         "SELECT id, julianday(created_at) < julianday('now', ?2) AS expired
@@ -144,7 +144,7 @@ fn prune_inactive_rows(conn: &Connection, page_id: i64) -> rusqlite::Result<()> 
 }
 
 fn keep_all_enabled() -> bool {
-    std::env::var("GBRAIN_RAW_IMPORTS_KEEP_ALL").as_deref() == Ok("1")
+    std::env::var("QUAID_RAW_IMPORTS_KEEP_ALL").as_deref() == Ok("1")
 }
 
 fn integer_env(name: &str, default_value: i64) -> i64 {
@@ -264,9 +264,9 @@ mod tests {
     #[test]
     fn inline_gc_keeps_only_ten_inactive_rows_by_default() {
         let _env_guard = env_mutation_lock().lock().unwrap();
-        let _keep_all = EnvVarGuard::clear("GBRAIN_RAW_IMPORTS_KEEP_ALL");
-        let _keep = EnvVarGuard::clear("GBRAIN_RAW_IMPORTS_KEEP");
-        let _ttl = EnvVarGuard::clear("GBRAIN_RAW_IMPORTS_TTL_DAYS");
+        let _keep_all = EnvVarGuard::clear("QUAID_RAW_IMPORTS_KEEP_ALL");
+        let _keep = EnvVarGuard::clear("QUAID_RAW_IMPORTS_KEEP");
+        let _ttl = EnvVarGuard::clear("QUAID_RAW_IMPORTS_TTL_DAYS");
         let conn = open_test_db();
         let page_id = page_id(&conn);
 
@@ -297,9 +297,9 @@ mod tests {
     #[test]
     fn inline_gc_prunes_ttl_expired_inactive_rows() {
         let _env_guard = env_mutation_lock().lock().unwrap();
-        let _keep_all = EnvVarGuard::clear("GBRAIN_RAW_IMPORTS_KEEP_ALL");
-        let _keep = EnvVarGuard::clear("GBRAIN_RAW_IMPORTS_KEEP");
-        let _ttl = EnvVarGuard::clear("GBRAIN_RAW_IMPORTS_TTL_DAYS");
+        let _keep_all = EnvVarGuard::clear("QUAID_RAW_IMPORTS_KEEP_ALL");
+        let _keep = EnvVarGuard::clear("QUAID_RAW_IMPORTS_KEEP");
+        let _ttl = EnvVarGuard::clear("QUAID_RAW_IMPORTS_TTL_DAYS");
         let conn = open_test_db();
         let page_id = page_id(&conn);
 
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn keep_all_disables_inline_gc() {
         let _env_guard = env_mutation_lock().lock().unwrap();
-        let _keep_all = EnvVarGuard::set("GBRAIN_RAW_IMPORTS_KEEP_ALL", "1");
+        let _keep_all = EnvVarGuard::set("QUAID_RAW_IMPORTS_KEEP_ALL", "1");
         let conn = open_test_db();
         let page_id = page_id(&conn);
 

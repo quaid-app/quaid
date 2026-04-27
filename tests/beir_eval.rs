@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use gbrain::commands::embed;
-use gbrain::core::db;
-use gbrain::core::migrate::import_dir;
-use gbrain::core::search::hybrid_search;
+use quaid::commands::embed;
+use quaid::core::db;
+use quaid::core::migrate::import_dir;
+use quaid::core::search::hybrid_search;
 
 // ── Dataset paths ─────────────────────────────────────────────────────────────
 
@@ -150,9 +150,9 @@ fn mean_ndcg_at_10(results: &[(Vec<String>, HashMap<String, u32>)]) -> f64 {
     sum / results.len() as f64
 }
 
-// ── Importer: BEIR corpus → gbrain pages ─────────────────────────────────────
+// ── Importer: BEIR corpus → quaid pages ─────────────────────────────────────
 
-/// Write BEIR documents as gbrain markdown pages to a temp directory,
+/// Write BEIR documents as quaid markdown pages to a temp directory,
 /// then bulk-import with `import_dir`.
 fn import_beir_corpus(
     conn: &rusqlite::Connection,

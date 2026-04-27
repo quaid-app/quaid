@@ -16,19 +16,19 @@ depends_on: p2-intelligence-layer
 
 Phases 1 and 2 shipped the core storage, search, graph, assertions, progressive retrieval,
 and MCP tools. Phase 3 (`p3-polish-benchmarks`) handled release readiness, coverage, and
-docs polish. What remains is the **intelligence layer that makes GigaBrain useful to agents**
+docs polish. What remains is the **intelligence layer that makes Quaid useful to agents**
 and the **evaluation infrastructure that proves it works**.
 
 Right now:
 - Five of eight SKILL.md files are stubs (briefing, alerts, research, upgrade, enrich).
   Agents can't use them.
 - Four CLI commands are `todo!()` stubs: `validate`, `call`, `pipe`, `skills doctor`.
-- Four MCP tools from the spec are unimplemented: `brain_gap`, `brain_gaps`, `brain_stats`,
-  `brain_raw`.
+- Four MCP tools from the spec are unimplemented: `memory_gap`, `memory_gaps`, `memory_stats`,
+  `memory_raw`.
 - No benchmark harness exists beyond a Phase 1 nDCG@10 proxy on 5 fixture pages.
 - `--json` output coverage is incomplete across some commands.
 
-Without this work, GigaBrain has a solid engine but no flight manual and no instruments.
+Without this work, Quaid has a solid engine but no flight manual and no instruments.
 
 ## What Changes
 
@@ -41,25 +41,25 @@ Author production-ready SKILL.md files for:
 - **Upgrade**: agent-guided binary + skill updates — version check, download, verify, validate
 - **Enrichment**: external data integration — Crustdata, Exa, Partiful patterns
 
-Implement `gbrain skills doctor` to verify skill resolution order and content hashes.
+Implement `quaid skills doctor` to verify skill resolution order and content hashes.
 
 ### 2. CLI Stub Completion
 
 Replace all `todo!()` stubs with working implementations:
-- `gbrain validate --all` — referential integrity, stale embeddings, broken links, assertion dedup
-- `gbrain validate --links` / `--assertions` / `--embeddings` — targeted checks
-- `gbrain call <TOOL> <JSON>` — raw MCP tool invocation (GL pattern)
-- `gbrain pipe` — JSONL streaming mode for scripting
-- `gbrain skills list` / `gbrain skills doctor` — skill inspection
+- `quaid validate --all` — referential integrity, stale embeddings, broken links, assertion dedup
+- `quaid validate --links` / `--assertions` / `--embeddings` — targeted checks
+- `quaid call <TOOL> <JSON>` — raw MCP tool invocation (GL pattern)
+- `quaid pipe` — JSONL streaming mode for scripting
+- `quaid skills list` / `quaid skills doctor` — skill inspection
 - Ensure `--json` flag produces structured output on every command
 
 ### 3. MCP Phase 3 Surface
 
 Implement remaining MCP tools from the spec:
-- `brain_gap` — log a knowledge gap (with privacy-safe query_hash)
-- `brain_gaps` — list unresolved/resolved gaps
-- `brain_stats` — brain statistics (page count, link count, contradiction count, etc.)
-- `brain_raw` — store raw structured data (API responses, JSON) for a page
+- `memory_gap` — log a knowledge gap (with privacy-safe query_hash)
+- `memory_gaps` — list unresolved/resolved gaps
+- `memory_stats` — memory statistics (page count, link count, contradiction count, etc.)
+- `memory_raw` — store raw structured data (API responses, JSON) for a page
 
 ### 4. Benchmark Harnesses
 
@@ -80,7 +80,7 @@ Build evaluation infrastructure:
 - `validate`: Database integrity checking (links, assertions, embeddings, referential)
 - `call`: Raw MCP tool invocation from CLI
 - `pipe`: JSONL streaming for shell pipelines
-- `brain_gap` / `brain_gaps` / `brain_stats` / `brain_raw`: MCP tool surface completion
+- `memory_gap` / `memory_gaps` / `memory_stats` / `memory_raw`: MCP tool surface completion
 - `benchmark-harness`: Reproducible retrieval quality and safety evaluation
 - `briefing-skill` / `alerts-skill` / `research-skill` / `upgrade-skill` / `enrich-skill`: Agent workflow skills
 

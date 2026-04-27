@@ -1,4 +1,4 @@
-use gbrain::core::db;
+use quaid::core::db;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -19,13 +19,13 @@ fn insert_page(conn: &Connection, slug: &str, page_type: &str, title: &str, summ
 }
 
 fn bin_path() -> &'static str {
-    env!("CARGO_BIN_EXE_gbrain")
+    env!("CARGO_BIN_EXE_quaid")
 }
 
-fn run_gbrain(db_path: &Path, args: &[&str]) -> std::process::Output {
+fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(bin_path());
     command.arg("--db").arg(db_path).args(args);
-    command.output().expect("run gbrain")
+    command.output().expect("run quaid")
 }
 
 fn parse_stdout_json(output: &std::process::Output) -> Value {
@@ -50,7 +50,7 @@ fn search_json_percent_query_returns_json_array() {
     );
     drop(conn);
 
-    let output = run_gbrain(&db_path, &["--json", "search", "50% fee reduction"]);
+    let output = run_quaid(&db_path, &["--json", "search", "50% fee reduction"]);
 
     assert!(
         output.status.success(),
@@ -72,7 +72,7 @@ fn search_raw_json_invalid_query_returns_error_object() {
     let db_path = test_db_path(&dir, "search-raw-json.db");
     let _conn = open_test_db(&db_path);
 
-    let output = run_gbrain(&db_path, &["--json", "search", "--raw", "?invalid"]);
+    let output = run_quaid(&db_path, &["--json", "search", "--raw", "?invalid"]);
 
     assert!(
         output.status.success(),
@@ -93,9 +93,9 @@ fn search_raw_json_invalid_query_returns_error_object() {
 }
 
 #[test]
-fn call_brain_search_question_query_returns_json_array() {
+fn call_memory_search_question_query_returns_json_array() {
     let dir = tempfile::TempDir::new().expect("temp dir");
-    let db_path = test_db_path(&dir, "brain-search-call.db");
+    let db_path = test_db_path(&dir, "memory-search-call.db");
     let conn = open_test_db(&db_path);
     insert_page(
         &conn,
@@ -106,28 +106,28 @@ fn call_brain_search_question_query_returns_json_array() {
     );
     drop(conn);
 
-    let output = run_gbrain(
+    let output = run_quaid(
         &db_path,
         &[
             "call",
-            "brain_search",
+            "memory_search",
             r#"{"query":"what is CLARITY?","limit":5}"#,
         ],
     );
 
     assert!(
         output.status.success(),
-        "call brain_search should exit cleanly: {output:?}"
+        "call memory_search should exit cleanly: {output:?}"
     );
     assert!(
         String::from_utf8_lossy(&output.stderr).trim().is_empty(),
-        "call brain_search should not write errors to stderr: {:?}",
+        "call memory_search should not write errors to stderr: {:?}",
         output.stderr
     );
 
     let parsed = parse_stdout_json(&output);
     assert!(
         parsed.is_array(),
-        "brain_search call must emit a JSON array"
+        "memory_search call must emit a JSON array"
     );
 }

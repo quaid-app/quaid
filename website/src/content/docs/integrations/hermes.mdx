@@ -1,0 +1,83 @@
+---
+title: Hermes Agent
+description: Use Quaid as the primary semantic memory system for Hermes Agent.
+guide:
+  eyebrow: Integration
+  accentBar: true
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Quaid can function as a durable memory system for [Hermes Agent](https://github.com/mshumer/hermes). Moving beyond simple text memory to a structured, semantically searchable knowledge engine, Hermes gains the ability to recall complex relationships and project history across sessions.
+
+## Why use Quaid for Hermes
+
+- **Semantic retrieval.** Hermes can query "concepts" rather than just keywords.
+- **PARA alignment.** Organizes knowledge into Projects, Areas, Resources, and Archives.
+- **Episodic memory.** Use timelines to track how a project or decision evolved over time.
+- **Native tooling.** Quaid exposes 17 tools via MCP.
+
+## Setup
+
+<Steps>
+
+1. ### Install Quaid
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
+   ```
+
+2. ### Configure the MCP server in Hermes
+   Add Quaid to `~/.hermes/config.yaml`:
+
+   ```yaml
+   mcp:
+     servers:
+       quaid:
+         command: "quaid"
+         args: ["serve"]
+   ```
+
+3. ### Initialize a PARA-shaped vault
+   Hermes works best when Quaid is indexing a directory laid out by the **PARA** method:
+
+   ```bash
+   mkdir -p ~/docs/{1-projects,2-areas,3-resources,4-archive}
+   quaid init ~/docs/memory.db
+   quaid collection add docs ~/docs --writable --db ~/docs/memory.db
+   QUAID_DB=~/docs/memory.db quaid serve
+   ```
+
+4. ### Tell Hermes to use Quaid for memory
+   Instruct Hermes to use `memory_put` and `memory_query` for durable knowledge instead of its default flat-file memory.
+
+</Steps>
+
+## Agent-specific instructions
+
+If you are an agent reading this, follow these protocols:
+
+### Storing new facts
+
+Use `memory_put` to write memory pages.
+
+- **Path pattern:** `2-areas/people/<name>.md` for preferences; `1-projects/<name>.md` for task state.
+- **Content:** Markdown with a compiled-truth section for stable facts and a timeline section for events. See [Compiled truth + timeline](/explanation/page-model/).
+
+### Retrieving context
+
+At the start of a session or a complex task, run a semantic query to pull relevant truth into your active context:
+
+```bash
+quaid query "What are the user's preferences for writing code?"
+```
+
+## Configuration summary
+
+| Component | Setting |
+| --------- | ------- |
+| Protocol | MCP (stdio JSON-RPC 2.0) |
+| Durable store | SQLite + sqlite-vec (`memory.db`) |
+| Memory organization | PARA |
+| Live sync | `quaid collection add … --writable` plus `quaid serve` |
+
+For deeper detail, see the [MCP tool reference](/reference/mcp/) and the [agent quickstart](/agents/quickstart/).

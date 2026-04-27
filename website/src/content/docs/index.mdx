@@ -1,55 +1,110 @@
 ---
-title: GigaBrain
-description: Your brain, persisted. Zero cloud, zero keys. SQLite + FTS5 + vector embeddings in one static binary.
+title: Quaid
+description: Your memory, persisted. Zero cloud, zero keys. SQLite + FTS5 + vector embeddings in one static binary.
 template: splash
 hero:
-  title: "Your brain, persisted. <br><span class='text-primary'>Zero cloud, zero keys.</span>"
-  tagline: A high-performance local knowledge engine that turns your files into a searchable, intelligent second brain without ever leaving your machine.
+  title: "Your memory, persisted. <br><span class='text-primary'>Zero cloud, zero keys.</span>"
+  tagline: A high-performance local knowledge engine that turns your files into a searchable, intelligent second brain — without ever leaving your machine.
   actions:
     - text: Get Started
-      link: /guides/quick-start/
+      link: /tutorials/install/
       icon: right-arrow
       variant: primary
     - text: View Source
-      link: https://github.com/macro88/gigabrain
+      link: https://github.com/quaid-app/quaid
       icon: github
       variant: secondary
 ---
 
 import { Code, CardGrid, Card } from "@astrojs/starlight/components";
+import AudienceCard from "../../components/docs/AudienceCard.astro";
+import GuideFeatureCard from "../../components/docs/GuideFeatureCard.astro";
+import GuideMetricCard from "../../components/docs/GuideMetricCard.astro";
 
 ## Install
 
-<Code code={`curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh`} lang="bash" title="Install GigaBrain (macOS / Linux)" />
+<Code code={`curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh`} lang="bash" title="Install Quaid (macOS / Linux)" />
 
-Then import your notes and connect to Claude Code:
+Then build your first memory and connect it to Claude Code:
 
-<Code code={`gbrain import ~/docs --db ~/brain.db\ngbrain serve --db ~/brain.db`} lang="bash" />
+<Code code={`quaid init ~/memory.db
+quaid import ~/notes --db ~/memory.db
+QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
-**Three commands. No API keys. No cloud.** [Full install options →](/guides/install/)
+**Three commands. No API keys. No cloud.** [Full install options →](/tutorials/install/)
 
 ---
 
-## Architecture for Privacy
+## Built for two audiences
+
+<div class="gb-guide-grid gb-guide-grid--two">
+  <AudienceCard
+    eyebrow="For developers"
+    title="Own your knowledge stack"
+    icon="laptop"
+    href="/tutorials/first-memory/"
+    linkText="Build your first memory"
+  >
+    <p>One binary. One file. SQLite-backed full-text search and a local vector index, with a CLI you can drive from any shell. Ten minutes from install to a memory that answers your first question.</p>
+  </AudienceCard>
+  <AudienceCard
+    eyebrow="For agents"
+    title="MCP-native by design"
+    icon="puzzle"
+    href="/agents/quickstart/"
+    linkText="Open the agent quickstart"
+  >
+    <p>Seventeen <code>memory_*</code> tools over stdio JSON-RPC. Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
+  </AudienceCard>
+</div>
+
+---
+
+## What makes Quaid different
+
+<div class="gb-guide-grid gb-guide-grid--two">
+  <GuideFeatureCard variant="line" icon="laptop" title="Local-first">
+    <p>Compute and storage on your machine. The embedding model ships in the binary on the airgapped channel; on the online channel it caches once after a one-time download. Nothing leaves the box.</p>
+  </GuideFeatureCard>
+  <GuideFeatureCard variant="line" icon="puzzle" title="Agent-native">
+    <p>The MCP server predates any GUI. Same surface, same contracts, whether the caller is a person at the terminal or a model over JSON-RPC.</p>
+  </GuideFeatureCard>
+  <GuideFeatureCard variant="line" icon="seti:db" title="Single binary">
+    <p>No container, no Python runtime, no service mesh. Drop one statically-linked file on a laptop, a Pi, or an air-gapped workstation and it works the same.</p>
+  </GuideFeatureCard>
+  <GuideFeatureCard variant="line" icon="magnifier" title="Hybrid retrieval">
+    <p>FTS5 for precision and a local BGE vector index for semantic recall, fused with set-union and a short-match short-circuit. You don't pick keyword <em>or</em> semantic — both run.</p>
+  </GuideFeatureCard>
+</div>
+
+---
+
+## What you get out of the box
+
+<div class="gb-guide-grid gb-guide-grid--three">
+  <GuideMetricCard value="27" label="CLI commands" note="Read, write, graph, intelligence, collections, system." />
+  <GuideMetricCard value="17" label="MCP tools" note="Same surface, exposed to any MCP-compatible client." />
+  <GuideMetricCard value="8" label="Embedded skills" note="Ingest, query, maintain, enrich, briefing, alerts, research, upgrade." />
+  <GuideMetricCard value="1" label="Static binary" note="No daemon, no port, no Docker, no Python." />
+  <GuideMetricCard value="0" label="API keys required" note="The model runs on your CPU. Nothing transits your network." />
+</div>
+
+---
+
+## Architecture for privacy
 
 <CardGrid>
   <Card title="SQLite Everything" icon="seti:db">
-    No complex setup. Your entire knowledge graph is stored in a highly
-    optimized SQLite database on your local disk. Lightweight, portable, and
-    permanent.
+    No complex setup. Your entire knowledge graph is stored in a highly optimized SQLite database on your local disk. Lightweight, portable, permanent.
   </Card>
   <Card title="Local Embeddings" icon="star">
-    Run state-of-the-art vector embeddings locally. Your private data never
-    touches an API. Privacy-first AI that works completely offline.
+    Run state-of-the-art vector embeddings locally. Your private data never touches an API. Privacy-first AI that works completely offline.
   </Card>
   <Card title="Hybrid Search" icon="magnifier">
-    Combine the precision of keyword search with the context of semantic search.
-    Find exactly what you need across millions of documents in milliseconds.
+    Combine the precision of keyword search with the context of semantic search. Find exactly what you need across millions of documents in milliseconds.
   </Card>
   <Card title="Live Vault Sync" icon="rocket">
-    Attach any Obsidian vault as a collection. GigaBrain watches for edits
-    with a 1.5 s debounce and reconcile-backed flushes so the brain stays
-    current as you write. <em>(Unix/macOS/Linux only — vault-sync-engine branch)</em>
+    Attach any Obsidian vault as a collection. Quaid watches for edits with a 1.5 s debounce and reconcile-backed flushes so the memory stays current as you write. <em>(Unix/macOS/Linux only — v0.9.6)</em>
   </Card>
 </CardGrid>
 
@@ -60,12 +115,14 @@ Then import your notes and connect to Claude Code:
 Three commands. No API keys. No cloud.
 
 ```bash
-# Initialize a brain
-gbrain init ~/brain.db
+# Initialize a memory
+quaid init ~/memory.db
 
 # Import your notes (idempotent — safe to re-run)
-gbrain import ~/notes --db ~/brain.db
+quaid import ~/notes --db ~/memory.db
 
 # Expose 17 tools to any MCP client over stdio (Unix/macOS/Linux; v0.9.6)
-GBRAIN_DB=~/brain.db gbrain serve
+QUAID_DB=~/memory.db quaid serve
 ```
+
+Next: [Build your first memory](/tutorials/first-memory/) · [Connect Claude Code](/tutorials/connect-claude-code/) · [Why Quaid](/why-quaid/)

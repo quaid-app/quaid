@@ -3,7 +3,7 @@ title: Roadmap
 description: Phased delivery plan with explicit ship gates.
 ---
 
-GigaBrain is built in phases. Each phase has a hard ship gate — no phase begins until the previous one passes.
+Quaid is built in phases. Each phase has a hard ship gate — no phase begins until the previous one passes.
 
 ---
 
@@ -36,7 +36,7 @@ Sprint 0 establishes the full repository structure before any core implementatio
 
 **Release:** `v0.1.0`
 
-The smallest complete slice that proves GigaBrain's value proposition. When Phase 1 ships, a real user can import their markdown brain, search it semantically and by keyword, export without data loss, and connect any MCP-compatible agent via `gbrain serve`.
+The smallest complete slice that proves Quaid's value proposition. When Phase 1 ships, a real user can import their markdown memory, search it semantically and by keyword, export without data loss, and connect any MCP-compatible agent via `quaid serve`.
 
 **Workstream 1 — Foundation (Week 1):**
 - All core types (`src/core/types.rs`)
@@ -55,7 +55,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 **Workstream 3 — Ingest and MCP (Week 3):**
 - Novelty checking — Jaccard + cosine dedup (`src/core/novelty.rs`)
 - `import` / `export` with normalized markdown round-trip (`src/core/migrate.rs`)
-- MCP stdio server with 5 core tools: `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
+- MCP stdio server with 5 core tools: `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 - CLI command: `serve`
 
 **Workstream 4 — Polish (Week 4):**
@@ -66,8 +66,8 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 
 **Ship gate (all passed — Phase 2 unblocked):**
 1. `cargo test` passes
-2. `gbrain import <corpus>` → `gbrain export` → semantic diff = 0
-3. `gbrain serve` connects to Claude Code with all 5 MCP tools responding correctly
+2. `quaid import <corpus>` → `quaid export` → semantic diff = 0
+3. `quaid serve` connects to Claude Code with all 5 MCP tools responding correctly
 4. Static binary: `ldd` confirms no dynamic dependencies on Linux musl build
 5. BEIR nDCG@10 baseline established
 
@@ -80,10 +80,10 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 **Depends on:** Phase 1 ship gate
 
 **Planned scope:**
-- Temporal links: `brain_link`, `brain_link_close`, backlinks with `--temporal`
-- Graph neighbourhood traversal: `brain_graph`, `gbrain graph`
+- Temporal links: `memory_link`, `memory_link_close`, backlinks with `--temporal`
+- Graph neighbourhood traversal: `memory_graph`, `quaid graph`
 - Assertions with provenance
-- Contradiction detection: `gbrain check`
+- Contradiction detection: `quaid check`
 - Progressive retrieval with token budgets (full implementation)
 - Novelty checking tiers 2–4
 - Work-context page types: `decision`, `commitment`, `action_item`
@@ -107,11 +107,11 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 - Docs polish: honest README and public docs for current status, supported install paths, and deferred work
 - Docs-site build/deploy and navigation improvements
 - All 8 skills production-ready (`briefing`, `alerts`, `research`, `upgrade`, `enrich`, `ingest`, `query`, `maintain`)
-- `gbrain skills doctor` — skill resolution order and content hash verification
-- `gbrain validate --all` — database integrity checker (links, assertions, embeddings)
-- `gbrain call <TOOL> <JSON>` — raw MCP tool invocation from CLI
-- `gbrain pipe` — JSONL streaming mode for shell pipelines
-- 4 new MCP tools: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` (total: 16 tools)
+- `quaid skills doctor` — skill resolution order and content hash verification
+- `quaid validate --all` — database integrity checker (links, assertions, embeddings)
+- `quaid call <TOOL> <JSON>` — raw MCP tool invocation from CLI
+- `quaid pipe` — JSONL streaming mode for shell pipelines
+- 4 new MCP tools: `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw` (total: 16 tools)
 - `--json` output on all commands
 - Benchmark harnesses: BEIR nDCG@10 regression gate, corpus-reality, concurrency stress, embedding migration (offline, CI-gated)
 - Advisory benchmarks: LongMemEval, LoCoMo, Ragas (Python adapters, API-key optional)
@@ -120,12 +120,12 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 1. Zero `todo!()` stubs in `src/commands/` ✅
 2. All 8 SKILL.md files are production-ready ✅
 3. 16 MCP tools registered and tested ✅
-4. `gbrain validate --all` runs successfully on a clean brain ✅
-5. `gbrain skills doctor` shows correct resolution order ✅
+4. `quaid validate --all` runs successfully on a clean memory ✅
+5. `quaid skills doctor` shows correct resolution order ✅
 6. Offline benchmarks (corpus-reality, concurrency, embedding migration) pass in CI ✅
 7. BEIR nDCG@10 baseline established with < 2% regression gate ✅
 8. `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` all clean ✅
-9. Nibbler adversarial review of `brain_gap`/`brain_gaps`/`brain_stats`/`brain_raw` ✅ (Approved 2026-04-16)
+9. Nibbler adversarial review of `memory_gap`/`memory_gaps`/`memory_stats`/`memory_raw` ✅ (Approved 2026-04-16)
 10. Scruffy benchmark reproducibility verification (re-run twice, confirm identical scores) ✅ (Approved 2026-04-17)
 
 ---
@@ -136,23 +136,23 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 **Owner:** Fry  
 **Depends on:** Phase 3 ship gate
 
-Extends GigaBrain from a single-vault store to a multi-collection, file-system-aware knowledge engine. The brain stays current as you edit in Obsidian or any editor, and write safety guarantees keep the SQLite state honest even under concurrent agents.
+Extends Quaid from a single-vault store to a multi-collection, file-system-aware knowledge engine. The memory stays current as you edit in Obsidian or any editor, and write safety guarantees keep the SQLite state honest even under concurrent agents.
 
 **Landed in this branch:**
 - Schema v5: `collections`, `file_state`, `embedding_jobs`, `raw_imports`, `collection_owners`, and updated indexes/FKs
-- Collections model: `gbrain collection add/list/info/sync`, per-collection writable/read-only state
+- Collections model: `quaid collection add/list/info/sync`, per-collection writable/read-only state
 - `<collection>::<slug>` routing across all CLI and MCP surfaces; ambiguous bare-slug inputs fail closed with a stable `AmbiguityError`
-- `.gbrainignore` support with atomic validation — all lines are parsed before any mirror update; invalid files leave the mirror unchanged
-- `gbrain collection ignore add|remove|list|clear --confirm` with dry-run-first validation
-- Quarantine lifecycle: pages with DB-only state (links, assertions, gaps) are quarantined on deletion rather than hard-deleted; inspect and manage with `gbrain collection quarantine list|export|discard|restore` (restore is Unix-only)
+- `.quaidignore` support with atomic validation — all lines are parsed before any mirror update; invalid files leave the mirror unchanged
+- `quaid collection ignore add|remove|list|clear --confirm` with dry-run-first validation
+- Quarantine lifecycle: pages with DB-only state (links, assertions, gaps) are quarantined on deletion rather than hard-deleted; inspect and manage with `quaid collection quarantine list|export|discard|restore` (restore is Unix-only)
 - Per-collection write interlocks: `CollectionRestoringError` on all mutating tools when a collection is in the `restoring` state
-- Writer-side crash safety: `brain_put` durably creates a sentinel before vault mutation and the startup reconciler consumes retained sentinels on next launch
-- Unix CAS / precondition gates on `brain_put` (platform-gated; Windows returns `UnsupportedPlatformError` for vault-sync CLI surfaces)
-- `brain_collections` MCP tool — read-only collection status with 13-field output: `name`, `root_path` (active only), `state`, `writable`, `is_write_target`, `page_count`, `last_sync_at`, `embedding_queue_depth`, `ignore_parse_errors`, `needs_full_sync`, `recovery_in_progress`, `integrity_blocked`, `restore_in_progress`
-- Live file watcher: `gbrain serve` runs one watcher per active collection with a 1.5 s debounce, bounded event queue, reconcile-backed flushes, and self-write suppression with TTL expiry
+- Writer-side crash safety: `memory_put` durably creates a sentinel before vault mutation and the startup reconciler consumes retained sentinels on next launch
+- Unix CAS / precondition gates on `memory_put` (platform-gated; Windows returns `UnsupportedPlatformError` for vault-sync CLI surfaces)
+- `memory_collections` MCP tool — read-only collection status with 13-field output: `name`, `root_path` (active only), `state`, `writable`, `is_write_target`, `page_count`, `last_sync_at`, `embedding_queue_depth`, `ignore_parse_errors`, `needs_full_sync`, `recovery_in_progress`, `integrity_blocked`, `restore_in_progress`
+- Live file watcher: `quaid serve` runs one watcher per active collection with a 1.5 s debounce, bounded event queue, reconcile-backed flushes, and self-write suppression with TTL expiry (Unix/macOS/Linux in `v0.9.6`)
 
 **Explicitly deferred (not available yet):**
-- Quarantine `restore` — Unix-only narrow seam is landed (`gbrain collection quarantine restore`, `#[cfg(unix)]`); Windows restore, IPC socket, and online restore handshake remain deferred
+- Quarantine `restore` — Unix-only narrow seam is landed (`quaid collection quarantine restore`, `#[cfg(unix)]`); Windows restore, IPC socket, and online restore handshake remain deferred
 - Broader DB-only mutator coverage and live/background recovery worker
 
 **Gate:** All closed tasks remain closed; next slice requires a fresh scoped gate before implementation resumes.
@@ -182,4 +182,5 @@ These are known design choices that are _not_ oversights:
 | `v0.2.0` | Phase 2 — intelligence layer |
 | `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
 | `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter) |
-| TBD | vault-sync-engine — collections, live-sync watcher, quarantine lifecycle, write safety (in progress on `spec/vault-sync-engine`; restore + IPC deferred) |
+| `v0.9.5` | Flexible model resolution — configurable `online-model` selection, alias expansion, and persisted model metadata validation |
+| `v0.9.6` | Initial vault-sync ship — collections, Unix-gated `quaid serve`, live watcher sync, quarantine tooling, `memory_collections`, and narrow Unix quarantine restore |

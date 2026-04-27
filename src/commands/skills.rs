@@ -71,7 +71,7 @@ pub fn run(action: SkillsAction, json: bool) -> Result<()> {
 }
 
 fn resolve_skills() -> Vec<SkillInfo> {
-    let global_dir = dirs::home_dir().map(|home| home.join(".gbrain").join("skills"));
+    let global_dir = dirs::home_dir().map(|home| home.join(".quaid").join("skills"));
     let local_dir = std::env::current_dir().ok().map(|dir| dir.join("skills"));
 
     resolve_skills_with_dirs(global_dir, local_dir)
@@ -99,7 +99,7 @@ fn resolve_skills_with_dirs(
         );
     }
 
-    // Layer 2: user-global (~/.gbrain/skills/)
+    // Layer 2: user-global (~/.quaid/skills/)
     if let Some(dir) = global_dir.as_ref() {
         scan_skill_dir(dir, &mut resolved);
     }

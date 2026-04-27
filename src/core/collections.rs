@@ -82,11 +82,11 @@ impl std::str::FromStr for CollectionState {
 /// Classification of operations for bare-slug resolution and interlock enforcement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpKind {
-    /// Non-mutating operation (brain_get, brain_search, brain_list, etc.)
+    /// Non-mutating operation (memory_get, memory_search, memory_list, etc.)
     Read,
-    /// Write operation creating a new page (brain_put without expected_version)
+    /// Write operation creating a new page (memory_put without expected_version)
     WriteCreate,
-    /// Write operation updating an existing page (brain_put with expected_version, brain_link, brain_check, etc.)
+    /// Write operation updating an existing page (memory_put with expected_version, memory_link, memory_check, etc.)
     WriteUpdate,
     /// Collection-level admin operation (migrate-uuids, ignore add/remove/clear, etc.)
     WriteAdmin,
@@ -426,7 +426,7 @@ pub fn parse_slug(
         });
     }
 
-    // Multi-collection brain — count owners of this slug
+    // Multi-collection memory store — count owners of this slug
     let owners: Vec<(i64, String)> = conn
         .prepare(
             "SELECT c.id, c.name FROM collections c \
@@ -693,7 +693,7 @@ mod tests {
         }
 
         #[test]
-        fn read_returns_not_found_when_multi_collection_brain_has_no_owner() {
+        fn read_returns_not_found_when_multi_collection_memory_has_no_owner() {
             let conn = open_resolution_db();
             insert_collection(&conn, 10, "work", true);
             insert_collection(&conn, 20, "memory", false);

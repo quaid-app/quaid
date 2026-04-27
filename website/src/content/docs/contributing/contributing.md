@@ -7,18 +7,18 @@ Welcome. This guide covers everything a new contributor needs to navigate the co
 
 ---
 
-## What GigaBrain is
+## What Quaid is
 
-GigaBrain is a local-first personal knowledge brain with two BGE-small distribution channels: an `airgapped` embedded binary and a smaller `online` binary. Both wrap SQLite + FTS5 + local vector embeddings and expose the same CLI + MCP surface.
+Quaid is a local-first personal knowledge memory with two BGE-small distribution channels: an `airgapped` embedded binary and a smaller `online` binary. Both wrap SQLite + FTS5 + local vector embeddings and expose the same CLI + MCP surface.
 
-Read [Getting Started](/guides/getting-started/) first if you haven't. Read the [Spec](/reference/spec/) for the full technical specification.
+Read [Build your first memory](/tutorials/first-memory/) first if you haven't. Read the [Specification](/contributing/specification/) for the full technical specification.
 
 ---
 
 ## Repository layout
 
 ```
-gigabrain/
+quaid/
 ├── src/
 │   ├── main.rs               # CLI entrypoint (clap dispatch)
 │   ├── schema.sql            # Full v5 DDL (embedded via include_str!)
@@ -117,7 +117,7 @@ CI runs `cargo check` and `cargo test` on every pull request. Both must pass bef
 
 ## How changes are proposed
 
-GigaBrain uses **OpenSpec** for structured change proposals. The rule is simple:
+Quaid uses **OpenSpec** for structured change proposals. The rule is simple:
 
 > Every meaningful code, docs, or architecture change requires an OpenSpec proposal in `openspec/changes/` _before_ implementation begins.
 
@@ -197,7 +197,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\push-sprint0-branch.ps1
 If you need to run the steps manually instead:
 
 ```powershell
-Set-Location C:\path\to\gigabrain
+Set-Location C:\path\to\quaid
 
 git checkout -b sprint-0/scaffold
 git add .
@@ -226,7 +226,7 @@ Open a PR on GitHub targeting `main`. Use this PR body:
 ## Sprint 0: Repository Scaffold
 
 ### What
-Full repository scaffold for GigaBrain v0.1.0 as specified in
+Full repository scaffold for Quaid v0.1.0 as specified in
 `openspec/changes/sprint-0-repo-scaffold/proposal.md`.
 
 ### OpenSpec Reference
@@ -256,7 +256,7 @@ Each phase has designated reviewers before it can ship:
 ## Constraints to keep in mind
 
 - **Single writer.** No auth, no RBAC, no multi-tenant. Do not add locking abstractions that assume multi-writer access.
-- **Optimistic concurrency on MCP writes.** `brain_put` requires `expected_version`. Always re-fetch before writing.
+- **Optimistic concurrency on MCP writes.** `memory_put` requires `expected_version`. Always re-fetch before writing.
 - **Ingest idempotency.** SHA-256 of source content is the idempotency key. Re-ingesting the same content must be a no-op.
 - **Static binary.** Every dependency must be statically linkable. No dynamic `.so` / `.dylib` dependencies at runtime.
 - **No internet at runtime.** Embeddings run locally via candle. Do not add network calls to the hot path.
@@ -265,7 +265,7 @@ Each phase has designated reviewers before it can ship:
 
 ## Skills are not code
 
-Skills live in `skills/*/SKILL.md` — plain markdown. They tell agents _how_ to use GigaBrain, not what it does. If you are changing workflow behaviour, update the relevant SKILL.md. If you are changing what the binary can do, update `src/` and `docs/spec.md`.
+Skills live in `skills/*/SKILL.md` — plain markdown. They tell agents _how_ to use Quaid, not what it does. If you are changing workflow behaviour, update the relevant SKILL.md. If you are changing what the binary can do, update `src/` and `docs/spec.md`.
 
 To override a default skill locally, drop a `SKILL.md` in your working directory. The binary will prefer it over the embedded default.
 
@@ -273,7 +273,7 @@ To override a default skill locally, drop a `SKILL.md` in your working directory
 
 ## Getting help
 
-- Full technical spec: [Spec](/reference/spec/)
+- Full technical spec: [Specification](/contributing/specification/)
 - Phased delivery plan: [Roadmap](/contributing/roadmap/)
 - Agent instructions: [AGENTS.md](../AGENTS.md) and [CLAUDE.md](../CLAUDE.md)
 - Open an issue on GitHub for bugs or feature requests.

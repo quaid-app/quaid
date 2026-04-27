@@ -1,6 +1,6 @@
 #[cfg(unix)]
 mod watcher_core {
-    use gbrain::core::{db, vault_sync};
+    use quaid::core::{db, vault_sync};
     use rusqlite::{params, Connection};
     use sha2::Digest;
     use std::path::{Path, PathBuf};

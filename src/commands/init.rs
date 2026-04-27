@@ -7,6 +7,12 @@ use crate::core::{db, inference};
 pub fn run(path: &str, requested_model: &inference::ModelConfig) -> Result<()> {
     let db_path = Path::new(path);
 
+    if let Some(parent) = db_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
     if db_path.exists() {
         db::init(path, &inference::resolve_model("small"))?;
         println!("Database already exists at {path}");
@@ -14,7 +20,7 @@ pub fn run(path: &str, requested_model: &inference::ModelConfig) -> Result<()> {
     }
 
     db::init(path, requested_model)?;
-    println!("Brain initialized at {path}");
+    println!("Memory initialized at {path}");
     Ok(())
 }
 
@@ -25,7 +31,7 @@ mod tests {
     #[test]
     fn init_creates_new_database_and_succeeds() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let path_str = db_path.to_str().unwrap();
 
         let result = run(path_str, &inference::resolve_model("small"));
@@ -36,7 +42,7 @@ mod tests {
     #[test]
     fn init_on_existing_database_succeeds_without_reinit() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
+        let db_path = dir.path().join("test_memory.db");
         let path_str = db_path.to_str().unwrap();
 
         // Create it first
@@ -54,11 +60,13 @@ mod tests {
     }
 
     #[test]
-    fn init_rejects_nonexistent_parent_directory() {
-        let result = run(
-            "/nonexistent/dir/brain.db",
-            &inference::resolve_model("small"),
-        );
-        assert!(result.is_err());
+    fn init_creates_missing_parent_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("nested").join("memory.db");
+        let path_str = db_path.to_str().unwrap();
+
+        let result = run(path_str, &inference::resolve_model("small"));
+        assert!(result.is_ok());
+        assert!(db_path.exists());
     }
 }

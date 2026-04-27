@@ -1,0 +1,87 @@
+---
+title: The skills system
+description: Why workflow intelligence lives in markdown, not in code — and how the resolution order works.
+guide:
+  eyebrow: Explanation
+  accentBar: true
+---
+
+Quaid ships eight workflow skills — `ingest`, `query`, `maintain`, `enrich`, `briefing`, `alerts`, `research`, `upgrade` — and none of them are written in Rust. They're markdown files. This is deliberate.
+
+## Thin harness, fat skills
+
+The binary is plumbing. It exposes:
+
+- A read/write surface (CLI verbs, MCP tools).
+- A retrieval surface (search, query, graph).
+- An intelligence surface (check, gaps, validate, stats).
+
+Everything *above* that — what to ingest first, when to detect a contradiction, how to escalate a knowledge gap, how to compose a daily briefing — is **workflow**. Workflows are agent-shaped reasoning, not engine work, and they evolve faster than binaries.
+
+We push that workflow into markdown so:
+
+- An agent can read the skill at runtime and follow it.
+- A human can read the same file and understand what the agent will do.
+- Editing a workflow is a markdown commit, not a release.
+
+## What lives in a skill
+
+Each skill is a single `SKILL.md` file with a fixed shape:
+
+- **Front matter** declares the skill's name, when to use it, and which surfaces it touches.
+- **Body** is prose: triggers, inputs, decision rules, exit conditions.
+- **Examples** show the canonical happy path.
+
+A skill never embeds code. It calls into the binary through the MCP tools or the CLI. That keeps the skill portable across agent runtimes and prevents skills from drifting out of sync with the surface.
+
+## The eight default skills
+
+| Skill | Trigger | Surfaces |
+| ----- | ------- | -------- |
+| `ingest` | New material to add | `quaid import`, `quaid ingest`, `memory_put` |
+| `query` | Question to answer | `memory_query`, `memory_search`, `memory_graph` |
+| `maintain` | Health check | `quaid validate`, `memory_check`, orphan detection |
+| `enrich` | External lookup | `memory_raw`, third-party APIs |
+| `briefing` | Daily what-changed | `memory_stats`, `memory_check`, `memory_gaps` |
+| `alerts` | Interrupt-driven | New contradictions, stale pages, embedding drift |
+| `research` | Resolve a gap | `memory_gaps`, sensitivity contract, ingest results |
+| `upgrade` | Bump the binary | Version check, SHA-256 verify, post-upgrade validation |
+
+See [Skill workflows](/agents/skill-workflows/) for the agent-facing summaries and [Customize skills](/how-to/skills/) for the override mechanics.
+
+## Resolution order
+
+When the binary needs a skill, it looks in three places, in order:
+
+1. **Working directory** — if `SKILL.md` is sitting next to the memory (or the agent's CWD), use it.
+2. **`~/.quaid/skills/<name>/SKILL.md`** — the user's per-machine override.
+3. **Embedded default** — the skill compiled into the binary.
+
+`quaid skills doctor` shows what is shadowing what, with SHA-256 hashes so you can tell whether a "custom" skill is actually different from the default.
+
+## On first run
+
+The first time you run any subcommand, the binary extracts every embedded skill into `~/.quaid/skills/`. From that moment on, the resolution order is meaningful — you can edit the user-scoped copy in place and the next agent that loads the skill picks up your edits.
+
+This is also why the binary is bigger than you'd expect for a Rust CLI: skills are bundled as bytes via `include_bytes!`. If you build the airgapped channel, the BGE-small model is in there too.
+
+## Why not RAG over skills?
+
+A different design would have skills live as searchable pages inside the memory itself. We considered it and rejected it for two reasons:
+
+- **Bootstrapping.** A fresh `memory.db` is empty. The agent needs `ingest` to know how to fill it.
+- **Versioning.** Skills are part of the binary contract; a skill that disagrees with the surface it calls is a release-train problem, not a content problem. Bundling keeps them aligned.
+
+The override mechanism preserves the flexibility — anything you'd put in a "skill page" can live in `~/.quaid/skills/` instead, edited in any markdown editor and tested without a rebuild.
+
+## When to author a custom skill
+
+Reach for a custom skill when you have a workflow that:
+
+- Calls **only** the existing CLI/MCP surface (no new code needed).
+- Repeats often enough that you'd rather an agent picked it up than re-prompt every time.
+- Has decision rules a human can read in under a few minutes.
+
+Drop your `SKILL.md` in either the working directory (project-scoped) or `~/.quaid/skills/<name>/` (user-scoped). Run `quaid skills doctor` to confirm it's resolving above the default.
+
+If you find yourself wanting a skill that requires new surface area — a new MCP tool, a new flag — that's a binary change, not a skill change. Open an issue.

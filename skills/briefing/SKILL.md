@@ -1,5 +1,5 @@
 ---
-name: gbrain-briefing
+name: quaid-briefing
 description: |
   Generate a structured "what shifted" report from the brain: changed pages,
   new pages, unresolved contradictions, open knowledge gaps, and upcoming timeline entries.
@@ -22,13 +22,13 @@ Default lookback: **1 day**. Override with `--days N`.
 ## Commands
 
 ```bash
-gbrain query "pages updated in last 24 hours" --json
-gbrain check --all --json
-gbrain gaps --limit 10 --json
-gbrain list --json
+quaid query "pages updated in last 24 hours" --json
+quaid check --all --json
+quaid gaps --limit 10 --json
+quaid list --json
 ```
 
-There is no single `gbrain briefing` command — the skill orchestrates existing commands
+There is no single `quaid briefing` command — the skill orchestrates existing commands
 and synthesises their output into the report structure below.
 
 ---
@@ -41,7 +41,7 @@ Pages where `truth_updated_at` or `timeline_updated_at` falls within the lookbac
 
 **Agent invocation:**
 ```bash
-gbrain list --json | jq '[.[] | select(.truth_updated_at > "<CUTOFF>" or .timeline_updated_at > "<CUTOFF>")]'
+quaid list --json | jq '[.[] | select(.truth_updated_at > "<CUTOFF>" or .timeline_updated_at > "<CUTOFF>")]'
 ```
 
 Replace `<CUTOFF>` with an ISO-8601 timestamp calculated as `now - lookback_days`.
@@ -59,7 +59,7 @@ to show all.
 Pages created within the lookback window (`created_at` field).
 
 ```bash
-gbrain list --json | jq '[.[] | select(.created_at > "<CUTOFF>")]'
+quaid list --json | jq '[.[] | select(.created_at > "<CUTOFF>")]'
 ```
 
 Include slug, type (wing), and the first sentence of `compiled_truth`. Rank by `created_at`
@@ -68,7 +68,7 @@ descending.
 ### 3. Unresolved Contradictions
 
 ```bash
-gbrain check --all --json
+quaid check --all --json
 ```
 
 Output the full list of contradiction objects from the response. If zero contradictions,
@@ -81,7 +81,7 @@ print `✓ No contradictions detected.` For each contradiction include:
 ### 4. Knowledge Gaps
 
 ```bash
-gbrain gaps --limit 10 --json
+quaid gaps --limit 10 --json
 ```
 
 List the ten highest-priority unresolved gaps. For each gap include:
@@ -98,7 +98,7 @@ Pages whose `timeline` section contains future-dated entries (entries with a dat
 greater than today's date). Retrieve with:
 
 ```bash
-gbrain query "timeline entries upcoming future" --limit 20 --json
+quaid query "timeline entries upcoming future" --limit 20 --json
 ```
 
 The agent should parse returned page timelines for entries matching the pattern
@@ -114,7 +114,7 @@ The agent should parse returned page timelines for entries matching the pattern
 Produce the briefing as a markdown document with this structure:
 
 ```markdown
-# Brain Briefing — <DATE>
+# Memory Briefing — <DATE>
 *Lookback: last <N> day(s)*
 
 ## What Shifted
@@ -150,12 +150,12 @@ Produce the briefing as a markdown document with this structure:
 ## Example Agent Invocation Sequence
 
 1. Compute the cutoff timestamp: `now - days * 86400` as ISO-8601.
-2. Run `gbrain list --json` → filter by `truth_updated_at` or `timeline_updated_at` > cutoff → **What Shifted** and **New Pages**.
-3. Run `gbrain check --all --json` → **Contradictions**.
-4. Run `gbrain gaps --limit 10 --json` → **Knowledge Gaps**.
-5. Run `gbrain query "upcoming timeline entries" --json` → parse for future dates → **Upcoming**.
+2. Run `quaid list --json` → filter by `truth_updated_at` or `timeline_updated_at` > cutoff → **What Shifted** and **New Pages**.
+3. Run `quaid check --all --json` → **Contradictions**.
+4. Run `quaid gaps --limit 10 --json` → **Knowledge Gaps**.
+5. Run `quaid query "upcoming timeline entries" --json` → parse for future dates → **Upcoming**.
 6. Assemble and render the briefing markdown document.
-7. Optionally persist the briefing as a new brain page: `gbrain put briefings/<YYYY-MM-DD>`.
+7. Optionally persist the briefing as a new brain page: `quaid put briefings/<YYYY-MM-DD>`.
 
 ---
 
@@ -175,6 +175,6 @@ When too many pages shifted to show all:
 | Condition | Behaviour |
 |-----------|-----------|
 | Brain empty | Each section reports "No data." |
-| `gbrain check --all` returns DB error | Log error in Contradictions section; continue |
-| `gbrain gaps` returns empty | Print `✓ No open gaps.` |
+| `quaid check --all` returns DB error | Log error in Contradictions section; continue |
+| `quaid gaps` returns empty | Print `✓ No open gaps.` |
 | ISO timestamp parse error | Abort and report: `Error: invalid cutoff timestamp` |

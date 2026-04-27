@@ -1,0 +1,125 @@
+---
+title: Page types and frontmatter
+description: The supported page types and their frontmatter conventions.
+guide:
+  eyebrow: Reference
+  accentBar: true
+---
+
+Every page in Quaid has a `type` declared in its frontmatter. The type drives ingestion classification, default page templates, and search-time hints (e.g. wing assignment). This page lists the recognized types and the frontmatter fields each one uses.
+
+## Frontmatter shape
+
+The frontmatter is YAML. Required fields apply to every page; everything else is type-specific or optional.
+
+```yaml
+---
+title: Alice Example          # required
+type: person                   # required
+slug: people/alice             # optional; inferred from path on import
+summary: Founder, RiverAI      # optional but recommended
+tags: [infra, ops]             # optional
+wing: people                   # optional; usually derived
+room: founders                 # optional; usually derived
+links:                         # optional inline links
+  - to: companies/river-ai
+    relationship: founder_of
+    valid_from: 2024-01-15
+---
+```
+
+The whole frontmatter block is preserved as JSON in `pages.frontmatter`. Anything beyond the recognized fields is round-tripped untouched.
+
+## Page model: compiled truth + timeline
+
+Every page body splits into two halves separated by `---` (after the frontmatter):
+
+```markdown
+# Alice Example
+
+Above the line: compiled truth.
+Always-current summary, never appended.
+
+---
+
+## Timeline
+
+- 2026-04-14 — Met at a demo day.
+- 2026-04-22 — Replied to outreach; intro to Bob.
+```
+
+The compiled-truth section (above the line) represents the current state of the world, edited in place. The timeline (below the line) is append-only evidence. See [Compiled truth + timeline](/explanation/page-model/) for the philosophy.
+
+## Recognized types
+
+| Type | Use for | Wing default |
+| ---- | ------- | ------------ |
+| `person` | Individual humans | `people` |
+| `company` | Organizations, vendors, customers | `companies` |
+| `deal` | Business opportunities, sales cycles | `deals` |
+| `project` | Active projects (PARA: Projects) | `projects` |
+| `area` | Ongoing responsibilities (PARA: Areas) | `areas` |
+| `resource` | Reference material (PARA: Resources) | `resources` |
+| `archive` | Inactive material (PARA: Archives) | `archives` |
+| `concept` | Abstract concepts, terms, taxonomies | `concepts` |
+| `original` | Your own thinking — essays, notes, drafts | `originals` |
+| `source` | External material attributed to a source | `sources` |
+| `media` | Articles, podcasts, videos referenced | `media` |
+| `decision` | Decisions made, with rationale | `decisions` |
+| `commitment` | Things you've committed to others | `commitments` |
+| `action_item` | Trackable to-dos with an owner | `actions` |
+| `journal` | Daily journal entries | `journal` |
+
+`quaid import` infers `type` from a PARA-style folder layout (`projects/`, `areas/`, etc.) when no explicit type is set in frontmatter.
+
+## Type-specific conventions
+
+### `person`
+
+Common fields:
+
+- `roles`: list of strings (`[founder, engineer]`)
+- `affiliations`: list of `{company, role, valid_from, valid_until}`
+- `contact`: `{email, phone, ...}` — **stored verbatim**, treat with care
+
+### `company`
+
+- `domain`, `hq`, `stage`, `headcount`
+- `funding`: list of rounds (`{round, amount, date, lead}`)
+
+### `deal`
+
+- `status`: `prospect` / `qualified` / `negotiation` / `won` / `lost`
+- `expected_close`, `value`
+- `parties`: list of slugs
+
+### `decision` / `commitment`
+
+- `made_at` (ISO date)
+- `owner` (slug)
+- `revisit_at` (optional)
+
+### `action_item`
+
+- `owner` (slug)
+- `due` (ISO date)
+- `status`: `open` / `done` / `cancelled`
+
+### `journal`
+
+- `date` (ISO date) — required for journal entries
+- Page slug typically matches the date (`journal/2026-04-25`).
+
+## Wing and room
+
+`wing` and `room` are derived during ingestion from the slug and content (see `core::palace`). They power filtered search (`quaid search "river" --wing companies`) and the memory-palace classification used by progressive retrieval. You can override them in frontmatter, but the defaults are usually correct.
+
+## Slug rules
+
+- Slashes are allowed (`people/alice`, `journal/2026-04-25`).
+- ASCII lower-case alphanumerics, dashes, slashes, and `_` only. The MCP server validates slugs and rejects invalid characters.
+- Bare slugs resolve to the default collection. Use `<collection>::<slug>` to disambiguate when more than one collection is attached.
+
+## Linking syntax
+
+Pages may include wiki-style links inside the body — `[[people/alice]]` — which the importer parses into `links` rows with `source_kind = 'wiki_link'`. Programmatic links created via `memory_link` or `quaid link` carry `source_kind = 'programmatic'`. See [Build a knowledge graph](/how-to/build-graph/).

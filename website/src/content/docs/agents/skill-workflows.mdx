@@ -1,0 +1,121 @@
+---
+title: Skill workflows
+description: The eight default skills, their triggers, and what each one outputs.
+guide:
+  eyebrow: For agents
+  accentBar: true
+---
+
+Quaid ships eight default skills as embedded markdown files. Each one is a workflow — a documented decision procedure that you, an agent, follow when the trigger conditions are met.
+
+This page is the agent-facing index. For the design philosophy, see [The skills system](/explanation/skills-system/). For overriding skills, see [Customize skills](/how-to/skills/).
+
+## Resolution order
+
+When you load a skill, the binary resolves it in this order:
+
+1. Working directory `SKILL.md` (project-scoped).
+2. `~/.quaid/skills/<name>/SKILL.md` (user-scoped).
+3. Embedded default.
+
+Always check `quaid skills doctor` if you're unsure what's in effect. The same name can have different content in different repos.
+
+## The eight skills
+
+### `ingest`
+
+> Process source documents into structured memory pages.
+
+**Trigger.** New material to add — meeting notes, articles, conversations, documents.
+**Surfaces.** `quaid import`, `quaid ingest`, `memory_put`.
+**Idempotency.** SHA-256 deduplication via `ingest_log`. Re-running on the same file content is a no-op unless `--force`.
+**Output.** New or updated `pages` rows; new `timeline_entries`; enqueued embedding jobs.
+
+### `query`
+
+> Answer questions using the four-layer search strategy.
+
+**Trigger.** A question to answer, with or without an obvious target page.
+**Surfaces.** `memory_query`, `memory_search`, `memory_graph`, `memory_backlinks`.
+**Strategy.** Try SMS short-circuit (slug/title match) → FTS5 → vector → graph traversal. Return cited results.
+**Output.** A ranked list with provenance. Cite sources by slug.
+
+### `maintain`
+
+> Keep the memory healthy: contradictions, orphans, stale assertions.
+
+**Trigger.** Periodic (daily / weekly), or after a large ingest.
+**Surfaces.** `quaid validate`, `memory_check`, manual orphan review.
+**Output.** A list of issues with proposed resolutions. Don't fix automatically — surface to the user.
+
+### `enrich`
+
+> Add external data while preserving compiled truth.
+
+**Trigger.** A page with thin compiled truth and a clear external source.
+**Surfaces.** `memory_raw` (store raw JSON), `memory_put` (extract facts), `memory_link` (relate to other pages).
+**Rule.** Never overwrite `compiled_truth` directly with raw external content. Always extract facts first, flag conflicts as contradictions.
+**Output.** A new `raw_data` row + extracted assertions in `compiled_truth`.
+**Sensitivity.** External API calls are governed by the [sensitivity contract](/agents/sensitivity-contract/).
+
+### `briefing`
+
+> Daily "what shifted" report.
+
+**Trigger.** Scheduled (typically morning), or on demand.
+**Surfaces.** `memory_stats`, `memory_check`, `memory_gaps`, `memory_timeline` (recent entries).
+**Default lookback.** 1 day. Configurable.
+**Output.** Structured report — changed pages, new pages, unresolved contradictions, open gaps, upcoming timeline entries. JSON when called from automation; markdown when called for human consumption.
+
+### `alerts`
+
+> Interrupt-driven notifications.
+
+**Trigger.** Memory state changes — new contradictions, stale pages, resolved gaps, embedding drift.
+**Surfaces.** `memory_check`, `memory_gaps`, `memory_stats`.
+**Output.** Structured JSON to stdout, one alert object per line. Designed to be piped to a logger, dashboard, or downstream MCP client.
+**Cadence.** Cron-driven, or after significant write batches.
+
+### `research`
+
+> Resolve knowledge gaps with sensitivity guardrails.
+
+**Trigger.** An unresolved gap from `memory_gaps`.
+**Surfaces.** `memory_gaps`, sensitivity escalation, external research, `quaid ingest`, `memory_put`.
+**Critical.** Default sensitivity is `internal` (hash-only). Escalating to `external` requires explicit approval — see [Sensitivity contract](/agents/sensitivity-contract/). Never bypass.
+**Output.** A new page resolving the gap, plus a `resolved_at` + `resolved_by_slug` update.
+
+### `upgrade`
+
+> Safe binary and skill upgrades with rollback.
+
+**Trigger.** A new Quaid release tag, or a user request.
+**Surfaces.** `quaid version`, the shell installer, `quaid validate`, `quaid skills doctor`.
+**Procedure.** Stop `serve` → download new binary → SHA-256 verify → atomic replace → run validation → on failure, restore from `.bak`.
+**Output.** New binary in place; skills re-extracted; validation report.
+
+## Cross-cutting rules
+
+These apply to every skill:
+
+- **Read before you write.** Always `memory_get` before `memory_put` when updating an existing page. Pass `expected_version`.
+- **Cite sources.** When the user asked a question, point to slugs and timeline dates. Don't synthesize without provenance.
+- **Honor write-gates.** A `restoring` or `needs_full_sync = 1` collection rejects writes with `CollectionRestoringError`. Don't retry; surface and wait.
+- **Hash-only by default.** Anything written to `knowledge_gaps` defaults to `sensitivity: internal` and stores only `query_hash`. Don't escalate without approval.
+- **Don't auto-resolve contradictions.** Surface them. Resolution is editorial; agents propose, humans decide.
+
+## When to author a custom skill
+
+Reach for a custom skill when you have a workflow that:
+
+- Calls only existing CLI/MCP surface (no new tools needed).
+- Repeats often enough that the user would rather you pick it up than re-prompt every time.
+- Has decision rules a human can read in under a few minutes.
+
+Drop your `SKILL.md` in the project directory or `~/.quaid/skills/<name>/`. Run `quaid skills doctor` to confirm shadowing is correct.
+
+## What skills don't do
+
+- They don't run code. Real work happens through CLI/MCP calls.
+- They don't bypass the binary's safety surface (write-gates, OCC, sensitivity).
+- They don't carry memory content. Pages live in the memory; skills are workflow.

@@ -1,0 +1,109 @@
+---
+title: Architecture
+description: How the binary, the library, and the SQLite file fit together.
+guide:
+  eyebrow: Explanation
+  accentBar: true
+---
+
+Quaid is a thin harness over a fat library, with one SQLite file as the system of record and one MCP server as the network surface. This page traces a request from a consumer all the way down to a vec0 row.
+
+## The layered diagram
+
+```text
+┌────────────────────────────────────────────────────────────────────┐
+│  Consumers                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
+│  │ Claude Code  │  │   Cursor     │  │  Custom MCP / shell user │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────────────────┘  │
+│         │ stdio JSON-RPC 2.0                │  stdin/stdout         │
+└─────────┼──────────────────┼─────────────────┼──────────────────────┘
+          ▼                  ▼                 ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  src/mcp/server.rs       src/main.rs (clap CLI)                    │
+│  ─ tool definitions      ─ subcommand dispatch                     │
+│  ─ JSON-RPC handlers     ─ flag/env var parsing                    │
+│  ─ slug resolution       ─ output formatting (text / JSON)         │
+└─────────────┬──────────────────────────┬───────────────────────────┘
+              ▼                          ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  src/commands/*.rs                                                 │
+│  one file per subcommand — both CLI and MCP route through here     │
+└─────────────────────────────┬──────────────────────────────────────┘
+                              ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  src/core/                                                         │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐ │
+│  │  db.rs       │ │  search.rs   │ │ inference.rs │ │  graph.rs  │ │
+│  │  (rusqlite)  │ │  (hybrid)    │ │ (candle/BGE) │ │   (BFS)    │ │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘ │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐ │
+│  │  fts.rs      │ │ chunking.rs  │ │ progressive  │ │ palace.rs  │ │
+│  │  (FTS5)      │ │              │ │ retrieve     │ │            │ │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘ │
+└─────────────────────────────┬──────────────────────────────────────┘
+                              ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  memory.db (SQLite + WAL + sqlite-vec)                              │
+│  pages · page_fts · page_embeddings_vec_<dim> · links · assertions │
+│  knowledge_gaps · timeline_entries · raw_data · ingest_log · …     │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+Three things to notice:
+
+1. **The MCP server and the CLI share a backend.** Both route into `src/commands/` for execution. There is no parallel implementation; the same code path serves agents and humans.
+2. **Everything below `src/commands/` is library code.** `src/core/` is reusable: an embedder could lift it into a different harness without touching the CLI or the MCP server.
+3. **One file holds it all.** `memory.db` is the only persistent artifact. Backups, migrations, copy-to-USB, send-to-colleague — all single-file operations.
+
+## The request path
+
+A `memory_query` call, end to end:
+
+1. **Client** issues a JSON-RPC `tools/call` over stdio.
+2. **`src/mcp/server.rs`** parses the request, validates the slug or query, resolves any collection ambiguity, and dispatches to the query handler.
+3. **`src/commands/query.rs`** calls `core::search::hybrid_search`.
+4. **`core/search.rs`** consults the **SMS** (small-match short-circuit) — if the query matches a slug or title verbatim, the work is done. Otherwise it runs both `core::fts::search_fts` and `core::inference::search_vec` in parallel, then merges with set-union.
+5. **`core::progressive::progressive_retrieve`** expands the merged result set up to the configured token budget when `depth: "auto"` is requested.
+6. The handler renders results, the server writes the JSON-RPC response, and the client gets back a ranked list.
+
+A `memory_put` follows a different path — same entry layer, but the command writes through `core::db` with optimistic concurrency, fires the FTS5 triggers, enqueues a `core::inference` chunk-and-embed job, and commits the WAL.
+
+## Process model
+
+`quaid serve` is a single async Tokio process. Per-request concurrency is fine; one writer at a time is enforced by SQLite's WAL semantics. Long-running embedding work happens behind a job queue (`embedding_jobs`) so the request handler can return promptly.
+
+When the file watcher is enabled, a small notify-based watcher thread observes attached collection roots, debounces edits (`QUAID_WATCH_DEBOUNCE_MS`, default 1500 ms), and forwards reconcile work to the same backend.
+
+## Storage layout
+
+Within `memory.db`:
+
+- **`pages` and `page_fts`** form the document store. FTS5 is content-rowid backed; triggers keep it in sync.
+- **`page_embeddings_vec_<dim>`** are sqlite-vec virtual tables — one per embedding width. The active model's table is identified by `embedding_models.vec_table`.
+- **`page_embeddings`** is a metadata join table that maps vec rowids back to chunk text and content hashes for stale detection.
+- **`links` and `assertions`** carry the graph and contradiction detection respectively. Both support temporal validity.
+- **`knowledge_gaps`** stores hashes by default; raw text only after explicit approval (see [Privacy](/explanation/privacy/)).
+- **`collections` and `file_state`** track attached vaults and the watcher's last-seen state.
+
+See [Schema](/reference/schema/) for the field-level reference.
+
+## Build channels
+
+The same source tree produces two binaries:
+
+| Channel | Feature flags | Binary size | Model assets |
+| ------- | ------------- | ----------- | ------------ |
+| Airgapped (default) | `embedded-model` | ~180 MB | BGE-small embedded |
+| Online | `bundled,online-model` | ~90 MB | Cached on first use |
+
+The MCP server, the CLI, and every command are identical between channels. The only differences are (a) where the model weights come from and (b) whether `--model` selects a non-default model at runtime.
+
+## Why this shape
+
+The design priorities were, in order:
+
+1. **One file you can move.** SQLite is the only persistent format that is both a real relational database and a single portable artifact.
+2. **Same surface for humans and agents.** The CLI exists for ergonomic shell use; the MCP server exists for agents. Sharing the command layer prevents drift.
+3. **Local-first compute.** Bringing the embedding model into the binary (or, on the online channel, into a one-time cache) means the memory never needs the network.
+4. **Thin harness, fat skills.** Workflow intelligence lives in markdown skill files (`skills/*/SKILL.md`), not in code. Editing a workflow is a markdown change, not a release.

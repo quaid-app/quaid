@@ -2,8 +2,8 @@ import { defineConfig } from "astro/config";
 import mdx from "@astrojs/mdx";
 import starlight from "@astrojs/starlight";
 
-const repo = process.env.GITHUB_REPOSITORY?.split("/")?.[1] ?? "gigabrain";
-const owner = process.env.GITHUB_REPOSITORY_OWNER ?? "macro88";
+const repo = process.env.GITHUB_REPOSITORY?.split("/")?.[1] ?? "quaid";
+const owner = process.env.GITHUB_REPOSITORY_OWNER ?? "quaid-app";
 const isGitHubActions = process.env.GITHUB_ACTIONS === "true";
 
 export default defineConfig({
@@ -12,9 +12,9 @@ export default defineConfig({
   trailingSlash: "always",
   integrations: [
     starlight({
-      title: "GigaBrain",
+      title: "Quaid",
       description:
-        "The personal knowledge brain. SQLite + FTS5 + vector embeddings in one file.",
+        "The personal knowledge memory. SQLite + FTS5 + vector embeddings in one file.",
       customCss: ["./src/styles/custom.css"],
       components: {
         Header: "./src/components/Header.astro",
@@ -24,35 +24,79 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/macro88/gigabrain",
+          href: "https://github.com/quaid-app/quaid",
         },
       ],
       sidebar: [
         {
-          label: "Overview",
-          items: ["index", "guides/why-gigabrain", "guides/how-it-works"],
+          label: "Start here",
+          items: ["start-here/welcome", "why-quaid"],
         },
         {
-          label: "Getting Started",
+          label: "Tutorials",
           items: [
-            "guides/install",
-            "guides/quick-start",
-            "guides/getting-started",
+            "tutorials/install",
+            "tutorials/first-memory",
+            "tutorials/connect-claude-code",
           ],
         },
-        { label: "CLI Reference", items: ["reference/cli"] },
-        { label: "MCP Server", items: ["guides/mcp-server"] },
         {
-          label: "Guides",
-          items: ["guides/intelligence-layer", "guides/phase3-capabilities"],
+          label: "How-to guides",
+          items: [
+            "how-to/import-obsidian",
+            "how-to/airgapped-vs-online",
+            "how-to/switch-embedding-model",
+            "how-to/write-pages",
+            "how-to/build-graph",
+            "how-to/contradictions-and-gaps",
+            "how-to/collections",
+            "how-to/skills",
+            "how-to/upgrade",
+            "how-to/troubleshooting",
+          ],
         },
         {
-          label: "Architecture",
-          items: ["reference/architecture", "reference/spec"],
+          label: "Explanation",
+          items: [
+            "explanation/architecture",
+            "explanation/page-model",
+            "explanation/hybrid-search",
+            "explanation/skills-system",
+            "explanation/embedding-models",
+            "explanation/privacy",
+          ],
         },
         {
-          label: "Contributing",
-          items: ["contributing/contributing", "contributing/roadmap"],
+          label: "Reference",
+          items: [
+            "reference/cli",
+            "reference/mcp",
+            "reference/configuration",
+            "reference/schema",
+            "reference/page-types",
+            "reference/errors",
+          ],
+        },
+        {
+          label: "For agents",
+          items: [
+            "agents/quickstart",
+            "agents/tool-catalog",
+            "agents/skill-workflows",
+            "agents/sensitivity-contract",
+          ],
+        },
+        {
+          label: "Integrations",
+          items: ["integrations/hermes"],
+        },
+        {
+          label: "Contribute",
+          items: [
+            "contributing/contributing",
+            "contributing/roadmap",
+            "contributing/specification",
+          ],
         },
       ],
     }),

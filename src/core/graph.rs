@@ -156,7 +156,7 @@ fn neighborhood_graph_from_root(
     };
 
     // Outbound-only BFS: a page's neighbourhood is the set of pages it explicitly
-    // links to.  Inbound links are accessible via `gbrain backlinks`, keeping the
+    // links to.  Inbound links are accessible via `quaid backlinks`, keeping the
     // two directions orthogonal and the rendering unambiguous.
     let target_slug_expr = if canonical_slug {
         "c.name || '::' || p.slug"

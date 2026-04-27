@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 # tests/install_profile.sh — deterministic tests for the installer's profile-write logic.
 #
-# Sources scripts/install.sh in GBRAIN_TEST_MODE=1 to isolate profile functions without
+# Sources scripts/install.sh in QUAID_TEST_MODE=1 to isolate profile functions without
 # running the download/install path. Tests cover: fresh write, idempotency, opt-out
-# (--no-profile / GBRAIN_NO_PROFILE=1), and regex-metacharacter safety.
+# (--no-profile / QUAID_NO_PROFILE=1), and regex-metacharacter safety.
 #
 # Usage:
 #   sh tests/install_profile.sh
@@ -35,19 +35,47 @@ rm -rf "$TEST_HOME"
 mkdir -p "$TEST_HOME"
 
 # Required variables install.sh reads at top level before any function executes
-GBRAIN_TEST_MODE=1
-GBRAIN_RELEASE_API_URL="https://example.invalid"
-GBRAIN_RELEASE_BASE_URL="https://example.invalid"
-GBRAIN_INSTALL_DIR="$TEST_HOME/bin"
-GBRAIN_NO_PROFILE=0
-GBRAIN_CHANNEL="airgapped"
-GBRAIN_VERSION="v0.0.0-test"
+QUAID_TEST_MODE=1
+QUAID_RELEASE_API_URL="https://example.invalid"
+QUAID_RELEASE_BASE_URL="https://example.invalid"
+QUAID_INSTALL_DIR="$TEST_HOME/bin"
+QUAID_NO_PROFILE=0
+QUAID_CHANNEL="airgapped"
+QUAID_VERSION="v0.0.0-test"
 HOME="$TEST_HOME"
-mkdir -p "$GBRAIN_INSTALL_DIR"
+mkdir -p "$QUAID_INSTALL_DIR"
 
 # Source the installer in test mode — function definitions load, main() does not run
 # shellcheck source=../scripts/install.sh
 . "$INSTALL_SH"
+
+# Windows-only helpers: apply/remove NTFS deny ACL via a .ps1 script so that
+# chmod 500 on directories actually restricts writes under Git Bash / MSYS2.
+_win_deny_write() {
+  [ -n "${MSYSTEM:-}" ] || return 0
+  command -v cygpath >/dev/null 2>&1 || return 0
+  command -v powershell >/dev/null 2>&1 || return 0
+  _wdw_path="$(cygpath -wa "$1")"
+  _wdw_ps1="${TEST_HOME}/win_acl_$$.ps1"
+  _wdw_wps1="$(cygpath -wa "$_wdw_ps1")"
+  printf '$user = $env:USERDOMAIN + "\\" + $env:USERNAME\n' > "$_wdw_ps1"
+  printf 'icacls "%s" /deny ($user + ":(AD,WD)") /T\n' "$_wdw_path" >> "$_wdw_ps1"
+  powershell -NoProfile -NonInteractive -File "$_wdw_wps1" >/dev/null 2>&1 || true
+  rm -f "$_wdw_ps1"
+}
+
+_win_allow_write() {
+  [ -n "${MSYSTEM:-}" ] || return 0
+  command -v cygpath >/dev/null 2>&1 || return 0
+  command -v powershell >/dev/null 2>&1 || return 0
+  _waw_path="$(cygpath -wa "$1")"
+  _waw_ps1="${TEST_HOME}/win_acl_$$.ps1"
+  _waw_wps1="$(cygpath -wa "$_waw_ps1")"
+  printf '$user = $env:USERDOMAIN + "\\" + $env:USERNAME\n' > "$_waw_ps1"
+  printf 'icacls "%s" /remove:d ($user) /T\n' "$_waw_path" >> "$_waw_ps1"
+  powershell -NoProfile -NonInteractive -File "$_waw_wps1" >/dev/null 2>&1 || true
+  rm -f "$_waw_ps1"
+}
 
 printf '\nRunning install profile tests...\n\n'
 
@@ -133,8 +161,8 @@ detect_profile() { PROFILE_FILE="$WP_PROFILE"; }
 
 # T5: write_profile writes both exports to a fresh profile
 write_profile
-if grep -Fq "export PATH=" "$WP_PROFILE" && grep -Fq "export GBRAIN_DB=" "$WP_PROFILE"; then
-  ok "T5: write_profile writes both PATH and GBRAIN_DB exports"
+if grep -Fq "export PATH=" "$WP_PROFILE" && grep -Fq "export QUAID_DB=" "$WP_PROFILE"; then
+  ok "T5: write_profile writes both PATH and QUAID_DB exports"
 else
   not_ok "T5: write_profile did not write expected exports"
 fi
@@ -142,11 +170,11 @@ fi
 # T6: write_profile is idempotent on re-run
 write_profile
 path_count=$(grep -c "export PATH=" "$WP_PROFILE")
-db_count=$(grep -c "export GBRAIN_DB=" "$WP_PROFILE")
+db_count=$(grep -c "export QUAID_DB=" "$WP_PROFILE")
 if [ "$path_count" = "1" ] && [ "$db_count" = "1" ]; then
   ok "T6: write_profile is idempotent (no duplicates on re-run)"
 else
-  not_ok "T6: write_profile duplicated lines: PATH×${path_count} GBRAIN_DB×${db_count}"
+  not_ok "T6: write_profile duplicated lines: PATH×${path_count} QUAID_DB×${db_count}"
 fi
 
 # T7: profile does not key off current PATH — write_profile always checks the file
@@ -167,7 +195,7 @@ fi
 PATH="$OLD_PATH"
 
 # ---------------------------------------------------------------
-# --no-profile / GBRAIN_NO_PROFILE=1 opt-out
+# --no-profile / QUAID_NO_PROFILE=1 opt-out
 # ---------------------------------------------------------------
 
 # T8: NO_PROFILE=1 branch — profile file must not be touched
@@ -186,17 +214,17 @@ else
 fi
 NO_PROFILE=0
 
-# T9: GBRAIN_NO_PROFILE=1 env var is read at startup into NO_PROFILE
-# The script initializes: NO_PROFILE="${GBRAIN_NO_PROFILE:-0}"
+# T9: QUAID_NO_PROFILE=1 env var is read at startup into NO_PROFILE
+# The script initializes: NO_PROFILE="${QUAID_NO_PROFILE:-0}"
 # We verify that behavior by checking the value directly.
-GBRAIN_NO_PROFILE=1
-_computed_no_profile="${GBRAIN_NO_PROFILE:-0}"
+QUAID_NO_PROFILE=1
+_computed_no_profile="${QUAID_NO_PROFILE:-0}"
 if [ "$_computed_no_profile" = "1" ]; then
-  ok "T9: GBRAIN_NO_PROFILE=1 env var propagates to NO_PROFILE at startup"
+  ok "T9: QUAID_NO_PROFILE=1 env var propagates to NO_PROFILE at startup"
 else
-  not_ok "T9: GBRAIN_NO_PROFILE=1 did not propagate"
+  not_ok "T9: QUAID_NO_PROFILE=1 did not propagate"
 fi
-GBRAIN_NO_PROFILE=0
+QUAID_NO_PROFILE=0
 
 # ---------------------------------------------------------------
 # detect_profile — branch coverage (T10–T13)
@@ -253,6 +281,9 @@ fi
 UNWRITABLE_HOME="$TEST_HOME/unwritable_home"
 mkdir -p "$UNWRITABLE_HOME"
 chmod 500 "$UNWRITABLE_HOME"
+# On Windows/MSYS2, chmod on directories does not update NTFS ACLs.
+# Use icacls via a .ps1 helper to actually deny write access.
+_win_deny_write "$UNWRITABLE_HOME"
 OLD_HOME_T14="$HOME"
 HOME="$UNWRITABLE_HOME"
 if SHELL=/usr/bin/zsh detect_profile >"$TEST_HOME/t14_detect.out" 2>"$TEST_HOME/t14_detect.err"; then
@@ -266,6 +297,7 @@ else
 fi
 HOME="$OLD_HOME_T14"
 chmod 700 "$UNWRITABLE_HOME"
+_win_allow_write "$UNWRITABLE_HOME"
 
 # ---------------------------------------------------------------
 # main() integration tests — T15–T18
@@ -310,10 +342,10 @@ T16_PROFILE="$TEST_HOME/.t16_profile"
 printf '' > "$T16_PROFILE"
 detect_profile() { PROFILE_FILE="$T16_PROFILE"; }
 NO_PROFILE=0
-GBRAIN_NO_PROFILE=0
+QUAID_NO_PROFILE=0
 if main >/dev/null 2>&1; then
-  if grep -Fq "export PATH=" "$T16_PROFILE" && grep -Fq "export GBRAIN_DB=" "$T16_PROFILE"; then
-    ok "T16: main() default path writes PATH and GBRAIN_DB to profile"
+  if grep -Fq "export PATH=" "$T16_PROFILE" && grep -Fq "export QUAID_DB=" "$T16_PROFILE"; then
+    ok "T16: main() default path writes PATH and QUAID_DB to profile"
   else
     not_ok "T16: main() default path did not write expected exports"
   fi
@@ -324,25 +356,25 @@ tmp_dir=""
 
 PATH="$SAVED_PATH_STUBS"
 
-# T17: GBRAIN_NO_PROFILE=1 env var is captured at script source time → NO_PROFILE=1
-# Run the installer in a fresh subprocess (GBRAIN_TEST_MODE=1 prevents main() from firing
-# but the top-level assignment  NO_PROFILE="${GBRAIN_NO_PROFILE:-0}"  still executes).
-t17_result=$(GBRAIN_TEST_MODE=1 \
-  GBRAIN_NO_PROFILE=1 \
-  GBRAIN_INSTALL_DIR="$TEST_HOME/bin" \
+# T17: QUAID_NO_PROFILE=1 env var is captured at script source time → NO_PROFILE=1
+# Run the installer in a fresh subprocess (QUAID_TEST_MODE=1 prevents main() from firing
+# but the top-level assignment  NO_PROFILE="${QUAID_NO_PROFILE:-0}"  still executes).
+t17_result=$(QUAID_TEST_MODE=1 \
+  QUAID_NO_PROFILE=1 \
+  QUAID_INSTALL_DIR="$TEST_HOME/bin" \
   HOME="$TEST_HOME" \
   sh -c ". \"$INSTALL_SH\" && printf '%s' \"\$NO_PROFILE\"" 2>/dev/null)
 if [ "$t17_result" = "1" ]; then
-  ok "T17: GBRAIN_NO_PROFILE=1 env var sets NO_PROFILE=1 at script startup"
+  ok "T17: QUAID_NO_PROFILE=1 env var sets NO_PROFILE=1 at script startup"
 else
-  not_ok "T17: GBRAIN_NO_PROFILE=1 did not set NO_PROFILE=1 (got: '$t17_result')"
+  not_ok "T17: QUAID_NO_PROFILE=1 did not set NO_PROFILE=1 (got: '$t17_result')"
 fi
 
-# T18: main() with GBRAIN_NO_PROFILE=1 env var — full end-to-end opt-out
+# T18: main() with QUAID_NO_PROFILE=1 env var — full end-to-end opt-out
 # Exercises the real pipe-flow semantics: env var → top-level NO_PROFILE init → main() skip.
-# Re-source install.sh so the top-level NO_PROFILE="${GBRAIN_NO_PROFILE:-0}" re-executes
-# with GBRAIN_NO_PROFILE=1, then call main() and verify no profile write occurred.
-GBRAIN_NO_PROFILE=1
+# Re-source install.sh so the top-level NO_PROFILE="${QUAID_NO_PROFILE:-0}" re-executes
+# with QUAID_NO_PROFILE=1, then call main() and verify no profile write occurred.
+QUAID_NO_PROFILE=1
 . "$INSTALL_SH"
 # Re-apply function stubs (re-source replaced them with production versions)
 resolve_version()  { VERSION="v0.0.0-test"; }
@@ -356,14 +388,14 @@ printf '' > "$T18_PROFILE"
 detect_profile() { PROFILE_FILE="$T18_PROFILE"; }
 if main >/dev/null 2>&1; then
   if [ ! -s "$T18_PROFILE" ]; then
-    ok "T18: main() with GBRAIN_NO_PROFILE=1 skips profile write end-to-end"
+    ok "T18: main() with QUAID_NO_PROFILE=1 skips profile write end-to-end"
   else
-    not_ok "T18: main() with GBRAIN_NO_PROFILE=1 wrote to profile (file non-empty)"
+    not_ok "T18: main() with QUAID_NO_PROFILE=1 wrote to profile (file non-empty)"
   fi
 else
-  not_ok "T18: main() with GBRAIN_NO_PROFILE=1 exited non-zero"
+  not_ok "T18: main() with QUAID_NO_PROFILE=1 exited non-zero"
 fi
-GBRAIN_NO_PROFILE=0
+QUAID_NO_PROFILE=0
 tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
 
@@ -376,10 +408,13 @@ verify_checksum()  { return 0; }
 need_cmd()         { return 0; }
 PATH="$TEST_STUBS:$PATH"
 NO_PROFILE=0
-GBRAIN_NO_PROFILE=0
+QUAID_NO_PROFILE=0
 T19_HOME="$TEST_HOME/unwritable_home_t19"
 mkdir -p "$T19_HOME"
 chmod 500 "$T19_HOME"
+# On Windows/MSYS2, chmod on directories does not update NTFS ACLs.
+# Use icacls via a .ps1 helper to actually deny write access.
+_win_deny_write "$T19_HOME"
 OLD_HOME_T19="$HOME"
 OLD_SHELL_T19="${SHELL:-}"
 HOME="$T19_HOME"
@@ -388,17 +423,17 @@ if main >"$TEST_HOME/t19_main.out" 2>"$TEST_HOME/t19_main.err"; then
   not_ok "T19: main() should exit non-zero when profile persistence fails"
 else
   if grep -Fq "Cannot create shell profile ${T19_HOME}/.zshrc" "$TEST_HOME/t19_main.err" &&
-     grep -Fq 'gbrain was installed, but PATH/GBRAIN_DB were not persisted automatically.' "$TEST_HOME/t19_main.err" &&
+     grep -Fq 'quaid was installed, but PATH/QUAID_DB were not persisted automatically.' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'Complete setup by adding these to your shell profile:' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'export PATH="' "$TEST_HOME/t19_main.err" &&
-     grep -Fq 'export GBRAIN_DB="$HOME/brain.db"' "$TEST_HOME/t19_main.err" &&
+     grep -Fq 'export QUAID_DB="$HOME/.quaid/memory.db"' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'download first, then run:' "$TEST_HOME/t19_main.err"; then
     ok "T19: main() drives the real detect_profile failure and prints recovery guidance"
   else
     not_ok "T19: main() did not print the expected real failure and recovery output"
   fi
 fi
-if grep -Fq "Installed gbrain to" "$TEST_HOME/t19_main.out"; then
+if grep -Fq "Installed quaid to" "$TEST_HOME/t19_main.out"; then
   ok "T19b: main() still reports where the binary was installed before failing"
 else
   not_ok "T19b: main() should report the installed binary path on profile failure"
@@ -411,6 +446,7 @@ fi
 HOME="$OLD_HOME_T19"
 SHELL="$OLD_SHELL_T19"
 chmod 700 "$T19_HOME"
+_win_allow_write "$T19_HOME"
 tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
 

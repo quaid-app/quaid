@@ -1,4 +1,4 @@
--- brain.db schema — GigaBrain v5
+-- memory.db schema — Quaid v6
 -- Embedded in binary via include_str!("schema.sql") in src/core/db.rs
 -- Standalone copy for reference and tooling.
 
@@ -6,9 +6,9 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 -- ============================================================
--- brain_config: persisted embedding model metadata
+-- quaid_config: persisted embedding model metadata
 -- ============================================================
-CREATE TABLE IF NOT EXISTS brain_config (
+CREATE TABLE IF NOT EXISTS quaid_config (
     key   TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 ) STRICT;
@@ -326,7 +326,7 @@ CREATE TABLE IF NOT EXISTS import_manifest (
 -- ============================================================
 -- ingest_log: per-file SHA-256 idempotency audit trail.
 -- Kept for compatibility with the import/ingest/embed commands;
--- will be removed when the reconciler slice replaces gbrain import.
+-- will be removed when the reconciler slice replaces quaid import.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ingest_log (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -384,7 +384,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',               '5'),
+    ('version',               '6'),
     ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),
@@ -410,7 +410,7 @@ CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resol
     WHERE resolved_at IS NULL;
 
 -- ============================================================
--- knowledge_gaps: queries the brain couldn't answer well
+-- knowledge_gaps: queries the memory engine couldn't answer well
 -- Privacy-safe by default: raw query text is NOT retained
 -- unless explicitly approved.  Only query_hash is stored on
 -- detection; query_text is populated post-approval.

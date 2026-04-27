@@ -1,0 +1,60 @@
+---
+title: Welcome
+description: How to use these docs, and where to start whether you're a developer, an operator, or an agent.
+guide:
+  eyebrow: Start here
+  displayTitle: Welcome to Quaid
+  accentBar: true
+---
+
+import GuideFeatureCard from "../../../components/docs/GuideFeatureCard.astro";
+import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
+
+Quaid is a personal knowledge memory that lives in a single file. It combines SQLite, FTS5, and local vector embeddings behind a thin CLI and an MCP server, so the same memory serves a human at the terminal and an agent over JSON-RPC.
+
+These docs are organized in four lanes — **Tutorials** to learn, **How-to guides** to solve problems, **Explanation** to understand, and **Reference** to look things up — plus a dedicated **For agents** track that curates the same material from an agent's perspective.
+
+## Pick a path
+
+<div class="gb-guide-grid gb-guide-grid--two">
+  <GuideFeatureCard icon="rocket" title="I want to try it now">
+    <p>Run the install command, build your first memory, and ask it a question — about ten minutes from cold start.</p>
+    <p><a href="/tutorials/install/">Install Quaid →</a></p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon="puzzle" title="I'm wiring this into Claude Code">
+    <p>Connect a running memory to any MCP client over stdio. No keys, no proxy.</p>
+    <p><a href="/tutorials/connect-claude-code/">Connect Claude Code →</a></p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon="document" title="I want to look something up">
+    <p>Every CLI command, every MCP tool, every config knob — in one scannable place.</p>
+    <p><a href="/reference/cli/">Open the Reference →</a></p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon="information" title="I'm building an agent on top">
+    <p>Tool catalog, skill workflows, and the sensitivity contract that governs what an agent may surface.</p>
+    <p><a href="/agents/quickstart/">Agent quickstart →</a></p>
+  </GuideFeatureCard>
+</div>
+
+## How these docs are structured
+
+- **Tutorials** are end-to-end lessons. Follow them in order; they assume nothing.
+- **How-to guides** are recipes. Each one solves a single problem and links out to the deeper material when you want it.
+- **Explanation** essays cover the design — the page model, hybrid search, the skills system, and the privacy posture.
+- **Reference** is exhaustive and dry. Use search; arrive, look, leave.
+- **For agents** mirrors the rest of the site but is shaped for an autonomous reader.
+
+## Conventions
+
+- Code blocks marked `bash` are real commands you can run. They assume `quaid` is on your PATH and `~/memory.db` exists, unless stated otherwise.
+- The label `(Unix)` next to a feature means it ships on macOS and Linux today; Windows parity for that surface is on the roadmap.
+- Where docs say "your memory" we mean the SQLite file (`memory.db`) — there is one per project, fully portable, and safe to copy.
+
+<GuideActionBanner
+  title="Ready to begin?"
+  primaryHref="/tutorials/install/"
+  primaryText="Install Quaid"
+  secondaryHref="/why-quaid/"
+  secondaryText="Read the pitch"
+>
+  <p>Ten minutes to a working memory, or a five-minute read on why we built it this way.</p>
+</GuideActionBanner>

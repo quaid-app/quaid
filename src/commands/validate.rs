@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_brain_passes_all_checks() {
+    fn clean_memory_passes_all_checks() {
         let conn = open_test_db();
         insert_page(&conn, "test/one");
         let report = execute_validate(&conn, &CheckFlags::all()).unwrap();

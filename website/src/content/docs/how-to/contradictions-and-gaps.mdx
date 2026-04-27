@@ -1,0 +1,93 @@
+---
+title: Detect contradictions and track knowledge gaps
+description: Use memory_check to find inconsistencies and memory_gap to log questions the memory couldn't answer.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+Two intelligence-layer surfaces work together: `check` finds places where the memory disagrees with itself, and `gap` records questions it couldn't answer well. This recipe shows how to use both.
+
+## Run a contradiction check
+
+```bash
+quaid check people/alice --db ~/memory.db    # one page
+quaid check --all --db ~/memory.db           # every page
+quaid check --type person --db ~/memory.db   # all pages of one type
+```
+
+`check` reads the `assertions` table and flags subject-predicate-object triples that disagree. Common patterns:
+
+- Two assertions about the same `(subject, predicate)` with overlapping `valid_from` / `valid_until`.
+- A timeline entry that contradicts a compiled-truth assertion.
+- A frontmatter field that disagrees with content in the body.
+
+Output is human-readable by default, JSON with `--json`. Materialized contradictions live in the `contradictions` table.
+
+## Where assertions come from
+
+Assertions are populated three ways:
+
+1. **Declared in frontmatter**:
+
+   ```yaml
+   ---
+   title: Alice
+   type: person
+   assertions:
+     - subject: alice
+       predicate: employed_by
+       object: river-ai
+       valid_from: 2024-01-15
+   ---
+   ```
+
+2. **Parsed from `## Assertions` sections** in the body.
+3. **Inferred** by ingestion heuristics from common patterns (e.g. "Alice joined RiverAI in 2024").
+
+## Resolve a contradiction
+
+There's no automated resolver — contradictions are surfaced for human (or agent) review. The typical resolution:
+
+- **Wrong assertion?** Delete it from the source (frontmatter or body), re-run `put`, re-run `check`.
+- **Both true at different times?** Add `valid_until` to the older assertion so the intervals don't overlap.
+- **Both true now, but seem to disagree?** Edit the predicate; the contradiction was lexical, not semantic.
+
+## Log a knowledge gap
+
+When a query returns weak results — or you anticipate one will — log it:
+
+```bash
+quaid call memory_gap '{"query":"who covers our European compliance?","context":"weekly briefing"}' --db ~/memory.db
+```
+
+By default this stores the **hash** of the query, plus the context, plus a default `sensitivity = internal`. The raw text is **not** persisted unless explicitly approved. See the [Sensitivity contract](/agents/sensitivity-contract/).
+
+## List unresolved gaps
+
+```bash
+quaid gaps --db ~/memory.db                    # unresolved (default)
+quaid gaps --resolved --db ~/memory.db         # include resolved
+quaid gaps --limit 100 --db ~/memory.db
+```
+
+## Resolve a gap
+
+You add a page that answers the question, then either:
+
+1. **Manually mark it resolved** — set `resolved_at` and `resolved_by_slug` in `knowledge_gaps` directly.
+2. **Use the `research` skill** — the embedded skill has a documented workflow for ingesting new material in response to a gap and marking the gap resolved when novelty passes a threshold.
+
+The skill is the recommended path; it keeps the gap → research → ingest → resolve loop legible.
+
+## Common workflow
+
+1. **Daily**: `quaid stats` shows unresolved gap counts; `quaid gaps --limit 5` is the work queue.
+2. **Weekly**: `quaid check --all` to catch contradictions you've introduced.
+3. **Monthly**: `quaid validate` to catch link integrity issues. See [Manage skills](/how-to/skills/) for an `alerts` skill that wires this into your day automatically.
+
+## How agents use this
+
+Agents log gaps when their `memory_query` results don't meet a confidence threshold. The hash-only default means the memory accumulates a privacy-safe ledger of "where can't we answer well?" over time, even when individual queries are sensitive.
+
+When an agent escalates a gap to external research (e.g. via the `enrich` skill), it must transition the sensitivity tier with explicit approval — see [Sensitivity contract](/agents/sensitivity-contract/).

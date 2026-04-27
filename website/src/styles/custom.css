@@ -1,4 +1,4 @@
-/* GigaBrain — "Digital Atelier" Theme (Anthropic-inspired) */
+/* Quaid — "Digital Atelier" Theme (Anthropic-inspired) */
 
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap");
 
@@ -250,7 +250,7 @@ site-search button[data-open-modal]:focus-visible {
   outline-offset: 3px;
 }
 
-/* Site title in header — match Stitch "GigaBrain" styling */
+/* Site title in header — match Stitch "Quaid" styling */
 .site-title {
   font-family: var(--sl-font-family-heading) !important;
   font-weight: 700 !important;

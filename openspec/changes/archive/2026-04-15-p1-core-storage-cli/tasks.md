@@ -101,22 +101,22 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T05 · src/commands/init.rs — gbrain init [PATH]
+### T05 · src/commands/init.rs — quaid init [PATH]
 
 > **Depends on:** T02
-> **Spec:** crud-commands/spec.md — gbrain init command
+> **Spec:** crud-commands/spec.md — quaid init command
 
 - [x] Call db::open(path) where path is CLI arg or default_db_path() (already in main.rs)
 - [x] If file already exists: print Database already exists at <path> and exit 0
-- [x] On success: print Brain initialized at <path> and exit 0
+- [x] On success: print Memory initialized at <path> and exit 0
 - [x] On error: print to stderr and exit 1
 
 ---
 
-### T06 · src/commands/put.rs — gbrain put <SLUG> [--expected-version N]
+### T06 · src/commands/put.rs — quaid put <SLUG> [--expected-version N]
 
 > **Depends on:** T02, T03, T04
-> **Spec:** crud-commands/spec.md — gbrain put command, OCC conflict on put
+> **Spec:** crud-commands/spec.md — quaid put command, OCC conflict on put
 > **Design decision:** compare-and-swap on version column; INSERT for new pages, compare-and-swap UPDATE for existing
 
 - [x] Read markdown from stdin
@@ -133,10 +133,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T07 · src/commands/get.rs — gbrain get <SLUG>
+### T07 · src/commands/get.rs — quaid get <SLUG>
 
 > **Depends on:** T02, T03
-> **Spec:** crud-commands/spec.md — gbrain get command
+> **Spec:** crud-commands/spec.md — quaid get command
 
 - [x] Query SELECT * FROM pages WHERE slug = ?
 - [x] If not found: print error to stderr, exit 1
@@ -145,10 +145,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T08 · src/commands/list.rs — gbrain list [--wing W] [--type T] [--limit N]
+### T08 · src/commands/list.rs — quaid list [--wing W] [--type T] [--limit N]
 
 > **Depends on:** T02
-> **Spec:** crud-commands/spec.md — gbrain list command
+> **Spec:** crud-commands/spec.md — quaid list command
 
 - [x] Build query over pages table with optional wing/type filters, ORDER BY updated_at DESC LIMIT N
 - [x] Default limit: 50
@@ -157,10 +157,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T09 · src/commands/stats.rs — gbrain stats
+### T09 · src/commands/stats.rs — quaid stats
 
 > **Depends on:** T02
-> **Spec:** crud-commands/spec.md — gbrain stats command
+> **Spec:** crud-commands/spec.md — quaid stats command
 
 - [x] Query: total pages, pages by type (GROUP BY page_type), total links, embedding count, DB file size via std::fs::metadata
 - [x] Print structured summary to stdout
@@ -168,10 +168,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T10 · src/commands/tags.rs — gbrain tags <SLUG> [--add TAG] [--remove TAG]
+### T10 · src/commands/tags.rs — quaid tags <SLUG> [--add TAG] [--remove TAG]
 
 > **Depends on:** T06, T07
-> **Spec:** crud-commands/spec.md — gbrain tags command
+> **Spec:** crud-commands/spec.md — quaid tags command
 
 - [x] Without flags: SELECT tags from the tags table for the given slug; print one per line
 - [x] --add: INSERT OR IGNORE into tags table for the given slug + tag; no OCC needed (tags are independent of page version)
@@ -180,10 +180,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T11 · src/commands/link.rs — gbrain link <FROM> <TO> --relationship <REL> [--valid-from D] [--valid-until D]
+### T11 · src/commands/link.rs — quaid link <FROM> <TO> --relationship <REL> [--valid-from D] [--valid-until D]
 
 > **Depends on:** T02
-> **Spec:** crud-commands/spec.md — gbrain link command
+> **Spec:** crud-commands/spec.md — quaid link command
 
 - [x] Insert row into links table with from_slug, to_slug, relationship, valid_from, valid_until, created_at
 - [x] --valid-until on existing link: UPDATE valid_until field to close the link
@@ -191,10 +191,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T12 · src/commands/compact.rs — gbrain compact
+### T12 · src/commands/compact.rs — quaid compact
 
 > **Depends on:** T02
-> **Spec:** crud-commands/spec.md — gbrain compact command
+> **Spec:** crud-commands/spec.md — quaid compact command
 
 - [x] Call db::compact(conn) — print success; on error print to stderr and exit 1
 
@@ -273,10 +273,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T17 · src/commands/search.rs — gbrain search "<QUERY>" [--wing W] [--limit N]
+### T17 · src/commands/search.rs — quaid search "<QUERY>" [--wing W] [--limit N]
 
 > **Depends on:** T13
-> **Spec:** search/spec.md — gbrain search command
+> **Spec:** search/spec.md — quaid search command
 
 - [x] Call search_fts(query, wing, conn)
 - [x] Print results as <slug>: <summary> lines ordered by score, up to --limit (default 10)
@@ -284,28 +284,28 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T18 · src/commands/embed.rs — gbrain embed [SLUG | --all | --stale]
+### T18 · src/commands/embed.rs — quaid embed [SLUG | --all | --stale]
 
 > **Depends on:** T14, T15, T02
-> **Spec:** embeddings/spec.md — gbrain embed command
+> **Spec:** embeddings/spec.md — quaid embed command
 >
 > **T14 dependency (honest status):** Command plumbing is ✅ complete — all three
 > invocation modes work, embedding rows are stored, stale-skip logic is correct.
 > The stored vectors are hash-indexed (not semantic) until T14 ships Candle/BGE-small.
-> `gbrain embed` emits a runtime note on stderr to prevent the output from being
+> `quaid embed` emits a runtime note on stderr to prevent the output from being
 > mistaken for true semantic indexing.
 
-- [x] gbrain embed <SLUG>: chunk the page, embed each chunk, upsert into page_embeddings and page_embeddings_vec_384
-- [x] gbrain embed --all: iterate all pages, embed all chunks (skip if content_hash unchanged)
-- [x] gbrain embed --stale: only re-embed pages where stored content_hash differs from current
+- [x] quaid embed <SLUG>: chunk the page, embed each chunk, upsert into page_embeddings and page_embeddings_vec_384
+- [x] quaid embed --all: iterate all pages, embed all chunks (skip if content_hash unchanged)
+- [x] quaid embed --stale: only re-embed pages where stored content_hash differs from current
 - [x] Unit test: embed a page — embedding rows appear in page_embeddings; re-embed unchanged page — no new rows added
 
 ---
 
-### T19 · src/commands/query.rs — gbrain query "<QUERY>" [--wing W] [--limit N] [--token-budget N]
+### T19 · src/commands/query.rs — quaid query "<QUERY>" [--wing W] [--limit N] [--token-budget N]
 
 > **Depends on:** T16
-> **Spec:** embeddings/spec.md — gbrain query command
+> **Spec:** embeddings/spec.md — quaid query command
 >
 > **T14 dependency (honest status):** Command plumbing is ✅ complete — hybrid
 > search, token-budget truncation, limit, wing filter, and JSON output all work.
@@ -345,7 +345,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 ### T22 · src/core/migrate.rs — import_dir, export_dir, validate_roundtrip
 
 > **Depends on:** T02, T03, T04, T14, T15, T21
-> **Spec:** ingest-export/spec.md — gbrain import command, gbrain export command, Round-trip tests
+> **Spec:** ingest-export/spec.md — quaid import command, quaid export command, Round-trip tests
 
 - [x] Implement import_dir(path: &Path, conn: &mut Connection, validate_only: bool) -> Result<ImportStats, anyhow::Error>:
   - Walk directory recursively; collect all .md files
@@ -366,30 +366,30 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T23 · src/commands/import.rs — gbrain import <PATH> [--validate-only]
+### T23 · src/commands/import.rs — quaid import <PATH> [--validate-only]
 
 > **Depends on:** T22
-> **Spec:** ingest-export/spec.md — gbrain import command
+> **Spec:** ingest-export/spec.md — quaid import command
 
 - [x] Call migrate::import_dir(path, conn, validate_only)
 - [x] Exit 1 if --validate-only found parse errors
 
 ---
 
-### T24 · src/commands/export.rs — gbrain export <OUTPUT_DIR>
+### T24 · src/commands/export.rs — quaid export <OUTPUT_DIR>
 
 > **Depends on:** T22
-> **Spec:** ingest-export/spec.md — gbrain export command
+> **Spec:** ingest-export/spec.md — quaid export command
 
 - [x] Call migrate::export_dir(output_path, conn)
 - [x] Print: Exported N pages to <output_dir>
 
 ---
 
-### T25 · src/commands/ingest.rs — gbrain ingest <FILE> [--force]
+### T25 · src/commands/ingest.rs — quaid ingest <FILE> [--force]
 
 > **Depends on:** T02, T03, T04, T14
-> **Spec:** ingest-export/spec.md — gbrain ingest command
+> **Spec:** ingest-export/spec.md — quaid ingest command
 
 - [x] Compute SHA-256 of file content; check ingest_log
 - [x] If present and no --force: print Already ingested (SHA-256 match), use --force to re-ingest and exit 0
@@ -398,7 +398,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ---
 
-### T26 · src/commands/timeline.rs — gbrain timeline <SLUG>
+### T26 · src/commands/timeline.rs — quaid timeline <SLUG>
 
 > **Depends on:** T07
 
@@ -426,21 +426,21 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Design decision:** rmcp 0.1, stdio transport, tokio runtime on serve entry; reuse core functions, no logic duplication
 > **Reviewer:** Nibbler adversarial review required before ship gate
 
-- [x] Register all 5 tools with JSON schema: brain_get, brain_put, brain_query, brain_search, brain_list
-- [x] brain_get: accept {slug} — core get — return rendered markdown; not-found returns error -32001
-- [x] brain_put: accept {slug, content, expected_version?} — core put with OCC — return {version: N}; OCC conflict returns error -32009 with {current_version: N}
-- [x] brain_query: accept {query, limit?, wing?} — hybrid_search — return JSON array of {slug, summary, score}
-- [x] brain_search: accept {query, limit?, wing?} — search_fts — return JSON array of results
-- [x] brain_list: accept {wing?, type?, limit?} — list query — return JSON array of pages
+- [x] Register all 5 tools with JSON schema: memory_get, memory_put, memory_query, memory_search, memory_list
+- [x] memory_get: accept {slug} — core get — return rendered markdown; not-found returns error -32001
+- [x] memory_put: accept {slug, content, expected_version?} — core put with OCC — return {version: N}; OCC conflict returns error -32009 with {current_version: N}
+- [x] memory_query: accept {query, limit?, wing?} — hybrid_search — return JSON array of {slug, summary, score}
+- [x] memory_search: accept {query, limit?, wing?} — search_fts — return JSON array of results
+- [x] memory_list: accept {wing?, type?, limit?} — list query — return JSON array of pages
 - [x] Implement MCP error code mapping: OccError to -32009, not found to -32001, parse error to -32002, DB error to -32003
 - [x] Server exits cleanly when stdin closes
 - [x] Unit test: send initialize + tools/list — 5 tool names in response
-- [x] Unit test: brain_get on non-existent slug — -32001 error code
-- [x] Unit test: brain_put with stale expected_version — -32009 with current version in error data
+- [x] Unit test: memory_get on non-existent slug — -32001 error code
+- [x] Unit test: memory_put with stale expected_version — -32009 with current version in error data
 
 ---
 
-### T29 · src/commands/serve.rs — gbrain serve
+### T29 · src/commands/serve.rs — quaid serve
 
 > **Depends on:** T28
 
@@ -452,21 +452,21 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 ## Week 4 — Polish and Ship Gate
 
-### T30 · src/commands/config.rs — gbrain config get/set
+### T30 · src/commands/config.rs — quaid config get/set
 
 > **Depends on:** T02
 
-- [x] gbrain config set <KEY> <VALUE>: upsert into config table
-- [x] gbrain config get <KEY>: print value or Not set
+- [x] quaid config set <KEY> <VALUE>: upsert into config table
+- [x] quaid config get <KEY>: print value or Not set
 - [x] Used by hybrid search for search_merge_strategy key
 
 ---
 
-### T31 · src/commands/version.rs — gbrain version
+### T31 · src/commands/version.rs — quaid version
 
 > **Depends on:** nothing
 
-- [x] Print gbrain <version> using the CARGO_PKG_VERSION env macro
+- [x] Print quaid <version> using the CARGO_PKG_VERSION env macro
 
 ---
 
@@ -509,8 +509,8 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 - [x] **SG-1** cargo test passes with zero failures
 - [x] **SG-2** cargo clippy -- -D warnings passes; cargo fmt --check passes
-- [x] **SG-3** gbrain import tests/fixtures/ then gbrain export then re-import — semantic diff = 0 (Professor sign-off)
-- [x] **SG-4** gbrain serve connects to an MCP client; all 5 tools respond correctly; tools/list returns all 5 names (Professor sign-off)
+- [x] **SG-3** quaid import tests/fixtures/ then quaid export then re-import — semantic diff = 0 (Professor sign-off)
+- [x] **SG-4** quaid serve connects to an MCP client; all 5 tools respond correctly; tools/list returns all 5 names (Professor sign-off)
 - [x] **SG-5** musl binary has no dynamic dependencies confirmed via ldd (Professor sign-off)
 - [x] **SG-6** Nibbler adversarial review on src/mcp/server.rs: OCC enforced on all write paths, no injection vectors (Nibbler sign-off)
   <!-- Fry SG-6 fixes applied in commit 5886ec2: OCC bypass closed, slug/content validation, error code consistency, limit caps, mutex recovery. Awaiting Nibbler re-review. -->

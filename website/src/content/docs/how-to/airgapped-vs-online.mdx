@@ -1,0 +1,107 @@
+---
+title: Run airgapped vs online
+description: Pick the build channel that fits your environment, and how to switch between them.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+`quaid` ships in two flavors. The defaults are tuned so most people never have to think about it; this page is the ten-minute guide for everyone else.
+
+## At a glance
+
+| | Airgapped (default) | Online |
+| --- | --- | --- |
+| Cargo features | `embedded-model` | `bundled,online-model` |
+| Binary size | ~180 MB | ~90 MB |
+| Model assets | BGE-small embedded | Cached on first use |
+| Network at runtime | Never | Once, per model |
+| Custom model selection (`--model`) | Warning-only no-op | Honored |
+
+## Choose airgapped if…
+
+- You work on a plane, in a SCIF, or on a regulated workstation.
+- You want zero ambiguity about whether the memory is talking to anyone.
+- You're fine with the BGE-small default (almost everyone is).
+
+## Choose online if…
+
+- You want a smaller binary.
+- You want to use a non-default model (`base`, `large`, `m3`, or any HF model ID).
+- You can tolerate a one-time download on first semantic use.
+
+## Install the airgapped channel
+
+This is the default. Either:
+
+```bash
+# Shell installer (default channel = airgapped)
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
+
+# Or build from source
+cargo build --release
+```
+
+Either path produces a binary that contains the BGE-small weights inside it. The first semantic operation does no network work.
+
+## Install the online channel
+
+```bash
+# Shell installer with channel override
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+  | QUAID_CHANNEL=online sh
+
+# Or build from source
+cargo build --release --no-default-features --features bundled,online-model
+```
+
+On first semantic use, `quaid` downloads the active model from `QUAID_HF_BASE_URL` (default `https://huggingface.co`) into `QUAID_MODEL_CACHE_DIR` (default `~/.quaid/models/`). Subsequent runs use the cache.
+
+## Switching channels
+
+The memory database is independent of the binary channel. To switch:
+
+1. Install the other channel.
+2. Move/keep the same `memory.db`.
+3. Run `quaid version` to confirm; run `quaid stats` to confirm the recorded model is still consistent.
+
+There's no schema migration involved.
+
+## Pin the channel and version in CI
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+  | QUAID_VERSION=v0.9.8 QUAID_CHANNEL=online sh
+```
+
+`QUAID_VERSION` pins the release tag; `QUAID_CHANNEL` pins the channel. The installer validates SHA-256 either way.
+
+## Use a Hugging Face mirror
+
+For environments with restricted egress, point at an internal mirror:
+
+```bash
+export QUAID_HF_BASE_URL=https://hf-mirror.internal
+export QUAID_MODEL_CACHE_DIR=/var/cache/quaid/models
+quaid query "..."
+```
+
+Only the online channel honors these. The airgapped binary does no network work regardless.
+
+## Verify there's no network
+
+Quick paranoia check on the airgapped channel:
+
+```bash
+# macOS: drop to airplane mode, run a query
+# Linux: drop network namespace
+unshare -n quaid query "test" --db /tmp/empty.db || true
+```
+
+If the query path tries to fetch a model on the airgapped channel, it's a bug — file an issue with `quaid version` output.
+
+## Related
+
+- [Embedding models](/explanation/embedding-models/) — why the channels differ.
+- [Switch embedding models](/how-to/switch-embedding-model/) — recipe for changing models.
+- [Configuration](/reference/configuration/) — every env var and config key.

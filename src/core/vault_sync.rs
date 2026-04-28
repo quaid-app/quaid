@@ -5699,7 +5699,7 @@ mod tests {
         assert!(needs_full_sync);
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            WatchEvent::DirtyPath(path) if path == "notes/already-buffered.md"
+            WatchEvent::DirtyPath(path) if path == PathBuf::from("notes/already-buffered.md")
         ));
     }
 

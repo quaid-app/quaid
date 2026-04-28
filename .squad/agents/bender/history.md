@@ -10,7 +10,7 @@
 - Validation needs to cover ingest, retrieval, CLI behavior, and MCP behavior.
 - OpenSpec proposals define what must be proven, not just what must be built.
 - This project values round-trip safety and harsh failure testing.
-- Phase 1 tasks 2.1–2.6 (core types) are the foundation — schema-struct alignment is the highest-value check before any downstream work.
+- Batch 1 coverage audit (2026-04-28): Linux CI canonical measurement is **82.53%** (19,588 / 23,729 lines). The 90% target is **not achievable** from this lane without significant dedicated test work on unix-gated internals. Recommendation: **defer v0.10.0 ship decision** and assign remaining gap (~1,768 lines) to follow-on test sprint. Platform barriers: ~1,400–1,600 unix-gated lines in vault_sync/reconciler/collection/fs_safety/quarantine unreachable on Windows or without integration tests. Decision record merged to `.squad/decisions.md`.
 - The Link struct has a known schema-vs-task mismatch: task says from_slug/to_slug, schema uses from_page_id/to_page_id (integer FK). Must verify Fry's resolution.
 - `type` is a Rust keyword; the Page struct must rename the field (e.g., `page_type`) and handle serde/rusqlite column mapping.
 - Anticipatory QA validation plan for tasks 2.1–2.6 written to `.squad/decisions/inbox/bender-p1-foundation-validation.md` on 2026-04-14.

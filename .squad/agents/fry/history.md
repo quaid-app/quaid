@@ -7,6 +7,13 @@
 
 ## Learnings
 
+### 2026-05-01 - PR #111 rustfmt drift cleanup
+
+- **Pattern:** When CI's `Check` job fails on a branch due to rustfmt drift accumulated on `origin/main`, the correct fix is `cargo fmt` (project-wide), not file-targeted `rustfmt` calls. File-targeted `rustfmt` without Cargo.toml edition context errors on `async fn` with "not permitted in Rust 2015".
+- **Scope creep from known list:** The task named 6 drift files; `cargo fmt --check` revealed 8 files needed formatting. Always verify the full scope with `cargo fmt --check` before committing.
+- **Validation sequence:** `cargo fmt` → `cargo fmt --check` (must exit 0) → `cargo check` (must compile clean). All three passed before pushing.
+- **Commit type:** Pure formatting commits use `style:` prefix (not `fix:` or `chore:`).
+
 ### 2026-04-28 22:36:00 - Batch 1 watcher-reliability rejection and lockout
 
 - **Rejection summary:** Professor gated Batch 1 on 2026-04-28 and rejected the current closure plan due to three interlocking contradictions: (1) overflow recovery tried to bypass `ActiveLease` authorization, (2) `memory_collections` MCP schema tried to widen past the frozen 13.6 contract, (3) `WatcherMode` enum had unreachable `"inactive"` variant given the null rule.

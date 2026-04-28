@@ -2,6 +2,66 @@
 
 ## Active Decisions
 
+### 2026-04-28: PR #110 Guardrails Bypass Fix & PR #111 Export Test Fix — Scope-Clean Split
+
+**By:** Fry + Bender + Leela + Professor + Zapp  
+**Date:** 2026-04-28  
+**Status:** COMPLETE — PR #110 APPROVED; PR #111 created (intentional split)
+
+**Arc Summary:**
+
+Multi-agent cycle to land PR #110 guardrails bypass fix, with discovery and intentional split of pre-existing Linux export test failure into separate PR #111.
+
+**Key Decisions:**
+
+- **D-PR110-Guardrails-Bypass (Leela):** Tighten `.github/workflows/main-guardrails.yml` bypass detection to require **all four conditions**:
+  - PR state = 'closed'
+  - merged_at is not None
+  - base.ref = 'main'
+  - `merge_commit_sha == github.sha` (bypass-closing gate)
+  
+  A directly-pushed commit cannot satisfy condition 4 because its SHA is not the PR's merge commit. GitHub sets `merge_commit_sha` to either an as-yet-unrealised merge commit (open PR) or to a GitHub-synthesised test-merge ref — neither equals the raw branch commit being pushed. This closes the bypass for all GitHub merge strategies (regular merge, squash, rebase).
+
+- **D-PR110-PathBuf-Guard (Bender):** In match guards comparing a `PathBuf` binding to a literal, use `Path::new(...)` (borrowed), never `PathBuf::from(...)` (owned). This avoids `clippy::cmp_owned` with zero semantic cost. Applied at `src/core/vault_sync.rs:5702` in test guard.
+
+- **D-PR110-Narrowing-Strategy (Zapp):** Reverted all coverage-sprint drift using `git checkout main --` to restore exact main state. Applied `cargo fmt` as standalone commit (mandatory for Check gate, not source churn). Removed `.squad/skills/coverage-*` SKILL.md files (agent-internal artifacts, no place in product PR).
+
+- **D-PR110-Baseline-Debt (Zapp):** Pre-existing clippy violations on main were exposed by new `-D warnings` gate. Minimal isolated patch:
+  - `src/commands/collection.rs:1654` — added missing `watcher_mode`, `watcher_last_event_at`, `watcher_channel_depth` to test initializer
+  - `src/core/vault_sync.rs:2199/2202/2205` — changed `.map_err(|e| e.to_string())?` to `VaultSyncError::InvariantViolation { message: e.to_string() }`
+  - `src/core/fs_safety.rs:599` — renamed unused `parent_fd` to `_parent_fd`
+
+- **D-PR111-Export-Test-Fix (Fry):** Pre-existing Linux-only test fixture failure in `src/commands/export.rs::run_exports_page_to_nested_markdown_file` discovered mid-review. Root cause: `open_test_db()` left default collection with `root_path = ''` (state = 'detached'). On Unix, `persist_with_vault_write()` attempts to open collection.root_path as directory FD; empty path returns ENOENT.
+  
+  Fix: Mirror existing pattern from `put.rs` tests — provision real vault dir inside TempDir and UPDATE collections row to point at it with state='active'. **Test fixture only; no production code changed.** Rationale: Production guard `db_path.is_empty() || db_path == ":memory:"` is valid for in-memory DBs but cannot distinguish "real file, no vault configured" from "real file, vault ready". Broadening that guard would silently suppress data-loss protection in real single-user installs starting before `quaid init` completes. Narrower fixture fix consistent with existing patterns, lower risk.
+
+- **D-PR111-Scope-Split (Fry / macro88):** Export test failure is unrelated to guardrails logic, pre-existing on main, and a Unix-only test issue (not production code). Create PR #111 with *only* the export test fix, landing in parallel to PR #110. Keeps guardrails PR scope maximally clean.
+
+**Professor Verdict:** APPROVE on PR #110  
+- Bypass architecture is sound; direct-push rejection now load-bearing on condition 4 (`merge_commit_sha == github.sha`)
+- All local gates pass: fmt ✅ / clippy ✅ / cargo check ✅
+- Remaining CI jobs (Test, Coverage) inherit pre-existing export test failure, resolved by PR #111
+- No review blocker in guardrails logic itself after bypass condition fix
+
+**Validation:**
+- PR #110 (`c8e1a18`): `cargo fmt --all -- --check` ✅ / `cargo clippy --all-targets -- -D warnings` ✅ / `cargo check --all-targets` ✅
+- PR #111 (`4735713`): `cargo test --quiet --test '*' -- export` ✅ / All 591 repo tests pass ✅
+
+**Platform Coverage:**
+- PR #110 (guardrails): Platform-agnostic workflow fix
+- PR #111 (export): Unix-only test fixture issue; Windows CI unaffected (test already passing)
+
+**Release Artifacts:**
+- **PR #110:** `fix/no-direct-main-guardrails` branch; final commit `c8e1a18`; awaiting Test/Coverage/Offline Benchmarks CI completion
+- **PR #111:** `fix/export-nested-markdown-linux` branch; commit `4735713`; ready for review and landing in parallel
+
+**Rule Established:**
+- Bypass detection: `merge_commit_sha == github.sha` is load-bearing for rejecting direct pushes to `main`
+- PathBuf comparisons: always use `Path::new(...)` in guards
+- Test fixtures: repair to match existing patterns rather than relax production branching logic
+
+---
+
 ### 2026-04-29: Batch 1 Coverage Sprint Arc — v0.10.0 Release Gate CLEARED
 
 **By:** Bender + Mom + Scruffy + Zapp  

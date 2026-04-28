@@ -860,3 +860,41 @@ Ready for implementation and landing.
 
 - When a hotfix PR is the next shippable patch, bump every public version truth that users can copy from (`Cargo.toml`, npm package metadata, runtime user agent, README/docs install snippets) in the same change or the release surface drifts immediately.
 - GitHub release body text is part of the product contract: keep install commands stable, but rewrite the explanatory paragraph so it names the actual hotfix instead of inheriting stale notes from the prior patch lane.
+
+---
+
+## 2025-07-18 — export test Linux fix (PR #111)
+
+### Problem
+
+`run_exports_page_to_nested_markdown_file` panics on Linux at `put_from_string().unwrap()`
+with `No such file or directory (os error 2)`. Root cause: the test's `open_test_db()`
+helper created a real on-disk database but left the default collection seeded by
+`db::open()` with `root_path = ''` and `state = 'detached'`.
+
+On Unix, `persist_with_vault_write()` (the `#[cfg(unix)]` variant) skips the
+early-exit branch (`db_path.is_empty() || db_path == ":memory:"`) because the DB is a
+real file, then calls `fs_safety::open_root_fd(Path::new(""))` which returns `ENOENT`.
+The `#[cfg(not(unix))]` variant goes straight to `persist_page_record()` and never
+touches the filesystem, so Windows CI was green.
+
+### Fix
+
+Provision a real vault directory and update the `collections` row in `open_test_db()`,
+mirroring the existing `open_test_db_with_vault()` pattern in `put.rs`. The `TempDir`
+is already returned so no `mem::forget` is needed.
+
+### Learnings
+
+1. **Default collection is a stub.** `db::open()` seeds `collections` with
+   `root_path=''`, `state='detached'`. Any test that exercises the Unix write path must
+   provision a real directory and update the row, or use an in-memory database.
+
+2. **The `:memory:` guard only applies to in-memory DBs.** On-disk test databases always
+   go through the full vault write path on Unix, even if no vault was configured.
+
+3. **`put.rs` has the pattern.** `open_test_db_with_vault()` is the reference
+   implementation for any test that calls put operations on an on-disk database.
+
+4. **cfg(unix) divergence is a cross-platform failure risk.** Run `cargo test` on Linux
+   before shipping put/export test helpers.

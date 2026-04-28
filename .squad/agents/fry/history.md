@@ -952,6 +952,8 @@ Use Path::new(...) instead — it borrows without allocating, satisfies
 - 2026-04-28: For vault-sync watcher bookkeeping, close task truth against the shared reconcile call graph, not against hypothetical per-event handlers. `src/core/vault_sync.rs::poll_collection_watcher()` → `run_watcher_reconcile()` → `src/core/reconciler.rs::reconcile_with_native_events()` is the load-bearing path for create/modify, delete/quarantine, and native rename application.
 - 2026-04-28: Batch 1 watcher-health truth lives in `src/core/vault_sync.rs` and `src/commands/collection.rs`; `quaid collection info` is the only surfaced watcher-health contract for v0.10, while MCP `memory_collections` remains intentionally frozen.
 - 2026-04-28: User preference reinforced — OpenSpec bookkeeping must be conservative and evidence-based: mark only tasks and ship gates proven by the merged tree, and leave explicit notes wherever scope is still deferred. Key working files for this lane: `openspec/changes/vault-sync-engine/tasks.md`, `openspec/changes/vault-sync-engine/implementation_plan.md`, `.squad/decisions.md`.
+Use Path::new(...) instead — it borrows without allocating and satisfies
+PartialEq<Path> on PathBuf.
 
 ---
 

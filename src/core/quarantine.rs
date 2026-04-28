@@ -1274,8 +1274,8 @@ fn current_timestamp(conn: &Connection) -> Result<String, QuarantineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::core::vault_sync::ResolvedSlug;
+    use std::path::PathBuf;
 
     fn open_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1761,11 +1761,7 @@ mod tests {
         );
         let peer_id =
             insert_quarantined_page(&conn, collection_id, "notes/peer", "2026-01-02T00:00:00Z");
-        insert_active_raw_import(
-            &conn,
-            page_id,
-            b"---\ntitle: Exported\n---\nbody\n",
-        );
+        insert_active_raw_import(&conn, page_id, b"---\ntitle: Exported\n---\nbody\n");
         conn.execute(
             "INSERT INTO links (from_page_id, to_page_id, relationship, context, source_kind)
              VALUES (?1, ?2, 'related', 'context', 'programmatic')",
@@ -1809,16 +1805,21 @@ mod tests {
 
         let output_dir = tempfile::TempDir::new().unwrap();
         let output_path = output_dir.path().join("nested").join("export.json");
-        let receipt =
-            export_quarantined_page(&conn, "work::notes/exported", &output_path).unwrap();
+        let receipt = export_quarantined_page(&conn, "work::notes/exported", &output_path).unwrap();
         let payload: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&output_path).unwrap()).unwrap();
 
         assert_eq!(receipt.collection, "work");
         assert_eq!(receipt.slug, "notes/exported");
-        assert_eq!(payload["active_raw_markdown"], "---\ntitle: Exported\n---\nbody\n");
+        assert_eq!(
+            payload["active_raw_markdown"],
+            "---\ntitle: Exported\n---\nbody\n"
+        );
         assert_eq!(payload["programmatic_links"].as_array().unwrap().len(), 1);
-        assert_eq!(payload["non_import_assertions"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            payload["non_import_assertions"].as_array().unwrap().len(),
+            1
+        );
         assert_eq!(payload["raw_data_rows"].as_array().unwrap().len(), 1);
         assert_eq!(payload["contradictions"].as_array().unwrap().len(), 1);
         assert_eq!(payload["knowledge_gaps"].as_array().unwrap().len(), 1);
@@ -1856,8 +1857,8 @@ mod tests {
     fn restore_quarantined_page_returns_unsupported_platform_error_on_windows() {
         let conn = open_test_db();
 
-        let err =
-            restore_quarantined_page(&conn, "work::notes/quarantined", "notes/restored").unwrap_err();
+        let err = restore_quarantined_page(&conn, "work::notes/quarantined", "notes/restored")
+            .unwrap_err();
 
         assert!(matches!(
             err,

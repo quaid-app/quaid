@@ -867,3 +867,9 @@ Ready for implementation and landing.
 - The safest repair was to reformat the existing Rust sources with `cargo fmt --all` on the PR branch instead of weakening the workflow or pinning around stale formatting output.
 - Validation that passed on this Windows host after the formatting commit candidate: `cargo fmt --all -- --check`, `cargo check --all-targets`, `cargo test --verbose`, and hook bootstrap simulation via `scripts/setup-git-hooks.ps1` plus `.githooks/pre-push`.
 - Key paths for this lane: `.github/workflows/ci.yml`, `.githooks/pre-push`, `scripts/setup-git-hooks.ps1`, and the eight Rust files touched by rustfmt.
+
+### 2026-04-28 08:45:00 - PR #110 hidden compile follow-up
+
+- When a CI rerun exposes new Rust errors after a mechanical fix, keep the repair surgical and aligned with the existing runtime contract: here the watcher-native init path was supposed to return `Result<WatcherHandle, String>` for poll fallback, so the correct fix was to confine `?` inside a closure rather than widen `VaultSyncError`.
+- Operator-facing watcher health remains process-local truth; test-only `CollectionInfoOutput` fixtures should set the watcher fields to `None` unless the test explicitly owns a live runtime snapshot.
+- The current Windows host can validate the shared `Check` surface (`cargo fmt --all -- --check`, both `cargo clippy` lanes, `cargo check --all-targets`), but Linux-only watcher compile seams still need the next GitHub rerun as the authoritative proof.

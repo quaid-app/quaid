@@ -276,8 +276,7 @@ mod tests {
             Some("some detail".to_owned()),
         )
         .expect("add entry");
-        run(&conn, "notes/structured-json", 10, true)
-            .expect("run json with structured entry");
+        run(&conn, "notes/structured-json", 10, true).expect("run json with structured entry");
     }
 
     #[test]

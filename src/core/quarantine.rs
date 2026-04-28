@@ -1275,6 +1275,7 @@ fn current_timestamp(conn: &Connection) -> Result<String, QuarantineError> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use crate::core::vault_sync::ResolvedSlug;
 
     fn open_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1306,6 +1307,20 @@ mod tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    fn insert_active_raw_import(conn: &Connection, page_id: i64, raw_bytes: &[u8]) {
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
+             VALUES (?1, ?2, 1, ?3, ?4)",
+            params![
+                page_id,
+                format!("import-{page_id}"),
+                raw_bytes,
+                format!("notes/{page_id}.md")
+            ],
+        )
+        .unwrap();
     }
 
     fn production_source_without_tests(path: &str) -> String {
@@ -1381,6 +1396,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(exported_at, "2026-01-03T04:05:06Z");
+    }
+
+    #[test]
+    fn record_quarantine_export_updates_existing_row_for_same_epoch() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id = insert_quarantined_page(
+            &conn,
+            collection_id,
+            "notes/exported",
+            "2026-01-01T00:00:00Z",
+        );
+
+        record_quarantine_export(
+            &conn,
+            page_id,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "old.json".to_owned(),
+        )
+        .unwrap();
+        record_quarantine_export(
+            &conn,
+            page_id,
+            "2026-01-01T00:00:00Z",
+            "2026-01-03T00:00:00Z",
+            "new.json".to_owned(),
+        )
+        .unwrap();
+
+        let (exported_at, output_path): (String, String) = conn
+            .query_row(
+                "SELECT exported_at, output_path
+                 FROM quarantine_exports
+                 WHERE page_id = ?1 AND quarantined_at = ?2",
+                params![page_id, "2026-01-01T00:00:00Z"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(exported_at, "2026-01-03T00:00:00Z");
+        assert_eq!(output_path, "new.json");
     }
 
     #[test]
@@ -1592,6 +1649,62 @@ mod tests {
     }
 
     #[test]
+    fn db_only_state_counts_include_all_preserved_categories() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id = insert_quarantined_page(
+            &conn,
+            collection_id,
+            "notes/exported",
+            "2026-01-02T00:00:00Z",
+        );
+        let peer_id =
+            insert_quarantined_page(&conn, collection_id, "notes/peer", "2026-01-02T00:00:00Z");
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship, context, source_kind)
+             VALUES (?1, ?2, 'related', 'context', 'programmatic')",
+            params![page_id, peer_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by)
+             VALUES (?1, 'notes/exported', 'status', 'active', 'agent')",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_data (page_id, source, data) VALUES (?1, 'api', '{}')",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO contradictions (page_id, other_page_id, type, description)
+             VALUES (?1, ?2, 'conflict', 'desc')",
+            params![page_id, peer_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
+             VALUES (?1, 'gap-1', 'context')",
+            [page_id],
+        )
+        .unwrap();
+
+        let counts = db_only_state_counts(&conn, page_id).unwrap();
+
+        assert_eq!(
+            counts,
+            DbOnlyStateCounts {
+                programmatic_links: 1,
+                non_import_assertions: 1,
+                raw_data: 1,
+                contradictions: 1,
+                knowledge_gaps: 1,
+            }
+        );
+    }
+
+    #[test]
     fn hard_delete_paths_consult_db_only_state_predicate_before_delete() {
         let reconciler_source = production_source_without_tests(
             PathBuf::from("src")
@@ -1633,6 +1746,124 @@ mod tests {
         assert!(matches!(
             err,
             QuarantineError::CollectionNotFound { collection } if collection == "missing"
+        ));
+    }
+
+    #[test]
+    fn export_quarantined_page_writes_nested_payload_and_records_export() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id = insert_quarantined_page(
+            &conn,
+            collection_id,
+            "notes/exported",
+            "2026-01-02T00:00:00Z",
+        );
+        let peer_id =
+            insert_quarantined_page(&conn, collection_id, "notes/peer", "2026-01-02T00:00:00Z");
+        insert_active_raw_import(
+            &conn,
+            page_id,
+            b"---\ntitle: Exported\n---\nbody\n",
+        );
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship, context, source_kind)
+             VALUES (?1, ?2, 'related', 'context', 'programmatic')",
+            params![page_id, peer_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by)
+             VALUES (?1, 'notes/exported', 'status', 'active', 'agent')",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_data (page_id, source, data) VALUES (?1, 'api', '{\"ok\":true}')",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO contradictions (page_id, other_page_id, type, description)
+             VALUES (?1, ?2, 'conflict', 'desc')",
+            params![page_id, peer_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
+             VALUES (?1, 'gap-1', 'context')",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tags (page_id, tag) VALUES (?1, 'alpha')",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO timeline_entries (page_id, date, source, summary, summary_hash, detail)
+             VALUES (?1, '2026-01-01', 'journal', 'summary', 'hash', 'detail')",
+            [page_id],
+        )
+        .unwrap();
+
+        let output_dir = tempfile::TempDir::new().unwrap();
+        let output_path = output_dir.path().join("nested").join("export.json");
+        let receipt =
+            export_quarantined_page(&conn, "work::notes/exported", &output_path).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&output_path).unwrap()).unwrap();
+
+        assert_eq!(receipt.collection, "work");
+        assert_eq!(receipt.slug, "notes/exported");
+        assert_eq!(payload["active_raw_markdown"], "---\ntitle: Exported\n---\nbody\n");
+        assert_eq!(payload["programmatic_links"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["non_import_assertions"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["raw_data_rows"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["contradictions"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["knowledge_gaps"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["tags"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["timeline_entries"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn load_quarantined_page_defaults_invalid_frontmatter_to_empty_map() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version, quarantined_at)
+             VALUES (?1, 'notes/invalid-frontmatter', ?2, 'note', 'title', '', 'truth', '', 'not-json', 'notes', '', 1, '2026-01-02T00:00:00Z')",
+            params![collection_id, uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+
+        let page = load_quarantined_page(
+            &conn,
+            &ResolvedSlug {
+                collection_id,
+                collection_name: "work".to_owned(),
+                slug: "notes/invalid-frontmatter".to_owned(),
+            },
+        )
+        .unwrap();
+
+        assert!(page.frontmatter.is_empty());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn restore_quarantined_page_returns_unsupported_platform_error_on_windows() {
+        let conn = open_test_db();
+
+        let err =
+            restore_quarantined_page(&conn, "work::notes/quarantined", "notes/restored").unwrap_err();
+
+        assert!(matches!(
+            err,
+            QuarantineError::VaultSync(VaultSyncError::UnsupportedPlatform {
+                command: "quaid collection quarantine restore"
+            })
         ));
     }
 }

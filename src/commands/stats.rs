@@ -164,4 +164,44 @@ mod tests {
         let stats = gather_stats(&conn).unwrap();
         assert!(stats.db_size_bytes > 0, "DB file size should be non-zero");
     }
+
+    #[test]
+    fn stats_run_succeeds_for_text_and_json_output() {
+        let conn = open_test_db();
+        insert_page(&conn, "people/alice", "person");
+        insert_page(&conn, "people/bob", "person");
+        let alice_id: i64 = conn
+            .query_row("SELECT id FROM pages WHERE slug = 'people/alice'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let bob_id: i64 = conn
+            .query_row("SELECT id FROM pages WHERE slug = 'people/bob'", [], |row| row.get(0))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship, source_kind) VALUES (?1, ?2, 'knows', 'programmatic')",
+            rusqlite::params![alice_id, bob_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 1, 'truth_section', 0, 'text', 'abc', 1)",
+            [alice_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        run(&conn, false).unwrap();
+        run(&conn, true).unwrap();
+    }
+
+    #[test]
+    fn stats_in_memory_database_reports_zero_file_size() {
+        let conn = db::open(":memory:").unwrap();
+
+        let stats = gather_stats(&conn).unwrap();
+
+        assert_eq!(stats.db_size_bytes, 0);
+    }
 }

@@ -96,8 +96,77 @@ mod tests {
                 "SELECT value FROM config WHERE key = 'version'",
                 [],
                 |row| row.get(0),
-            )
-            .unwrap();
+        )
+        .unwrap();
         assert_eq!(value, "99");
+    }
+
+    #[test]
+    fn get_returns_ok_when_key_is_missing() {
+        let conn = open_test_db();
+
+        run(
+            &conn,
+            ConfigAction::Get {
+                key: "missing".into(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn get_returns_ok_when_key_exists() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES (?1, ?2)",
+            rusqlite::params!["theme", "dark"],
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            ConfigAction::Get {
+                key: "theme".into(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn get_returns_error_when_config_table_is_missing() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        let err = run(
+            &conn,
+            ConfigAction::Get {
+                key: "theme".into(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("no such table"));
+    }
+
+    #[test]
+    fn list_returns_ok_when_values_exist() {
+        let conn = open_test_db();
+        run(
+            &conn,
+            ConfigAction::Set {
+                key: "alpha".into(),
+                value: "1".into(),
+            },
+        )
+        .unwrap();
+        run(
+            &conn,
+            ConfigAction::Set {
+                key: "beta".into(),
+                value: "2".into(),
+            },
+        )
+        .unwrap();
+
+        run(&conn, ConfigAction::List).unwrap();
     }
 }

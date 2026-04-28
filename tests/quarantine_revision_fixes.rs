@@ -1,4 +1,6 @@
 /// Targeted tests for quarantine restore's narrow re-enable gate.
+mod common;
+
 use quaid::core::db;
 use rusqlite::{params, Connection};
 use std::fs;
@@ -46,7 +48,7 @@ fn insert_quarantined_page(
 
 #[cfg(unix)]
 fn run_restore(db_path: &Path, slug: &str, relative_path: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_quaid"))
+    Command::new(common::quaid_bin())
         .arg("--db")
         .arg(db_path)
         .arg("collection")
@@ -94,7 +96,7 @@ fn blocker_1_failed_export_does_not_unlock_discard() {
     let export_path = blocked_parent.join("subdir").join("out.json");
     drop(conn);
 
-    let export_result = std::process::Command::new(env!("CARGO_BIN_EXE_quaid"))
+    let export_result = std::process::Command::new(common::quaid_bin())
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -125,7 +127,7 @@ fn blocker_1_failed_export_does_not_unlock_discard() {
 
     drop(conn);
 
-    let discard_result = std::process::Command::new(env!("CARGO_BIN_EXE_quaid"))
+    let discard_result = std::process::Command::new(common::quaid_bin())
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -381,7 +383,7 @@ fn restore_refuses_when_target_appears_after_the_earlier_absence_check() {
     drop(conn);
 
     let pause_file = dir.path().join("restore.pause");
-    let child = Command::new(env!("CARGO_BIN_EXE_quaid"))
+    let child = Command::new(common::quaid_bin())
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -462,7 +464,7 @@ fn restore_cleans_up_tempfile_when_write_fails() {
     );
     drop(conn);
 
-    let restore_result = Command::new(env!("CARGO_BIN_EXE_quaid"))
+    let restore_result = Command::new(common::quaid_bin())
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -539,7 +541,7 @@ fn restore_rolls_back_target_when_parse_fails_after_install() {
     );
     drop(conn);
 
-    let restore_result = Command::new(env!("CARGO_BIN_EXE_quaid"))
+    let restore_result = Command::new(common::quaid_bin())
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
@@ -658,7 +660,7 @@ fn restore_rollback_unlinks_residue_and_fsyncs_parent_before_returning() {
     drop(conn);
 
     let trace_file = dir.path().join("restore.trace");
-    let restore_result = Command::new(env!("CARGO_BIN_EXE_quaid"))
+    let restore_result = Command::new(common::quaid_bin())
         .arg("--db")
         .arg(&db_path)
         .arg("collection")

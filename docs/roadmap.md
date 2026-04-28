@@ -160,7 +160,7 @@ These are known design choices that are _not_ oversights:
 | `v0.9.5` | Flexible model resolution + configurable online-model selection; `QUAID_MODEL` / `--model` support in online channel |
 | `v0.9.6` | vault-sync-engine initial ship (Unix/macOS/Linux): Collections model, stat-diff reconciler, file watcher, quarantine lifecycle, write-through `memory_put`, `memory_collections` MCP tool |
 | `v0.9.9` | Intermediate hotfix release for vault-sync refinements |
-| `v0.9.10` | Compound-term FTS recall recovery (#67/#69): AND-first / OR-fallback tiered search strategy + watcher-startup hotfix (#81) for legacy blank-root collections |
+| `v0.10.0` | Batch 1 watcher reliability hardening: overflow recovery worker, native→poll fallback, crash/backoff supervisor, and CLI watcher-health reporting |
 
 ---
 

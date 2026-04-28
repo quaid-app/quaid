@@ -1,3 +1,5 @@
+mod common;
+
 use quaid::core::db;
 use quaid::core::vault_sync;
 use rusqlite::{params, Connection};
@@ -11,8 +13,8 @@ fn open_test_db(path: &Path) -> Connection {
     db::open(path.to_str().expect("utf-8 db path")).expect("open test db")
 }
 
-fn bin_path() -> &'static str {
-    env!("CARGO_BIN_EXE_quaid")
+fn bin_path() -> &'static Path {
+    common::quaid_bin()
 }
 
 fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {
@@ -903,6 +905,89 @@ fn collection_info_json_reports_quarantine_backlog_count() {
 }
 
 #[test]
+fn collection_info_json_reports_null_watcher_health_without_live_runtime_registry() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "collection-info-watcher-health-null.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    let _collection_id = insert_collection(&conn, "work", &root);
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
+
+    assert!(
+        output.status.success(),
+        "collection info should succeed: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert!(parsed["watcher_mode"].is_null());
+    assert!(parsed["watcher_last_event_at"].is_null());
+    assert!(parsed["watcher_channel_depth"].is_null());
+}
+
+#[test]
+fn collection_info_json_reports_release_metadata_queue_depth_and_active_reconcile_status() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "collection-info-release-metadata.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    let collection_id = insert_collection(&conn, "work", &root);
+    insert_page(&conn, collection_id, "notes/a");
+    let work_page_id = page_id(&conn, collection_id, "notes/a");
+    conn.execute(
+        "INSERT INTO embedding_jobs (page_id) VALUES (?1)",
+        [work_page_id],
+    )
+    .expect("insert embedding job");
+    conn.execute(
+        "UPDATE collections
+         SET needs_full_sync = 1,
+             ignore_parse_errors = 'line 3 raw=\"[broken\" error=Invalid glob pattern',
+             reload_generation = 4,
+             watcher_released_session_id = 'serve-1',
+             watcher_released_generation = 3
+         WHERE id = ?1",
+        [collection_id],
+    )
+    .expect("seed release metadata");
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
+
+    assert!(
+        output.status.success(),
+        "collection info should succeed: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(
+        parsed["blocked_state"].as_str(),
+        Some("active_reconcile_needed")
+    );
+    assert_eq!(
+        parsed["suggested_command"].as_str(),
+        Some("quaid collection sync work")
+    );
+    assert_eq!(
+        parsed["status_message"].as_str(),
+        Some("collection is active but needs a real reconcile before writes are considered fully healthy")
+    );
+    assert_eq!(parsed["queue_depth"].as_i64(), Some(1));
+    assert_eq!(parsed["reload_generation"].as_i64(), Some(4));
+    assert_eq!(
+        parsed["watcher_released_session_id"].as_str(),
+        Some("serve-1")
+    );
+    assert_eq!(parsed["watcher_released_generation"].as_i64(), Some(3));
+    assert_eq!(
+        parsed["ignore_parse_errors"].as_str(),
+        Some("line 3 raw=\"[broken\" error=Invalid glob pattern")
+    );
+    assert!(parsed["watcher_mode"].is_null());
+}
+
+#[test]
 fn collection_list_json_reports_k1_columns_truthfully() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = test_db_path(&dir, "collection-list.db");
@@ -943,6 +1028,85 @@ fn collection_list_json_reports_k1_columns_truthfully() {
     assert_eq!(row["page_count"].as_i64(), Some(1));
     assert_eq!(row["last_sync_at"].as_str(), Some("2026-04-23T00:20:00Z"));
     assert_eq!(row["queue_depth"].as_i64(), Some(0));
+}
+
+#[test]
+fn collection_list_plain_text_skips_placeholder_rows_and_reports_queue_depth() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "collection-list-plain.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    let collection_id = insert_collection(&conn, "work", &root);
+    insert_page(&conn, collection_id, "notes/a");
+    let work_page_id = page_id(&conn, collection_id, "notes/a");
+    conn.execute(
+        "INSERT INTO embedding_jobs (page_id) VALUES (?1)",
+        [work_page_id],
+    )
+    .expect("insert embedding job");
+    conn.execute(
+        "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+         VALUES ('placeholder', '', 'detached', 0, 0)",
+        [],
+    )
+    .expect("insert placeholder collection");
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["collection", "list"]);
+
+    assert!(
+        output.status.success(),
+        "collection list should succeed: {output:?}"
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("name | state | writable | write_target | root_path | page_count | last_sync_at | queue_depth"));
+    assert!(text.contains("work | active | writable | false |"));
+    assert!(text.contains(" | 1 | - | 1"));
+    assert!(
+        !text.contains("placeholder"),
+        "placeholder rows with empty roots must stay hidden: {text}"
+    );
+}
+
+#[test]
+fn collection_info_plain_text_reports_retryable_manifest_gap_truthfully() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "collection-info-plain.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    let pending_root = dir.path().join("restored");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&pending_root).expect("create pending root");
+    let collection_id = insert_collection(&conn, "work", &root);
+    conn.execute(
+        "UPDATE collections
+         SET state = 'restoring',
+             pending_root_path = ?2,
+             pending_manifest_incomplete_at = '2026-04-23T00:05:00Z',
+             reload_generation = 9
+         WHERE id = ?1",
+        params![collection_id, pending_root.display().to_string()],
+    )
+    .expect("seed retryable manifest gap");
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["collection", "info", "work"]);
+
+    assert!(
+        output.status.success(),
+        "collection info should succeed: {output:?}"
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("collection=work state=restoring writable=writable"));
+    assert!(text.contains("pending_root_path="));
+    assert!(
+        text.contains("watcher_mode=null watcher_last_event_at=null watcher_channel_depth=null")
+    );
+    assert!(text.contains("blocked_state=pending_finalize"));
+    assert!(text.contains("integrity_blocked=manifest_incomplete_pending"));
+    assert!(text.contains("suggested_command=quaid collection sync work --finalize-pending"));
+    assert!(text.contains("status_message=\"restore manifest is still incomplete; collection remains blocked until the files reappear and quaid collection sync work --finalize-pending succeeds\""));
 }
 
 #[test]

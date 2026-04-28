@@ -710,6 +710,41 @@ mod windows_fallback_tests {
     }
 
     #[test]
+    fn stat_at_nofollow_returns_unsupported_on_windows() {
+        let result = stat_at_nofollow(0u32, Path::new("file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn openat_create_excl_returns_unsupported_on_windows() {
+        let result = openat_create_excl(0u32, Path::new("file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn renameat_parent_fd_returns_unsupported_on_windows() {
+        let result = renameat_parent_fd(0u32, Path::new("old.txt"), Path::new("new.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn linkat_parent_fd_returns_unsupported_on_windows() {
+        let result = linkat_parent_fd(0u32, Path::new("old.txt"), Path::new("new.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn unlinkat_parent_fd_returns_unsupported_on_windows() {
+        let result = unlinkat_parent_fd(0u32, Path::new("file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
     fn file_stat_nofollow_mode_bits_methods_work_without_unix() {
         // The FileStatNoFollow struct and its methods are platform-agnostic.
         let regular = FileStatNoFollow {
@@ -723,10 +758,16 @@ mod windows_fallback_tests {
         assert!(!regular.is_directory());
         assert!(!regular.is_symlink());
 
-        let dir = FileStatNoFollow { mode_bits: 0o040755, ..regular.clone() };
+        let dir = FileStatNoFollow {
+            mode_bits: 0o040755,
+            ..regular.clone()
+        };
         assert!(dir.is_directory());
 
-        let sym = FileStatNoFollow { mode_bits: 0o120777, ..regular.clone() };
+        let sym = FileStatNoFollow {
+            mode_bits: 0o120777,
+            ..regular.clone()
+        };
         assert!(sym.is_symlink());
     }
 }

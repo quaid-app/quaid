@@ -424,6 +424,13 @@ mod tests {
     }
 
     #[test]
+    fn early_command_returns_none_for_regular_subcommands() {
+        let cli = Cli::try_parse_from(["quaid", "config", "list"]).expect("parse config list");
+
+        assert_eq!(early_command(&cli), EarlyCommand::None);
+    }
+
+    #[test]
     fn validate_flags_from_args_defaults_to_all_checks() {
         let flags = validate_flags_from_args(false, false, false, false);
 
@@ -438,6 +445,15 @@ mod tests {
 
         assert!(flags.links);
         assert!(!flags.assertions);
+        assert!(flags.embeddings);
+    }
+
+    #[test]
+    fn validate_flags_from_args_honors_all_flag() {
+        let flags = validate_flags_from_args(true, false, false, false);
+
+        assert!(flags.links);
+        assert!(flags.assertions);
         assert!(flags.embeddings);
     }
 }

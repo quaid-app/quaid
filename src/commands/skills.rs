@@ -349,4 +349,89 @@ mod tests {
         assert_eq!(ingest_with_local.hash, ingest_without_local.hash);
         assert!(!ingest_with_local.shadowed);
     }
+
+    #[test]
+    fn additional_non_embedded_skills_are_appended_in_name_order() {
+        let local_dir = test_dir("extra_skills");
+        for name in ["zeta", "alpha"] {
+            let skill_dir = local_dir.join(name);
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: extra\n---\n"),
+            )
+            .unwrap();
+        }
+
+        let skills = resolve_skills_with_dirs(None, Some(local_dir));
+        let extra_names: Vec<_> = skills
+            .iter()
+            .filter(|skill| !EMBEDDED_SKILLS.iter().any(|embedded| embedded.name == skill.name))
+            .map(|skill| skill.name.as_str())
+            .collect();
+
+        assert_eq!(extra_names, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn check_frontmatter_rejects_missing_yaml_block() {
+        let mut issues = Vec::new();
+
+        let (valid, has_name, has_desc) = check_frontmatter("name: ingest", &mut issues);
+
+        assert!(!valid);
+        assert!(!has_name);
+        assert!(!has_desc);
+        assert_eq!(issues, vec!["missing YAML frontmatter"]);
+    }
+
+    #[test]
+    fn check_frontmatter_rejects_unclosed_block() {
+        let mut issues = Vec::new();
+
+        let (valid, has_name, has_desc) =
+            check_frontmatter("---\nname: ingest\ndescription: test", &mut issues);
+
+        assert!(!valid);
+        assert!(!has_name);
+        assert!(!has_desc);
+        assert_eq!(issues, vec!["unclosed frontmatter block"]);
+    }
+
+    #[test]
+    fn check_frontmatter_reports_missing_required_fields() {
+        let mut issues = Vec::new();
+
+        let (valid, has_name, has_desc) = check_frontmatter("---\nname: ingest\n---", &mut issues);
+
+        assert!(valid);
+        assert!(has_name);
+        assert!(!has_desc);
+        assert_eq!(issues, vec!["frontmatter missing 'description' field"]);
+    }
+
+    #[test]
+    fn check_frontmatter_reports_missing_name_field() {
+        let mut issues = Vec::new();
+
+        let (valid, has_name, has_desc) =
+            check_frontmatter("---\ndescription: test\n---", &mut issues);
+
+        assert!(valid);
+        assert!(!has_name);
+        assert!(has_desc);
+        assert_eq!(issues, vec!["frontmatter missing 'name' field"]);
+    }
+
+    #[test]
+    fn run_list_outputs_json_and_text() {
+        run_list(true).unwrap();
+        run_list(false).unwrap();
+    }
+
+    #[test]
+    fn run_doctor_reports_all_ok_when_no_overrides_are_present() {
+        run_doctor(true).unwrap();
+        run_doctor(false).unwrap();
+    }
 }

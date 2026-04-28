@@ -132,11 +132,14 @@
 - [ ] 6.5 Create/Modify handler: re-ingest bytes; never self-write UUID on observed external edits.
 - [ ] 6.6 Delete handler: invoke delete-vs-quarantine classifier.
 - [ ] 6.7 Rename handler: honor native pair events directly; update `file_state.relative_path`; preserve `pages.id`.
-- [ ] 6.7a Overflow recovery task: on bounded-channel overflow, set `collections.needs_full_sync=1` in a brief tx, WARN log, continue accepting events. Recovery task polls the flag every 500ms and runs `full_hash_reconcile` within ~1s. Recovery worker is gated to `state='active'` only.
-- [ ] 6.8 `.quaidignore` watcher: treat as live control file; trigger atomic parse + mirror refresh + reconciliation on any change.
-- [ ] 6.9 Watcher auto-detect: native first, downgrade to poll on init error with WARN.
-- [ ] 6.10 Per-collection watcher supervisor with crash/restart + exponential backoff.
-- [ ] 6.11 Expose watcher health (last event time, channel depth, mode) via `memory_collections` and `quaid collection info`.
+- [x] 6.7a Overflow recovery task: on bounded-channel overflow, set `collections.needs_full_sync=1` in a brief tx, WARN log, continue accepting events. Recovery task polls the flag every 500ms and runs `full_hash_reconcile` within ~1s. Recovery worker is gated to `state='active'` only.
+  > **Authorization repair note (Leela, Batch 1 repair):** `OverflowRecovery` is added to `FullHashReconcileMode` (the operation-label enum, NOT the authorization enum). Authorization must be `FullHashReconcileAuthorization::ActiveLease { lease_session_id }` using the serve session's `collections.active_lease_session_id`. Lease mismatch or null lease → skip with WARN. This is not a new authorization variant; it reuses the existing `ActiveLease` proof. Professor rejected any design that introduces a separate authorization bypass for overflow recovery.
+- [x] 6.8 `.quaidignore` watcher: treat as live control file; trigger atomic parse + mirror refresh + reconciliation on any change.
+  > **Complete (Mom Batch 1 edge fix):** watcher classification now bypasses the markdown-only filter for the root `.quaidignore` control file, debounces `IgnoreFileChanged`, reloads the cached mirror atomically, and only reconciles on a successful parse. Invalid globs or a deleted file with a prior mirror keep the last-known-good mirror, surface `ignore_parse_errors`, WARN-log the failure, and skip reconciliation so serve never walks on stale ignore state.
+- [x] 6.9 Watcher auto-detect: native first, downgrade to poll on init error with WARN.
+- [x] 6.10 Per-collection watcher supervisor with crash/restart + exponential backoff.
+- [x] 6.11 Expose watcher health (last event time, channel depth, mode) via `quaid collection info` CLI only. `memory_collections` MCP tool is NOT widened in v0.10.0 — the 13.6 frozen 13-field schema is preserved. See Batch 1 repair note in `implementation_plan.md`.
+  > **WatcherMode:** `Native | Poll | Crashed` only. No `Inactive` variant. Non-active collections surface `null` in all three health fields. Windows surfaces `null` for all three health fields.
 
 ## 7. Self-write dedup set
 
@@ -326,11 +329,14 @@
 - [x] 17.5u Foreign rename lands at target between steps 9 and 11 → `ConcurrentRenameError`; sentinel retained.
 - [x] 17.5u2 Combined foreign-rename + `SQLITE_BUSY` on `needs_full_sync` write: sentinel alone drives recovery.
 - [x] 17.5v Parent-directory fsync failure at step 10 → DB commit is REFUSED; sentinel retained.
-- [ ] 17.5w `collections.needs_full_sync=1` triggers `full_hash_reconcile` within 1s.
-- [ ] 17.5x Overflow recovery worker is gated to `state='active'` only.
-- [ ] 17.5y `.quaidignore` valid edit refreshes mirror + triggers reconciliation.
-- [ ] 17.5z `.quaidignore` single-line parse failure preserves last-known-good mirror.
-- [ ] 17.5aa Absent `.quaidignore` with prior mirror → WARN, mirror unchanged.
+- [x] 17.5w `collections.needs_full_sync=1` triggers `full_hash_reconcile` within 1s via `ActiveLease`-authorized recovery worker (not a new authorization bypass).
+- [x] 17.5x Overflow recovery worker is gated to `state='active'` only.
+- [x] 17.5y `.quaidignore` valid edit refreshes mirror + triggers reconciliation.
+  > **Closed (Batch 1):** `ignore_file_change_reloads_mirror_and_triggers_reconcile` — writes a valid `.quaidignore`, emits `WatchEvent::IgnoreFileChanged`, asserts `ignore_patterns` mirror updated and `last_sync_at` set.
+- [x] 17.5z `.quaidignore` single-line parse failure preserves last-known-good mirror.
+  > **Closed (Batch 1):** `invalid_ignore_file_change_preserves_mirror_and_skips_reconcile` — writes a broken glob, asserts mirror unchanged, `ignore_parse_errors` populated, reconcile not triggered.
+- [x] 17.5aa Absent `.quaidignore` with prior mirror → WARN, mirror unchanged.
+  > **Closed (Batch 1):** `deleted_ignore_file_with_prior_mirror_preserves_mirror_and_skips_reconcile` — no `.quaidignore` on disk; asserts mirror unchanged and `file_stably_absent_but_clear_not_confirmed` error tag present.
 - [x] 17.5aa2 `ignore clear --confirm` clears mirror and reconciles.
 - [x] 17.5aa3 CLI `ignore add` with invalid glob refuses with no disk mutation, no DB mutation.
 - [x] 17.5aa4 CLI `ignore remove` updates file and mirror transactionally.
@@ -411,9 +417,10 @@
 - [x] 17.5aaa Zero active `raw_imports` → `InvariantViolationError`; `--allow-rerender` is audit-logged WARN override.
   > **Batch H boundary:** enforced paths raise typed invariant errors before mutation; the explicit override seam exists only as the closed operator-only policy hook and is not enabled for passive/background reconciler callers.
 - [x] 17.5aaa1 Post-ingest invariant assertion runs in every write-path test.
-- [ ] 17.5aaa2 Watcher overflow sets `needs_full_sync=1` and recovery runs within 1s.
-- [ ] 17.5aaa3 Watcher auto-detects native-first, downgrades to poll on init error with WARN.
-- [ ] 17.5aaa4 Watcher supervisor restarts on panic with exponential backoff.
+- [x] 17.5aaa2 Watcher overflow sets `needs_full_sync=1` and recovery runs within 1s.
+  > **Closed (Batch 1):** `run_overflow_recovery_pass_clears_needs_full_sync_for_active_matching_lease` and `start_serve_runtime_leaves_restoring_needs_full_sync_for_overflow_worker` together prove the recovery worker clears `needs_full_sync` for active+matching-lease collections and refuses to clear it for restoring or lease-mismatched collections.
+- [x] 17.5aaa3 Watcher auto-detects native-first, downgrades to poll on init error with WARN.
+- [x] 17.5aaa4 Watcher supervisor restarts on panic with exponential backoff.
 - [ ] 17.5bbb Full-hash audit rehashes files older than `QUAID_FULL_HASH_AUDIT_DAYS` and updates `last_full_hash_at`.
 - [x] 17.5ccc Fresh-attach and first-use-after-detach always run `full_hash_reconcile`.
 - [x] 17.5ddd `memory_collections` response shape matches design.md schema exactly.

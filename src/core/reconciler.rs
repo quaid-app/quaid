@@ -5430,10 +5430,22 @@ mod tests {
     #[test]
     fn drift_capture_summary_has_material_changes_returns_true_when_any_nonzero() {
         for summary in [
-            DriftCaptureSummary { pages_updated: 1, ..Default::default() },
-            DriftCaptureSummary { pages_added: 1, ..Default::default() },
-            DriftCaptureSummary { pages_quarantined: 1, ..Default::default() },
-            DriftCaptureSummary { pages_deleted: 1, ..Default::default() },
+            DriftCaptureSummary {
+                pages_updated: 1,
+                ..Default::default()
+            },
+            DriftCaptureSummary {
+                pages_added: 1,
+                ..Default::default()
+            },
+            DriftCaptureSummary {
+                pages_quarantined: 1,
+                ..Default::default()
+            },
+            DriftCaptureSummary {
+                pages_deleted: 1,
+                ..Default::default()
+            },
         ] {
             assert!(summary.has_material_changes());
         }
@@ -5722,7 +5734,8 @@ mod tests {
             [],
         )
         .unwrap();
-        let collection = sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
         let result = uuid_migration_preflight(&conn, &collection);
         assert!(result.is_ok());
     }
@@ -5745,9 +5758,13 @@ mod tests {
             ],
         )
         .unwrap();
-        let collection = sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
         let result = uuid_migration_preflight(&conn, &collection);
-        assert!(result.is_ok(), "preflight should pass when uuid is mirrored: {result:?}");
+        assert!(
+            result.is_ok(),
+            "preflight should pass when uuid is mirrored: {result:?}"
+        );
     }
 
     #[test]
@@ -5765,10 +5782,14 @@ mod tests {
             rusqlite::params![large_body],
         )
         .unwrap();
-        let collection = sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
         // Large body → has_canonical_trivial_body returns false → no error
         let result = uuid_migration_preflight(&conn, &collection);
-        assert!(result.is_ok(), "large-body page should not trigger preflight error: {result:?}");
+        assert!(
+            result.is_ok(),
+            "large-body page should not trigger preflight error: {result:?}"
+        );
     }
 
     #[test]
@@ -5829,7 +5850,10 @@ mod tests {
                 lease_session_id: "lease-1".to_owned(),
             },
         );
-        assert!(result.is_ok(), "remap-root with matching lease on active should pass: {result:?}");
+        assert!(
+            result.is_ok(),
+            "remap-root with matching lease on active should pass: {result:?}"
+        );
     }
 
     #[test]
@@ -5912,11 +5936,20 @@ mod tests {
     fn full_hash_reconcile_mode_as_str_covers_all_variants() {
         assert_eq!(FullHashReconcileMode::Audit.as_str(), "audit");
         assert_eq!(FullHashReconcileMode::FreshAttach.as_str(), "fresh-attach");
-        assert_eq!(FullHashReconcileMode::OverflowRecovery.as_str(), "overflow-recovery");
+        assert_eq!(
+            FullHashReconcileMode::OverflowRecovery.as_str(),
+            "overflow-recovery"
+        );
         assert_eq!(FullHashReconcileMode::RemapRoot.as_str(), "remap-root");
         assert_eq!(FullHashReconcileMode::Restore.as_str(), "restore");
-        assert_eq!(FullHashReconcileMode::RemapDriftCapture.as_str(), "remap-drift-capture");
-        assert_eq!(FullHashReconcileMode::RestoreDriftCapture.as_str(), "restore-drift-capture");
+        assert_eq!(
+            FullHashReconcileMode::RemapDriftCapture.as_str(),
+            "remap-drift-capture"
+        );
+        assert_eq!(
+            FullHashReconcileMode::RestoreDriftCapture.as_str(),
+            "restore-drift-capture"
+        );
     }
 
     #[test]

@@ -42,7 +42,7 @@ Note the binary version and the schema version on the memory (`schema_version` i
 curl -fsSL https://api.github.com/repos/quaid-app/quaid/releases/latest | jq -r '.tag_name'
 
 # Or pin
-QUAID_VERSION=v0.9.10
+QUAID_VERSION=v0.10.0
 ```
 
 Read the release notes before upgrading. Schema bumps require a migration window.
@@ -53,7 +53,7 @@ The shell installer is the supported upgrade path:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
-  | QUAID_VERSION=v0.9.10 sh
+  | QUAID_VERSION=v0.10.0 sh
 ```
 
 It:
@@ -68,7 +68,7 @@ If you installed manually, repeat the manual steps:
 
 ```bash
 ASSET="quaid-darwin-arm64-airgapped"
-VERSION="v0.9.10"
+VERSION="v0.10.0"
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ASSET}.sha256" -o "${ASSET}.sha256"
 shasum -a 256 -c "${ASSET}.sha256"

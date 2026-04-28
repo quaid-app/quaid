@@ -394,7 +394,7 @@ fn normalize_score(score: f64, max_score: f64) -> f64 {
 mod tests {
     use std::collections::BTreeSet;
 
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
 
     use super::*;
     use crate::commands::embed;
@@ -418,6 +418,16 @@ mod tests {
             score,
             wing: "people".to_owned(),
         }
+    }
+
+    fn insert_collection(conn: &Connection, name: &str) -> i64 {
+        conn.execute(
+            "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+             VALUES (?1, ?2, 'active', 1, 0)",
+            params![name, format!("/{name}")],
+        )
+        .expect("insert collection");
+        conn.last_insert_rowid()
     }
 
     fn insert_page(
@@ -453,6 +463,51 @@ mod tests {
             rusqlite::params![slug, uuid, title, summary, truth, wing],
         )
         .expect("insert page");
+    }
+
+    fn insert_page_in_collection(
+        conn: &Connection,
+        collection_id: i64,
+        slug: &str,
+        title: &str,
+        summary: &str,
+        truth: &str,
+        wing: &str,
+    ) {
+        let mut hex = String::new();
+        for byte in format!("{collection_id}-{slug}").as_bytes() {
+            hex.push_str(&format!("{byte:02x}"));
+            if hex.len() >= 32 {
+                break;
+            }
+        }
+        while hex.len() < 32 {
+            hex.push('0');
+        }
+        let uuid = format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        );
+
+        conn.execute(
+            "INSERT INTO pages (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, ?3, 'person', ?4, ?5, ?6, '', '{}', ?7, '', 1)",
+            rusqlite::params![collection_id, slug, uuid, title, summary, truth, wing],
+        )
+        .expect("insert page");
+    }
+
+    #[test]
+    fn hybrid_search_returns_empty_for_blank_query() {
+        let conn = open_test_db();
+
+        let results = hybrid_search("   ", None, None, &conn, 1000).expect("hybrid search");
+
+        assert!(results.is_empty());
     }
 
     #[test]
@@ -672,6 +727,276 @@ mod tests {
         let strategy = read_merge_strategy(&conn).expect("merge strategy");
 
         assert_eq!(strategy, SearchMergeStrategy::SetUnion);
+    }
+
+    #[test]
+    fn read_merge_strategy_honors_rrf_config() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('search_merge_strategy', 'rrf')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .expect("insert config");
+
+        let strategy = read_merge_strategy(&conn).expect("merge strategy");
+
+        assert_eq!(strategy, SearchMergeStrategy::Rrf);
+    }
+
+    #[test]
+    fn read_merge_strategy_propagates_sql_errors() {
+        let conn = open_test_db();
+        conn.execute("DROP TABLE config", []).expect("drop config");
+
+        let err = read_merge_strategy(&conn).expect_err("missing config table should fail");
+
+        assert!(matches!(err, SearchError::Sqlite(_)));
+    }
+
+    #[test]
+    fn hybrid_search_uses_rrf_when_configured() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on memory safety.",
+            "concepts",
+        );
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('search_merge_strategy', 'rrf')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .expect("insert config");
+
+        let results = hybrid_search("systems language", None, None, &conn, 1).expect("rrf search");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].slug, "concepts/rust");
+    }
+
+    #[test]
+    fn exact_slug_result_applies_wing_and_collection_filters() {
+        let conn = open_test_db();
+        let default_collection_id: i64 = conn
+            .query_row("SELECT id FROM collections WHERE name = 'default'", [], |row| {
+                row.get(0)
+            })
+            .expect("default collection id");
+        insert_page(
+            &conn,
+            "people/alice",
+            "Alice",
+            "Founder",
+            "Alice works on AI agents.",
+            "people",
+        );
+
+        let matching = exact_slug_result(
+            "people/alice",
+            Some("people"),
+            Some(default_collection_id),
+            &conn,
+            false,
+        )
+        .expect("exact slug");
+        let wrong_wing = exact_slug_result("people/alice", Some("companies"), None, &conn, false)
+            .expect("wrong wing");
+        let wrong_collection =
+            exact_slug_result("people/alice", None, Some(default_collection_id + 999), &conn, false)
+                .expect("wrong collection");
+
+        assert_eq!(matching.expect("matching result").slug, "people/alice");
+        assert!(wrong_wing.is_none());
+        assert!(wrong_collection.is_none());
+    }
+
+    #[test]
+    fn exact_slug_result_propagates_sql_errors() {
+        let conn = open_test_db();
+        conn.execute("DROP TABLE pages", []).expect("drop pages");
+
+        let err = exact_slug_result("people/alice", None, None, &conn, false)
+            .expect_err("missing pages table should fail");
+
+        assert!(matches!(err, SearchError::Sqlite(_)));
+    }
+
+    #[test]
+    fn hybrid_search_canonical_returns_ambiguous_error_for_exact_slug_query() {
+        let conn = open_test_db();
+        let work_collection_id = insert_collection(&conn, "work");
+        insert_page(
+            &conn,
+            "people/alice",
+            "Alice Default",
+            "Founder",
+            "Alice works on default agents.",
+            "people",
+        );
+        insert_page_in_collection(
+            &conn,
+            work_collection_id,
+            "people/alice",
+            "Alice Work",
+            "Operator",
+            "Alice works on the work collection agents.",
+            "people",
+        );
+
+        let err = hybrid_search_canonical("people/alice", None, None, &conn, 10)
+            .expect_err("ambiguous canonical search should fail");
+
+        assert!(matches!(
+            err,
+            SearchError::Ambiguous { slug, candidates }
+                if slug == "people/alice"
+                    && candidates.contains("default::people/alice")
+                    && candidates.contains("work::people/alice")
+        ));
+    }
+
+    #[test]
+    fn exact_slug_result_canonical_returns_prefixed_slug_for_explicit_collection_address() {
+        let conn = open_test_db();
+        let work_collection_id = insert_collection(&conn, "work");
+        insert_page_in_collection(
+            &conn,
+            work_collection_id,
+            "people/alice",
+            "Alice Work",
+            "Operator",
+            "Alice works on the work collection agents.",
+            "people",
+        );
+
+        let result = exact_slug_result_canonical("work::people/alice", Some("people"), None, &conn)
+            .expect("canonical exact slug")
+            .expect("matching page");
+
+        assert_eq!(result.slug, "work::people/alice");
+        assert_eq!(result.wing, "people");
+    }
+
+    #[test]
+    fn exact_slug_result_canonical_returns_none_when_wing_filter_excludes_match() {
+        let conn = open_test_db();
+        let work_collection_id = insert_collection(&conn, "work");
+        insert_page_in_collection(
+            &conn,
+            work_collection_id,
+            "people/alice",
+            "Alice Work",
+            "Operator",
+            "Alice works on the work collection agents.",
+            "people",
+        );
+
+        let result =
+            exact_slug_result_canonical("work::people/alice", Some("companies"), None, &conn)
+                .expect("canonical exact slug");
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn exact_slug_result_canonical_for_collection_propagates_collection_lookup_sql_errors() {
+        let conn = open_test_db();
+        conn.execute("DROP TABLE collections", [])
+            .expect("drop collections");
+
+        let err = exact_slug_result_canonical_for_collection(
+            "work::people/alice",
+            None,
+            1,
+            &conn,
+        )
+        .expect_err("missing collections table should fail");
+
+        assert!(matches!(err, SearchError::Sqlite(_)));
+    }
+
+    #[test]
+    fn exact_slug_result_canonical_returns_none_for_invalid_bare_slug() {
+        let conn = open_test_db();
+
+        let result =
+            exact_slug_result_canonical("/etc/passwd", None, None, &conn).expect("invalid slug");
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn exact_slug_result_canonical_for_collection_handles_prefix_and_wing_filters() {
+        let conn = open_test_db();
+        let work_collection_id = insert_collection(&conn, "work");
+        insert_page_in_collection(
+            &conn,
+            work_collection_id,
+            "people/alice",
+            "Alice Work",
+            "Operator",
+            "Alice works on the work collection agents.",
+            "people",
+        );
+
+        let matching = exact_slug_result_canonical_for_collection(
+            "work::people/alice",
+            Some("people"),
+            work_collection_id,
+            &conn,
+        )
+        .expect("matching canonical exact slug");
+        let wrong_prefix = exact_slug_result_canonical_for_collection(
+            "default::people/alice",
+            None,
+            work_collection_id,
+            &conn,
+        )
+        .expect("wrong prefix");
+        let missing_prefix = exact_slug_result_canonical_for_collection(
+            "missing::people/alice",
+            None,
+            work_collection_id,
+            &conn,
+        )
+        .expect("missing prefix");
+        let wrong_wing = exact_slug_result_canonical_for_collection(
+            "people/alice",
+            Some("companies"),
+            work_collection_id,
+            &conn,
+        )
+        .expect("wrong wing");
+
+        assert_eq!(
+            matching.expect("matching result").slug,
+            "work::people/alice"
+        );
+        assert!(wrong_prefix.is_none());
+        assert!(missing_prefix.is_none());
+        assert!(wrong_wing.is_none());
+    }
+
+    #[test]
+    fn merge_rrf_combines_ranked_results() {
+        let fts = vec![result("a", 10.0), result("b", 9.0)];
+        let vec = vec![result("b", 8.0), result("c", 7.0)];
+
+        let results = merge_rrf(&fts, &vec);
+        let slugs: Vec<_> = results.iter().map(|result| result.slug.as_str()).collect();
+
+        assert_eq!(slugs, vec!["b", "a", "c"]);
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[test]
+    fn normalize_score_returns_zero_when_max_is_zero() {
+        assert_eq!(normalize_score(5.0, 0.0), 0.0);
+        assert_eq!(max_score(&[]), 0.0);
     }
 
     /// Regression: issue #37 — question marks in natural-language queries must

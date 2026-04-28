@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. `v0.9.10` keeps the current vault-sync release surface, adds compound-term FTS recall recovery for Issues #67/#69, and includes the Issue #81 watcher-startup hotfix for legacy blank-root collections.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. `v0.10.0` keeps the current vault-sync release surface and hardens watcher reliability with overflow recovery, native→poll fallback, crash supervision, and CLI watcher-health reporting.
 
 ## What it does
 
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete, and the first vault-sync slice is shipped.** The current release is `v0.9.10`: it preserves the current vault-sync surface, fixes compound-term FTS recall for Issues #67/#69, and fixes `quaid serve` startup when legacy active collections still carry blank root paths.
+> **Phase 3 is complete, and the first vault-sync slice is shipped.** The current release is `v0.10.0`: it preserves the current vault-sync surface and adds Batch 1 watcher-reliability hardening for overflow recovery, native→poll fallback, crash supervision, and CLI watcher health.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -26,7 +26,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.10` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.10.0` airgapped + online assets |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
@@ -183,7 +183,7 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **vault-sync tools:** `memory_collections` — read-only per-collection status including state, ignore diagnostics, and recovery flags
 
-All 17 tools are live in the current `v0.9.10` release. See [spec.md](spec.md#mcp-server) for tool signatures.
+All 17 tools are live in the current `v0.10.0` release. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 

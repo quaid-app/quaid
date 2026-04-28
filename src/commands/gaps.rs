@@ -82,8 +82,7 @@ mod tests {
     #[test]
     fn run_with_gap_text_shows_entry() {
         let conn = open_db();
-        gaps::log_gap(None, "test-query", "some context", Some(0.5), &conn)
-            .expect("log gap");
+        gaps::log_gap(None, "test-query", "some context", Some(0.5), &conn).expect("log gap");
         run(&conn, 10, false, false).expect("run with gap text");
     }
 

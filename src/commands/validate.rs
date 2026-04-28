@@ -553,4 +553,298 @@ mod tests {
         .unwrap();
         assert_eq!(report.checks, vec!["links"]);
     }
+
+    // ── run() output paths ───────────────────────────────────────
+
+    #[test]
+    fn run_text_mode_returns_ok_on_clean_db() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/clean-text");
+        let result = run(&conn, &CheckFlags::all(), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_json_mode_returns_ok_on_clean_db() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/clean-json");
+        let result = run(&conn, &CheckFlags::all(), true);
+        assert!(result.is_ok());
+    }
+
+    // ── link violation checks ────────────────────────────────────
+
+    #[test]
+    fn detects_dangling_from_page_link() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/link-target");
+        let target_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug='test/link-target'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship) \
+             VALUES (9999, ?1, 'related')",
+            [target_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: true,
+                assertions: false,
+                embeddings: false,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "dangling_from_page"));
+    }
+
+    #[test]
+    fn detects_dangling_to_page_link() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/link-source");
+        let source_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug='test/link-source'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship) \
+             VALUES (?1, 9999, 'related')",
+            [source_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: true,
+                assertions: false,
+                embeddings: false,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "dangling_to_page"));
+    }
+
+    #[test]
+    fn detects_overlapping_link_intervals() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/from");
+        insert_page(&conn, "test/to");
+        let from_id: i64 = conn
+            .query_row("SELECT id FROM pages WHERE slug='test/from'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let to_id: i64 = conn
+            .query_row("SELECT id FROM pages WHERE slug='test/to'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        // Two open-ended links with same from/to/relationship overlap
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship) VALUES (?1, ?2, 'knows')",
+            rusqlite::params![from_id, to_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship) VALUES (?1, ?2, 'knows')",
+            rusqlite::params![from_id, to_id],
+        )
+        .unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: true,
+                assertions: false,
+                embeddings: false,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "overlapping_interval"));
+    }
+
+    // ── assertion duplicate check ────────────────────────────────
+
+    #[test]
+    fn detects_duplicate_assertion_overlap() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/dup-assert");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug='test/dup-assert'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Two identical assertions with open-ended validity → overlap
+        conn.execute(
+            "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by) \
+             VALUES (?1, 'Alice', 'works_at', 'Acme', 'manual')",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by) \
+             VALUES (?1, 'Alice', 'works_at', 'Acme', 'manual')",
+            [page_id],
+        )
+        .unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: false,
+                assertions: true,
+                embeddings: false,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "duplicate_assertion"));
+    }
+
+    // ── embedding violation checks ───────────────────────────────
+
+    #[test]
+    fn detects_stale_model_embeddings() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/stale-model");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug='test/stale-model'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Insert embedding row referencing a non-active model (bypass FK)
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO page_embeddings \
+             (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count) \
+             VALUES (?1, 'old-model/v0', 1, 'truth_section', 0, 'text', 'abc', 1)",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: false,
+                assertions: false,
+                embeddings: true,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "stale_model_embeddings"));
+    }
+
+    #[test]
+    fn detects_orphaned_embeddings() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/orphan-emb");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug='test/orphan-emb'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Insert a valid embedding, then delete the page without cascading
+        conn.execute(
+            "INSERT INTO page_embeddings \
+             (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 77, 'truth_section', 0, 'text', 'abc', 1)",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute("DELETE FROM pages WHERE slug='test/orphan-emb'", [])
+            .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: false,
+                assertions: false,
+                embeddings: true,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "orphaned_embeddings"));
+    }
+
+    #[test]
+    fn detects_unsafe_vec_table_name() {
+        let conn = open_test_db();
+        // Corrupt the active model's vec_table to an unsafe name
+        conn.execute(
+            "UPDATE embedding_models SET vec_table = 'drop table--' WHERE active = 1",
+            [],
+        )
+        .unwrap();
+
+        let report = execute_validate(
+            &conn,
+            &CheckFlags {
+                links: false,
+                assertions: false,
+                embeddings: true,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.violation_type == "unsafe_vec_table"));
+    }
+
+    #[test]
+    fn is_safe_identifier_valid_and_invalid() {
+        assert!(super::is_safe_identifier("page_embeddings_vec_384"));
+        assert!(super::is_safe_identifier("abc123_XYZ"));
+        assert!(!super::is_safe_identifier(""));
+        assert!(!super::is_safe_identifier("bad table"));
+        assert!(!super::is_safe_identifier("drop;table"));
+        assert!(!super::is_safe_identifier("a-b"));
+    }
 }

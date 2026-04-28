@@ -20,7 +20,7 @@ use uuid::Uuid;
 #[cfg(unix)]
 use notify::{
     event::ModifyKind, Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind,
-    RecommendedWatcher, RecursiveMode, Watcher,
+    PollWatcher, RecommendedWatcher, RecursiveMode, Watcher,
 };
 #[cfg(all(test, unix))]
 use rustix::fs::fsync;
@@ -90,6 +90,7 @@ impl RuntimeRegistries {
 struct SupervisorHandle {
     session_id: String,
     generation: i64,
+    watcher_health: Option<WatcherHealthSnapshot>,
 }
 
 #[cfg(unix)]
@@ -99,13 +100,56 @@ struct SelfWriteDedupEntry {
     inserted_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum WatcherMode {
+    Native,
+    Poll,
+    Crashed,
+}
+
+impl WatcherMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Poll => "poll",
+            Self::Crashed => "crashed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatcherHealthSnapshot {
+    mode: WatcherMode,
+    last_event_at: Option<String>,
+    channel_depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatcherHealthView {
+    pub mode: String,
+    pub last_event_at: Option<String>,
+    pub channel_depth: i64,
+}
+
+#[cfg(unix)]
+enum WatcherHandle {
+    Native(RecommendedWatcher),
+    Poll(PollWatcher),
+}
+
 #[cfg(unix)]
 struct CollectionWatcherState {
     root_path: PathBuf,
     generation: i64,
     receiver: mpsc::Receiver<WatchEvent>,
-    _watcher: RecommendedWatcher,
+    watcher: Option<WatcherHandle>,
     buffer: WatchBatchBuffer,
+    mode: WatcherMode,
+    last_event_at: Option<String>,
+    last_watcher_error: Option<Instant>,
+    backoff_until: Option<Instant>,
+    consecutive_failures: u32,
 }
 
 #[cfg(unix)]
@@ -113,14 +157,16 @@ struct CollectionWatcherState {
 struct WatchBatchBuffer {
     dirty_paths: HashSet<PathBuf>,
     native_renames: Vec<crate::core::reconciler::NativeRename>,
+    ignore_file_changed: bool,
     debounce_deadline: Option<Instant>,
 }
 
 #[cfg(unix)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum WatchEvent {
     DirtyPath(PathBuf),
     NativeRename(crate::core::reconciler::NativeRename),
+    IgnoreFileChanged,
 }
 
 static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
@@ -751,6 +797,53 @@ pub fn collection_recovery_in_progress(collection_id: i64) -> bool {
         .unwrap_or(false)
 }
 
+pub fn collection_watcher_health(collection_id: i64) -> Option<WatcherHealthView> {
+    with_supervisor_handles(|handles| {
+        handles
+            .get(&collection_id)
+            .and_then(|handle| handle.watcher_health.clone())
+            .map(|health| WatcherHealthView {
+                mode: health.mode.as_str().to_owned(),
+                last_event_at: health.last_event_at,
+                channel_depth: health.channel_depth as i64,
+            })
+    })
+    .ok()
+    .flatten()
+}
+
+#[cfg(test)]
+pub(crate) fn set_collection_watcher_health_for_test(
+    collection_id: i64,
+    session_id: &str,
+    generation: i64,
+    mode: Option<WatcherMode>,
+    last_event_at: Option<String>,
+    channel_depth: usize,
+) {
+    let _ = with_supervisor_handles(|handles| {
+        handles.insert(
+            collection_id,
+            SupervisorHandle {
+                session_id: session_id.to_owned(),
+                generation,
+                watcher_health: mode.map(|mode| WatcherHealthSnapshot {
+                    mode,
+                    last_event_at,
+                    channel_depth,
+                }),
+            },
+        );
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn clear_collection_watcher_health_for_test(collection_id: i64) {
+    let _ = with_supervisor_handles(|handles| {
+        handles.remove(&collection_id);
+    });
+}
+
 fn parse_ignore_parse_errors(
     raw: Option<String>,
 ) -> Result<Option<Vec<IgnoreParseErrorView>>, VaultSyncError> {
@@ -988,6 +1081,7 @@ fn register_supervisor_handle(
             SupervisorHandle {
                 session_id: session_id.to_owned(),
                 generation,
+                watcher_health: None,
             },
         );
     })?;
@@ -1035,7 +1129,8 @@ fn sync_supervisor_handles(conn: &Connection, session_id: &str) -> Result<(), Va
     let mut owned = HashSet::new();
     for (collection_id, state, needs_full_sync, generation) in rows {
         owned.insert(collection_id);
-        if state == CollectionState::Active.as_str() && !needs_full_sync {
+        let _ = needs_full_sync;
+        if state == CollectionState::Active.as_str() {
             register_supervisor_handle(collection_id, session_id, generation)?;
         } else {
             remove_supervisor_handle(collection_id, session_id)?;
@@ -1138,6 +1233,20 @@ fn watch_debounce_duration() -> Duration {
         .filter(|value| *value > 0)
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_millis(DEFAULT_WATCH_DEBOUNCE_MS))
+}
+
+#[cfg(unix)]
+fn watcher_backoff_duration(consecutive_failures: u32) -> Duration {
+    let shift = consecutive_failures.saturating_sub(1).min(6);
+    Duration::from_secs((1_u64 << shift).min(60))
+}
+
+#[cfg(unix)]
+fn current_timestamp(conn: &Connection) -> Result<String, VaultSyncError> {
+    conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
+        row.get(0)
+    })
+    .map_err(Into::into)
 }
 
 #[cfg(unix)]
@@ -1948,6 +2057,13 @@ fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
+fn is_root_ignore_path(root_path: &Path, path: &Path) -> bool {
+    path.strip_prefix(root_path)
+        .ok()
+        .is_some_and(|relative| relative == Path::new(".quaidignore"))
+}
+
+#[cfg(unix)]
 fn should_suppress_self_write_rename(
     root_path: &Path,
     event_paths: &[PathBuf],
@@ -1973,6 +2089,13 @@ fn classify_watch_event(
     event: NotifyEvent,
 ) -> Result<Vec<WatchEvent>, VaultSyncError> {
     let mut actions = Vec::new();
+    let ignore_file_changed = event
+        .paths
+        .iter()
+        .any(|path| is_root_ignore_path(root_path, path));
+    if ignore_file_changed {
+        actions.push(WatchEvent::IgnoreFileChanged);
+    }
     if matches!(event.kind, NotifyEventKind::Modify(ModifyKind::Name(_))) && event.paths.len() >= 2
     {
         let from_path = relative_markdown_path(root_path, &event.paths[0]);
@@ -1994,6 +2117,9 @@ fn classify_watch_event(
     }
 
     for full_path in event.paths {
+        if is_root_ignore_path(root_path, &full_path) {
+            continue;
+        }
         let Some(relative_path) = relative_markdown_path(root_path, &full_path) else {
             continue;
         };
@@ -2006,16 +2132,13 @@ fn classify_watch_event(
 }
 
 #[cfg(unix)]
-fn start_collection_watcher(
+fn watch_callback(
     collection_id: i64,
-    root_path: &Path,
-    db_path: &str,
-) -> Result<CollectionWatcherState, VaultSyncError> {
-    let (sender, receiver) = mpsc::channel(WATCH_CHANNEL_CAPACITY);
-    let watch_root = root_path.to_path_buf();
-    let callback_root = watch_root.clone();
-    let db_path = db_path.to_owned();
-    let mut watcher = notify::recommended_watcher(move |result: notify::Result<NotifyEvent>| {
+    callback_root: PathBuf,
+    db_path: String,
+    sender: mpsc::Sender<WatchEvent>,
+) -> impl FnMut(notify::Result<NotifyEvent>) + Send + 'static {
+    move |result: notify::Result<NotifyEvent>| {
         let Ok(event) = result else {
             return;
         };
@@ -2038,31 +2161,88 @@ fn start_collection_watcher(
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
             }
         }
-    })
-    .map_err(|error| VaultSyncError::InvariantViolation {
-        message: format!("failed to create watcher for collection_id={collection_id}: {error}"),
-    })?;
-    watcher
-        .configure(NotifyConfig::default())
-        .map_err(|error| VaultSyncError::InvariantViolation {
-            message: format!(
-                "failed to configure watcher for collection_id={collection_id}: {error}"
-            ),
-        })?;
-    watcher
-        .watch(&watch_root, RecursiveMode::Recursive)
-        .map_err(|error| VaultSyncError::InvariantViolation {
-            message: format!(
-                "failed to watch root {} for collection_id={collection_id}: {error}",
-                watch_root.display()
-            ),
-        })?;
+    }
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+static FORCE_NATIVE_WATCHER_INIT_FAILURE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+#[cfg(test)]
+fn set_force_native_watcher_init_failure(enabled: bool) {
+    FORCE_NATIVE_WATCHER_INIT_FAILURE.store(enabled, Ordering::SeqCst);
+}
+
+#[cfg(unix)]
+fn start_collection_watcher(
+    collection_id: i64,
+    root_path: &Path,
+    db_path: &str,
+) -> Result<CollectionWatcherState, VaultSyncError> {
+    let (sender, receiver) = mpsc::channel(WATCH_CHANNEL_CAPACITY);
+    let watch_root = root_path.to_path_buf();
+    let db_path = db_path.to_owned();
+    #[cfg(test)]
+    let native_init_forced_error = FORCE_NATIVE_WATCHER_INIT_FAILURE.load(Ordering::SeqCst);
+    #[cfg(not(test))]
+    let native_init_forced_error = false;
+    let native_result = if native_init_forced_error {
+        Err("forced native watcher init failure".to_owned())
+    } else {
+        let mut watcher = notify::recommended_watcher(watch_callback(
+            collection_id,
+            watch_root.clone(),
+            db_path.clone(),
+            sender.clone(),
+        ))
+        .map_err(|error| error.to_string())?;
+        watcher
+            .configure(NotifyConfig::default())
+            .map_err(|error| error.to_string())?;
+        watcher
+            .watch(&watch_root, RecursiveMode::Recursive)
+            .map_err(|error| error.to_string())?;
+        Ok(WatcherHandle::Native(watcher))
+    };
+    let (watcher, mode) = match native_result {
+        Ok(watcher) => (Some(watcher), WatcherMode::Native),
+        Err(error) => {
+            eprintln!(
+                "WARN: watcher_native_init_failed collection_id={} error={} falling_back_to_poll",
+                collection_id, error
+            );
+            let mut watcher = PollWatcher::new(
+                watch_callback(collection_id, watch_root.clone(), db_path, sender),
+                NotifyConfig::default(),
+            )
+            .map_err(|poll_error| VaultSyncError::InvariantViolation {
+                message: format!(
+                    "failed to create poll watcher for collection_id={collection_id}: {poll_error}"
+                ),
+            })?;
+            watcher
+                .watch(&watch_root, RecursiveMode::Recursive)
+                .map_err(|poll_error| VaultSyncError::InvariantViolation {
+                    message: format!(
+                        "failed to watch root {} with poll watcher for collection_id={collection_id}: {poll_error}",
+                        watch_root.display()
+                    ),
+                })?;
+            (Some(WatcherHandle::Poll(watcher)), WatcherMode::Poll)
+        }
+    };
     Ok(CollectionWatcherState {
         root_path: watch_root,
         generation: 0,
         receiver,
-        _watcher: watcher,
+        watcher,
         buffer: WatchBatchBuffer::default(),
+        mode,
+        last_event_at: None,
+        last_watcher_error: None,
+        backoff_until: None,
+        consecutive_failures: 0,
     })
 }
 
@@ -2095,15 +2275,39 @@ fn sync_collection_watchers(
     watchers.retain(|collection_id, _| active.contains_key(collection_id));
 
     for (collection_id, (root_path, generation)) in active {
+        if let Some(state) = watchers.get(&collection_id) {
+            let same_target = state.root_path == root_path && state.generation == generation;
+            if same_target
+                && matches!(state.mode, WatcherMode::Crashed)
+                && state
+                    .backoff_until
+                    .is_some_and(|backoff_until| Instant::now() < backoff_until)
+            {
+                continue;
+            }
+        }
         let needs_replace = watchers
             .get(&collection_id)
-            .map(|state| state.root_path != root_path || state.generation != generation)
+            .map(|state| {
+                state.root_path != root_path
+                    || state.generation != generation
+                    || matches!(state.mode, WatcherMode::Crashed)
+            })
             .unwrap_or(true);
         if !needs_replace {
             continue;
         }
+        let previous_failures = watchers
+            .get(&collection_id)
+            .map(|state| state.consecutive_failures)
+            .unwrap_or(0);
+        let previous_last_error = watchers
+            .get(&collection_id)
+            .and_then(|state| state.last_watcher_error);
         let mut state = start_collection_watcher(collection_id, &root_path, db_path)?;
         state.generation = generation;
+        state.consecutive_failures = previous_failures;
+        state.last_watcher_error = previous_last_error;
         watchers.insert(collection_id, state);
     }
     Ok(())
@@ -2182,15 +2386,26 @@ fn poll_collection_watcher(
     collection_id: i64,
     state: &mut CollectionWatcherState,
 ) -> Result<(), VaultSyncError> {
+    if matches!(state.mode, WatcherMode::Crashed) {
+        return Ok(());
+    }
     let debounce = watch_debounce_duration();
+    let mut received_event = false;
     loop {
         match state.receiver.try_recv() {
             Ok(WatchEvent::DirtyPath(path)) => {
+                received_event = true;
                 state.buffer.dirty_paths.insert(path);
                 state.buffer.debounce_deadline = Some(Instant::now() + debounce);
             }
             Ok(WatchEvent::NativeRename(rename)) => {
+                received_event = true;
                 state.buffer.native_renames.push(rename);
+                state.buffer.debounce_deadline = Some(Instant::now() + debounce);
+            }
+            Ok(WatchEvent::IgnoreFileChanged) => {
+                received_event = true;
+                state.buffer.ignore_file_changed = true;
                 state.buffer.debounce_deadline = Some(Instant::now() + debounce);
             }
             Err(TryRecvError::Empty) => break,
@@ -2203,6 +2418,11 @@ fn poll_collection_watcher(
             }
         }
     }
+    if received_event {
+        state.last_event_at = Some(current_timestamp(conn)?);
+        state.consecutive_failures = 0;
+        state.backoff_until = None;
+    }
 
     let Some(deadline) = state.buffer.debounce_deadline else {
         return Ok(());
@@ -2212,9 +2432,138 @@ fn poll_collection_watcher(
     }
 
     let native_renames = std::mem::take(&mut state.buffer.native_renames);
+    let ignore_file_changed = state.buffer.ignore_file_changed;
+    state.buffer.ignore_file_changed = false;
     state.buffer.dirty_paths.clear();
     state.buffer.debounce_deadline = None;
+    if ignore_file_changed {
+        match crate::core::ignore_patterns::reload_patterns(conn, collection_id, &state.root_path) {
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!(
+                    "WARN: watch_ignore_reload_failed collection_id={} root={} error={}",
+                    collection_id,
+                    state.root_path.display(),
+                    error
+                );
+                return Ok(());
+            }
+        }
+    }
     run_watcher_reconcile(conn, collection_id, &native_renames)
+}
+
+#[cfg(unix)]
+fn mark_watcher_crashed(collection_id: i64, state: &mut CollectionWatcherState) -> Duration {
+    let now = Instant::now();
+    state.mode = WatcherMode::Crashed;
+    state.watcher = None;
+    state.buffer = WatchBatchBuffer::default();
+    state.last_watcher_error = Some(now);
+    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+    let backoff = watcher_backoff_duration(state.consecutive_failures);
+    state.backoff_until = Some(now + backoff);
+    eprintln!(
+        "WARN: watcher_crashed collection_id={} backoff_secs={}",
+        collection_id,
+        backoff.as_secs()
+    );
+    backoff
+}
+
+#[cfg(unix)]
+fn publish_watcher_health(
+    session_id: &str,
+    watchers: &HashMap<i64, CollectionWatcherState>,
+) -> Result<(), VaultSyncError> {
+    with_supervisor_handles(|handles| {
+        for (collection_id, handle) in handles.iter_mut() {
+            if handle.session_id != session_id {
+                continue;
+            }
+            handle.watcher_health =
+                watchers
+                    .get(collection_id)
+                    .map(|state| WatcherHealthSnapshot {
+                        mode: state.mode,
+                        last_event_at: state.last_event_at.clone(),
+                        channel_depth: state.receiver.len(),
+                    });
+        }
+    })?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn run_overflow_recovery_pass(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<(i64, String)>, VaultSyncError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, active_lease_session_id
+         FROM collections
+         WHERE state = 'active' AND needs_full_sync = 1",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut actions = Vec::new();
+    for (collection_id, collection_name, active_lease_session_id) in rows {
+        let Some(lease_session_id) = active_lease_session_id else {
+            eprintln!(
+                "WARN: overflow_recovery_skipped_lease_mismatch collection={} collection_id={} expected_session_id={} actual_session_id=null",
+                collection_name, collection_id, session_id
+            );
+            actions.push((collection_id, format!("{collection_name}:lease-mismatch")));
+            continue;
+        };
+        if lease_session_id != session_id {
+            eprintln!(
+                "WARN: overflow_recovery_skipped_lease_mismatch collection={} collection_id={} expected_session_id={} actual_session_id={}",
+                collection_name, collection_id, session_id, lease_session_id
+            );
+            actions.push((collection_id, format!("{collection_name}:lease-mismatch")));
+            continue;
+        }
+        match full_hash_reconcile_authorized(
+            conn,
+            collection_id,
+            FullHashReconcileMode::OverflowRecovery,
+            FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: lease_session_id.clone(),
+            },
+        ) {
+            Ok(_) => {
+                conn.execute(
+                    "UPDATE collections
+                     SET needs_full_sync = 0,
+                         last_sync_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                     WHERE id = ?1 AND state = 'active'",
+                    [collection_id],
+                )?;
+                eprintln!(
+                    "INFO: overflow_recovery_complete collection={}",
+                    collection_name
+                );
+                actions.push((collection_id, format!("{collection_name}:reconciled")));
+            }
+            Err(error) => {
+                eprintln!(
+                    "WARN: overflow_recovery_failed collection={} collection_id={} error={}",
+                    collection_name, collection_id, error
+                );
+                actions.push((collection_id, format!("{collection_name}:failed")));
+            }
+        }
+    }
+    Ok(actions)
 }
 
 fn reconcile_halt_details(err: &ReconcileError) -> Option<(&'static str, String)> {
@@ -2820,6 +3169,8 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         let mut watchers = watchers;
         #[cfg(unix)]
         let mut last_dedup_sweep = Instant::now();
+        #[cfg(unix)]
+        let mut last_overflow_recovery = Instant::now();
         while !stop_signal.load(Ordering::SeqCst) {
             if let Ok(conn) = Connection::open(&db_path) {
                 if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
@@ -2837,7 +3188,16 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                 {
                     let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
                     for (collection_id, state) in &mut watchers {
-                        let _ = poll_collection_watcher(&conn, *collection_id, state);
+                        if let Err(error) = poll_collection_watcher(&conn, *collection_id, state) {
+                            if matches!(error, VaultSyncError::InvariantViolation { .. }) {
+                                let _ = mark_watcher_crashed(*collection_id, state);
+                            } else {
+                                eprintln!(
+                                    "WARN: watcher_poll_failed collection_id={} error={}",
+                                    collection_id, error
+                                );
+                            }
+                        }
                     }
                     if last_dedup_sweep.elapsed() >= self_write_dedup_sweep_interval() {
                         let _ = sweep_expired_self_write_entries_at(Instant::now());
@@ -2885,6 +3245,14 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                 }
                 let _ = run_rcrt_pass(&conn, &session_id_for_thread);
                 let _ = sync_supervisor_handles(&conn, &session_id_for_thread);
+                #[cfg(unix)]
+                {
+                    let _ = publish_watcher_health(&session_id_for_thread, &watchers);
+                    if last_overflow_recovery.elapsed() >= Duration::from_millis(500) {
+                        let _ = run_overflow_recovery_pass(&conn, &session_id_for_thread);
+                        last_overflow_recovery = Instant::now();
+                    }
+                }
             }
             thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
         }
@@ -3978,14 +4346,236 @@ mod tests {
             root_path: PathBuf::from("/vault"),
             generation: 0,
             receiver,
-            _watcher: watcher,
+            watcher: Some(WatcherHandle::Native(watcher)),
             buffer: WatchBatchBuffer::default(),
+            mode: WatcherMode::Native,
+            last_event_at: None,
+            last_watcher_error: None,
+            backoff_until: None,
+            consecutive_failures: 0,
         };
 
         let err = poll_collection_watcher(&conn, 42, &mut state).unwrap_err();
 
         assert!(matches!(err, VaultSyncError::InvariantViolation { .. }));
         assert!(err.to_string().contains("watch channel disconnected"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_watch_event_emits_ignore_reload_without_markdown_dirty_path() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ignore_path = root.path().join(".quaidignore");
+        fs::write(&ignore_path, "notes/**\n").unwrap();
+        let event = NotifyEvent {
+            kind: NotifyEventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![ignore_path],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_watch_event(root.path(), event).unwrap();
+
+        assert_eq!(actions, vec![WatchEvent::IgnoreFileChanged]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignore_file_change_reloads_mirror_and_triggers_reconcile() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        fs::write(root.path().join(".quaidignore"), "notes/**\n").unwrap();
+        let (sender, receiver) = mpsc::channel(1);
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let mut state = CollectionWatcherState {
+            root_path: root.path().to_path_buf(),
+            generation: 0,
+            receiver,
+            watcher: Some(WatcherHandle::Native(watcher)),
+            buffer: WatchBatchBuffer::default(),
+            mode: WatcherMode::Native,
+            last_event_at: None,
+            last_watcher_error: None,
+            backoff_until: None,
+            consecutive_failures: 0,
+        };
+
+        sender.blocking_send(WatchEvent::IgnoreFileChanged).unwrap();
+        poll_collection_watcher(&conn, collection_id, &mut state).unwrap();
+        state.buffer.debounce_deadline = Some(Instant::now());
+        poll_collection_watcher(&conn, collection_id, &mut state).unwrap();
+
+        let row: (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT ignore_patterns, ignore_parse_errors, last_sync_at
+                 FROM collections
+                 WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0.as_deref(), Some("[\"notes/**\"]"));
+        assert!(row.1.is_none());
+        assert!(row.2.is_some(), "ignore change should trigger reconcile");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_ignore_file_change_preserves_mirror_and_skips_reconcile() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET ignore_patterns = ?2
+             WHERE id = ?1",
+            params![collection_id, "[\"notes/**\"]"],
+        )
+        .unwrap();
+        fs::write(root.path().join(".quaidignore"), "[broken\n").unwrap();
+        let (sender, receiver) = mpsc::channel(1);
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let mut state = CollectionWatcherState {
+            root_path: root.path().to_path_buf(),
+            generation: 0,
+            receiver,
+            watcher: Some(WatcherHandle::Native(watcher)),
+            buffer: WatchBatchBuffer::default(),
+            mode: WatcherMode::Native,
+            last_event_at: None,
+            last_watcher_error: None,
+            backoff_until: None,
+            consecutive_failures: 0,
+        };
+
+        sender.blocking_send(WatchEvent::IgnoreFileChanged).unwrap();
+        poll_collection_watcher(&conn, collection_id, &mut state).unwrap();
+        state.buffer.debounce_deadline = Some(Instant::now());
+        poll_collection_watcher(&conn, collection_id, &mut state).unwrap();
+
+        let row: (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT ignore_patterns, ignore_parse_errors, last_sync_at
+                 FROM collections
+                 WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0.as_deref(), Some("[\"notes/**\"]"));
+        assert!(row.1.unwrap().contains("parse_error"));
+        assert!(row.2.is_none(), "invalid ignore file must skip reconcile");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleted_ignore_file_with_prior_mirror_preserves_mirror_and_skips_reconcile() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET ignore_patterns = ?2
+             WHERE id = ?1",
+            params![collection_id, "[\"notes/**\"]"],
+        )
+        .unwrap();
+        let (sender, receiver) = mpsc::channel(1);
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let mut state = CollectionWatcherState {
+            root_path: root.path().to_path_buf(),
+            generation: 0,
+            receiver,
+            watcher: Some(WatcherHandle::Native(watcher)),
+            buffer: WatchBatchBuffer::default(),
+            mode: WatcherMode::Native,
+            last_event_at: None,
+            last_watcher_error: None,
+            backoff_until: None,
+            consecutive_failures: 0,
+        };
+
+        sender.blocking_send(WatchEvent::IgnoreFileChanged).unwrap();
+        poll_collection_watcher(&conn, collection_id, &mut state).unwrap();
+        state.buffer.debounce_deadline = Some(Instant::now());
+        poll_collection_watcher(&conn, collection_id, &mut state).unwrap();
+
+        let row: (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT ignore_patterns, ignore_parse_errors, last_sync_at
+                 FROM collections
+                 WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0.as_deref(), Some("[\"notes/**\"]"));
+        let ignore_errors = row.1.unwrap();
+        assert!(ignore_errors.contains("file_stably_absent_but_clear_not_confirmed"));
+        assert!(
+            row.2.is_none(),
+            "missing ignore file must not trigger reconcile"
+        );
+    }
+
+    #[test]
+    fn list_memory_collections_only_marks_restore_in_progress_after_release_ack() {
+        let conn = open_test_db();
+        let active_id = insert_collection(&conn, "active", Path::new("vault-active"));
+        let restoring_pending_id = insert_collection(
+            &conn,
+            "restoring-pending",
+            Path::new("vault-restoring-pending"),
+        );
+        let restoring_live_id =
+            insert_collection(&conn, "restoring-live", Path::new("vault-restoring-live"));
+        conn.execute(
+            "UPDATE collections
+             SET state = 'active',
+                 restore_command_id = 'restore-active',
+                 watcher_released_at = '2026-04-25T00:00:00Z'
+             WHERE id = ?1",
+            [active_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 restore_command_id = 'restore-pending',
+                 watcher_released_at = NULL
+             WHERE id = ?1",
+            [restoring_pending_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 restore_command_id = 'restore-live',
+                 watcher_released_at = '2026-04-25T00:00:00Z'
+             WHERE id = ?1",
+            [restoring_live_id],
+        )
+        .unwrap();
+
+        let views = list_memory_collections(&conn).unwrap();
+
+        let active = views.iter().find(|view| view.name == "active").unwrap();
+        assert_eq!(active.state, "active");
+        assert!(!active.restore_in_progress);
+
+        let restoring_pending = views
+            .iter()
+            .find(|view| view.name == "restoring-pending")
+            .unwrap();
+        assert_eq!(restoring_pending.state, "restoring");
+        assert!(!restoring_pending.restore_in_progress);
+
+        let restoring_live = views
+            .iter()
+            .find(|view| view.name == "restoring-live")
+            .unwrap();
+        assert_eq!(restoring_live.state, "restoring");
+        assert!(restoring_live.restore_in_progress);
     }
 
     #[cfg(unix)]
@@ -4671,12 +5261,89 @@ mod tests {
             "watcher sync must drop watchers for non-active collections: {snippet}"
         );
         assert!(
-            snippet.contains("state.root_path != root_path || state.generation != generation"),
+            snippet.contains("state.root_path != root_path")
+                && snippet.contains("state.generation != generation"),
             "watcher sync must replace watchers when root or reload_generation changes: {snippet}"
         );
         assert!(
             snippet.contains("state.generation = generation;"),
             "replacement watchers must inherit the new reload_generation: {snippet}"
+        );
+    }
+
+    #[test]
+    fn run_overflow_recovery_pass_production_logic_uses_active_lease_and_active_gate() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn run_overflow_recovery_pass(").unwrap();
+        let end = source[start..]
+            .find("pub fn start_serve_runtime(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("WHERE state = 'active' AND needs_full_sync = 1"),
+            "overflow recovery must gate itself to active collections: {snippet}"
+        );
+        assert!(
+            snippet.contains("FullHashReconcileMode::OverflowRecovery"),
+            "overflow recovery must use the repaired mode label: {snippet}"
+        );
+        assert!(
+            snippet.contains("FullHashReconcileAuthorization::ActiveLease"),
+            "overflow recovery must reuse the active lease authorization: {snippet}"
+        );
+        assert!(
+            snippet.contains("overflow_recovery_skipped_lease_mismatch"),
+            "overflow recovery must warn on lease mismatch rather than bypassing ownership: {snippet}"
+        );
+    }
+
+    #[test]
+    fn start_collection_watcher_production_logic_keeps_native_first_poll_fallback() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn start_collection_watcher(").unwrap();
+        let end = source[start..]
+            .find("fn sync_collection_watchers(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("watcher_native_init_failed"),
+            "native watcher failures must warn before fallback: {snippet}"
+        );
+        assert!(
+            snippet.contains("PollWatcher::new"),
+            "native watcher failures must fall back to poll mode: {snippet}"
+        );
+        assert!(
+            snippet.contains("WatcherMode::Poll"),
+            "fallback path must record poll mode explicitly: {snippet}"
+        );
+    }
+
+    #[test]
+    fn watcher_supervisor_production_logic_tracks_crash_state_and_backoff() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn mark_watcher_crashed(").unwrap();
+        let end = source[start..]
+            .find("fn publish_watcher_health(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("state.mode = WatcherMode::Crashed;"),
+            "watcher crashes must be surfaced as an explicit crashed mode: {snippet}"
+        );
+        assert!(
+            snippet.contains("state.backoff_until = Some(now + backoff);"),
+            "watcher crashes must record restart backoff: {snippet}"
+        );
+        assert!(
+            snippet.contains("watcher_backoff_duration"),
+            "watcher crashes must use exponential backoff helper: {snippet}"
         );
     }
 
@@ -4738,6 +5405,323 @@ mod tests {
             })
             .unwrap();
         assert_eq!(default_state, "detached");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_collection_watcher_falls_back_to_poll_mode_when_native_init_fails() {
+        set_force_native_watcher_init_failure(true);
+        let root = tempfile::TempDir::new().unwrap();
+
+        let state = start_collection_watcher(7, root.path(), ":memory:").unwrap();
+
+        set_force_native_watcher_init_failure(false);
+        assert_eq!(state.mode, WatcherMode::Poll);
+        assert!(matches!(state.watcher, Some(WatcherHandle::Poll(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_collection_watchers_preserves_crashed_watcher_until_backoff_expires() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let (_sender, receiver) = mpsc::channel(1);
+        let backoff_until = Instant::now() + Duration::from_secs(5);
+        let crashed = CollectionWatcherState {
+            root_path: root.path().to_path_buf(),
+            generation: 0,
+            receiver,
+            watcher: None,
+            buffer: WatchBatchBuffer::default(),
+            mode: WatcherMode::Crashed,
+            last_event_at: Some("2026-04-28T00:00:00Z".to_owned()),
+            last_watcher_error: None,
+            backoff_until: Some(backoff_until),
+            consecutive_failures: 2,
+        };
+        let mut watchers = HashMap::from([(collection_id, crashed)]);
+
+        sync_collection_watchers(&conn, &db_path, &mut watchers).unwrap();
+
+        let retained = watchers.get(&collection_id).unwrap();
+        assert_eq!(retained.mode, WatcherMode::Crashed);
+        assert!(retained.watcher.is_none());
+        assert_eq!(
+            retained.last_event_at.as_deref(),
+            Some("2026-04-28T00:00:00Z")
+        );
+        assert_eq!(retained.backoff_until, Some(backoff_until));
+        assert_eq!(retained.consecutive_failures, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_collection_watcher_marks_crashed_state_and_sync_restarts_after_backoff() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let (_sender, receiver) = mpsc::channel(1);
+        drop(_sender);
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let mut state = CollectionWatcherState {
+            root_path: root.path().to_path_buf(),
+            generation: 0,
+            receiver,
+            watcher: Some(WatcherHandle::Native(watcher)),
+            buffer: WatchBatchBuffer::default(),
+            mode: WatcherMode::Native,
+            last_event_at: None,
+            last_watcher_error: None,
+            backoff_until: None,
+            consecutive_failures: 0,
+        };
+
+        let error = poll_collection_watcher(&conn, collection_id, &mut state).unwrap_err();
+        assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
+        let backoff = mark_watcher_crashed(collection_id, &mut state);
+        assert_eq!(state.mode, WatcherMode::Crashed);
+        assert_eq!(backoff, Duration::from_secs(1));
+        assert!(state.backoff_until.is_some());
+
+        state.backoff_until = Some(Instant::now() - Duration::from_millis(1));
+        let mut watchers = HashMap::from([(collection_id, state)]);
+        sync_collection_watchers(&conn, &db_path, &mut watchers).unwrap();
+        let restarted = watchers.get(&collection_id).unwrap();
+        assert!(matches!(
+            restarted.mode,
+            WatcherMode::Native | WatcherMode::Poll
+        ));
+        assert!(!matches!(restarted.mode, WatcherMode::Crashed));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publish_watcher_health_updates_only_matching_session_handles() {
+        init_process_registries().unwrap();
+        register_supervisor_handle(41, "serve-1", 3).unwrap();
+        register_supervisor_handle(42, "foreign-session", 7).unwrap();
+        let (_sender, receiver) = mpsc::channel(2);
+        let watchers = HashMap::from([(
+            41,
+            CollectionWatcherState {
+                root_path: PathBuf::from("/vault"),
+                generation: 3,
+                receiver,
+                watcher: None,
+                buffer: WatchBatchBuffer::default(),
+                mode: WatcherMode::Poll,
+                last_event_at: Some("2026-04-28T00:00:00Z".to_owned()),
+                last_watcher_error: None,
+                backoff_until: None,
+                consecutive_failures: 0,
+            },
+        )]);
+
+        publish_watcher_health("serve-1", &watchers).unwrap();
+
+        let health = collection_watcher_health(41).unwrap();
+        assert_eq!(health.mode, "poll");
+        assert_eq!(
+            health.last_event_at.as_deref(),
+            Some("2026-04-28T00:00:00Z")
+        );
+        assert_eq!(health.channel_depth, 0);
+        assert!(collection_watcher_health(42).is_none());
+        clear_collection_watcher_health_for_test(41);
+        clear_collection_watcher_health_for_test(42);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_overflow_recovery_pass_clears_needs_full_sync_for_active_matching_lease() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let note_path = root.path().join("notes").join("a.md");
+        fs::create_dir_all(note_path.parent().unwrap()).unwrap();
+        fs::write(&note_path, "# A\n").unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET needs_full_sync = 1,
+                 active_lease_session_id = 'serve-session'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let actions = run_overflow_recovery_pass(&conn, "serve-session").unwrap();
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+
+        assert!(actions
+            .iter()
+            .any(|(_, action)| action == "work:reconciled"));
+        assert!(!collection.needs_full_sync);
+        assert!(collection.last_sync_at.is_some());
+
+        let runtime = start_serve_runtime(db_path).unwrap();
+        drop(runtime);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_overflow_recovery_pass_leaves_needs_full_sync_for_missing_or_foreign_lease() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let root_a = tempfile::TempDir::new().unwrap();
+        let root_b = tempfile::TempDir::new().unwrap();
+        let missing_lease = insert_collection(&conn, "missing-lease", root_a.path());
+        let foreign_lease = insert_collection(&conn, "foreign-lease", root_b.path());
+        conn.execute(
+            "UPDATE collections
+             SET needs_full_sync = 1
+             WHERE id = ?1",
+            [missing_lease],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET needs_full_sync = 1,
+                 active_lease_session_id = 'other-session'
+             WHERE id = ?1",
+            [foreign_lease],
+        )
+        .unwrap();
+
+        let actions = run_overflow_recovery_pass(&conn, "serve-session").unwrap();
+
+        assert!(actions
+            .iter()
+            .any(|(collection_id, action)| *collection_id == missing_lease
+                && action == "missing-lease:lease-mismatch"));
+        assert!(actions
+            .iter()
+            .any(|(collection_id, action)| *collection_id == foreign_lease
+                && action == "foreign-lease:lease-mismatch"));
+        let rows = conn
+            .prepare(
+                "SELECT name, needs_full_sync, last_sync_at
+                 FROM collections
+                 WHERE id IN (?1, ?2)
+                 ORDER BY id",
+            )
+            .unwrap()
+            .query_map(params![missing_lease, foreign_lease], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("missing-lease".to_owned(), true, None),
+                ("foreign-lease".to_owned(), true, None),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_serve_runtime_leaves_restoring_needs_full_sync_for_overflow_worker() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 needs_full_sync = 1,
+                 integrity_failed_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let runtime = start_serve_runtime(db_path.clone()).unwrap();
+        thread::sleep(Duration::from_millis(1200));
+
+        let verify = Connection::open(&db_path).unwrap();
+        let collection = load_collection_by_id(&verify, collection_id).unwrap();
+
+        assert!(collection.needs_full_sync);
+        assert_eq!(collection.state, CollectionState::Restoring);
+        drop(runtime);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_callback_marks_collection_needs_full_sync_when_channel_is_full() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let file_path = root.path().join("notes").join("a.md");
+        write_restore_file(root.path(), "notes/a.md", b"watch callback bytes");
+        let (sender, mut receiver) = mpsc::channel(1);
+        sender
+            .blocking_send(WatchEvent::DirtyPath(PathBuf::from(
+                "notes/already-buffered.md",
+            )))
+            .unwrap();
+        let mut callback = watch_callback(
+            collection_id,
+            root.path().to_path_buf(),
+            db_path.clone(),
+            sender,
+        );
+        let event = NotifyEvent {
+            kind: NotifyEventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![file_path],
+            attrs: Default::default(),
+        };
+
+        callback(Ok(event));
+
+        let needs_full_sync: bool = conn
+            .query_row(
+                "SELECT needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(needs_full_sync);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            WatchEvent::DirtyPath(path) if path == PathBuf::from("notes/already-buffered.md")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_callback_drops_events_when_channel_is_closed_without_mutating_collection() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let file_path = root.path().join("notes").join("a.md");
+        write_restore_file(root.path(), "notes/a.md", b"watch callback bytes");
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let mut callback =
+            watch_callback(collection_id, root.path().to_path_buf(), db_path, sender);
+        let event = NotifyEvent {
+            kind: NotifyEventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![file_path],
+            attrs: Default::default(),
+        };
+
+        callback(Ok(event));
+
+        let needs_full_sync: bool = conn
+            .query_row(
+                "SELECT needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!needs_full_sync);
     }
 
     #[test]

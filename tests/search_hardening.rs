@@ -1,3 +1,5 @@
+mod common;
+
 use quaid::core::db;
 use rusqlite::Connection;
 use serde_json::Value;
@@ -19,8 +21,8 @@ fn insert_page(conn: &Connection, slug: &str, page_type: &str, title: &str, summ
     .expect("insert page");
 }
 
-fn bin_path() -> &'static str {
-    env!("CARGO_BIN_EXE_quaid")
+fn bin_path() -> &'static Path {
+    common::quaid_bin()
 }
 
 fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {

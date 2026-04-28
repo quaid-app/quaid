@@ -180,10 +180,18 @@ mod tests {
 
     fn insert_page(conn: &Connection, slug: &str) {
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                                 frontmatter, wing, room, version) \
-             VALUES (?1, 'note', ?1, '', '', '', '{}', '', '', 1)",
-            [slug],
+             VALUES (?1, ?2, 'note', ?1, '', '', '', '{}', '', '', 1)",
+            rusqlite::params![slug, uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+    }
+
+    fn activate_collection(conn: &Connection) {
+        conn.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 0 WHERE id = 1",
+            [],
         )
         .unwrap();
     }
@@ -219,5 +227,94 @@ mod tests {
         let error = add(&conn, "notes/alice", "2026-04-22", "blocked", None, None).unwrap_err();
 
         assert!(error.to_string().contains("CollectionRestoringError"));
+    }
+
+    #[test]
+    fn run_no_entries_text_output() {
+        let conn = open_test_db();
+        activate_collection(&conn);
+        insert_page(&conn, "notes/empty");
+        run(&conn, "notes/empty", 10, false).expect("run with no entries");
+    }
+
+    #[test]
+    fn run_no_entries_json_output() {
+        let conn = open_test_db();
+        activate_collection(&conn);
+        insert_page(&conn, "notes/empty-json");
+        run(&conn, "notes/empty-json", 10, true).expect("run json with no entries");
+    }
+
+    #[test]
+    fn run_with_structured_entry_text_output() {
+        let conn = open_test_db();
+        activate_collection(&conn);
+        insert_page(&conn, "notes/structured");
+        add(
+            &conn,
+            "notes/structured",
+            "2026-04-01",
+            "something happened",
+            None,
+            None,
+        )
+        .expect("add entry");
+        run(&conn, "notes/structured", 10, false).expect("run with structured entry");
+    }
+
+    #[test]
+    fn run_with_structured_entry_json_output() {
+        let conn = open_test_db();
+        activate_collection(&conn);
+        insert_page(&conn, "notes/structured-json");
+        add(
+            &conn,
+            "notes/structured-json",
+            "2026-04-01",
+            "event text",
+            Some("src".to_owned()),
+            Some("some detail".to_owned()),
+        )
+        .expect("add entry");
+        run(&conn, "notes/structured-json", 10, true)
+            .expect("run json with structured entry");
+    }
+
+    #[test]
+    fn run_with_legacy_timeline_markdown() {
+        let conn = open_test_db();
+        activate_collection(&conn);
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
+                                frontmatter, wing, room, version) \
+             VALUES ('notes/legacy', ?1, 'note', 'legacy', '', '', 'event alpha\n---\nevent beta', '{}', '', '', 1)",
+            [uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+        run(&conn, "notes/legacy", 10, false).expect("run with legacy timeline");
+    }
+
+    #[test]
+    fn add_with_source_and_detail_inserts_entry() {
+        let conn = open_test_db();
+        activate_collection(&conn);
+        insert_page(&conn, "notes/sourced");
+        add(
+            &conn,
+            "notes/sourced",
+            "2026-04-01",
+            "something",
+            Some("test-src".to_owned()),
+            Some("some detail".to_owned()),
+        )
+        .expect("add with source and detail");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM timeline_entries WHERE source = 'test-src'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

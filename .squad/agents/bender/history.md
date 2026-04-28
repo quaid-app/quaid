@@ -195,6 +195,23 @@ This dual-release cycle validated the full team workflow:
 ## Learnings
 
 - **When `docs/roadmap.md` and `website/contributing/roadmap.md` are updated in separate passes, both must be checked for the same stale language.** Zapp's D4 only fixed the website version. Amy updated docs/roadmap.md for vault-sync content but missed the pre-existing stale Phase 1/2 release lines. Rule: any docs-refresh checklist must diff both roadmap files together.
+
+## 2025-07-22 Vault-Sync-Engine Batch 1 Coverage Audit
+
+- **Scope:** Audited test coverage for vault-sync-engine Batch 1 implementation against v0.10.0 ship decision.
+- **Baseline:** Linux CI canonical = **82.53%** (`cargo llvm-cov` full run on ubuntu-latest). Windows lib-only = 80.20%.
+- **Platform gap:** ~2.33% explained by (1) unix-gated code not compiling on Windows, (2) integration tests excluded from `--lib` mode. Windows `--lib` is not canonical; CI Linux full-run is ground truth.
+- **90% verdict:** **NOT ACHIEVABLE** in this lane. Reaching 90% requires ~1,768 more covered lines. Primary blockers: `core/vault_sync.rs` watcher pipeline, `core/reconciler.rs` ingest loop, `core/fs_safety.rs`, `commands/collection.rs` vault lifecycle — all substantially `#[cfg(unix)]`-gated or requiring mounted filesystem.
+- **Quick wins landed:** 25 new unit tests in `commands/call.rs` (9 dispatch routes), `commands/timeline.rs` (7 `run()` + `add()` paths), `commands/gaps.rs` (4 `run()` paths), `commands/version.rs` (1 smoke). All pass. Estimated Linux CI delta: ~0.5–1%.
+- **Recommendation:** Ship v0.10.0 at 82.53% (post-PR: ~83–83.5%). Assign remaining gap to Scruffy in a dedicated test sprint.
+- **Decision written:** `.squad/decisions/inbox/bender-batch1-coverage-audit.md`
+
+## Learnings
+
+- **`cargo llvm-cov --lib` vs `cargo llvm-cov` (no flag):** `--lib` = unit tests only; no flag = all tests including integration. The CI canonical run uses no flag, which is 2–3% higher than `--lib` on Windows. Always compare same mode when quoting coverage numbers.
+- **Unix-gated code is a coverage ceiling, not a test gap.** `#[cfg(unix)]` blocks are unreachable on Windows and won't appear in any coverage report regardless of test quality. When evaluating a coverage target, subtract estimated unix-gated missed lines before setting expectations.
+- **`get_page_by_key` requires non-NULL `uuid` in the pages row.** Tests that call command functions going through `get_page_by_key` must insert pages with an explicit UUID (`uuid::Uuid::now_v7().to_string()`). The schema allows NULL by design for legacy inserts, but the query function rejects it. `add()` (timeline) does NOT call `get_page_by_key` and works with NULL uuid; `run()` (timeline) DOES and fails without it.
+- **For single-collection DBs, `OpKind::Read` via `parse_slug` resolves to that collection regardless of whether the page exists.** No need to worry about collection state for read-only paths; detached collections resolve fine for reads.
 - **"tag pending" is the most reliably stale string in docs.** Cross-check against `git tag -l` output on every docs validation pass that touches roadmap files.
 
 ## Learnings

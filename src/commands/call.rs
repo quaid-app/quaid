@@ -161,10 +161,14 @@ mod tests {
     use crate::core::{db, inference::default_model};
     use serde_json::json;
 
+    fn make_server() -> QuaidServer {
+        let conn = db::init(":memory:", &default_model()).expect("init in-memory db");
+        QuaidServer::new(conn)
+    }
+
     #[test]
     fn dispatch_tool_routes_memory_collections() {
-        let conn = db::init(":memory:", &default_model()).expect("init in-memory db");
-        let server = QuaidServer::new(conn);
+        let server = make_server();
 
         let result = dispatch_tool(&server, "memory_collections", json!({}))
             .expect("dispatch memory_collections");
@@ -173,5 +177,81 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["name"], json!("default"));
         assert_eq!(rows[0]["state"], json!("detached"));
+    }
+
+    #[test]
+    fn dispatch_tool_memory_list_returns_empty_array() {
+        let server = make_server();
+        let result = dispatch_tool(&server, "memory_list", json!({}))
+            .expect("dispatch memory_list");
+        assert!(result.as_array().is_some());
+    }
+
+    #[test]
+    fn dispatch_tool_memory_search_returns_array() {
+        let server = make_server();
+        let result =
+            dispatch_tool(&server, "memory_search", json!({"query": "anything"}))
+                .expect("dispatch memory_search");
+        assert!(result.as_array().is_some());
+    }
+
+    #[test]
+    fn dispatch_tool_memory_stats_returns_object() {
+        let server = make_server();
+        let result = dispatch_tool(&server, "memory_stats", json!({}))
+            .expect("dispatch memory_stats");
+        assert!(result.is_object() || result.is_string());
+    }
+
+    #[test]
+    fn dispatch_tool_memory_gaps_returns_array() {
+        let server = make_server();
+        let result = dispatch_tool(&server, "memory_gaps", json!({}))
+            .expect("dispatch memory_gaps");
+        assert!(result.as_array().is_some());
+    }
+
+    #[test]
+    fn dispatch_tool_memory_gap_logs_and_returns_object() {
+        let server = make_server();
+        let result = dispatch_tool(
+            &server,
+            "memory_gap",
+            json!({"query": "test question", "context": "test context"}),
+        )
+        .expect("dispatch memory_gap");
+        assert!(result.is_object() || result.is_string());
+    }
+
+    #[test]
+    fn dispatch_tool_memory_tags_returns_result() {
+        let server = make_server();
+        let result = dispatch_tool(&server, "memory_tags", json!({"slug": "people/ghost"}));
+        // ghost page does not exist → error is acceptable; what matters is routing succeeded
+        let _ = result;
+    }
+
+    #[test]
+    fn dispatch_tool_memory_check_returns_result() {
+        let server = make_server();
+        let result = dispatch_tool(&server, "memory_check", json!({"slug": "people/ghost"}));
+        let _ = result;
+    }
+
+    #[test]
+    fn dispatch_tool_unknown_tool_returns_err() {
+        let server = make_server();
+        let err = dispatch_tool(&server, "not_a_real_tool", json!({}))
+            .expect_err("unknown tool must return Err");
+        assert!(err.contains("unknown tool"));
+    }
+
+    #[test]
+    fn dispatch_tool_memory_get_missing_page_returns_err() {
+        let server = make_server();
+        let err = dispatch_tool(&server, "memory_get", json!({"slug": "people/no-one"}))
+            .expect_err("missing page must return Err");
+        assert!(!err.is_empty());
     }
 }

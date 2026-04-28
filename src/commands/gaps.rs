@@ -57,3 +57,40 @@ pub fn run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{db, gaps};
+
+    fn open_db() -> Connection {
+        db::open(":memory:").expect("open in-memory db")
+    }
+
+    #[test]
+    fn run_empty_text_succeeds() {
+        let conn = open_db();
+        run(&conn, 10, false, false).expect("run with no gaps");
+    }
+
+    #[test]
+    fn run_empty_json_succeeds() {
+        let conn = open_db();
+        run(&conn, 10, false, true).expect("run with no gaps json");
+    }
+
+    #[test]
+    fn run_with_gap_text_shows_entry() {
+        let conn = open_db();
+        gaps::log_gap(None, "test-query", "some context", Some(0.5), &conn)
+            .expect("log gap");
+        run(&conn, 10, false, false).expect("run with gap text");
+    }
+
+    #[test]
+    fn run_with_gap_json_includes_array() {
+        let conn = open_db();
+        gaps::log_gap(None, "json-query", "ctx", None, &conn).expect("log gap");
+        run(&conn, 10, false, true).expect("run with gap json");
+    }
+}

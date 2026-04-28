@@ -86,11 +86,13 @@ Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the 
 ### Download a binary
 
 ```bash
-VERSION="v0.10.0"
+VERSION="<published-tag>"   # for example: v0.10.0 until v0.11.0 is published
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
 ```
+
+Use a published tag here. This branch is preparing `v0.11.0`, so build from source if you need the unreleased Batch 2 embedding-worker slice before the tag exists.
 
 ### Build from source
 
@@ -167,7 +169,7 @@ quaid serve
 
 ## MCP tools
 
-All 17 tools available in `v0.10.0` via `quaid serve` (macOS + Linux):
+The MCP surface stays at 17 tools on this branch and in the current release line. The `v0.11.0` docs pass is about Batch 2 background embedding drain and queue reporting, not new tool names:
 
 | Category | Tools |
 |----------|-------|

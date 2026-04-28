@@ -1,4 +1,4 @@
--- memory.db schema — Quaid v6
+-- memory.db schema — Quaid v7
 -- Embedded in binary via include_str!("schema.sql") in src/core/db.rs
 -- Standalone copy for reference and tooling.
 
@@ -367,13 +367,20 @@ CREATE INDEX IF NOT EXISTS idx_file_state_page ON file_state(page_id);
 CREATE TABLE IF NOT EXISTS embedding_jobs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     page_id     INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL DEFAULT 0,
     priority    INTEGER NOT NULL DEFAULT 0,
+    job_state   TEXT    NOT NULL DEFAULT 'pending'
+                        CHECK(job_state IN ('pending', 'running', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT    DEFAULT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     enqueued_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     started_at  TEXT    DEFAULT NULL,
     UNIQUE(page_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_embedding_jobs_queue ON embedding_jobs(priority DESC, enqueued_at);
+CREATE INDEX IF NOT EXISTS idx_embedding_jobs_queue
+    ON embedding_jobs(job_state, priority DESC, enqueued_at);
 
 -- ============================================================
 -- config: mutable runtime defaults
@@ -384,7 +391,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',               '6'),
+    ('version',               '7'),
     ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),

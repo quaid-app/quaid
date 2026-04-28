@@ -157,12 +157,15 @@
 
 ## 8. Embedding queue and worker
 
-- [ ] 8.1 Add `embedding_jobs(page_id, chunk_index, job_state, attempt_count, last_error, created_at, started_at)` table.
-- [ ] 8.2 Ingest/reconciler/`memory_put` enqueue jobs atomically in the same SQLite tx as `pages`/`file_state`.
-- [ ] 8.3 Background worker drains jobs with bounded concurrency `min(cpus, 4)` (configurable via `QUAID_EMBEDDING_CONCURRENCY`).
-- [ ] 8.4 Worker retries with exponential backoff; permanent failures leave the job in `failed` state with `last_error`.
-- [ ] 8.5 On `quaid serve` startup, resume pending jobs.
-- [ ] 8.6 Expose queue depth + failing jobs in `memory_collections` + `quaid collection info`.
+- [x] 8.1 Add `embedding_jobs(page_id, chunk_index, job_state, attempt_count, last_error, created_at, started_at)` table.
+  > **Closed (v7 queue schema):** `src/schema.sql` bumps the embedded schema to v7 and extends `embedding_jobs` with `chunk_index`, `job_state`, `attempt_count`, `last_error`, and `created_at` while preserving the existing one-row-per-page enqueue contract (`UNIQUE(page_id)` + default `chunk_index = 0`). `src/core/db.rs` and schema-version tests were updated in the same patch.
+- [x] 8.2 Ingest/reconciler/`memory_put` enqueue jobs atomically in the same SQLite tx as `pages`/`file_state`.
+  > **Closed (existing write paths audited):** live enqueue paths in `commands/put.rs`, `core/reconciler.rs`, `core/quarantine.rs`, and the compatibility raw-import rotation helpers all continue to enqueue inside the same SQLite transaction as the corresponding page/file-state mutation. Re-enqueue now also resets stale `running`/`failed` state for the latest page-content job.
+- [x] 8.3 Background worker drains jobs with bounded concurrency `min(cpus, 4)` (configurable via `QUAID_EMBEDDING_CONCURRENCY`).
+- [x] 8.4 Worker retries with exponential backoff; permanent failures leave the job in `failed` state with `last_error`.
+- [x] 8.5 On `quaid serve` startup, resume pending jobs.
+- [x] 8.6 Expose actionable queue depth in `memory_collections`, and expose queue depth + failing jobs in `quaid collection info`.
+  > **Closed (contract-preserving diagnostics):** actionable queue depth counts only `pending + running` rows. `memory_collections` keeps its frozen 13-field MCP shape and exports only `embedding_queue_depth`; `quaid collection info` now surfaces `failing_jobs` on both plain-text and `--json` output without widening the MCP contract.
 
 ## 9. `quaid collection` commands
 
@@ -351,8 +354,10 @@
 - [x] 17.5bb Dedup echo suppression works within TTL.
 - [x] 17.5cc External edit after TTL is ingested normally.
 - [x] 17.5dd Dedup path-only match (without hash) does NOT suppress.
-- [ ] 17.5ee Embedding queue drains after write stampede; FTS always fresh.
-- [ ] 17.5ff Embedding worker survives process restart and resumes pending jobs.
+- [x] 17.5ee Embedding queue drains after write stampede; FTS always fresh.
+  > **Closed:** `mcp::server::tests::memory_put_write_stampede_keeps_fts_fresh_and_drains_embedding_queue` proves repeated `memory_put` updates keep FTS search current while the background embedding queue drains to vector-searchable state.
+- [x] 17.5ff Embedding worker survives process restart and resumes pending jobs.
+  > **Closed:** `core::vault_sync::tests::run_startup_sequence_resets_running_embedding_jobs_to_pending` proves startup repairs orphaned `running` rows before the worker loop resumes processing.
 - [ ] 17.5gg Serve heartbeat row updates every 5s; stale rows >15s are ignored.
 - [x] 17.5hh `collection_owners` PK keeps the single-owner invariant for offline plain-sync leases.
 - [x] 17.5hh2 Short-lived CLI owner lease is released on normal exit and panic unwind without stale owner residue.

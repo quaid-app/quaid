@@ -12,7 +12,7 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
 const PAGES_AU_TRIGGER_SQL: &str =
     "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
@@ -114,9 +114,7 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
     if !existed_before || path == ":memory:" {
         let effective_model = hydrate_model_config(&requested_model)
             .map_err(|message| DbError::Schema { message })?;
-        ensure_embedding_model_registry(&conn, &effective_model)?;
-        write_quaid_config(&conn, &QuaidConfig::from_model(&effective_model))?;
-        sync_legacy_config(&conn, &effective_model)?;
+        persist_model_metadata(&conn, &effective_model)?;
         configure_runtime_model(effective_model.clone());
         return Ok(OpenDb {
             conn,
@@ -140,9 +138,11 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
             stored.to_model_config()
         }
         None => {
-            return Err(DbError::Schema {
-                message: format_schema_reinit_message(0, path),
-            })
+            recover_crash_partial_fresh_db(&conn, &requested_model, path)?.ok_or_else(|| {
+                DbError::Schema {
+                    message: format_schema_reinit_message(0, path),
+                }
+            })?
         }
     };
 
@@ -171,6 +171,15 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
     }
 
     if existed_before {
+        if let Some(recovered_model) =
+            recover_crash_partial_fresh_db(&conn, &requested_model, path)?
+        {
+            configure_runtime_model(recovered_model);
+            return Ok(conn);
+        }
+    }
+
+    if existed_before {
         return Err(DbError::Schema {
             message: format_schema_reinit_message(0, path),
         });
@@ -179,9 +188,7 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
     let selected_model =
         hydrate_model_config(&requested_model).map_err(|message| DbError::Schema { message })?;
 
-    ensure_embedding_model_registry(&conn, &selected_model)?;
-    write_quaid_config(&conn, &QuaidConfig::from_model(&selected_model))?;
-    sync_legacy_config(&conn, &selected_model)?;
+    persist_model_metadata(&conn, &selected_model)?;
     configure_runtime_model(selected_model);
     Ok(conn)
 }
@@ -379,6 +386,148 @@ fn ensure_embedding_model_registry(conn: &Connection, model: &ModelConfig) -> Re
     Ok(())
 }
 
+fn persist_model_metadata(conn: &Connection, model: &ModelConfig) -> Result<(), DbError> {
+    ensure_embedding_model_registry(conn, model)?;
+    write_quaid_config(conn, &QuaidConfig::from_model(model))?;
+    sync_legacy_config(conn, model)?;
+    Ok(())
+}
+
+fn recover_crash_partial_fresh_db(
+    conn: &Connection,
+    requested_model: &ModelConfig,
+    db_path: &str,
+) -> Result<Option<ModelConfig>, DbError> {
+    if !is_bootstrap_fresh_db(conn)? {
+        return Ok(None);
+    }
+
+    let effective_model = match read_bootstrap_registry_model(conn)? {
+        Some(stored) => {
+            if stored.model_id != requested_model.model_id {
+                return Err(DbError::ModelMismatch {
+                    message: format_model_mismatch(&stored, requested_model, db_path),
+                });
+            }
+            stored.to_model_config()
+        }
+        None => {
+            hydrate_model_config(requested_model).map_err(|message| DbError::Schema { message })?
+        }
+    };
+
+    persist_model_metadata(conn, &effective_model)?;
+    Ok(Some(effective_model))
+}
+
+fn is_bootstrap_fresh_db(conn: &Connection) -> Result<bool, DbError> {
+    let default_collection_count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM collections
+         WHERE id = 1
+           AND name = 'default'
+           AND root_path = ''
+           AND state = 'detached'
+           AND writable = 1
+           AND is_write_target = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if default_collection_count != 1 {
+        return Ok(false);
+    }
+
+    let collection_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM collections", [], |row| row.get(0))?;
+    if collection_count != 1 {
+        return Ok(false);
+    }
+
+    let embedding_model_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM embedding_models", [], |row| {
+            row.get(0)
+        })?;
+    if embedding_model_count > 1 {
+        return Ok(false);
+    }
+
+    let inactive_embedding_model_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM embedding_models WHERE active != 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if inactive_embedding_model_count != 0 {
+        return Ok(false);
+    }
+
+    for table in [
+        "assertions",
+        "collection_owners",
+        "contradictions",
+        "embedding_jobs",
+        "file_state",
+        "import_manifest",
+        "ingest_log",
+        "knowledge_gaps",
+        "links",
+        "page_embeddings",
+        "pages",
+        "quarantine_exports",
+        "raw_data",
+        "raw_imports",
+        "serve_sessions",
+        "tags",
+        "timeline_entries",
+    ] {
+        if table_has_rows(conn, table)? {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn table_has_rows(conn: &Connection, table: &str) -> Result<bool, DbError> {
+    let exists: Option<i64> = conn
+        .query_row(&format!("SELECT 1 FROM {table} LIMIT 1"), [], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    Ok(exists.is_some())
+}
+
+fn read_bootstrap_registry_model(conn: &Connection) -> Result<Option<QuaidConfig>, DbError> {
+    conn.query_row(
+        "SELECT name, dimensions
+         FROM embedding_models
+         WHERE active = 1
+         LIMIT 1",
+        [],
+        |row| {
+            let model_id: String = row.get(0)?;
+            let embedding_dim: i64 = row.get(1)?;
+            Ok(QuaidConfig {
+                model_alias: model_alias_for_model_id(&model_id).to_owned(),
+                model_id,
+                embedding_dim: embedding_dim as usize,
+                schema_version: SCHEMA_VERSION,
+            })
+        },
+    )
+    .optional()
+    .map_err(DbError::from)
+}
+
+fn model_alias_for_model_id(model_id: &str) -> &'static str {
+    match model_id.trim().to_ascii_lowercase().as_str() {
+        "baai/bge-small-en-v1.5" => "small",
+        "baai/bge-base-en-v1.5" => "base",
+        "baai/bge-large-en-v1.5" => "large",
+        "baai/bge-m3" => "m3",
+        _ => "custom",
+    }
+}
+
 fn sync_legacy_config(conn: &Connection, model: &ModelConfig) -> Result<(), DbError> {
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('embedding_model', ?1)",
@@ -436,7 +585,7 @@ pub fn read_quaid_config(conn: &Connection) -> Result<Option<QuaidConfig>, DbErr
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<Result<_, _>>()?;
 
-    // Table exists but is completely empty → legacy / pre-migration DB.
+    // Table exists but is completely empty → bootstrap-partial or legacy state.
     if rows.is_empty() {
         return Ok(None);
     }
@@ -649,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn open_sets_user_version_to_6() {
+    fn open_sets_user_version_to_7() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
@@ -657,7 +806,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 
     #[test]
@@ -699,7 +848,7 @@ mod tests {
         let version: i64 = conn2
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 
     #[test]
@@ -771,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn open_with_model_rejects_legacy_database_before_creating_v6_tables() {
+    fn open_with_model_rejects_legacy_database_before_creating_v7_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
         seed_existing_db(&db_path, 5);
@@ -780,7 +929,7 @@ mod tests {
             .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 5, expected 6"));
+        assert!(err.to_string().contains("Found version 5, expected 7"));
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
@@ -795,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn init_rejects_legacy_database_before_creating_v6_tables() {
+    fn init_rejects_legacy_database_before_creating_v7_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
         seed_existing_db(&db_path, 5);
@@ -815,6 +964,76 @@ mod tests {
             )
             .unwrap();
         assert_eq!(config_version, "5");
+    }
+
+    #[test]
+    fn open_connection_seeds_config_version_to_7_for_partial_v7_databases() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v7.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "7");
+        drop(conn);
+
+        assert!(
+            preflight_existing_schema(db_path.to_str().unwrap()).is_ok(),
+            "freshly seeded v7 DDL should not be misclassified as legacy before quaid_config is written"
+        );
+    }
+
+    #[test]
+    fn open_with_model_recovers_crash_partial_v7_bootstrap() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v7.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        drop(conn);
+
+        let opened = open_with_model(db_path.to_str().unwrap(), &default_model())
+            .expect("crash-partial fresh db should reopen cleanly");
+        let stored = read_quaid_config(&opened.conn).unwrap().unwrap();
+
+        assert_eq!(stored.model_alias, "small");
+        assert_eq!(stored.schema_version, 7);
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn open_with_model_recovers_crash_partial_v7_bootstrap_from_registry_model() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v7-registry.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        let large_model = hydrate_model_config(&resolve_model("large")).unwrap();
+        ensure_embedding_model_registry(&conn, &large_model).unwrap();
+        drop(conn);
+
+        let opened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large"))
+            .expect("registry-seeded crash-partial db should reopen with the registered model");
+
+        assert_eq!(opened.effective_model.model_id, "BAAI/bge-large-en-v1.5");
+        assert_eq!(opened.effective_model.embedding_dim, 1024);
+        let stored = read_quaid_config(&opened.conn).unwrap().unwrap();
+        assert_eq!(stored.model_alias, "large");
+    }
+
+    #[test]
+    fn init_recovers_crash_partial_v7_bootstrap() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v7-init.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        drop(conn);
+
+        let conn = init(db_path.to_str().unwrap(), &default_model())
+            .expect("init should complete a crash-partial fresh bootstrap");
+        let stored = read_quaid_config(&conn).unwrap().unwrap();
+
+        assert_eq!(stored.model_alias, "small");
+        assert_eq!(stored.schema_version, 7);
     }
 
     #[test]
@@ -886,7 +1105,7 @@ mod tests {
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 6);
+        assert_eq!(config.schema_version, 7);
     }
 
     #[test]
@@ -902,7 +1121,7 @@ mod tests {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
-                schema_version: 6,
+                schema_version: 7,
             }
         );
     }
@@ -979,14 +1198,31 @@ mod tests {
     }
 
     #[test]
-    fn missing_quaid_config_requires_reinit() {
+    fn missing_quaid_config_requires_reinit_once_pages_exist() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let opened = open_with_model(db_path.to_str().unwrap(), &default_model()).unwrap();
+        let collection_id: i64 = opened
+            .conn
+            .query_row(
+                "SELECT id FROM collections WHERE name = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        opened
+            .conn
+            .execute(
+                "INSERT INTO pages
+                     (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+                 VALUES (?1, 'notes/live', ?2, 'concept', 'Live', '', 'truth', '', '{}', 'notes', '', 1)",
+                params![collection_id, uuid::Uuid::now_v7().to_string()],
+            )
+            .unwrap();
         opened.conn.execute("DELETE FROM quaid_config", []).unwrap();
         drop(opened);
 
-        let reopened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large"));
+        let reopened = open_with_model(db_path.to_str().unwrap(), &default_model());
         assert!(matches!(reopened, Err(DbError::Schema { .. })));
     }
 

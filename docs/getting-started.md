@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. `v0.10.0` keeps the current vault-sync release surface and hardens watcher reliability with overflow recovery, native→poll fallback, crash supervision, and CLI watcher-health reporting.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.11.0`: it keeps the vault-sync surface from `v0.10.0` and adds Batch 2 background embedding draining plus queue-depth / failing-job visibility for collection status.
 
 ## What it does
 
@@ -15,9 +15,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete, and the first vault-sync slice is shipped.** The current release is `v0.10.0`: it preserves the current vault-sync surface and adds Batch 1 watcher-reliability hardening for overflow recovery, native→poll fallback, crash supervision, and CLI watcher health.
+> **Phase 3 is complete, and the vault-sync line is in Batch 2.** This branch prepares `v0.11.0`: it preserves the current 17-tool surface, keeps the Batch 1 watcher-reliability hardening from `v0.10.0`, and adds the background embedding worker plus queue-depth / failing-job reporting.
 >
-> See [roadmap.md](roadmap.md) for the full delivery plan.
+> Published GitHub Release binaries still come from the latest public tag until the `v0.11.0` workflow completes. See [roadmap.md](roadmap.md) for the full delivery plan.
 
 ---
 
@@ -25,12 +25,14 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.10.0` airgapped + online assets |
+| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect this branch, including the Batch 2 slice |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — use the latest published tag until `v0.11.0` is cut |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
 > **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
+>
+> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.11.0` Batch 2 behavior before the tag exists.
 
 ---
 
@@ -67,7 +69,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first memory store
 
-> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use all features now; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the full branch state described below before `v0.11.0` is published; see [Status](#status) and [Install options](#install-options) above.
 
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
@@ -82,7 +84,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 quaid init ~/.quaid/memory.db
 ```
 
-This creates a new `memory.db` file with the full v6 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (in `v0.9.6`) collections, file_state, and raw_imports tables.
+This creates a new `memory.db` file with the full v7 schema — pages, embeddings, links, assertions, knowledge gaps, collections, `file_state`, `raw_imports`, and `embedding_jobs`.
 
 ### 2. Import or attach an existing markdown directory
 
@@ -188,9 +190,9 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Phase 3 tools (gaps, stats, raw data):** `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
 
-**vault-sync tools:** `memory_collections` — read-only per-collection status including state, ignore diagnostics, and recovery flags
+**vault-sync tools:** `memory_collections` — read-only per-collection status including state, ignore diagnostics, recovery flags, and embedding queue health
 
-All 17 tools are live in the current `v0.10.0` release. See [spec.md](spec.md#mcp-server) for tool signatures.
+All 17 tools remain live on this branch and in the current release line. Batch 2 changes background embedding drain and queue reporting, not the MCP tool count. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
@@ -257,6 +259,7 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 | -------- | ------- | ------- |
 | `QUAID_DB` | `~/.quaid/memory.db` | Path to the active memory database |
 | `QUAID_NO_PROFILE` | `0` | Set to `1` to skip shell profile writes during install |
+| `QUAID_EMBEDDING_CONCURRENCY` | auto (`min(available CPUs, 4)`) | Override how many embedding jobs `quaid serve` drains at once |
 
 ---
 
@@ -400,7 +403,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands are shipped in `v0.9.6`. The current release line exposes the landed vault-sync slice while keeping Windows `serve` hosting and IPC follow-ons explicitly deferred.
+> These commands first shipped in `v0.9.6`. This branch carries the `v0.11.0` follow-on: Batch 1 watcher hardening stays in place, Batch 2 adds background embedding drain plus queue health reporting, and the deferred IPC / broader restore follow-ons remain out of scope.
 
 ### Attach a vault
 
@@ -414,6 +417,8 @@ quaid collection list
 # Show extended status: ignore errors, quarantine count, recovery flags
 quaid collection info work
 ```
+
+On this branch, `quaid collection info` also surfaces `queue_depth` and `failing_jobs` so you can see whether the background embedding worker is keeping up.
 
 Once attached, `quaid serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 

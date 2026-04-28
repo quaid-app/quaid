@@ -31,6 +31,7 @@ use tokenizers::Tokenizer;
 #[cfg(feature = "online-model")]
 use uuid::Uuid;
 
+use super::chunking::chunk_page;
 use super::types::{InferenceError, SearchError, SearchResult};
 
 #[cfg(all(feature = "embedded-model", feature = "online-model"))]
@@ -1186,6 +1187,23 @@ fn active_model(conn: &Connection) -> Result<(String, String), SearchError> {
     })
 }
 
+pub fn refresh_page_embeddings(
+    conn: &Connection,
+    page_id: i64,
+    page: &crate::core::types::Page,
+) -> Result<usize, SearchError> {
+    let (model_name, vec_table) = active_model(conn)?;
+    if !is_safe_identifier(&vec_table) {
+        return Err(SearchError::Internal {
+            message: format!("unsafe vec table name: {vec_table}"),
+        });
+    }
+
+    let chunks = chunk_page(page);
+    replace_page_embeddings(conn, page_id, &model_name, &vec_table, &chunks)?;
+    Ok(chunks.len())
+}
+
 pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(std::mem::size_of_val(embedding));
     for value in embedding {
@@ -1199,6 +1217,74 @@ fn is_safe_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn replace_page_embeddings(
+    conn: &Connection,
+    page_id: i64,
+    model_name: &str,
+    vec_table: &str,
+    chunks: &[crate::core::types::Chunk],
+) -> Result<(), SearchError> {
+    let tx = conn.unchecked_transaction()?;
+
+    let existing_rowids = existing_vec_rowids(&tx, page_id, model_name)?;
+    let delete_vec_sql = format!("DELETE FROM {vec_table} WHERE rowid = ?1");
+    for vec_rowid in existing_rowids {
+        tx.execute(&delete_vec_sql, [vec_rowid])?;
+    }
+
+    tx.execute(
+        "DELETE FROM page_embeddings WHERE page_id = ?1 AND model = ?2",
+        rusqlite::params![page_id, model_name],
+    )?;
+
+    let insert_vec_sql = format!("INSERT INTO {vec_table}(embedding) VALUES (?1)");
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let embedding = embed(&chunk.content).map_err(|err| SearchError::Internal {
+            message: err.to_string(),
+        })?;
+        let embedding_blob = embedding_to_blob(&embedding);
+        tx.execute(&insert_vec_sql, rusqlite::params![embedding_blob])?;
+        let vec_rowid = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO page_embeddings \
+                 (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, \
+                  content_hash, token_count, heading_path) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                page_id,
+                model_name,
+                vec_rowid,
+                chunk.chunk_type,
+                chunk_index as i64,
+                chunk.content,
+                chunk.content_hash,
+                chunk.token_count as i64,
+                chunk.heading_path,
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+fn existing_vec_rowids(
+    conn: &Connection,
+    page_id: i64,
+    model_name: &str,
+) -> Result<Vec<i64>, SearchError> {
+    let mut stmt = conn.prepare(
+        "SELECT vec_rowid FROM page_embeddings WHERE page_id = ?1 AND model = ?2 ORDER BY chunk_index",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![page_id, model_name], |row| row.get(0))?;
+
+    let mut rowids = Vec::new();
+    for row in rows {
+        rowids.push(row?);
+    }
+    Ok(rowids)
 }
 
 fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {

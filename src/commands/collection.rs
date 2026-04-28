@@ -129,6 +129,7 @@ struct CollectionInfoOutput {
     last_sync_at: Option<String>,
     page_count: i64,
     queue_depth: i64,
+    failing_jobs: i64,
     quarantined_pages_awaiting_action: i64,
     ignore_parse_errors: Option<String>,
     pending_root_path: Option<String>,
@@ -176,6 +177,7 @@ struct CollectionStatusSummary {
 struct CollectionMetrics {
     page_count: i64,
     queue_depth: i64,
+    failing_jobs: i64,
     quarantined_pages_awaiting_action: i64,
 }
 
@@ -333,6 +335,7 @@ fn list(db: &Connection, json: bool) -> Result<()> {
                     FROM embedding_jobs ej
                     JOIN pages p ON p.id = ej.page_id
                     WHERE p.collection_id = c.id
+                      AND ej.job_state IN ('pending', 'running')
                 ), 0)
          FROM collections c
          WHERE c.root_path <> ''
@@ -392,6 +395,7 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
             output.needs_full_sync,
             output.last_sync_at.as_deref().unwrap_or("null")
         );
+        println!("failing_jobs={}", output.failing_jobs);
         println!(
             "pending_root_path={} integrity_failed_at={} reconcile_halted_at={} ignore_parse_errors={}",
             output.pending_root_path.as_deref().unwrap_or("null"),
@@ -440,6 +444,7 @@ fn build_collection_info_output(
         last_sync_at: collection.last_sync_at,
         page_count: metrics.page_count,
         queue_depth: metrics.queue_depth,
+        failing_jobs: metrics.failing_jobs,
         quarantined_pages_awaiting_action: metrics.quarantined_pages_awaiting_action,
         ignore_parse_errors: collection.ignore_parse_errors,
         pending_root_path: collection.pending_root_path,
@@ -879,9 +884,17 @@ fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionM
                 ), 0),
                 COALESCE((
                     SELECT COUNT(*)
+                 FROM embedding_jobs ej
+                 JOIN pages p ON p.id = ej.page_id
+                 WHERE p.collection_id = ?1
+                   AND ej.job_state IN ('pending', 'running')
+                ), 0),
+                COALESCE((
+                    SELECT COUNT(*)
                     FROM embedding_jobs ej
                     JOIN pages p ON p.id = ej.page_id
                     WHERE p.collection_id = ?1
+                      AND ej.job_state = 'failed'
                 ), 0)",
         [collection_id],
         |row| {
@@ -889,6 +902,7 @@ fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionM
                 page_count: row.get(0)?,
                 quarantined_pages_awaiting_action: row.get(1)?,
                 queue_depth: row.get(2)?,
+                failing_jobs: row.get(3)?,
             })
         },
     )
@@ -1375,6 +1389,15 @@ mod tests {
         .unwrap();
     }
 
+    fn insert_embedding_job(conn: &Connection, page_id: i64, job_state: &str, attempt_count: i64) {
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, last_error, started_at)
+             VALUES (?1, ?2, ?3, CASE WHEN ?2 = 'failed' THEN 'boom' ELSE NULL END, CASE WHEN ?2 = 'running' THEN '2026-04-28T00:00:00Z' ELSE NULL END)",
+            rusqlite::params![page_id, job_state, attempt_count],
+        )
+        .unwrap();
+    }
+
     #[cfg(unix)]
     fn collection_page_count(conn: &Connection, name: &str) -> i64 {
         conn.query_row(
@@ -1662,6 +1685,7 @@ mod tests {
             last_sync_at: collection.last_sync_at,
             page_count: metrics.page_count,
             queue_depth: metrics.queue_depth,
+            failing_jobs: metrics.failing_jobs,
             quarantined_pages_awaiting_action: metrics.quarantined_pages_awaiting_action,
             ignore_parse_errors: collection.ignore_parse_errors,
             pending_root_path: collection.pending_root_path,
@@ -2562,6 +2586,45 @@ mod tests {
         );
         assert_eq!(output.watcher_released_generation, Some(5));
         vault_sync::clear_collection_watcher_health_for_test(collection_id);
+    }
+
+    #[test]
+    fn collection_metrics_count_pending_and_running_jobs_separately_from_failed_jobs() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let pending_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/pending",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Pending\ntype: note\n---\nPending body.\n",
+            "notes/pending.md",
+        );
+        let running_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/running",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Running\ntype: note\n---\nRunning body.\n",
+            "notes/running.md",
+        );
+        let failed_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/failed",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Failed\ntype: note\n---\nFailed body.\n",
+            "notes/failed.md",
+        );
+
+        insert_embedding_job(&conn, pending_page_id, "pending", 0);
+        insert_embedding_job(&conn, running_page_id, "running", 1);
+        insert_embedding_job(&conn, failed_page_id, "failed", 5);
+
+        let metrics = collection_metrics(&conn, collection_id).unwrap();
+        assert_eq!(metrics.queue_depth, 2);
+        assert_eq!(metrics.failing_jobs, 1);
     }
 
     #[test]

@@ -235,17 +235,18 @@ jobs:
 
             > **npm — planned follow-on, not yet available.** `quaid` is not in the public
             > npm registry. Use the shell installer or a GitHub Releases binary above.
+            >
+            > Install docs: https://github.com/quaid-app/quaid/blob/${{ github.ref_name }}/docs/getting-started.md
+            >
+            > Pre-rename upgrade path: https://github.com/quaid-app/quaid/blob/${{ github.ref_name }}/MIGRATION.md
 
             ---
 
-            This release fixes Issues #67, #69, and #81. The compound-term FTS recall fix
-            (#67/#69): natural-language queries such as `neural network inference` now use
-            an AND-first / OR-fallback strategy in `quaid search` and the hybrid-search FTS
-            arm — including `memory_query` — so relevant pages are no longer dropped when no
-            single document contains every token. `quaid search --raw` preserves expert FTS5
-            semantics. The watcher hotfix (#81): `quaid serve` now normalizes legacy active
-            collections with blank root paths before watcher registration. The shell installer
-            defaults to `airgapped`.
+            ## Highlights
+
+            See the auto-generated release notes below for the merged changes included in
+            `${{ github.ref_name }}`. Keep this workflow body evergreen: install guidance lives
+            here; version-specific feature summaries belong in the PR history and generated notes.
 
             ---
           draft: false

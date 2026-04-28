@@ -935,12 +935,20 @@ fn collection_info_json_reports_release_metadata_queue_depth_and_active_reconcil
     std::fs::create_dir_all(&root).expect("create root");
     let collection_id = insert_collection(&conn, "work", &root);
     insert_page(&conn, collection_id, "notes/a");
+    insert_page(&conn, collection_id, "notes/b");
     let work_page_id = page_id(&conn, collection_id, "notes/a");
+    let failed_page_id = page_id(&conn, collection_id, "notes/b");
     conn.execute(
         "INSERT INTO embedding_jobs (page_id) VALUES (?1)",
         [work_page_id],
     )
     .expect("insert embedding job");
+    conn.execute(
+        "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, last_error)
+         VALUES (?1, 'failed', 5, 'hash shim exploded')",
+        [failed_page_id],
+    )
+    .expect("insert failed embedding job");
     conn.execute(
         "UPDATE collections
          SET needs_full_sync = 1,
@@ -974,6 +982,7 @@ fn collection_info_json_reports_release_metadata_queue_depth_and_active_reconcil
         Some("collection is active but needs a real reconcile before writes are considered fully healthy")
     );
     assert_eq!(parsed["queue_depth"].as_i64(), Some(1));
+    assert_eq!(parsed["failing_jobs"].as_i64(), Some(1));
     assert_eq!(parsed["reload_generation"].as_i64(), Some(4));
     assert_eq!(
         parsed["watcher_released_session_id"].as_str(),

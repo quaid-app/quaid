@@ -120,7 +120,7 @@ upgrade guide before shipping:
 
 | Role | Owner | Status |
 | ---- | ----- | ------ |
-| Launch wording and release copy | Zapp | ✅ Signed off |
+| Launch wording and release copy | Zapp | Pending current release review |
 | Hard-breaking rename migration gate | Zapp | N/A unless the current release carries `quaid-hard-rename` |
 | Release workflow assets and checksums | Fry | Pending workflow run + artifact verification |
-| Scope confirmed against approved proposal | Leela | Pending E.1 cargo test + E.4 DAB rerun |
+| Scope confirmed against approved proposal | Leela | Pending implementation, review, and coverage gate sign-off |

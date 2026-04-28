@@ -47,7 +47,7 @@ Open a new shell or `source` your profile, then:
 quaid --help`}
 />
 
-You should see a version line beginning with `quaid v0.9.x`. If `quaid: command not found`, ensure `~/.local/bin` is on your PATH (the installer prints a hint for your shell on success).
+You should see a version line like `quaid 0.x.y`. If `quaid: command not found`, ensure `~/.local/bin` is on your PATH (the installer prints a hint for your shell on success).
 
 ## Step 3 — Pin a specific version (optional)
 
@@ -57,8 +57,10 @@ The installer always grabs the latest release. To pin:
   tone="terminal"
   label="Pinned install"
   code={`curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
-  | QUAID_VERSION=v0.10.0 sh`}
+  | QUAID_VERSION=<published-tag> sh`}
 />
+
+Replace `<published-tag>` with a GitHub Release tag. If you need the unreleased `v0.11.0` branch state, build from source instead.
 
 ## What you got
 

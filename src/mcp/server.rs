@@ -1861,6 +1861,65 @@ mod tests {
     }
 
     #[test]
+    fn memory_put_write_stampede_keeps_fts_fresh_and_drains_embedding_queue() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+
+        server
+            .memory_put(MemoryPutInput {
+                slug: "notes/stampede".to_string(),
+                content: "---\ntitle: Stampede\ntype: note\n---\nOriginal alpha body\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+        server
+            .memory_put(MemoryPutInput {
+                slug: "notes/stampede".to_string(),
+                content: "---\ntitle: Stampede\ntype: note\n---\nUpdated omega body\n".to_string(),
+                expected_version: Some(1),
+            })
+            .unwrap();
+
+        let db = server.db.lock().unwrap();
+        let page_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/stampede'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let queued_jobs: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_jobs WHERE page_id = ?1 AND job_state = 'pending'",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued_jobs, 1);
+
+        let fts_results = crate::core::fts::search_fts("omega", None, None, &db, 10).unwrap();
+        assert!(fts_results
+            .iter()
+            .any(|result| result.slug == "notes/stampede"));
+
+        vault_sync::drain_embedding_queue(&db).unwrap();
+
+        let remaining_jobs: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_jobs WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_jobs, 0);
+
+        let vec_results = crate::core::inference::search_vec("omega", 10, None, None, &db).unwrap();
+        assert!(vec_results
+            .iter()
+            .any(|result| result.slug == "notes/stampede"));
+    }
+
+    #[test]
     fn memory_query_logs_gap_for_weak_results() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -3478,8 +3537,30 @@ mod tests {
             "notes/default-page",
             "---\ntitle: Default Page\ntype: note\n---\nDefault\n",
         );
+        create_page(
+            &server,
+            "notes/default-failed",
+            "---\ntitle: Default Failed\ntype: note\n---\nFailed\n",
+        );
 
         let db = server.db.lock().unwrap();
+        let failed_page_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/default-failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        db.execute(
+            "UPDATE embedding_jobs
+             SET job_state = 'failed',
+                 attempt_count = 5,
+                 last_error = 'stuck forever',
+                 started_at = NULL
+             WHERE page_id = ?1",
+            [failed_page_id],
+        )
+        .unwrap();
         db.execute(
             "UPDATE collections
              SET ignore_parse_errors = ?2
@@ -3592,9 +3673,10 @@ mod tests {
         assert_eq!(default["state"], "active");
         assert!(default["writable"].as_bool().unwrap());
         assert!(default["is_write_target"].as_bool().unwrap());
-        assert_eq!(default["page_count"], 1);
+        assert_eq!(default["page_count"], 2);
         assert!(default["last_sync_at"].is_null());
         assert!(default["embedding_queue_depth"].as_i64().is_some());
+        assert!(default.get("failing_jobs").is_none());
         assert!(!default["needs_full_sync"].as_bool().unwrap());
         assert!(!default["recovery_in_progress"].as_bool().unwrap());
         assert!(default["integrity_blocked"].is_null());

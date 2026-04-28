@@ -22,6 +22,24 @@ pub fn quaid_bin() -> &'static Path {
                 }
             }
 
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            candidates.push(manifest_dir.join("target").join("debug").join("quaid.exe"));
+            candidates.push(
+                manifest_dir
+                    .join("target")
+                    .join("debug")
+                    .join("deps")
+                    .join("quaid.exe"),
+            );
+            candidates.push(manifest_dir.join("target").join("release").join("quaid.exe"));
+            candidates.push(
+                manifest_dir
+                    .join("target")
+                    .join("release")
+                    .join("deps")
+                    .join("quaid.exe"),
+            );
+
             candidates
                 .into_iter()
                 .find(|candidate| candidate.is_file())

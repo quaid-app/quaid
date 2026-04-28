@@ -51,9 +51,15 @@ pub fn rotate_active_raw_import(
 
 pub fn enqueue_embedding_job(conn: &Connection, page_id: i64) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO embedding_jobs (page_id)
-         VALUES (?1)
+        "INSERT INTO embedding_jobs
+             (page_id, chunk_index, priority, job_state, attempt_count, last_error, created_at, enqueued_at, started_at)
+         VALUES (?1, 0, 0, 'pending', 0, NULL, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)
          ON CONFLICT(page_id) DO UPDATE SET
+             chunk_index = excluded.chunk_index,
+             priority = excluded.priority,
+             job_state = 'pending',
+             attempt_count = 0,
+             last_error = NULL,
              started_at = NULL,
              enqueued_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
         [page_id],
@@ -237,6 +243,36 @@ mod tests {
         rotate_active_raw_import(&conn, page_id, "notes/test.md", b"first").unwrap();
 
         assert_eq!(active_raw_import_count(&conn, page_id).unwrap(), 1);
+    }
+
+    #[test]
+    fn enqueue_embedding_job_resets_failed_jobs_back_to_pending() {
+        let conn = open_test_db();
+        let page_id = page_id(&conn);
+
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, last_error, started_at)
+             VALUES (?1, 'failed', 4, 'boom', '2026-04-28T00:00:00Z')",
+            [page_id],
+        )
+        .unwrap();
+
+        enqueue_embedding_job(&conn, page_id).unwrap();
+
+        let row: (String, i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT job_state, attempt_count, last_error, started_at
+                 FROM embedding_jobs
+                 WHERE page_id = ?1",
+                [page_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 0);
+        assert!(row.2.is_none());
+        assert!(row.3.is_none());
     }
 
     #[test]

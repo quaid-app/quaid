@@ -10,7 +10,7 @@ This document is the agent instruction guide for completing the `vault-sync-engi
 - **Core source:** `src/core/` — one file per subsystem
 - **Command handlers:** `src/commands/` — one file per CLI subcommand
 - **MCP tool handlers:** `src/mcp/server.rs`
-- **Schema:** `src/schema.sql` — embedded in the binary via `include_str!("schema.sql")` in `src/core/db.rs`; current schema version is **v6** (`SCHEMA_VERSION = 6` in `db.rs`)
+- **Schema:** `src/schema.sql` — embedded in the binary via `include_str!("schema.sql")` in `src/core/db.rs`; current schema version is **v7** (`SCHEMA_VERSION = 7` in `db.rs`)
 - **Spec artifacts:** `openspec/changes/vault-sync-engine/` — `proposal.md`, `design.md`, `specs/`, `tasks.md`
 - **Task tracking:** Mark completed tasks in `tasks.md` by changing `- [ ]` to `- [x]` immediately after the implementation is verified
 - **Error types:** `VaultSyncError` enum lives in `src/core/vault_sync.rs`; new error variants go there
@@ -147,7 +147,7 @@ Wire into the serve loop with a `last_embedding_drain` timer, polling every **2s
 
 **Task 8.5** (startup resume): In `run_startup_sequence` (called by `start_serve_runtime`), reset all `job_state='running'` rows back to `'pending'` (they were orphaned by the previous serve crash).
 
-**Task 8.6**: Surface `queue_depth` (count of `pending`+`running`) and `failing_jobs` (count of `failed`) in `memory_collections` and `quaid collection info`.
+**Task 8.6**: Surface actionable `queue_depth` (count of `pending`+`running`) in `memory_collections`, and surface both `queue_depth` plus `failing_jobs` (count of `failed`) in `quaid collection info`. `memory_collections` remains on the frozen 13-field MCP schema from task 13.6 and is NOT widened for failed-job counts in this release.
 
 **Test 17.5ee:** Write a page via `memory_put`, assert `embedding_jobs` row exists, run `drain_embedding_queue`, assert job is deleted and embedding is queryable via `search_vec`.  
 **Test 17.5ff:** Seed a `running` job row (simulating a crash), call the startup resume logic, assert the row resets to `pending`.

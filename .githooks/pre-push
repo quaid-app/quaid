@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+remote_name="${1:-origin}"
+remote_url="${2:-}"
+configured_branches="$(git config --get quaid.protectedBranches 2>/dev/null || true)"
+protected_branches="${QUAID_PROTECTED_BRANCHES:-$configured_branches}"
+
+if [ -z "$protected_branches" ]; then
+  protected_branches="main master"
+fi
+
+is_protected_branch() {
+  candidate="$1"
+  for branch in $protected_branches; do
+    if [ "$candidate" = "$branch" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+while read -r local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/*)
+      target_branch="${remote_ref#refs/heads/}"
+      if is_protected_branch "$target_branch"; then
+        echo >&2
+        echo >&2 "ERROR: direct pushes to protected branch '$target_branch' are blocked."
+        echo >&2 "Remote: $remote_name ${remote_url:+($remote_url)}"
+        echo >&2 "Required workflow: create or update a feature branch, push that branch, then open a PR into '$target_branch'."
+        echo >&2 "Configured protected branches: $protected_branches"
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+exit 0

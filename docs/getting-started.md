@@ -39,6 +39,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 ```bash
 git clone https://github.com/quaid-app/quaid
 cd quaid
+./scripts/setup-git-hooks.sh
 cargo build --release
 # Binary at: target/release/quaid (airgapped channel — default; embeds BGE-small-en-v1.5)
 
@@ -47,6 +48,12 @@ cargo build --release --no-default-features --features bundled,online-model
 ```
 
 Requirements: Rust toolchain (stable). SQLite and sqlite-vec are bundled. The default build is the **airgapped** channel (embeds BGE-small-en-v1.5 at compile time); the explicit `online-model` build produces the online variant that downloads/caches BGE-small on first semantic use.
+
+> **Contributor safeguard:** install the repo hooks once per clone before you push anything. The
+> hook blocks direct pushes to `main` / `master`.
+>
+> - POSIX shell: `./scripts/setup-git-hooks.sh`
+> - PowerShell: `powershell -ExecutionPolicy Bypass -File .\scripts\setup-git-hooks.ps1`
 
 ### Cross-compile for static Linux binary
 

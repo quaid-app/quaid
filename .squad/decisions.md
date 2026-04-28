@@ -318,6 +318,14 @@ Applied targeted fixes to Sprint 0 artifacts so the scaffold is internally coher
 
 **Why:** User request — ensuring team memory captures governance requirement.
 
+### 2026-04-28: Hard-stop direct pushes to main
+
+**By:** macro88 (via Copilot)
+
+**What:** Treat direct pushes to `main` as a major violation. Put technical and process safeguards in place so direct pushes to `main` cannot happen again. Always create a branch and open a PR.
+
+**Why:** The existing branch + PR directive was violated during the `v0.10.0` release flow, so the repo now requires hard enforcement instead of relying on policy alone.
+
 ### 2026-04-14: Phase 1 OpenSpec Unblock
 
 **By:** Leela  

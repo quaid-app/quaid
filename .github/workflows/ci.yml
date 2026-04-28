@@ -32,6 +32,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Verify protected-branch hook bootstrap
+        run: |
+          sh scripts/setup-git-hooks.sh
+          test "$(git config --local --get core.hooksPath)" = ".githooks"
+          if printf 'refs/heads/fix/test 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222\n' | .githooks/pre-push origin https://github.com/quaid-app/quaid; then
+            echo "::error::.githooks/pre-push allowed a direct push to main"
+            exit 1
+          fi
+          printf 'refs/heads/fix/test 1111111111111111111111111111111111111111 refs/heads/fix/test 0000000000000000000000000000000000000000\n' | .githooks/pre-push origin https://github.com/quaid-app/quaid
+
       - name: Cargo fmt
         run: cargo fmt --all -- --check
 

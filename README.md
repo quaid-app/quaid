@@ -96,8 +96,12 @@ curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quai
 
 ```bash
 git clone https://github.com/quaid-app/quaid
-cd quaid && cargo build --release
+cd quaid
+./scripts/setup-git-hooks.sh   # blocks direct pushes to main/master for this clone
+cargo build --release
 ```
+
+On Windows PowerShell, run `powershell -ExecutionPolicy Bypass -File .\scripts\setup-git-hooks.ps1` after `cd quaid`.
 
 ---
 

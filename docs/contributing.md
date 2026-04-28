@@ -79,6 +79,9 @@ quaid/
 ## Build and test
 
 ```bash
+# Install repo guardrails for this clone (blocks direct pushes to main/master)
+./scripts/setup-git-hooks.sh
+
 # Check that everything compiles (fast; no linking)
 cargo check
 
@@ -100,6 +103,9 @@ cross build --release --target x86_64-unknown-linux-musl
 ```
 
 CI runs `cargo check` and `cargo test` on every pull request. Both must pass before a PR can merge. Phase 3 also runs offline benchmark tests (`corpus_reality`, `concurrency_stress`, `embedding_migration`) on every PR.
+
+> **Windows PowerShell:** run `powershell -ExecutionPolicy Bypass -File .\scripts\setup-git-hooks.ps1`
+> once per clone to install the same repo-versioned hooks.
 
 ---
 
@@ -160,11 +166,12 @@ This keeps design intent visible and reviewable before any work starts.
 
 1. **Spec first.** Check `docs/spec.md` for the canonical design. If your change is not in the spec, propose it via OpenSpec.
 2. **OpenSpec proposal.** Write a proposal and get it reviewed.
-3. **Branch.** Branch off `main` — name it `phase-N/short-description` or `fix/short-description`.
-4. **Implement.** Follow the module structure above. One command per file in `src/commands/`. Core logic in `src/core/`.
-5. **Test.** Unit tests live next to the code they test (Rust convention). Integration tests go in `tests/`.
-6. **CI.** Push — CI runs `cargo check` and `cargo test` automatically.
-7. **PR.** Open a pull request. Link the OpenSpec proposal. Get reviewer sign-off per the phase gates.
+3. **Install repo hooks.** Run `./scripts/setup-git-hooks.sh` once per clone (or the PowerShell variant). Direct pushes to `main` / `master` must fail locally before Git contacts origin.
+4. **Branch.** Branch off `main` — name it `phase-N/short-description` or `fix/short-description`.
+5. **Implement.** Follow the module structure above. One command per file in `src/commands/`. Core logic in `src/core/`.
+6. **Test.** Unit tests live next to the code they test (Rust convention). Integration tests go in `tests/`.
+7. **CI.** Push your branch — CI runs `cargo check` and `cargo test` automatically.
+8. **PR.** Open a pull request. Link the OpenSpec proposal. Get reviewer sign-off per the phase gates.
 
 ---
 

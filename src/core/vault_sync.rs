@@ -134,7 +134,10 @@ pub struct WatcherHealthView {
 
 #[cfg(unix)]
 enum WatcherHandle {
+    // Fields are held for Drop semantics (keeping the watcher alive), not read directly.
+    #[allow(dead_code)]
     Native(RecommendedWatcher),
+    #[allow(dead_code)]
     Poll(PollWatcher),
 }
 

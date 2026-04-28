@@ -2,6 +2,50 @@
 
 ## Active Decisions
 
+### 2026-04-28: PR #110 Revision — ops: harden main branch guardrails
+
+**By:** Mom (revision owner), Bender (diagnosis), Professor (review)  
+**Date:** 2026-04-28  
+**Status:** REVISION COMPLETE; awaiting CI validation (run 73345970025)  
+**Commits:** `7e8031f` (revision), `d317005` (clippy fix), `6e75056` (squad history)
+
+**Context:**  
+Professor rejected PR #110 at `b066d34` on three grounds: (1) fmt fix widened PR with unrelated Rust churn; (2) merge failed Linux CI `cargo check`; (3) OpenSpec overclaimed task 3.2 branch-protection completion with no recorded attempt. Fry locked out per reviewer protocol; Mom assigned revision owner.
+
+**Bender Diagnosis Arc:**
+- **Fmt failure root:** Pre-existing rustfmt drift on 8 files from `ea5cabf` (v0.10.0). No files in PR #110 diff; base-branch formatting drift. **(D-Bender-FmtDrift)**
+- **Compile errors (exposed after fmt fix):** Two pre-existing errors masked by fmt gate failure:
+  - E0063 collection.rs:1654 — `CollectionInfoOutput` test struct missing watcher fields (add `watcher_mode`, `watcher_last_event_at`, `watcher_channel_depth` as `None`)
+  - E0277 vault_sync.rs:2199–2205 — `?` operators inside if/else exit function instead of block; no `From<String>` for `VaultSyncError`. Wrap else block in `(|| -> Result<WatcherHandle, String> { ... })()`
+  - Both errors originate from v0.10.0 direct-push to main (exact vulnerability PR #110 prevents). **(D-Bender-CompileAttribution)**
+
+**Mom Revision Phase 1 (`7e8031f`):**
+- **D-Mom-P1 (Fmt carryover):** Retain mechanical fmt changes on 8 Rust files as necessary CI compliance (current rustfmt differs from v0.10.0 version). No new logic.
+- **D-Mom-P2 (Compile fixes):** Retain independent re-implementations of same logical repairs (vault_sync closure wrapper, collection.rs field additions, fs_safety unused var). Required for Linux CI pass; not new feature content.
+- **D-Mom-P3 (Strip Fry artifacts):** Removed locked-out squad files (`.squad/decisions/inbox/fry-pr110-*.md`, `.squad/skills/stable-rustfmt-drift/SKILL.md`, Fry's history additions).
+- **D-Mom-P4 (OpenSpec truth):** Task 3.2 `[x]` → `[ ]`; proposal verification updated to "pending — outcome not yet recorded". Makes artifacts truthful without asserting incomplete work.
+
+**Mom Revision Phase 2 (`d317005` — Clippy/Rustc fix):**
+After Mom's revision pushed, Check job 73344930177 revealed three diagnostics:
+- **D-Mom-C1:** `WatcherHandle::Poll` variant marked `#[allow(dead_code)]` — fallback not yet matched in unix watcher dispatch; suppression preserves design intent.
+- **D-Mom-C2:** Test variable `root_fd` → `_root_fd` — intent clarification (opened to prove `open_root_fd` succeeds; actual stat uses `root_fd2`).
+- **D-Mom-C3:** Match guard `PathBuf::from(...)` → `Path::new(...)` — avoid owned allocation; `PathBuf` implements `PartialEq<Path>`.
+
+**Validation:** `cargo fmt --all -- --check` ✅; `cargo clippy --all-targets -- -D warnings` ✅; `cargo check --all-targets` ✅
+
+**Professor Review Arc:**
+- **Initial rejection (of `b066d34`):** PR widened with unrelated churn; merge fails Linux CI; OpenSpec overclaims completion. Assign Mom (lockout: not Fry). **(D-Prof-Reject-1)**
+- **Revised assessment (of `7e8031f`):** Truth/documentation blocker closed; unrelated Rust carryover still breaks merge artifact (fs_safety unused `root_fd`, vault_sync clippy warnings). Assign Zapp (lockout: not Mom, not Fry). **(D-Prof-Reject-2)**
+- **Pending final review (after `d317005` + Check run 73345970025):** If Check passes cross-platform, ready for merge approval.
+
+**Platform Notes:**
+- Windows: Clippy + fmt + check all pass locally
+- Linux CI: Awaiting Check run 73345970025 (in progress)
+
+**Next Owner:** Awaiting Check run completion. If green, Professor approves; PR ready to land. If red, Zapp assigned per lockout protocol.
+
+---
+
 ### 2026-04-29: Batch 1 Coverage Sprint Arc — v0.10.0 Release Gate CLEARED
 
 **By:** Bender + Mom + Scruffy + Zapp  

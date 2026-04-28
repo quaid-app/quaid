@@ -7,7 +7,9 @@
 
 ## Learnings
 
-- Command coverage sprint (2026-05): Added targeted unit tests to `validate.rs`, `pipe.rs`, `query.rs`, and `call.rs`. Windows line coverage moved from 85.58% → **88.38%**. Individual file gains: validate 70.7%→91.0%, pipe 70.1%→89.4%, query 79.8%→95.0%, call 67.6%→88.9%. Key constraints: `process::exit(1)` failure paths are permanently untestable; `invalid_temporal_order` link check cannot be triggered without bypassing SQLite CHECK constraints; `active_model_count > 1` blocked by partial unique index. Two pre-existing test failures in `core::search` (UNIQUE constraint on `config` table upsert) were present before this work and are unrelated.
+- **PR #110 rerun CI diagnosis (2026-04-28):** Fry's fmt fix (644ad9c) was correct — `cargo fmt --check` now passes. But two pre-existing compile errors from `ea5cabf` (v0.10.0 direct-push) were masked by the earlier fmt gate failure and are now exposed. (1) E0063 in `collection.rs:1654`: test struct literal `CollectionInfoOutput` missing three watcher-health fields (`watcher_mode`, `watcher_last_event_at`, `watcher_channel_depth`) added in task 6.11; fix: add all three as `None` to the literal. (2) E0277 ×3 in `vault_sync.rs:2199,2202,2205`: `?` operators inside a `let native_result = if ... {} else {}` expression exit the *function*, not the block — but `VaultSyncError` has no `From<String>` impl; fix: wrap the else block in `(|| -> Result<WatcherHandle, String> { ... })()` to confine the `?` scope. Root blame: both errors come from v0.10.0 bypassing CI — the exact violation PR #110 exists to prevent.
+
+- Command coverage sprint (2026-05):Added targeted unit tests to `validate.rs`, `pipe.rs`, `query.rs`, and `call.rs`. Windows line coverage moved from 85.58% → **88.38%**. Individual file gains: validate 70.7%→91.0%, pipe 70.1%→89.4%, query 79.8%→95.0%, call 67.6%→88.9%. Key constraints: `process::exit(1)` failure paths are permanently untestable; `invalid_temporal_order` link check cannot be triggered without bypassing SQLite CHECK constraints; `active_model_count > 1` blocked by partial unique index. Two pre-existing test failures in `core::search` (UNIQUE constraint on `config` table upsert) were present before this work and are unrelated.
 - The `config` table (runtime key/value defaults including `default_token_budget`) IS seeded by the schema at `db::open` time — the summary incorrectly said it did not exist. Use `UPDATE` not `INSERT` when overriding config values in tests.
 - `#[tokio::test]` requires the `tokio` dev-dependency to have `features = ["full"]` — confirmed present in this project's Cargo.toml.
 - Coverage sprint 2 (2026-05): Pushed Windows LINE coverage from **88.38% → 90.12%** (clean) / **90.77%** (no-clean). Added `pipe_no_newline_exceeds_limit_triggers_too_long_at_eof` in `pipe.rs` (covers lines 65-70 + 43-44) and two FTS5-hit tests in `query.rs` (covers lines 55+59). Stale LLVM binary issue: `--no-clean` coverage runs hang if the lib binary was built with a now-deleted test — fix is to run `--clean` or delete `target\llvm-cov-target\debug\deps\quaid-*.exe` manually. FTS5 tests must use multi-word queries (space prevents `exact_slug_query` short-circuit) with unique token prefixes like `xqzfoo` to avoid false matches.
@@ -290,4 +292,27 @@ This dual-release cycle validated the full team workflow:
 - **`run_phase2_stability_check` is fully testable with fake closures.** The function takes `check_fn: impl FnMut() -> bool` — pass `|| false` to exercise the max-iters exhaustion branch without any real vault.
 - **For env-var-controlled constants, test with `std::env::set_var` + restore pattern.** `default_restore_stability_max_iters()` reads `QUAID_RESTORE_STABILITY_MAX_ITERS`; setting it to "0" forces the zero-fallback branch. Always restore the var (or use `remove_var`) after the test to avoid polluting parallel tests.
 
+## 2026-04-28 PR #110 CI Failure Diagnosis — `cargo fmt` drift
 
+- **PR:** #110 `ops: harden main branch guardrails` (branch `fix/no-direct-main-guardrails`)
+- **Failed job:** `Check` (job ID `73337561909`, run ID `25039073040`)
+- **Failing step:** `Cargo fmt` → `cargo fmt --all -- --check` — exits with code 1
+- **Root cause:** Pre-existing `rustfmt` formatting drift in Rust source files. The runner found format diffs in `src/core/search.rs`, `src/commands/collection.rs`, `src/core/quarantine.rs`, and `tests/command_surface_coverage.rs`.
+- **PR is clean:** The PR only touches `.githooks/pre-push`, `.github/CODEOWNERS`, `.github/workflows/ci.yml` (adds one hook-bootstrap step only), `.github/workflows/main-guardrails.yml`, `scripts/setup-git-hooks.{sh,ps1}`, docs, and `.squad/` files. **Zero Rust source files** are changed by this PR.
+- **Nature of failure:** Pre-existing repo drift. The branch was cut from (or is behind) a version of main where these source files were already not formatted to the current `rustfmt` standard. The `cargo fmt --check` step was already present in `ci.yml` before this PR.
+- **Fix:** Run `cargo fmt --all` on the `fix/no-direct-main-guardrails` branch, commit the result, and push. Zero behavioral regression risk — formatting changes produce identical binaries.
+- **Reproducible locally:** Yes, deterministic. `cargo fmt --all -- --check` will fail on the branch; `cargo fmt --all` fixes it immediately.
+- **Decision written:** `.squad/decisions/inbox/bender-pr110-ci-diagnose.md`
+
+## Learnings
+
+- **`cargo fmt --check` failures in ops/docs PRs are almost always base-branch drift, not PR regressions.** The first diagnostic step is to confirm whether the failing files appear in the PR diff. If they don't, it's drift.
+- **When diagnosing a multi-step CI job failure, confirm which step failed by reading log output for `##[error]Process completed with exit code 1` and tracing back to the last `Diff in` or compiler error.** The `Cargo fmt` step produces "Diff in <file>:<line>" output then exits 1; the `Cargo clippy` step produces `error[EXXXX]` output.
+- **`ci.yml` diff is the fastest way to confirm whether a new CI step could be the failure source.** PR #110's ci.yml change only added the `Verify protected-branch hook bootstrap` step before `Cargo fmt`; `Cargo fmt` itself was already there and was the step that failed.
+
+
+- **Scribe: PR #110 revision phase orchestration & decision merge (2026-04-28T08:12:34Z):**
+   - Orchestration log written: .squad/orchestration-log/2026-04-28T08-12-34Z-bender.md (CI diagnosis phases).
+   - All 8 decision inbox files merged to canonical .squad/decisions.md under "PR #110 Revision" section; inbox files deleted.
+   - Cross-agent histories updated with summary entries.
+   - Decisions merged: D-Bender-FmtDrift (initial fmt failure diagnosis), D-Bender-CompileAttribution (compile error attribution).

@@ -4,6 +4,7 @@ use quaid::{
     commands::{link, put},
     core::{db, gaps},
 };
+use rusqlite::Connection;
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -44,6 +45,29 @@ fn run_quaid_in_dir(db_path: &Path, dir: &Path, args: &[&str], home_dir: &Path) 
         .args(args)
         .output()
         .expect("run quaid in directory")
+}
+
+/// Provision a real vault root on the default collection (id=1).
+///
+/// `quaid init` seeds the default collection with `root_path = ''` and
+/// `state = 'detached'`, which is fine for purely in-memory usage but breaks
+/// any code path that touches `vault_sync::with_write_slug_lock` because it
+/// tries to open the (empty) root directory.  Call this helper after
+/// `db::open` and before any `put` / write-through operation.
+fn provision_vault(dir: &tempfile::TempDir, conn: &Connection) {
+    let vault_root = dir.path().join("vault");
+    fs::create_dir_all(&vault_root).unwrap();
+    conn.execute(
+        "UPDATE collections
+         SET root_path = ?1,
+             writable = 1,
+             is_write_target = 1,
+             state = 'active',
+             needs_full_sync = 0
+         WHERE id = 1",
+        [vault_root.display().to_string()],
+    )
+    .unwrap();
 }
 
 fn run_quaid_with_input(db_path: &Path, args: &[&str], input: &str) -> Output {
@@ -107,6 +131,7 @@ fn export_command_writes_markdown_files_for_existing_pages() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = init_db(&dir);
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    provision_vault(&dir, &conn);
     put::put_from_string(
         &conn,
         "notes/exported",
@@ -282,6 +307,7 @@ fn tags_timeline_add_and_link_close_commands_update_existing_records() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = init_db(&dir);
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    provision_vault(&dir, &conn);
     put::put_from_string(
         &conn,
         "notes/alpha",

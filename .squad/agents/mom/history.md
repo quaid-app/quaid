@@ -26,6 +26,20 @@
 - Quarantine restore second revision — 5-blocker fix (2026-04-25): Mom fixed all 5 consolidated blockers (tempfile cleanup, post-install rollback, absent-parent refusal, task wording, contract narrowness). Decisions D-R1 through D-R5 merged into `.squad/decisions.md`. All tests pass (591 total, 0 new failures).
 - Vault-sync CI fix decisions (2026-04-25): D-V1 (process registry isolation), D-V2 (frontmatter parsing), D-V3 (frontmatter sync), D-V4 (error format consistency) merged to `.squad/decisions.md`.
 
+- **PR #110 revision (2026-04-28) — ops: harden main branch guardrails:**
+  - Professor rejected the branch at `644ad9c`/`b066d34` on three grounds: (1) fmt fix widened PR with unrelated Rust churn; (2) merge result failed `cargo check` on Linux; (3) OpenSpec claimed task 3.2 complete with no recorded branch-protection attempt.
+  - Root cause of (2): `ea5cabf` (origin/main) had three pre-existing Linux-only compile bugs — `vault_sync.rs` used `?` directly inside an `if/else` branch returning `Result<WatcherHandle,String>` inside a `Result<_,VaultSyncError>` function without a closure wrapper; `collection.rs` test fixture was missing three watcher fields; `fs_safety.rs` test had an unused `parent_fd`. All three were fixed in `b066d34` (Fry-coordinated, locked out) — Mom retained those fixes but stripped the Fry decision/history files.
+  - Fry-authored artifacts stripped: `.squad/decisions/inbox/fry-pr110-ci-fix.md`, `fry-pr110-compile-fix.md`, `.squad/skills/stable-rustfmt-drift/SKILL.md`, Fry history additions. Fry's history restored to `ea5cabf` baseline.
+  - OpenSpec truth-repaired: `tasks.md` task 3.2 unchecked; `proposal.md` verification bullet revised to mark `gh api` branch-protection as pending/unrecorded.
+  - Fmt changes to unrelated Rust files (`src/commands/`, `src/core/`, `tests/`) were retained — they are required by `cargo fmt --all -- --check` on current stable toolchain and are pure mechanical output, not logic churn.
+  - Revision commit: `7e8031f`. Pushed to `fix/no-direct-main-guardrails`. PR #110 is now review-ready for Professor re-evaluation.
+
+- **PR #110 clippy burndown (2026-04-29) — commit `d317005`:**
+  - Three CI failures on `7e8031f` fixed surgically: (1) `vault_sync.rs:138` — `#[allow(dead_code)]` on `WatcherHandle` enum (`Poll(PollWatcher)` variant is a fallback arm that exists but is never matched in current unix path); (2) `fs_safety.rs:598` — renamed `root_fd` to `_root_fd` in test (fd opened to verify success; stat uses `root_fd2`); (3) `vault_sync.rs:5695` — replaced `PathBuf::from(...)` with `Path::new(...)` in match guard to satisfy `clippy::cmp_owned`.
+  - `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo check --all-targets` all pass locally.
+  - Scope stays narrow: 2 source files, 3 lines changed, no logic or behavioural difference.
+  - Lesson: `cmp_owned` fires on owned comparisons in match guards too — prefer `Path::new` over `PathBuf::from` in any non-owning context.
+
 - Edge-case work is an explicit part of this squad, not an afterthought.
 - The requested target model is Gemini 3.1 Pro when available on the active surface.
 - Proposal-first work makes it easier to identify which assumptions deserve stress.

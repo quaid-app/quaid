@@ -4,9 +4,10 @@ use quaid::{
     commands::{link, put},
     core::{db, gaps},
 };
+use rusqlite::Connection;
 use serde_json::Value;
-use std::io::Write;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -44,6 +45,29 @@ fn run_quaid_in_dir(db_path: &Path, dir: &Path, args: &[&str], home_dir: &Path) 
         .args(args)
         .output()
         .expect("run quaid in directory")
+}
+
+/// Provision a real vault root on the default collection (id=1).
+///
+/// `quaid init` seeds the default collection with `root_path = ''` and
+/// `state = 'detached'`, which is fine for purely in-memory usage but breaks
+/// any code path that touches `vault_sync::with_write_slug_lock` because it
+/// tries to open the (empty) root directory.  Call this helper after
+/// `db::open` and before any `put` / write-through operation.
+fn provision_vault(dir: &tempfile::TempDir, conn: &Connection) {
+    let vault_root = dir.path().join("vault");
+    fs::create_dir_all(&vault_root).unwrap();
+    conn.execute(
+        "UPDATE collections
+         SET root_path = ?1,
+             writable = 1,
+             is_write_target = 1,
+             state = 'active',
+             needs_full_sync = 0
+         WHERE id = 1",
+        [vault_root.display().to_string()],
+    )
+    .unwrap();
 }
 
 fn run_quaid_with_input(db_path: &Path, args: &[&str], input: &str) -> Output {
@@ -107,6 +131,7 @@ fn export_command_writes_markdown_files_for_existing_pages() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = init_db(&dir);
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    provision_vault(&dir, &conn);
     put::put_from_string(
         &conn,
         "notes/exported",
@@ -155,14 +180,19 @@ fn skills_commands_report_shadowing_and_frontmatter_issues() {
     )
     .unwrap();
 
-    let list = run_quaid_in_dir(&db_path, &project_dir, &["skills", "list", "--json"], &home_dir);
+    let list = run_quaid_in_dir(
+        &db_path,
+        &project_dir,
+        &["skills", "list", "--json"],
+        &home_dir,
+    );
     assert!(list.status.success());
     let listed: Value = serde_json::from_slice(&list.stdout).unwrap();
     let listed = listed.as_array().unwrap();
     assert!(listed.iter().any(|skill| skill["name"] == "local-extra"));
-    assert!(listed.iter().any(|skill| {
-        skill["name"] == "ingest" && skill["shadowed"].as_bool() == Some(true)
-    }));
+    assert!(listed
+        .iter()
+        .any(|skill| { skill["name"] == "ingest" && skill["shadowed"].as_bool() == Some(true) }));
 
     let list_text = run_quaid_in_dir(&db_path, &project_dir, &["skills", "list"], &home_dir);
     assert!(list_text.status.success());
@@ -219,7 +249,14 @@ fn stats_compact_validate_and_gaps_commands_cover_reporting_surface() {
     assert!(String::from_utf8_lossy(&validate.stdout).contains("All checks passed."));
 
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
-    gaps::log_gap(None, "coverage-gap", "surface coverage gap", Some(0.25), &conn).unwrap();
+    gaps::log_gap(
+        None,
+        "coverage-gap",
+        "surface coverage gap",
+        Some(0.25),
+        &conn,
+    )
+    .unwrap();
     drop(conn);
 
     let gap_output = run_quaid(&db_path, &["gaps", "--json"]);
@@ -243,7 +280,11 @@ fn import_and_ingest_commands_accept_markdown_sources() {
     fs::write(import_dir.join("ignored.txt"), "ignore me").unwrap();
 
     let import = run_quaid(&db_path, &["import", import_dir.to_str().unwrap()]);
-    assert!(import.status.success(), "import stderr: {}", String::from_utf8_lossy(&import.stderr));
+    assert!(
+        import.status.success(),
+        "import stderr: {}",
+        String::from_utf8_lossy(&import.stderr)
+    );
     assert!(String::from_utf8_lossy(&import.stdout).contains("Imported 1 page(s)"));
 
     let ingest_file = dir.path().join("ingest.md");
@@ -253,7 +294,11 @@ fn import_and_ingest_commands_accept_markdown_sources() {
     )
     .unwrap();
     let ingest = run_quaid(&db_path, &["ingest", ingest_file.to_str().unwrap()]);
-    assert!(ingest.status.success(), "ingest stderr: {}", String::from_utf8_lossy(&ingest.stderr));
+    assert!(
+        ingest.status.success(),
+        "ingest stderr: {}",
+        String::from_utf8_lossy(&ingest.stderr)
+    );
     assert!(String::from_utf8_lossy(&ingest.stdout).contains("Ingested notes/ingested"));
 }
 
@@ -262,7 +307,14 @@ fn tags_timeline_add_and_link_close_commands_update_existing_records() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = init_db(&dir);
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
-    put::put_from_string(&conn, "notes/alpha", "---\ntitle: Alpha\n---\nAlpha\n", None).unwrap();
+    provision_vault(&dir, &conn);
+    put::put_from_string(
+        &conn,
+        "notes/alpha",
+        "---\ntitle: Alpha\n---\nAlpha\n",
+        None,
+    )
+    .unwrap();
     put::put_from_string(&conn, "notes/beta", "---\ntitle: Beta\n---\nBeta\n", None).unwrap();
     link::run_silent(
         &conn,
@@ -280,9 +332,20 @@ fn tags_timeline_add_and_link_close_commands_update_existing_records() {
 
     let tags = run_quaid(
         &db_path,
-        &["tags", "notes/alpha", "--add", "focus", "--add", "important"],
+        &[
+            "tags",
+            "notes/alpha",
+            "--add",
+            "focus",
+            "--add",
+            "important",
+        ],
     );
-    assert!(tags.status.success(), "tags stderr: {}", String::from_utf8_lossy(&tags.stderr));
+    assert!(
+        tags.status.success(),
+        "tags stderr: {}",
+        String::from_utf8_lossy(&tags.stderr)
+    );
 
     let timeline = run_quaid(
         &db_path,
@@ -299,13 +362,26 @@ fn tags_timeline_add_and_link_close_commands_update_existing_records() {
             "main arm covered",
         ],
     );
-    assert!(timeline.status.success(), "timeline stderr: {}", String::from_utf8_lossy(&timeline.stderr));
+    assert!(
+        timeline.status.success(),
+        "timeline stderr: {}",
+        String::from_utf8_lossy(&timeline.stderr)
+    );
 
     let close = run_quaid(
         &db_path,
-        &["link-close", &link_id.to_string(), "--valid-until", "2026-04-29"],
+        &[
+            "link-close",
+            &link_id.to_string(),
+            "--valid-until",
+            "2026-04-29",
+        ],
     );
-    assert!(close.status.success(), "link-close stderr: {}", String::from_utf8_lossy(&close.stderr));
+    assert!(
+        close.status.success(),
+        "link-close stderr: {}",
+        String::from_utf8_lossy(&close.stderr)
+    );
 
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
     let tag_count: i64 = conn
@@ -317,11 +393,17 @@ fn tags_timeline_add_and_link_close_commands_update_existing_records() {
         .unwrap();
     assert_eq!(tag_count, 2);
     let timeline_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM timeline_entries", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM timeline_entries", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(timeline_count, 1);
     let valid_until: String = conn
-        .query_row("SELECT valid_until FROM links WHERE id = ?1", [link_id], |row| row.get(0))
+        .query_row(
+            "SELECT valid_until FROM links WHERE id = ?1",
+            [link_id],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(valid_until, "2026-04-29");
 }
@@ -332,7 +414,11 @@ fn embed_and_pipe_commands_run_through_main_dispatch() {
     let db_path = init_db(&dir);
 
     let embed = run_quaid(&db_path, &["embed", "--all"]);
-    assert!(embed.status.success(), "embed stderr: {}", String::from_utf8_lossy(&embed.stderr));
+    assert!(
+        embed.status.success(),
+        "embed stderr: {}",
+        String::from_utf8_lossy(&embed.stderr)
+    );
     assert!(String::from_utf8_lossy(&embed.stdout).contains("Embedded 0 chunks across 0 page(s)."));
 
     let pipe = run_quaid_with_input(
@@ -340,7 +426,11 @@ fn embed_and_pipe_commands_run_through_main_dispatch() {
         &["pipe"],
         "{\"tool\":\"memory_stats\",\"input\":{}}\n",
     );
-    assert!(pipe.status.success(), "pipe stderr: {}", String::from_utf8_lossy(&pipe.stderr));
+    assert!(
+        pipe.status.success(),
+        "pipe stderr: {}",
+        String::from_utf8_lossy(&pipe.stderr)
+    );
     let pipe_json: Value = serde_json::from_slice(&pipe.stdout).unwrap();
     assert!(pipe_json.get("page_count").is_some());
 }

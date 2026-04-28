@@ -96,8 +96,8 @@ mod tests {
                 "SELECT value FROM config WHERE key = 'version'",
                 [],
                 |row| row.get(0),
-        )
-        .unwrap();
+            )
+            .unwrap();
         assert_eq!(value, "99");
     }
 

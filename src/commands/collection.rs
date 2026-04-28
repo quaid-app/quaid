@@ -1328,7 +1328,12 @@ mod tests {
         conn.execute(
             "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
              VALUES (?1, ?2, 1, ?3, ?4)",
-            rusqlite::params![page_id, Uuid::now_v7().to_string(), raw_bytes, relative_path],
+            rusqlite::params![
+                page_id,
+                Uuid::now_v7().to_string(),
+                raw_bytes,
+                relative_path
+            ],
         )
         .unwrap();
         let hash = Sha256::digest(raw_bytes);
@@ -1671,6 +1676,9 @@ mod tests {
             reload_generation: collection.reload_generation,
             watcher_released_session_id: collection.watcher_released_session_id,
             watcher_released_generation: collection.watcher_released_generation,
+            watcher_mode: None,
+            watcher_last_event_at: None,
+            watcher_channel_depth: None,
             blocked_state: status.blocked_state,
             integrity_blocked: status.integrity_blocked,
             suggested_command: status.suggested_command,
@@ -1774,9 +1782,11 @@ mod tests {
 
         assert!(error.to_string().contains("--write-quaid-id is deferred"));
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM collections WHERE name = 'work'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM collections WHERE name = 'work'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 0);
     }
@@ -2372,9 +2382,11 @@ mod tests {
         )
         .unwrap();
         let remaining: i64 = conn
-            .query_row("SELECT COUNT(*) FROM pages WHERE id = ?1", [page_id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(remaining, 0);
     }

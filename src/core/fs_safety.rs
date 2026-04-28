@@ -596,7 +596,7 @@ mod tests {
         fs::create_dir(&sub).unwrap();
 
         let root_fd = open_root_fd(dir.path()).unwrap();
-        let parent_fd = walk_to_parent(root_fd, Path::new("subdir/placeholder")).unwrap();
+        let _parent_fd = walk_to_parent(root_fd, Path::new("subdir/placeholder")).unwrap();
         // stat_at_nofollow needs a name relative to parent_fd, so stat "." on parent_fd
         // by using the subdir path from root
         let root_fd2 = open_root_fd(dir.path()).unwrap();

@@ -134,7 +134,10 @@ pub struct WatcherHealthView {
 
 #[cfg(unix)]
 enum WatcherHandle {
+    // Fields are held for Drop semantics (keeping the watcher alive), not read directly.
+    #[allow(dead_code)]
     Native(RecommendedWatcher),
+    #[allow(dead_code)]
     Poll(PollWatcher),
 }
 
@@ -2190,20 +2193,26 @@ fn start_collection_watcher(
     let native_result = if native_init_forced_error {
         Err("forced native watcher init failure".to_owned())
     } else {
-        let mut watcher = notify::recommended_watcher(watch_callback(
-            collection_id,
-            watch_root.clone(),
-            db_path.clone(),
-            sender.clone(),
-        ))
-        .map_err(|error| error.to_string())?;
-        watcher
-            .configure(NotifyConfig::default())
-            .map_err(|error| error.to_string())?;
-        watcher
-            .watch(&watch_root, RecursiveMode::Recursive)
-            .map_err(|error| error.to_string())?;
-        Ok(WatcherHandle::Native(watcher))
+        // Wrap the native init sequence in a closure so that failures produce
+        // Err(String) into `native_result` rather than propagating with `?`
+        // out of `start_collection_watcher`, which would bypass the poll-watcher
+        // fallback in the `match native_result` block below.
+        (|| -> Result<WatcherHandle, String> {
+            let mut watcher = notify::recommended_watcher(watch_callback(
+                collection_id,
+                watch_root.clone(),
+                db_path.clone(),
+                sender.clone(),
+            ))
+            .map_err(|e| e.to_string())?;
+            watcher
+                .configure(NotifyConfig::default())
+                .map_err(|e| e.to_string())?;
+            watcher
+                .watch(&watch_root, RecursiveMode::Recursive)
+                .map_err(|e| e.to_string())?;
+            Ok(WatcherHandle::Native(watcher))
+        })()
     };
     let (watcher, mode) = match native_result {
         Ok(watcher) => (Some(watcher), WatcherMode::Native),
@@ -5690,7 +5699,7 @@ mod tests {
         assert!(needs_full_sync);
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            WatchEvent::DirtyPath(path) if path == PathBuf::from("notes/already-buffered.md")
+            WatchEvent::DirtyPath(path) if path == Path::new("notes/already-buffered.md")
         ));
     }
 

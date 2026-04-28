@@ -860,3 +860,10 @@ Ready for implementation and landing.
 
 - When a hotfix PR is the next shippable patch, bump every public version truth that users can copy from (`Cargo.toml`, npm package metadata, runtime user agent, README/docs install snippets) in the same change or the release surface drifts immediately.
 - GitHub release body text is part of the product contract: keep install commands stable, but rewrite the explanatory paragraph so it names the actual hotfix instead of inheriting stale notes from the prior patch lane.
+
+### 2026-04-28 08:10:00 - PR #110 CI fmt drift on guardrails lane
+
+- The failing `Check` job on PR #110 was not caused by the new branch-guardrail files; it was a `cargo fmt --check` drift against current stable rustfmt across existing Rust test/code files (`src/commands/{collection,config,query,skills,stats}.rs`, `src/core/{quarantine,search}.rs`, `tests/command_surface_coverage.rs`).
+- The safest repair was to reformat the existing Rust sources with `cargo fmt --all` on the PR branch instead of weakening the workflow or pinning around stale formatting output.
+- Validation that passed on this Windows host after the formatting commit candidate: `cargo fmt --all -- --check`, `cargo check --all-targets`, `cargo test --verbose`, and hook bootstrap simulation via `scripts/setup-git-hooks.ps1` plus `.githooks/pre-push`.
+- Key paths for this lane: `.github/workflows/ci.yml`, `.githooks/pre-push`, `scripts/setup-git-hooks.ps1`, and the eight Rust files touched by rustfmt.

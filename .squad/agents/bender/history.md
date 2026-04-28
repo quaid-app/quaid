@@ -7,6 +7,11 @@
 
 ## Learnings
 
+- Command coverage sprint (2026-05): Added targeted unit tests to `validate.rs`, `pipe.rs`, `query.rs`, and `call.rs`. Windows line coverage moved from 85.58% → **88.38%**. Individual file gains: validate 70.7%→91.0%, pipe 70.1%→89.4%, query 79.8%→95.0%, call 67.6%→88.9%. Key constraints: `process::exit(1)` failure paths are permanently untestable; `invalid_temporal_order` link check cannot be triggered without bypassing SQLite CHECK constraints; `active_model_count > 1` blocked by partial unique index. Two pre-existing test failures in `core::search` (UNIQUE constraint on `config` table upsert) were present before this work and are unrelated.
+- The `config` table (runtime key/value defaults including `default_token_budget`) IS seeded by the schema at `db::open` time — the summary incorrectly said it did not exist. Use `UPDATE` not `INSERT` when overriding config values in tests.
+- `#[tokio::test]` requires the `tokio` dev-dependency to have `features = ["full"]` — confirmed present in this project's Cargo.toml.
+- Coverage sprint 2 (2026-05): Pushed Windows LINE coverage from **88.38% → 90.12%** (clean) / **90.77%** (no-clean). Added `pipe_no_newline_exceeds_limit_triggers_too_long_at_eof` in `pipe.rs` (covers lines 65-70 + 43-44) and two FTS5-hit tests in `query.rs` (covers lines 55+59). Stale LLVM binary issue: `--no-clean` coverage runs hang if the lib binary was built with a now-deleted test — fix is to run `--clean` or delete `target\llvm-cov-target\debug\deps\quaid-*.exe` manually. FTS5 tests must use multi-word queries (space prevents `exact_slug_query` short-circuit) with unique token prefixes like `xqzfoo` to avoid false matches.
+
 - Validation needs to cover ingest, retrieval, CLI behavior, and MCP behavior.
 - OpenSpec proposals define what must be proven, not just what must be built.
 - This project values round-trip safety and harsh failure testing.

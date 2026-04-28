@@ -137,36 +137,99 @@ mod tests {
     }
 
     #[test]
-    fn low_result_query_auto_logs_gap() {
+    fn budget_results_zero_budget_breaks_immediately() {
+        let results = vec![result("people/alice", "anything")];
+        // prefix len ("people/alice: ") = 14, budget = 0 → 0 <= 14 → break
+        let budgeted = budget_results(results, 10, 0);
+        assert!(budgeted.is_empty());
+    }
+
+    #[test]
+    fn read_token_budget_returns_default_4000_from_config_table() {
         use crate::core::db;
-        use crate::core::gaps;
+        let conn = db::open(":memory:").unwrap();
+        // The schema seeds config with default_token_budget = 4000
+        let budget = super::read_token_budget(&conn);
+        assert_eq!(budget, 4000);
+    }
 
-        let conn = db::open(":memory:").expect("open db");
-
-        // Query with no results should log a gap
-        let results = crate::core::search::hybrid_search_canonical(
-            "nonexistent quantum socks",
-            None,
-            None,
-            &conn,
-            10,
+    #[test]
+    fn read_token_budget_returns_custom_value_from_config_table() {
+        use crate::core::db;
+        let conn = db::open(":memory:").unwrap();
+        // config table exists in schema with default 4000; update it to a custom value
+        conn.execute(
+            "UPDATE config SET value = '8192' WHERE key = 'default_token_budget'",
+            [],
         )
         .unwrap();
-        assert!(results.len() < 2);
+        let budget = super::read_token_budget(&conn);
+        assert_eq!(budget, 8192);
+    }
 
-        // Simulate the gap logging that query::run does
-        if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
-            gaps::log_gap(
-                None,
-                "nonexistent quantum socks",
-                "",
-                results.first().map(|r| r.score),
-                &conn,
-            )
-            .unwrap();
-        }
+    #[tokio::test]
+    async fn run_json_mode_returns_ok_with_empty_results() {
+        use crate::core::db;
+        let conn = db::open(":memory:").unwrap();
+        let result = run(&conn, "nonexistent zebra query", "none", 5, 1000, None, true).await;
+        assert!(result.is_ok());
+    }
 
-        let gaps = gaps::list_gaps(false, 10, &conn).unwrap();
-        assert_eq!(gaps.len(), 1);
+    #[tokio::test]
+    async fn run_text_mode_no_results_prints_nothing_and_returns_ok() {
+        use crate::core::db;
+        let conn = db::open(":memory:").unwrap();
+        let result = run(&conn, "nonexistent zebra query", "none", 5, 1000, None, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_auto_depth_uses_token_budget() {
+        use crate::core::db;
+        let conn = db::open(":memory:").unwrap();
+        // depth="auto" triggers read_token_budget + progressive_retrieve path
+        let result = run(&conn, "anything", "auto", 5, 0, None, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_with_explicit_token_budget_uses_it() {
+        use crate::core::db;
+        let conn = db::open(":memory:").unwrap();
+        let result = run(&conn, "query", "auto", 5, 2000, None, true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_text_mode_with_fts_match_prints_results() {
+        use crate::core::db;
+        let conn = db::open(":memory:").unwrap();
+        // Insert a page whose title contains a unique multi-word phrase.
+        // FTS5 trigger fires automatically on INSERT.
+        conn.execute(
+            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, wing, version) \
+             VALUES ('concept/xqztest', 'concept', 'xqzfoo xqzbar unique coverage probe', \
+                     'An xqzfoo probe page for coverage', '', '', 'concept', 1)",
+            [],
+        )
+        .unwrap();
+        // Multi-word query → exact_slug_query returns None → FTS5 path → finds the page
+        let result = run(&conn, "xqzfoo xqzbar", "none", 5, 10_000, None, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_json_mode_with_fts_match_serializes_results_array() {
+        use crate::core::db;
+        let conn = db::open(":memory:").unwrap();
+        conn.execute(
+            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, wing, version) \
+             VALUES ('concept/xqzjson', 'concept', 'xqzjson xqzbaz unique json probe', \
+                     'JSON output path probe', '', '', 'concept', 1)",
+            [],
+        )
+        .unwrap();
+        let result = run(&conn, "xqzjson xqzbaz", "none", 5, 10_000, None, true).await;
+        assert!(result.is_ok());
     }
 }

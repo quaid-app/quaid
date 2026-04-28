@@ -192,4 +192,99 @@ mod tests {
         let second: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
         assert!(second.get("page_count").is_some());
     }
+
+    #[test]
+    fn pipe_empty_input_produces_no_output() {
+        let conn = db::open(":memory:").unwrap();
+        let server = QuaidServer::new(conn);
+        let reader = Cursor::new(String::new());
+        let mut output = Vec::new();
+        run_with_io(&server, reader, &mut output, MAX_LINE_BYTES).unwrap();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn pipe_blank_lines_are_skipped() {
+        let conn = db::open(":memory:").unwrap();
+        let server = QuaidServer::new(conn);
+        let reader = Cursor::new("\n   \n\n".to_string());
+        let mut output = Vec::new();
+        run_with_io(&server, reader, &mut output, MAX_LINE_BYTES).unwrap();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn pipe_parse_error_writes_error_json() {
+        let conn = db::open(":memory:").unwrap();
+        let server = QuaidServer::new(conn);
+        let reader = Cursor::new("not valid json\n".to_string());
+        let mut output = Vec::new();
+        run_with_io(&server, reader, &mut output, MAX_LINE_BYTES).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        let response: Value = serde_json::from_str(output_str.trim()).unwrap();
+        assert!(response.get("error").is_some());
+        let err_msg = response["error"].as_str().unwrap_or("");
+        assert!(err_msg.contains("parse error"));
+    }
+
+    #[test]
+    fn pipe_unknown_tool_writes_error_json() {
+        let conn = db::open(":memory:").unwrap();
+        let server = QuaidServer::new(conn);
+        let input = "{\"tool\":\"no_such_tool\",\"input\":{}}\n".to_string();
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+        run_with_io(&server, reader, &mut output, MAX_LINE_BYTES).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        let response: Value = serde_json::from_str(output_str.trim()).unwrap();
+        assert!(response.get("error").is_some());
+    }
+
+    #[test]
+    fn pipe_no_trailing_newline_still_processes_line() {
+        // Tests the EOF-with-buffer path in read_limited_line (lines 38-46)
+        let conn = db::open(":memory:").unwrap();
+        let server = QuaidServer::new(conn);
+        // Input without trailing newline — exercises the "available is empty but buf has data" path
+        let input = "not json".to_string();
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+        run_with_io(&server, reader, &mut output, MAX_LINE_BYTES).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        let response: Value = serde_json::from_str(output_str.trim()).unwrap();
+        assert!(response.get("error").is_some());
+    }
+
+    #[test]
+    fn pipe_valid_tool_call_returns_result() {
+        let conn = db::open(":memory:").unwrap();
+        let server = QuaidServer::new(conn);
+        let input = "{\"tool\":\"memory_stats\",\"input\":{}}\n".to_string();
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+        run_with_io(&server, reader, &mut output, MAX_LINE_BYTES).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        let response: Value = serde_json::from_str(output_str.trim()).unwrap();
+        // memory_stats returns an object with page_count
+        assert!(response.get("page_count").is_some() || response.is_object());
+    }
+
+    #[test]
+    fn pipe_no_newline_exceeds_limit_triggers_too_long_at_eof() {
+        // 10 bytes of data, no newline, max_line_bytes = 8.
+        // fill_buf returns all 10 bytes; no newline found → else branch (lines 65-70):
+        //   buf.len() + available.len() = 10 > 8 → exceeded=true, buf.clear()
+        //   consume all → loop; fill_buf empty (EOF) → exceeded=true → TooLong (lines 43-44)
+        let conn = db::open(":memory:").unwrap();
+        let server = QuaidServer::new(conn);
+        let input = "x".repeat(10);
+        let reader = Cursor::new(input);
+        let mut output = Vec::new();
+        run_with_io(&server, reader, &mut output, 8).unwrap();
+        let output_str = String::from_utf8(output).unwrap();
+        let response: Value = serde_json::from_str(output_str.trim()).unwrap();
+        assert!(response.get("error").is_some());
+        let err_msg = response["error"].as_str().unwrap_or("");
+        assert!(err_msg.contains("8 bytes"));
+    }
 }

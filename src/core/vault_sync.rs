@@ -2196,13 +2196,19 @@ fn start_collection_watcher(
             db_path.clone(),
             sender.clone(),
         ))
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| VaultSyncError::InvariantViolation {
+            message: error.to_string(),
+        })?;
         watcher
             .configure(NotifyConfig::default())
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| VaultSyncError::InvariantViolation {
+                message: error.to_string(),
+            })?;
         watcher
             .watch(&watch_root, RecursiveMode::Recursive)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| VaultSyncError::InvariantViolation {
+                message: error.to_string(),
+            })?;
         Ok(WatcherHandle::Native(watcher))
     };
     let (watcher, mode) = match native_result {
@@ -5690,7 +5696,7 @@ mod tests {
         assert!(needs_full_sync);
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            WatchEvent::DirtyPath(path) if path == PathBuf::from("notes/already-buffered.md")
+            WatchEvent::DirtyPath(path) if path == Path::new("notes/already-buffered.md")
         ));
     }
 

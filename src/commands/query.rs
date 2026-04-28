@@ -171,16 +171,7 @@ mod tests {
     async fn run_json_mode_returns_ok_with_empty_results() {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
-        let result = run(
-            &conn,
-            "nonexistent zebra query",
-            "none",
-            5,
-            1000,
-            None,
-            true,
-        )
-        .await;
+        let result = run(&conn, "nonexistent zebra query", "none", 5, 1000, None, true).await;
         assert!(result.is_ok());
     }
 
@@ -188,16 +179,7 @@ mod tests {
     async fn run_text_mode_no_results_prints_nothing_and_returns_ok() {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
-        let result = run(
-            &conn,
-            "nonexistent zebra query",
-            "none",
-            5,
-            1000,
-            None,
-            false,
-        )
-        .await;
+        let result = run(&conn, "nonexistent zebra query", "none", 5, 1000, None, false).await;
         assert!(result.is_ok());
     }
 

@@ -366,11 +366,7 @@ mod tests {
         let skills = resolve_skills_with_dirs(None, Some(local_dir));
         let extra_names: Vec<_> = skills
             .iter()
-            .filter(|skill| {
-                !EMBEDDED_SKILLS
-                    .iter()
-                    .any(|embedded| embedded.name == skill.name)
-            })
+            .filter(|skill| !EMBEDDED_SKILLS.iter().any(|embedded| embedded.name == skill.name))
             .map(|skill| skill.name.as_str())
             .collect();
 

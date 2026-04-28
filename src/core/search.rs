@@ -782,11 +782,9 @@ mod tests {
     fn exact_slug_result_applies_wing_and_collection_filters() {
         let conn = open_test_db();
         let default_collection_id: i64 = conn
-            .query_row(
-                "SELECT id FROM collections WHERE name = 'default'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM collections WHERE name = 'default'", [], |row| {
+                row.get(0)
+            })
             .expect("default collection id");
         insert_page(
             &conn,
@@ -807,14 +805,9 @@ mod tests {
         .expect("exact slug");
         let wrong_wing = exact_slug_result("people/alice", Some("companies"), None, &conn, false)
             .expect("wrong wing");
-        let wrong_collection = exact_slug_result(
-            "people/alice",
-            None,
-            Some(default_collection_id + 999),
-            &conn,
-            false,
-        )
-        .expect("wrong collection");
+        let wrong_collection =
+            exact_slug_result("people/alice", None, Some(default_collection_id + 999), &conn, false)
+                .expect("wrong collection");
 
         assert_eq!(matching.expect("matching result").slug, "people/alice");
         assert!(wrong_wing.is_none());
@@ -915,8 +908,13 @@ mod tests {
         conn.execute("DROP TABLE collections", [])
             .expect("drop collections");
 
-        let err = exact_slug_result_canonical_for_collection("work::people/alice", None, 1, &conn)
-            .expect_err("missing collections table should fail");
+        let err = exact_slug_result_canonical_for_collection(
+            "work::people/alice",
+            None,
+            1,
+            &conn,
+        )
+        .expect_err("missing collections table should fail");
 
         assert!(matches!(err, SearchError::Sqlite(_)));
     }

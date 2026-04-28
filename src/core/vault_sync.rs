@@ -133,7 +133,6 @@ pub struct WatcherHealthView {
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 enum WatcherHandle {
     // Fields are held for Drop semantics (keeping the watcher alive), not read directly.
     #[allow(dead_code)]
@@ -5700,7 +5699,7 @@ mod tests {
         assert!(needs_full_sync);
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            WatchEvent::DirtyPath(path) if path == Path::new("notes/already-buffered.md")
+            WatchEvent::DirtyPath(path) if path == PathBuf::from("notes/already-buffered.md")
         ));
     }
 

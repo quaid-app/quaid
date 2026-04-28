@@ -171,18 +171,12 @@ mod tests {
         insert_page(&conn, "people/alice", "person");
         insert_page(&conn, "people/bob", "person");
         let alice_id: i64 = conn
-            .query_row(
-                "SELECT id FROM pages WHERE slug = 'people/alice'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM pages WHERE slug = 'people/alice'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let bob_id: i64 = conn
-            .query_row(
-                "SELECT id FROM pages WHERE slug = 'people/bob'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM pages WHERE slug = 'people/bob'", [], |row| row.get(0))
             .unwrap();
         conn.execute(
             "INSERT INTO links (from_page_id, to_page_id, relationship, source_kind) VALUES (?1, ?2, 'knows', 'programmatic')",

@@ -1,6 +1,6 @@
 [package]
 name = "quaid"
-version = "0.11.0"
+version = "0.11.2"
 edition = "2021"
 description = "Local-first personal memory. SQLite + FTS5 + local vector embeddings. One static binary."
 license = "MIT"

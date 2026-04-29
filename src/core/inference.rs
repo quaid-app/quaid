@@ -1754,6 +1754,40 @@ mod tests {
     }
 
     #[test]
+    fn existing_vec_rowids_returns_sorted_rowids_for_page_and_model() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'note', 'Refresh', '', 'truth', '', '{}', 'notes', '', 1)",
+            rusqlite::params!["notes/rowids", uuid::Uuid::now_v7().to_string()],
+        )
+        .expect("insert page");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/rowids'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 22, 'truth_section', 1, 'second', 'hash-b', 1, 'B')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert second rowid");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 11, 'truth_section', 0, 'first', 'hash-a', 1, 'A')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert first rowid");
+
+        let rowids = existing_vec_rowids(&conn, page_id, "BAAI/bge-small-en-v1.5").unwrap();
+
+        assert_eq!(rowids, vec![11, 22]);
+    }
+
+    #[test]
     fn embedding_to_blob_writes_little_endian_f32_values() {
         let blob = embedding_to_blob(&[1.0, -2.5]);
 

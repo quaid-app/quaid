@@ -1109,6 +1109,51 @@ mod tests {
     }
 
     #[test]
+    fn persist_model_metadata_writes_registry_quaid_config_and_legacy_config() {
+        let conn = open_connection(":memory:").unwrap();
+
+        persist_model_metadata(&conn, &resolve_model("base")).unwrap();
+
+        let stored = read_quaid_config(&conn).unwrap().unwrap();
+        let active_model: String = conn
+            .query_row(
+                "SELECT name FROM embedding_models WHERE active = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let legacy_model: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'embedding_model'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(stored.model_alias, "base");
+        assert_eq!(stored.embedding_dim, 768);
+        assert_eq!(active_model, "BAAI/bge-base-en-v1.5");
+        assert_eq!(legacy_model, "BAAI/bge-base-en-v1.5");
+    }
+
+    #[test]
+    fn is_bootstrap_fresh_db_returns_false_when_inactive_embedding_model_exists() {
+        let conn = open_connection(":memory:").unwrap();
+        ensure_embedding_model_registry(&conn, &default_model()).unwrap();
+        conn.execute("UPDATE embedding_models SET active = 0", [])
+            .unwrap();
+
+        assert!(!is_bootstrap_fresh_db(&conn).unwrap());
+    }
+
+    #[test]
+    fn model_alias_for_model_id_maps_standard_ids() {
+        assert_eq!(model_alias_for_model_id("BAAI/bge-small-en-v1.5"), "small");
+        assert_eq!(model_alias_for_model_id("BAAI/bge-base-en-v1.5"), "base");
+        assert_eq!(model_alias_for_model_id("BAAI/bge-large-en-v1.5"), "large");
+    }
+
+    #[test]
     fn quaid_config_to_model_config_restores_pinned_hashes_for_standard_aliases() {
         let config = QuaidConfig {
             model_id: "BAAI/bge-large-en-v1.5".to_owned(),

@@ -2,7 +2,7 @@
 name: pretag-release-doc-truth
 version: 1.0
 author: amy
-last_updated: 2026-04-28T21:46:33.929+08:00
+last_updated: 2026-04-29T21:29:11.071+08:00
 ---
 
 # Pre-tag release doc truth
@@ -23,6 +23,11 @@ Use this when a release branch or version bump exists before the matching GitHub
 - In install prose, say GitHub Releases and `install.sh` use the **latest published tag**.
 - Do not collapse those two states into one sentence.
 
+### 1a. Check workflow-enforced version gates
+
+- If the release workflow verifies the manifest version against the tag, audit that manifest (`Cargo.toml`, `package.json`, etc.) as part of pretag truth work.
+- A branch can be docs-ready and test-green but still be non-shippable if the manifest still points at the last public version.
+
 ### 2. Use placeholders in release-asset commands
 
 Prefer:
@@ -42,9 +47,12 @@ Then add a short note explaining that readers should replace the placeholder wit
 ### 3. Name the branch-only feature delta
 
 If the tool count or install surface did not change, say so directly. Example: "This release keeps the 17-tool MCP surface and adds background embedding drain plus queue reporting."
+Also check roadmap/deferred tables for stale "not yet implemented" language; they often drift separately from README/install docs after a follow-on slice lands.
+When a previously deferred CLI/admin command ships, update both the roadmap's deferred table and the user docs that teach the old workflow. A merged feature like `--write-quaid-id` / `migrate-uuids` can still block release if public docs leave it stranded in "future work."
 
 ## Audit checklist
 
+- [ ] Manifest version (`Cargo.toml`, `package.json`, etc.) matches the intended tag once the release is actually ready to cut
 - [ ] `README.md`
 - [ ] `docs/getting-started.md`
 - [ ] `website/src/content/docs/tutorials/install.mdx`

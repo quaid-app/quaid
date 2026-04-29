@@ -12,6 +12,7 @@ Use this when a collection-level command needs to rewrite many vault files that 
 ## Patterns
 - Prefer calling the existing single-file writer (`put_from_string`, equivalent mutator, etc.) from bulk admin flows instead of cloning sentinel/tempfile/rename/file_state/raw_import logic.
 - Put collection-level gates (serve-owner refusal, writable/restoring/needs_full_sync checks, dry-run counting) around the loop, but let each per-file write go through the hardened writer.
+- If bulk rewrites target vault bytes, make the live-owner refusal and the temporary offline lease **root-scoped**, not row-scoped: every collection row sharing the canonical root must block the batch when serve owns any alias, and the offline lease must cover every same-root row for the full rewrite loop.
 - Canonicalize legacy aliases during render/write time so migration commands can rewrite stale on-disk keys without widening read paths.
 
 ## Examples

@@ -4699,6 +4699,28 @@ mod tests {
     }
 
     #[test]
+    fn process_embedding_job_on_connection_deletes_orphaned_jobs_when_page_is_missing() {
+        let conn = open_test_db();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "INSERT INTO embedding_jobs (id, page_id, job_state) VALUES (1, 999, 'pending')",
+            [],
+        )
+        .unwrap();
+
+        process_embedding_job_on_connection(&conn, 1, 999).unwrap();
+
+        let remaining_jobs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_jobs WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_jobs, 0);
+    }
+
+    #[test]
     fn resume_orphaned_embedding_jobs_resets_running_rows_to_pending() {
         let conn = open_test_db();
         let page_id = insert_page_with_raw_import(

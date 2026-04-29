@@ -1703,9 +1703,54 @@ mod tests {
                 "SELECT COUNT(*) FROM page_embeddings WHERE page_id = ?1 AND model = 'BAAI/bge-small-en-v1.5'",
                 rusqlite::params![page_id],
                 |row| row.get(0),
-            )
-            .expect("count refreshed metadata rows");
+        )
+        .expect("count refreshed metadata rows");
         assert_eq!(metadata_count as usize, expected_chunks);
+    }
+
+    #[test]
+    fn refresh_page_embeddings_rejects_unsafe_vec_table_names() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'note', 'Refresh', '', 'truth', '', '{}', 'notes', '', 1)",
+            rusqlite::params!["notes/unsafe-refresh", uuid::Uuid::now_v7().to_string()],
+        )
+        .expect("insert page");
+        conn.execute(
+            "UPDATE embedding_models SET vec_table = 'page-embeddings-vec-384' WHERE active = 1",
+            [],
+        )
+        .expect("set unsafe vec table");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/unsafe-refresh'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        let page = Page {
+            slug: "notes/unsafe-refresh".to_owned(),
+            uuid: uuid::Uuid::now_v7().to_string(),
+            page_type: "note".to_owned(),
+            title: "Refresh".to_owned(),
+            summary: String::new(),
+            compiled_truth: "truth".to_owned(),
+            timeline: String::new(),
+            frontmatter: HashMap::new(),
+            wing: "notes".to_owned(),
+            room: String::new(),
+            version: 1,
+            created_at: "2026-04-28T00:00:00Z".to_owned(),
+            updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            truth_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            timeline_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+        };
+
+        let err = refresh_page_embeddings(&conn, page_id, &page).unwrap_err();
+
+        assert!(matches!(err, SearchError::Internal { .. }));
+        assert!(err.to_string().contains("unsafe vec table name"));
     }
 
     #[test]

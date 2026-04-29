@@ -6,6 +6,7 @@
 
 - [2026-04-29T20:33:01.970+08:00] Batch 3 safety review: bulk UUID rewrite guards cannot be trusted if ownership is keyed only by collection_id and the rewrite path does not hold an offline owner lease for the whole batch.
 - [2026-04-29T21:29:11.071+08:00] Batch 3 rereview: same-root bulk rewrite defenses are only credible when refusal and temporary ownership both key off the canonical root, and the closure note says exactly that instead of implying broader proof.
+- [2026-04-29T21:29:11.071+08:00] Coverage backfill on Windows is only review-safe when it stays on fail-closed/helper seams and the task text explicitly says the untouched Unix-only destructive path is still proved elsewhere.
 ## 2026-04-29T13:29:11Z — Batch 3 review close
 
 - **Professor:** Rejected Batch 3 on incomplete task closure (`12.6b`/`17.5ii9`). Error text lacks "stop serve first" guidance. Tests incomplete.

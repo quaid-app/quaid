@@ -6,6 +6,7 @@
 
 - [2026-04-29T20:33:01.970+08:00] Batch 3 vault-sync review: task truth must match operator-facing behavior exactly; if OpenSpec says a live-owner refusal must name pid/host and tell the operator to stop serve first, tests must assert that guidance, not just the error tag.
 - [2026-04-29T21:29:11.071+08:00] Batch 3 re-review: bulk vault rewrites only honestly close when the guard is root-scoped twice — refuse same-root live owners before alias insertion, then hold an offline owner lease across every same-root row for the full batch. Operator guidance is part of the contract; if the spec says "stop serve first," the CLI text must say it.
+- [2026-04-29T21:29:11.071+08:00] Coverage-lift follow-ups are acceptable when they stay in same-file helper tests and explicitly narrow remaining platform proof. Repo-wide Windows coverage is not evidence to relabel Unix-only vault-sync guarantees as Windows-certified.
 ## 2026-04-29T13:29:11Z — Batch 3 review close
 
 - **Professor:** Rejected Batch 3 on incomplete task closure (`12.6b`/`17.5ii9`). Error text lacks "stop serve first" guidance. Tests incomplete.

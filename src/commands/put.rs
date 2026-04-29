@@ -102,6 +102,25 @@ pub fn put_from_string(
     content: &str,
     expected_version: Option<i64>,
 ) -> anyhow::Result<()> {
+    put_from_string_with_output(db, slug_input, content, expected_version, true)
+}
+
+pub(crate) fn put_from_string_quiet(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    expected_version: Option<i64>,
+) -> anyhow::Result<()> {
+    put_from_string_with_output(db, slug_input, content, expected_version, false)
+}
+
+fn put_from_string_with_output(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    expected_version: Option<i64>,
+    emit_status: bool,
+) -> anyhow::Result<()> {
     let (frontmatter, body) = markdown::parse_frontmatter(content);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
@@ -182,10 +201,12 @@ pub fn put_from_string(
     } else {
         "Updated"
     };
-    println!(
-        "{verb} {}::{} (version {})",
-        prepared.collection_name, prepared.slug, outcome.version
-    );
+    if emit_status {
+        println!(
+            "{verb} {}::{} (version {})",
+            prepared.collection_name, prepared.slug, outcome.version
+        );
+    }
 
     Ok(())
 }

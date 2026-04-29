@@ -2151,7 +2151,7 @@ pub fn write_quaid_id_to_file(
     let rendered = markdown::render_page(&page);
     let canonical_slug = format!("{}::{}", collection.name, slug);
 
-    match put::put_from_string(conn, &canonical_slug, &rendered, Some(version)) {
+    match put::put_from_string_quiet(conn, &canonical_slug, &rendered, Some(version)) {
         Ok(()) => Ok(WriteBackOutcome::Migrated),
         Err(error) => match error.downcast::<VaultSyncError>() {
             Ok(vault_error) => match vault_error {

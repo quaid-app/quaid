@@ -49,6 +49,7 @@ Then add a short note explaining that readers should replace the placeholder wit
 If the tool count or install surface did not change, say so directly. Example: "This release keeps the 17-tool MCP surface and adds background embedding drain plus queue reporting."
 Also check roadmap/deferred tables for stale "not yet implemented" language; they often drift separately from README/install docs after a follow-on slice lands.
 When a previously deferred CLI/admin command ships, update both the roadmap's deferred table and the user docs that teach the old workflow. A merged feature like `--write-quaid-id` / `migrate-uuids` can still block release if public docs leave it stranded in "future work."
+- If the shipped delta is an admin or vault-write path, verify the docs also carry its operating limits (for example Unix-only, offline-only, or "refuses while `serve` owns the collection"). Naming the feature without its guardrails is still a truth bug.
 
 ## Audit checklist
 

@@ -234,6 +234,20 @@ fn beir_fiqa_ndcg_at_10_meets_baseline() {
         fiqa_dir.display()
     );
 
+    // Skip the expensive evaluation phase when no baseline is recorded yet.
+    // Running the full embedding + retrieval pipeline without a baseline to
+    // compare against wastes 20–40 minutes of CI time for zero signal. Once a
+    // baseline is established in benchmarks/baselines/beir.json, this guard
+    // drops away and the test runs normally.
+    let Some(baseline) = baseline_ndcg("fiqa") else {
+        eprintln!(
+            "⚠  No FiQA baseline established yet — skipping expensive evaluation in CI. \
+             To record the anchor score run locally:\n\
+             cargo test --test beir_eval beir_fiqa_ndcg_at_10_meets_baseline -- --ignored --nocapture"
+        );
+        return;
+    };
+
     let corpus = load_corpus_jsonl(&fiqa_dir.join("corpus.jsonl"));
     let queries = load_queries_jsonl(&fiqa_dir.join("queries.jsonl"));
     let qrels = load_qrels_tsv(&fiqa_dir.join("qrels").join("test.tsv"));
@@ -279,16 +293,6 @@ fn beir_fiqa_ndcg_at_10_meets_baseline() {
         test_queries.len()
     );
 
-    // Update baseline if not yet set
-    let Some(baseline) = baseline_ndcg("fiqa") else {
-        eprintln!(
-            "⚠  No FiQA baseline established yet. Current score: {:.4}. \
-             Update benchmarks/baselines/beir.json to record this as the anchor.",
-            ndcg
-        );
-        return;
-    };
-
     let threshold = regression_threshold();
     let min_acceptable = baseline * (1.0 - threshold / 100.0);
 
@@ -318,6 +322,20 @@ fn beir_nq_ndcg_at_10_meets_baseline() {
         "NQ dataset not found at {}. Run: ./benchmarks/prep_datasets.sh nq",
         nq_dir.display()
     );
+
+    // Skip the expensive evaluation phase when no baseline is recorded yet.
+    // Running the full embedding + retrieval pipeline without a baseline to
+    // compare against wastes 20–40 minutes of CI time for zero signal. Once a
+    // baseline is established in benchmarks/baselines/beir.json, this guard
+    // drops away and the test runs normally.
+    let Some(baseline) = baseline_ndcg("nq") else {
+        eprintln!(
+            "⚠  No NQ baseline established yet — skipping expensive evaluation in CI. \
+             To record the anchor score run locally:\n\
+             cargo test --test beir_eval beir_nq_ndcg_at_10_meets_baseline -- --ignored --nocapture"
+        );
+        return;
+    };
 
     let corpus = load_corpus_jsonl(&nq_dir.join("corpus.jsonl"));
     let queries = load_queries_jsonl(&nq_dir.join("queries.jsonl"));
@@ -364,15 +382,6 @@ fn beir_nq_ndcg_at_10_meets_baseline() {
         ndcg,
         test_queries.len()
     );
-
-    let Some(baseline) = baseline_ndcg("nq") else {
-        eprintln!(
-            "⚠  No NQ baseline established yet. Current score: {:.4}. \
-             Update benchmarks/baselines/beir.json to record this as the anchor.",
-            ndcg
-        );
-        return;
-    };
 
     let threshold = regression_threshold();
     let min_acceptable = baseline * (1.0 - threshold / 100.0);

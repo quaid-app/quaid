@@ -16,6 +16,7 @@ When APIs or public interfaces change, tests must be updated in the same commit.
 - **Test assertions → disk reality:** When test files contain expected counts (e.g., `EXPECTED_FEATURES`, `EXPECTED_SCENARIOS`), they must match the actual files on disk
 - **Add files → update assertions:** When adding docs pages, features, or any counted resource, update the test assertion array in the same commit
 - **CI failures → check assertions first:** Before debugging complex failures, verify test assertion arrays match filesystem state
+- **Ordering invariants → behavior proof:** When a test is guarding "X must happen before Y", prefer asserting the blocked-state outcome (no file rewrite, no DB rotation, refusal surfaced) over parsing source text or relying on substring order
 
 ## Examples
 
@@ -23,11 +24,13 @@ When APIs or public interfaces change, tests must be updated in the same commit.
 - Changed auth API signature → updated auth.test.ts in same commit
 - Added `distributed-mesh.md` to features/ → added `'distributed-mesh'` to EXPECTED_FEATURES array
 - Deleted two scenario files → removed entries from EXPECTED_SCENARIOS
+- Replaced a source-order test with a same-root live-owner refusal test that proves the file and `raw_imports` stay unchanged
 
 ✗ **Incorrect:**
 - Changed spawn parameters → committed without updating casting.test.ts (CI breaks for next person)
 - Added `built-in-roles.md` → left EXPECTED_FEATURES at old count (PR blocked)
 - Test says "expected 7 files" but disk has 25 (assertion staleness)
+- Parsing `collection.rs` as text to prove a lease happens before a rewrite loop
 
 ## Anti-Patterns
 
@@ -35,3 +38,4 @@ When APIs or public interfaces change, tests must be updated in the same commit.
 - Treating test assertion arrays as static (they evolve with content)
 - Assuming CI passing means coverage is correct (stale assertions can pass while being wrong)
 - Leaving gaps for other agents to discover
+- Locking sequencing behavior to source formatting, helper names, or substring order instead of observable state

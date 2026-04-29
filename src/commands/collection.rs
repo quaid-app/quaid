@@ -2101,28 +2101,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn run_uuid_write_back_keeps_root_scoped_owner_lease_ahead_of_bulk_loop() {
-        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("commands")
-            .join("collection.rs");
-        let source = fs::read_to_string(source_path).unwrap();
-        let start = source.find("fn run_uuid_write_back(").unwrap();
-        let end = source[start..].find("\nfn list(").unwrap() + start;
-        let function = &source[start..end];
-        let lease_idx = function
-            .find("start_short_lived_owner_lease_for_root_path")
-            .unwrap();
-        let loop_idx = function.find("for page_id in page_ids").unwrap();
+    fn run_uuid_write_back_refuses_same_root_live_owner_before_rewriting_files() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let original = "---\ntitle: Note\ntype: note\n---\nhello\n";
+        let note_path = root.path().join("note.md");
+        fs::write(&note_path, original).unwrap();
+        attach_collection(&conn, "work", root.path());
+        let alias_id = insert_collection(&conn, "alias", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 7654, 'alias-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [alias_id],
+        )
+        .unwrap();
 
-        assert!(
-            function.contains("ensure_no_live_serve_owner_for_root_path"),
-            "bulk UUID rewrite must use a root-scoped live-owner refusal helper so duplicate-root alias rows cannot bypass serve ownership"
-        );
-        assert!(
-            lease_idx < loop_idx,
-            "bulk UUID rewrite must acquire the root-scoped short-lived owner lease before iterating page rewrites"
-        );
+        let error = run_uuid_write_back(&conn, &collection, false).unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=7654"));
+        assert!(text.contains("owner_host=alias-host"));
+        assert!(text.contains("stop serve first"));
+        let rendered = fs::read_to_string(&note_path).unwrap();
+        assert_eq!(rendered, original);
+        assert!(!rendered.contains("quaid_id: "));
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 1);
     }
 
     #[cfg(unix)]

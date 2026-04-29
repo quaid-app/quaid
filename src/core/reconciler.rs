@@ -1684,7 +1684,7 @@ fn load_new_tree_identities(
         let (compiled_truth, timeline) = markdown::split_content(&body);
         let uuid = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "resolve_rename_resolution: {} has invalid quaid_id: {err}",
+                "resolve_rename_resolution: {} has invalid frontmatter uuid: {err}",
                 path.display()
             ))
         })?;
@@ -1724,7 +1724,7 @@ fn detect_duplicate_uuids_in_tree(
         let (frontmatter, _) = markdown::parse_frontmatter(&raw);
         if let Some(uuid) = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "detect_duplicate_uuids_in_tree: {} has invalid quaid_id: {err}",
+                "detect_duplicate_uuids_in_tree: {} has invalid frontmatter uuid: {err}",
                 relative_path.display()
             ))
         })? {
@@ -5487,7 +5487,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(error.contains("invalid quaid_id"));
+        assert!(error.contains("invalid frontmatter uuid"));
         assert_eq!(committed_count, 0);
     }
 

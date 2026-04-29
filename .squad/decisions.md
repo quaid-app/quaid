@@ -7880,3 +7880,79 @@ Batch 3 safety is not acceptable to ship.
 - Treat `tests/command_surface_coverage.rs` as a last-mile dispatch smoke only; do not spend Batch 3 effort there until the real helper and CLI truth seams are locked.
 - Windows iteration should stay cheap: targeted tests first, then `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1`, then `cargo llvm-cov report --json --output-path target\llvm-cov-report.json` for missed-line movement.
 
+
+
+# Mom Batch 3 Revision
+
+## Mom Batch 3 Revision
+
+- **Date:** 2026-04-29T21:29:11.071+08:00
+- **Decision:** Treat bulk UUID rewrite ownership as a canonical-root seam, not a single-row seam.
+
+### Why
+
+`collection_owners` is keyed by `collection_id`, but `collections.root_path` is not unique. That means `collection add --write-quaid-id` can create an alias row that points at the same vault root while serve still owns a different row, and a row-scoped preflight/lease is not enough to keep the watcher out.
+
+### Applied rule
+
+1. Before `collection add --write-quaid-id` inserts the alias row, preflight the canonical root and fail closed if any same-root row has a live serve owner.
+2. For non-dry-run bulk UUID rewrites, acquire one short-lived offline session across **all** collection rows sharing the canonical root and hold it for the entire rewrite loop.
+3. Keep the operator-facing refusal honest: tell them to stop serve first, run the bulk rewrite offline, then restart serve.
+
+### Scope
+
+This is intentionally narrow to bulk UUID rewrites (`migrate-uuids` and `collection add --write-quaid-id`). It does not widen generic duplicate-root policy or imply that all collection commands are now root-unique.
+
+
+
+# Nibbler Batch 3 rereview
+
+# Nibbler Batch 3 rereview
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Worktree:** `D:\repos\quaid-vault-sync-batch3-v0120`
+- **Branch/Commit:** `spec/vault-sync-engine-batch3-v0120` @ `67f4091`
+- **Verdict:** **APPROVE**
+
+## Why
+
+1. The same-root alias bypass is closed in both directions:
+   - `collection add --write-quaid-id` now refuses before inserting a second row when any same-root alias is live-owned.
+   - Bulk UUID rewrite refusal now resolves live ownership by canonical root, not only the target collection row.
+2. The offline race is closed at the right seam:
+   - non-dry-run UUID write-back acquires a short-lived owner lease covering every same-root collection row before the rewrite loop starts;
+   - helper coverage proves the root-scoped lease claims aliases together and cleans up after drop.
+3. The operator-facing story is now honest:
+   - refusal text explicitly tells operators to stop serve first, rerun offline, then restart serve;
+   - task closure notes were narrowed to the actual proof: same-root alias refusal plus a root-scoped lease/source-invariant seam, not a broader claim.
+
+## Residual non-blocking risks
+
+- The end-to-end refusal tests remain Unix-gated, so on a Windows host the rerun evidence comes from helper/unit proof rather than executing the CLI path directly. That matches the current Unix-only command surface, but it is still narrower evidence than a native Unix validation lane.
+
+
+
+# Professor Batch 3 re-review
+
+# Professor Batch 3 re-review
+
+- **Date:** 2026-04-29T21:29:11.071+08:00
+- **Requested by:** macro88
+- **Verdict:** APPROVE
+- **Revision reviewed:** 67f4091 on spec/vault-sync-engine-batch3-v0120
+
+## Decision
+
+The revised Batch 3 implementation now honestly closes the prior rejection findings.
+
+## What changed enough to pass
+
+1. collection add --write-quaid-id now refuses before inserting an alias row when any same-root collection is live-owned. The refusal is root-scoped rather than keyed only to the newly created row.
+2. Non-dry-run bulk UUID rewrite now acquires a short-lived owner lease across every collection row sharing the canonical root before the rewrite loop begins, so serve cannot claim an alias mid-batch.
+3. Operator-facing refusal text now includes the required stop serve first guidance, and the tests/proof seam were updated to cover that wording and the root-scoped lease ordering.
+4. openspec/changes/vault-sync-engine/tasks.md no longer overclaims the repaired seam: the revised notes explicitly tie closure to same-root alias refusal, root-scoped lease coverage, and the stop-serve guidance.
+
+## Non-blocking follow-ups
+
+- None.
+

@@ -152,3 +152,20 @@ Reviewed only the 13.5 MCP read-filter slice on `spec/vault-sync-engine`. `brain
 - Mom: Revision cycle RUNNING; Fry locked out pending completion
 - Decisions merged: 1 inbox entry
 - Archive: 22 entries moved to decisions-archive.md (file was 438KB)
+
+## 2026-04-29 Session: Batch 3 Multi-Agent Review
+
+**Session ID:** 2026-04-29T13:29:11.071Z
+**Agents:** Professor, Nibbler, Scruffy
+**Outcome:** Professor APPROVE, Nibbler APPROVE, Scruffy FAIL/STARTED
+
+### Session Summary
+
+Batch 3 revision received multi-agent re-review for same-root alias race and offline-lease closure. Professor and Nibbler approved the fix. Scruffy's revalidation failed on Windows coverage gap; coverage fix work started. Task claims narrowed to match actual proof seams.
+
+### Cross-Agent Dependencies
+
+- Professor → Nibbler: Review results aligned (same-root alias closed + root-scoped lease works)
+- Nibbler → Scruffy: Revalidation launched on Windows lane; coverage still insufficient
+- Scruffy: Blocking on honest Windows coverage for 17.5ww/ww2/ww3 or narrowed claims
+

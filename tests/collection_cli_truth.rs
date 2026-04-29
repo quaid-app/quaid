@@ -43,7 +43,13 @@ fn run_quaid_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::proc
 }
 
 fn parse_stdout_json(output: &std::process::Output) -> Value {
-    serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON")
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "stdout must be valid JSON: {err}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
 }
 
 fn combined_output(output: &std::process::Output) -> String {

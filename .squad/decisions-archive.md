@@ -5357,3 +5357,142 @@ Re-executed D.1 validation after HIGH defect repair. All doc surfaces now correc
 
 **Decision:** Route five issues to lanes; resolve in v0.9.4 ship gates; complete near-complete lanes.
 
+
+# Archived 2026-04-29 12:46:46Z
+
+# Decision: Quaid Hard Rename — Documentation & Skills Implementation
+
+**Date:** 2025-07-22  
+**Author:** Amy (Technical Writer)  
+**Status:** Implemented — Phases G and H complete
+
+---
+
+
+# Decision: Align publish-npm.yml to "npm not yet live" contract
+
+**Date:** 2025-07-25  
+**Author:** Leela  
+**Status:** Accepted
+
+## Archived on 2026-04-29 12:47:41Z
+
+# Decision: Quaid Hard Rename — Documentation & Skills Implementation
+
+**Date:** 2025-07-22  
+**Author:** Amy (Technical Writer)  
+**Status:** Implemented — Phases G and H complete
+
+---
+
+## What was done
+
+Applied the hard rename from GigaBrain/gbrain/brain terminology to Quaid/quaid/memory across all documentation, agent-facing markdown, and skill files:
+
+**Files updated (Phase G — Documentation):**
+- `README.md` — title, subtitle, all CLI examples, env vars, MCP tool names, install URLs, binary asset names
+- `CLAUDE.md` — product name, all CLI/MCP tool/env var references, architecture table, quaid_config
+- `AGENTS.md` — all CLI commands, MCP tool names, DB path, product description
+- `docs/spec.md` — comprehensive pass; ~245 occurrences resolved
+- `docs/getting-started.md` — all quickstart CLI examples
+- `docs/contributing.md` — repo layout, release process, tool references
+- `docs/roadmap.md` — all phase descriptions and CLI examples
+- `docs/gigabrain-vs-qmd-friction-analysis.md` — product name references; file not renamed (per tasks.md: consult macro88 first)
+
+**Files updated (Phase H — Skills):**
+- All 8 `skills/*/SKILL.md` files — gbrain→quaid CLI, brain_*→memory_* tools, GBRAIN_*→QUAID_* env vars
+
+---
+
+## Key decisions made during implementation
+
+### 1. "Garry Tan's GBrain" kept as historical reference
+The phrase "Garry Tan's GBrain work" in `README.md`, `CLAUDE.md`, and `docs/spec.md` was preserved. This is attribution to prior art (a Gist) and should remain as-is. The surrounding prose uses "Quaid" throughout.
+
+### 2. docs/gigabrain-vs-qmd-friction-analysis.md — file not renamed
+Per tasks.md instruction (G.7): "consult with macro88 before renaming files in `docs/`". All product-name content inside the file was updated; the filename itself was not changed. A follow-up decision from macro88 is needed.
+
+### 3. README subtitle and Why section rewritten
+The original opening used "personal knowledge brain" framing. The new subtitle is "Persistent memory for AI agents" to match the agent-first positioning in the proposal. The "Git doesn't scale past ~5,000 files" paragraph was removed; the Why section now leads with the agent use case.
+
+### 4. Default init path updated
+CLI examples throughout changed from `quaid init ~/memory.db` → `quaid init ~/.quaid/memory.db`, consistent with the `~/.quaid/` config directory rename.
+
+### 5. Upgrade skill binary filename pattern
+In `skills/upgrade/SKILL.md`, patterns like `gbrain.new`, `$(which gbrain)`, and `gbrain.new.sha256` were renamed to `quaid.new`, `$(which quaid)`, and `quaid.new.sha256`. These were not caught by the simple space/backtick patterns and required targeted fixes.
+
+### 6. spec.md upgrade section
+References to `https://github.com/[owner]/gbrain/releases/...` URLs updated to `[owner]/quaid`. Checksum staging file names updated from `gbrain.sha256` to `quaid.sha256`. Error message "Upgrade gbrain" updated to "Upgrade quaid".
+
+### 7. Comparison table in spec.md
+`| SQLite (gbrain) |` updated to `| SQLite (quaid) |`. The adjacent `PGLite (Garry's GBrain)` column header was preserved as it refers to Garry Tan's separate project.
+
+---
+
+## Phases not in scope for Amy
+
+Phases B–F (schema, Cargo, MCP server code, env vars in scripts, CI/release workflows) and Phases I–L (test suite, final audit, migration guide, PR) are owned by engineering roles per the ownership table in tasks.md.
+
+---
+
+## Verification
+
+Final check confirmed zero remaining occurrences of `GigaBrain|gbrain|GBRAIN_|brain\.db|~/.gbrain|macro88` in all updated files (excluding historical "Garry Tan's GBrain" references intentionally preserved).
+
+
+# Decision: Align publish-npm.yml to "npm not yet live" contract
+
+**Date:** 2025-07-25  
+**Author:** Leela  
+**Status:** Accepted
+
+## Context
+
+`.github/workflows/publish-npm.yml` was triggering automatically on every `v*.*.*` tag via a
+`push: tags` event. This directly contradicts the truthful stance held by:
+
+- `README.md` — npm row marked "❌ Not yet published — use binary release or build from source"
+- `docs/getting-started.md` — same row with identical wording
+- `MIGRATION.md` — "quaid is staged but not yet in the public registry — `npm install -g quaid` will not work yet"
+- `.github/RELEASE_CHECKLIST.md` — npm listed under **Deferred distribution channels**, explicitly labelled "not available; label as planned follow-on, not yet live"
+
+Nibbler's rejection cited this contradiction correctly.
+
+Zapp and Amy are locked out of this artifact cycle (prior rejected release-message artifacts).
+
+## Decision
+
+Replace the `push: tags` trigger in `publish-npm.yml` with `workflow_dispatch` only.
+
+This is the smallest safe change that:
+1. Removes the contradiction — no auto-publish fires on release tags.
+2. Preserves the full workflow so it is ready to activate when npm goes live (flip trigger back to `push: tags` at that point).
+3. Adds a comment in the file stating the rationale so the next person knows why it is manual-only.
+4. Does not introduce any forbidden legacy literals.
+
+## Alternatives considered
+
+- **Delete the workflow** — too destructive; the pipeline work should not be lost.
+- **Add `if: false` to the job** — less clear than removing the trigger; YAML linters may warn.
+- **Keep trigger but gate on a repo variable** — adds indirection with no benefit over `workflow_dispatch`.
+
+## Affected files
+
+- `.github/workflows/publish-npm.yml` — trigger changed from `push: tags` to `workflow_dispatch`
+
+## Follow-on
+
+When the npm channel is opened, the trigger should be restored to:
+
+```yaml
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+```
+
+and the explanatory comment removed. The `RELEASE_CHECKLIST.md` npm deferred-channel checkbox
+should be updated at the same time.
+
+
+

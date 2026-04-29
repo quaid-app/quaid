@@ -2128,4 +2128,81 @@ fn collection_migrate_uuids_refuses_live_owner_with_pid_and_host() {
     assert!(text.contains("ServeOwnsCollectionError"));
     assert!(text.contains("owner_pid=9876"));
     assert!(text.contains("owner_host=truth-host"));
+    assert!(text.contains("stop serve first"));
+}
+
+#[cfg(unix)]
+#[test]
+fn collection_add_write_quaid_id_refuses_same_root_live_owner_before_alias_attach() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = init_db(&dir);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::write(
+        root.join("note.md"),
+        "---\ntitle: Note\ntype: concept\n---\nhello from add\n",
+    )
+    .expect("write note");
+
+    let add = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "add",
+            "work",
+            root.to_str().expect("root path"),
+        ],
+    );
+    assert!(add.status.success(), "initial add should succeed: {add:?}");
+
+    let conn = open_test_db(&db_path);
+    let collection_id: i64 = conn
+        .query_row(
+            "SELECT id FROM collections WHERE name = 'work'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+         VALUES ('serve-live', 2468, 'alias-host', datetime('now'))",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+        [collection_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "add",
+            "alias",
+            root.to_str().expect("root path"),
+            "--write-quaid-id",
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "same-root live owner should block alias write-back add: {output:?}"
+    );
+    let text = combined_output(&output);
+    assert!(text.contains("ServeOwnsCollectionError"));
+    assert!(text.contains("owner_pid=2468"));
+    assert!(text.contains("owner_host=alias-host"));
+    assert!(text.contains("stop serve first"));
+
+    let conn = open_test_db(&db_path);
+    let alias_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM collections WHERE name = 'alias'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(alias_count, 0);
 }

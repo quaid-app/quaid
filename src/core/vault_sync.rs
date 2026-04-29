@@ -1904,6 +1904,50 @@ pub fn live_collection_owner(
     .map_err(Into::into)
 }
 
+fn collection_ids_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<Vec<i64>, VaultSyncError> {
+    let mut stmt = conn.prepare(
+        "SELECT id
+         FROM collections
+         WHERE root_path = ?1
+         ORDER BY id",
+    )?;
+    let rows = stmt.query_map([root_path], |row| row.get::<_, i64>(0))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn live_collection_owner_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<Option<(String, LiveCollectionOwner)>, VaultSyncError> {
+    conn.query_row(
+        "SELECT c.name, o.session_id, s.pid, s.host
+         FROM collections c
+         JOIN collection_owners o ON o.collection_id = c.id
+         JOIN serve_sessions s ON s.session_id = o.session_id
+         WHERE c.root_path = ?1
+           AND s.heartbeat_at >= datetime('now', ?2)
+         ORDER BY c.id
+         LIMIT 1",
+        params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
+        |row| {
+            Ok((
+                row.get(0)?,
+                LiveCollectionOwner {
+                    session_id: row.get(1)?,
+                    pid: row.get(2)?,
+                    host: row.get(3)?,
+                },
+            ))
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+#[allow(dead_code)]
 pub fn ensure_no_live_serve_owner(
     conn: &Connection,
     collection_id: i64,
@@ -1912,6 +1956,21 @@ pub fn ensure_no_live_serve_owner(
     if let Some(owner) = live_collection_owner(conn, collection_id)? {
         return Err(VaultSyncError::ServeOwnsCollectionError {
             collection_name: collection.name,
+            owner_session_id: owner.session_id,
+            owner_pid: owner.pid,
+            owner_host: owner.host,
+        });
+    }
+    Ok(())
+}
+
+pub fn ensure_no_live_serve_owner_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<(), VaultSyncError> {
+    if let Some((collection_name, owner)) = live_collection_owner_for_root_path(conn, root_path)? {
+        return Err(VaultSyncError::ServeOwnsCollectionError {
+            collection_name,
             owner_session_id: owner.session_id,
             owner_pid: owner.pid,
             owner_host: owner.host,
@@ -1970,6 +2029,7 @@ pub fn acquire_owner_lease(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn release_owner_lease(
     conn: &Connection,
     collection_id: i64,
@@ -3710,7 +3770,6 @@ pub fn begin_restore(
         acquire_owner_lease(conn, collection.id, &session_id)?;
         let _lease_guard = LeaseGuard {
             db_path: database_path(conn).ok(),
-            collection_id: collection.id,
             session_id: session_id.clone(),
         };
         conn.execute(
@@ -3954,7 +4013,6 @@ impl Drop for ShortLivedLease {
 
 struct LeaseGuard {
     db_path: Option<String>,
-    collection_id: i64,
     session_id: String,
 }
 
@@ -3962,7 +4020,6 @@ impl Drop for LeaseGuard {
     fn drop(&mut self) {
         if let Some(db_path) = self.db_path.as_deref() {
             if let Ok(conn) = Connection::open(db_path) {
-                let _ = release_owner_lease(&conn, self.collection_id, &self.session_id);
                 let _ = unregister_session(&conn, &self.session_id);
             }
         }
@@ -3980,16 +4037,46 @@ pub(crate) fn start_short_lived_owner_lease(
     )
 }
 
+pub(crate) fn start_short_lived_owner_lease_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<ShortLivedLease, VaultSyncError> {
+    let collection_ids = collection_ids_for_root_path(conn, root_path)?;
+    if collection_ids.is_empty() {
+        return Err(VaultSyncError::InvariantViolation {
+            message: format!(
+                "root_path={} missing collection rows for short-lived owner lease",
+                root_path
+            ),
+        });
+    }
+    start_short_lived_owner_leases_with_interval(
+        conn,
+        &collection_ids,
+        Duration::from_secs(HEARTBEAT_INTERVAL_SECS),
+    )
+}
+
 fn start_short_lived_owner_lease_with_interval(
     conn: &Connection,
     collection_id: i64,
     heartbeat_interval: Duration,
 ) -> Result<ShortLivedLease, VaultSyncError> {
+    start_short_lived_owner_leases_with_interval(conn, &[collection_id], heartbeat_interval)
+}
+
+fn start_short_lived_owner_leases_with_interval(
+    conn: &Connection,
+    collection_ids: &[i64],
+    heartbeat_interval: Duration,
+) -> Result<ShortLivedLease, VaultSyncError> {
     let db_path = database_path(conn)?;
     let session_id = register_session(conn)?;
-    if let Err(err) = acquire_owner_lease(conn, collection_id, &session_id) {
-        let _ = unregister_session(conn, &session_id);
-        return Err(err);
+    for collection_id in collection_ids {
+        if let Err(err) = acquire_owner_lease(conn, *collection_id, &session_id) {
+            let _ = unregister_session(conn, &session_id);
+            return Err(err);
+        }
     }
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -4013,7 +4100,6 @@ fn start_short_lived_owner_lease_with_interval(
         handle: Some(handle),
         _guard: LeaseGuard {
             db_path: Some(db_path),
-            collection_id,
             session_id: session_id.clone(),
         },
         session_id,
@@ -7252,7 +7338,6 @@ mod tests {
         {
             let lease_guard = LeaseGuard {
                 db_path: Some(db_path),
-                collection_id,
                 session_id: session_id.clone(),
             };
             drop(lease_guard);
@@ -8060,6 +8145,89 @@ mod tests {
         assert!(row.0.is_none());
         assert_eq!(row.1, 0);
         assert_eq!(row.2, 0);
+    }
+
+    #[test]
+    fn short_lived_owner_lease_for_root_path_claims_same_root_aliases_and_cleans_up() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let temp = tempfile::TempDir::new().unwrap();
+        let root_path = temp.path().display().to_string();
+        let work_id = insert_collection(&conn, "work", temp.path());
+        let alias_id = insert_collection(&conn, "alias", temp.path());
+
+        let lease = start_short_lived_owner_lease_for_root_path(&conn, &root_path).unwrap();
+        let claimed_rows: Vec<(i64, Option<String>)> = conn
+            .prepare(
+                "SELECT id, active_lease_session_id
+                 FROM collections
+                 WHERE root_path = ?1
+                 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([root_path.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            claimed_rows,
+            vec![
+                (work_id, Some(lease.session_id.clone())),
+                (alias_id, Some(lease.session_id.clone()))
+            ]
+        );
+
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-live', 2, 'host')",
+            [],
+        )
+        .unwrap();
+        let error = acquire_owner_lease(&conn, alias_id, "serve-live").unwrap_err();
+        assert!(error.to_string().contains("ServeOwnsCollectionError"));
+
+        drop(lease);
+
+        let row: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM collection_owners),
+                     (SELECT COUNT(*) FROM serve_sessions WHERE session_id != 'serve-live'),
+                     (SELECT COUNT(*) FROM collections
+                      WHERE root_path = ?1 AND active_lease_session_id IS NULL)",
+                [root_path.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 0);
+        assert_eq!(row.1, 0);
+        assert_eq!(row.2, 2);
+    }
+
+    #[test]
+    fn ensure_no_live_serve_owner_for_root_path_reports_same_root_alias_owner() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        insert_collection(&conn, "alias", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 77, 'batch3-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error =
+            ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string())
+                .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("collection=work"));
+        assert!(text.contains("owner_pid=77"));
+        assert!(text.contains("owner_host=batch3-host"));
     }
 
     #[cfg(unix)]

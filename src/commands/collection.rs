@@ -251,6 +251,7 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
     }
 
     let root_path = resolve_collection_root(&args.path)?;
+    let root_path_string = root_path.display().to_string();
     let ignore_patterns = read_initial_ignore_patterns(&root_path)?;
     let writable = if args.read_only {
         false
@@ -263,6 +264,10 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
             collection_name: args.name.clone(),
         }
         .to_string()));
+    }
+    if args.write_quaid_id {
+        vault_sync::ensure_no_live_serve_owner_for_root_path(db, &root_path_string)
+            .map_err(map_bulk_uuid_write_back_error)?;
     }
 
     let collection_id = {
@@ -281,7 +286,7 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
              VALUES (?1, ?2, 'detached', ?3, 0, ?4, NULL, 1)",
             params![
                 args.name,
-                root_path.display().to_string(),
+                root_path_string,
                 i64::from(writable),
                 ignore_patterns,
             ],
@@ -361,8 +366,16 @@ fn run_uuid_write_back(
 ) -> Result<UuidMigrationSummary> {
     vault_sync::ensure_collection_vault_write_allowed(db, collection.id)
         .map_err(|err| anyhow!(err.to_string()))?;
-    vault_sync::ensure_no_live_serve_owner(db, collection.id)
-        .map_err(|err| anyhow!(err.to_string()))?;
+    let _lease = if dry_run {
+        vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path)
+            .map_err(map_bulk_uuid_write_back_error)?;
+        None
+    } else {
+        Some(
+            vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
+                .map_err(map_bulk_uuid_write_back_error)?,
+        )
+    };
 
     let mut stmt = db.prepare(
         "SELECT id
@@ -403,6 +416,15 @@ fn run_uuid_write_back(
     }
 
     Ok(summary)
+}
+
+fn map_bulk_uuid_write_back_error(err: vault_sync::VaultSyncError) -> anyhow::Error {
+    match err {
+        vault_sync::VaultSyncError::ServeOwnsCollectionError { .. } => anyhow!(
+            "{err}. stop serve first, run the bulk UUID rewrite offline, then restart serve."
+        ),
+        other => anyhow!(other.to_string()),
+    }
 }
 
 fn list(db: &Connection, json: bool) -> Result<()> {
@@ -1982,6 +2004,80 @@ mod tests {
         assert!(text.contains("ServeOwnsCollectionError"));
         assert!(text.contains("owner_pid=4321"));
         assert!(text.contains("owner_host=batch3-host"));
+        assert!(text.contains("stop serve first"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_write_quaid_id_refuses_same_root_live_owner_before_inserting_alias_row() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 7654, 'alias-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id)
+             SELECT id, 'serve-live' FROM collections WHERE name = 'work'",
+            [],
+        )
+        .unwrap();
+
+        let error = add(
+            &conn,
+            CollectionAddArgs {
+                name: "alias".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_quaid_id: true,
+            },
+            true,
+        )
+        .unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=7654"));
+        assert!(text.contains("owner_host=alias-host"));
+        assert!(text.contains("stop serve first"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM collections WHERE root_path = ?1",
+                [root.path().display().to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_uuid_write_back_keeps_root_scoped_owner_lease_ahead_of_bulk_loop() {
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("commands")
+            .join("collection.rs");
+        let source = fs::read_to_string(source_path).unwrap();
+        let start = source.find("fn run_uuid_write_back(").unwrap();
+        let end = source[start..].find("\nfn list(").unwrap() + start;
+        let function = &source[start..end];
+        let lease_idx = function
+            .find("start_short_lived_owner_lease_for_root_path")
+            .unwrap();
+        let loop_idx = function.find("for page_id in page_ids").unwrap();
+
+        assert!(
+            function.contains("ensure_no_live_serve_owner_for_root_path"),
+            "bulk UUID rewrite must use a root-scoped live-owner refusal helper so duplicate-root alias rows cannot bypass serve ownership"
+        );
+        assert!(
+            lease_idx < loop_idx,
+            "bulk UUID rewrite must acquire the root-scoped short-lived owner lease before iterating page rewrites"
+        );
     }
 
     #[cfg(unix)]

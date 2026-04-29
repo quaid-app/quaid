@@ -535,7 +535,7 @@ mod tests {
         let file_path = dir.path().join("with-id.md");
         fs::write(
             &file_path,
-            "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+            "---\nquaid_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
         )
         .unwrap();
 
@@ -552,7 +552,7 @@ mod tests {
             serde_json::from_str(&frontmatter_json).unwrap();
 
         assert_eq!(
-            frontmatter.get("memory_id").map(String::as_str),
+            frontmatter.get("quaid_id").map(String::as_str),
             Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
     }
@@ -564,7 +564,7 @@ mod tests {
         let file_path = dir.path().join("with-id.md");
         fs::write(
             &file_path,
-            "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+            "---\nquaid_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
         )
         .unwrap();
 

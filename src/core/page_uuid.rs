@@ -3,16 +3,19 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub const QUAID_ID_FRONTMATTER_KEY: &str = "quaid_id";
+pub const LEGACY_MEMORY_ID_FRONTMATTER_KEY: &str = "memory_id";
+
 #[derive(Debug, Error)]
 pub enum PageUuidError {
-    #[error("frontmatter memory_id cannot be empty")]
+    #[error("frontmatter quaid_id/memory_id cannot be empty")]
     EmptyFrontmatterUuid,
 
-    #[error("invalid frontmatter memory_id: {value}")]
+    #[error("invalid frontmatter quaid_id/memory_id: {value}")]
     InvalidFrontmatterUuid { value: String },
 
     #[error(
-        "frontmatter memory_id {frontmatter_uuid} does not match stored page uuid {stored_uuid}"
+        "frontmatter quaid_id/memory_id {frontmatter_uuid} does not match stored page uuid {stored_uuid}"
     )]
     UuidMismatch {
         stored_uuid: String,
@@ -27,7 +30,10 @@ pub fn generate_uuid_v7() -> String {
 pub fn parse_frontmatter_uuid(
     frontmatter: &HashMap<String, String>,
 ) -> Result<Option<String>, PageUuidError> {
-    let Some(raw_uuid) = frontmatter.get("memory_id") else {
+    let Some(raw_uuid) = frontmatter
+        .get(QUAID_ID_FRONTMATTER_KEY)
+        .or_else(|| frontmatter.get(LEGACY_MEMORY_ID_FRONTMATTER_KEY))
+    else {
         return Ok(None);
     };
 
@@ -66,7 +72,10 @@ pub fn resolve_page_uuid(
 mod tests {
     use std::collections::HashMap;
 
-    use super::{generate_uuid_v7, parse_frontmatter_uuid, resolve_page_uuid, PageUuidError};
+    use super::{
+        generate_uuid_v7, parse_frontmatter_uuid, resolve_page_uuid, PageUuidError,
+        LEGACY_MEMORY_ID_FRONTMATTER_KEY, QUAID_ID_FRONTMATTER_KEY,
+    };
 
     #[test]
     fn generate_uuid_v7_returns_a_uuid_string() {
@@ -77,13 +86,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_frontmatter_uuid_preserves_present_memory_id() {
+    fn parse_frontmatter_uuid_preserves_present_quaid_id() {
         let frontmatter = HashMap::from([(
-            "memory_id".to_string(),
+            QUAID_ID_FRONTMATTER_KEY.to_string(),
             "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
         )]);
 
-        let parsed = parse_frontmatter_uuid(&frontmatter).expect("memory_id should parse");
+        let parsed = parse_frontmatter_uuid(&frontmatter).expect("quaid_id should parse");
+
+        assert_eq!(
+            parsed,
+            Some("01969f11-9448-7d79-8d3f-c68f54761234".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_frontmatter_uuid_accepts_legacy_memory_id() {
+        let frontmatter = HashMap::from([(
+            LEGACY_MEMORY_ID_FRONTMATTER_KEY.to_string(),
+            "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
+        )]);
+
+        let parsed = parse_frontmatter_uuid(&frontmatter).expect("legacy memory_id should parse");
 
         assert_eq!(
             parsed,
@@ -114,12 +138,12 @@ mod tests {
     #[test]
     fn resolve_page_uuid_rejects_mismatched_frontmatter_uuid() {
         let frontmatter = HashMap::from([(
-            "memory_id".to_string(),
+            QUAID_ID_FRONTMATTER_KEY.to_string(),
             "01969f11-9448-7d79-8d3f-c68f54761235".to_string(),
         )]);
 
         let err = resolve_page_uuid(&frontmatter, Some("01969f11-9448-7d79-8d3f-c68f54761234"))
-            .expect_err("mismatched memory_id should fail");
+            .expect_err("mismatched quaid_id should fail");
 
         assert!(matches!(err, PageUuidError::UuidMismatch { .. }));
     }

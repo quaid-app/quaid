@@ -31,7 +31,7 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
-use crate::commands::get::get_page_by_key;
+use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{
     self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
 };
@@ -42,6 +42,7 @@ use crate::core::file_state;
 #[cfg(unix)]
 use crate::core::fs_safety;
 use crate::core::markdown;
+use crate::core::page_uuid;
 use crate::core::quarantine;
 use crate::core::reconciler::{
     fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, reconcile,
@@ -226,6 +227,20 @@ pub struct RestoreManifest {
     pub entries: Vec<RestoreManifestEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteBackOutcome {
+    Migrated,
+    SkippedReadOnly,
+    AlreadyHadUuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveCollectionOwner {
+    pub session_id: String,
+    pub pid: i64,
+    pub host: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalizeCaller {
     RestoreOriginator { command_id: String },
@@ -304,10 +319,14 @@ pub enum VaultSyncError {
     #[error("CollectionReadOnlyError: collection={collection_name}")]
     CollectionReadOnly { collection_name: String },
 
-    #[error("ServeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id}")]
+    #[error(
+        "ServeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id} owner_pid={owner_pid} owner_host={owner_host}"
+    )]
     ServeOwnsCollectionError {
         collection_name: String,
         owner_session_id: String,
+        owner_pid: i64,
+        owner_host: String,
     },
 
     #[error("RestoreInProgressError: collection={collection_name}")]
@@ -1862,6 +1881,104 @@ pub fn session_is_live(conn: &Connection, session_id: &str) -> Result<bool, Vaul
     Ok(live != 0)
 }
 
+pub fn live_collection_owner(
+    conn: &Connection,
+    collection_id: i64,
+) -> Result<Option<LiveCollectionOwner>, VaultSyncError> {
+    conn.query_row(
+        "SELECT o.session_id, s.pid, s.host
+         FROM collection_owners o
+         JOIN serve_sessions s ON s.session_id = o.session_id
+         WHERE o.collection_id = ?1
+           AND s.heartbeat_at >= datetime('now', ?2)",
+        params![collection_id, format!("-{SESSION_LIVENESS_SECS} seconds")],
+        |row| {
+            Ok(LiveCollectionOwner {
+                session_id: row.get(0)?,
+                pid: row.get(1)?,
+                host: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn collection_ids_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<Vec<i64>, VaultSyncError> {
+    let mut stmt = conn.prepare(
+        "SELECT id
+         FROM collections
+         WHERE root_path = ?1
+         ORDER BY id",
+    )?;
+    let rows = stmt.query_map([root_path], |row| row.get::<_, i64>(0))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn live_collection_owner_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<Option<(String, LiveCollectionOwner)>, VaultSyncError> {
+    conn.query_row(
+        "SELECT c.name, o.session_id, s.pid, s.host
+         FROM collections c
+         JOIN collection_owners o ON o.collection_id = c.id
+         JOIN serve_sessions s ON s.session_id = o.session_id
+         WHERE c.root_path = ?1
+           AND s.heartbeat_at >= datetime('now', ?2)
+         ORDER BY c.id
+         LIMIT 1",
+        params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
+        |row| {
+            Ok((
+                row.get(0)?,
+                LiveCollectionOwner {
+                    session_id: row.get(1)?,
+                    pid: row.get(2)?,
+                    host: row.get(3)?,
+                },
+            ))
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+#[allow(dead_code)]
+pub fn ensure_no_live_serve_owner(
+    conn: &Connection,
+    collection_id: i64,
+) -> Result<(), VaultSyncError> {
+    let collection = load_collection_by_id(conn, collection_id)?;
+    if let Some(owner) = live_collection_owner(conn, collection_id)? {
+        return Err(VaultSyncError::ServeOwnsCollectionError {
+            collection_name: collection.name,
+            owner_session_id: owner.session_id,
+            owner_pid: owner.pid,
+            owner_host: owner.host,
+        });
+    }
+    Ok(())
+}
+
+pub fn ensure_no_live_serve_owner_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<(), VaultSyncError> {
+    if let Some((collection_name, owner)) = live_collection_owner_for_root_path(conn, root_path)? {
+        return Err(VaultSyncError::ServeOwnsCollectionError {
+            collection_name,
+            owner_session_id: owner.session_id,
+            owner_pid: owner.pid,
+            owner_host: owner.host,
+        });
+    }
+    Ok(())
+}
+
 pub fn owner_session_id(
     conn: &Connection,
     collection_id: i64,
@@ -1880,16 +1997,16 @@ pub fn acquire_owner_lease(
     collection_id: i64,
     session_id: &str,
 ) -> Result<(), VaultSyncError> {
-    let existing_owner = owner_session_id(conn, collection_id)?;
-    match existing_owner {
-        Some(owner) if owner != session_id && session_is_live(conn, &owner)? => {
+    if let Some(owner) = live_collection_owner(conn, collection_id)? {
+        if owner.session_id != session_id {
             let collection = load_collection_by_id(conn, collection_id)?;
             return Err(VaultSyncError::ServeOwnsCollectionError {
                 collection_name: collection.name,
-                owner_session_id: owner,
+                owner_session_id: owner.session_id,
+                owner_pid: owner.pid,
+                owner_host: owner.host,
             });
         }
-        _ => {}
     }
 
     let tx = conn.unchecked_transaction()?;
@@ -1912,6 +2029,7 @@ pub fn acquire_owner_lease(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn release_owner_lease(
     conn: &Connection,
     collection_id: i64,
@@ -2003,6 +2121,59 @@ pub fn ensure_collection_vault_write_allowed(
         });
     }
     Ok(())
+}
+
+pub fn write_quaid_id_to_file(
+    conn: &Connection,
+    collection: &Collection,
+    page_id: i64,
+) -> Result<WriteBackOutcome, VaultSyncError> {
+    ensure_collection_vault_write_allowed(conn, collection.id)?;
+
+    let (slug, version, frontmatter_json): (String, i64, String) = conn.query_row(
+        "SELECT slug, version, frontmatter
+         FROM pages
+         WHERE id = ?1 AND collection_id = ?2",
+        params![page_id, collection.id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let frontmatter: HashMap<String, String> =
+        serde_json::from_str(&frontmatter_json).unwrap_or_default();
+    if frontmatter.contains_key(page_uuid::QUAID_ID_FRONTMATTER_KEY) {
+        return Ok(WriteBackOutcome::AlreadyHadUuid);
+    }
+
+    let page = get_page_by_key(conn, collection.id, &slug).map_err(|error| {
+        VaultSyncError::InvariantViolation {
+            message: error.to_string(),
+        }
+    })?;
+    let rendered = markdown::render_page(&page);
+    let canonical_slug = format!("{}::{}", collection.name, slug);
+
+    match put::put_from_string_quiet(conn, &canonical_slug, &rendered, Some(version)) {
+        Ok(()) => Ok(WriteBackOutcome::Migrated),
+        Err(error) => match error.downcast::<VaultSyncError>() {
+            Ok(vault_error) => match vault_error {
+                VaultSyncError::Io(io_error) => {
+                    let raw = io_error.raw_os_error().unwrap_or_default();
+                    if io_error.kind() == io::ErrorKind::PermissionDenied || raw == 30 {
+                        eprintln!(
+                            "WARN: quaid_id_write_back_skipped_read_only collection={} slug={} error={}",
+                            collection.name, slug, io_error
+                        );
+                        Ok(WriteBackOutcome::SkippedReadOnly)
+                    } else {
+                        Err(VaultSyncError::Io(io_error))
+                    }
+                }
+                other => Err(other),
+            },
+            Err(other) => Err(VaultSyncError::InvariantViolation {
+                message: other.to_string(),
+            }),
+        },
+    }
 }
 
 fn ensure_plain_sync_allowed(collection: &Collection) -> Result<(), VaultSyncError> {
@@ -2730,6 +2901,8 @@ pub fn mark_collection_restoring_for_handshake(
         VaultSyncError::ServeOwnsCollectionError {
             collection_name: collection.name.clone(),
             owner_session_id: "none".to_owned(),
+            owner_pid: 0,
+            owner_host: "unknown".to_owned(),
         }
     })?;
     if !session_is_live(conn, &expected_session_id)? {
@@ -3597,7 +3770,6 @@ pub fn begin_restore(
         acquire_owner_lease(conn, collection.id, &session_id)?;
         let _lease_guard = LeaseGuard {
             db_path: database_path(conn).ok(),
-            collection_id: collection.id,
             session_id: session_id.clone(),
         };
         conn.execute(
@@ -3841,7 +4013,6 @@ impl Drop for ShortLivedLease {
 
 struct LeaseGuard {
     db_path: Option<String>,
-    collection_id: i64,
     session_id: String,
 }
 
@@ -3849,7 +4020,6 @@ impl Drop for LeaseGuard {
     fn drop(&mut self) {
         if let Some(db_path) = self.db_path.as_deref() {
             if let Ok(conn) = Connection::open(db_path) {
-                let _ = release_owner_lease(&conn, self.collection_id, &self.session_id);
                 let _ = unregister_session(&conn, &self.session_id);
             }
         }
@@ -3867,16 +4037,46 @@ pub(crate) fn start_short_lived_owner_lease(
     )
 }
 
+pub(crate) fn start_short_lived_owner_lease_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<ShortLivedLease, VaultSyncError> {
+    let collection_ids = collection_ids_for_root_path(conn, root_path)?;
+    if collection_ids.is_empty() {
+        return Err(VaultSyncError::InvariantViolation {
+            message: format!(
+                "root_path={} missing collection rows for short-lived owner lease",
+                root_path
+            ),
+        });
+    }
+    start_short_lived_owner_leases_with_interval(
+        conn,
+        &collection_ids,
+        Duration::from_secs(HEARTBEAT_INTERVAL_SECS),
+    )
+}
+
 fn start_short_lived_owner_lease_with_interval(
     conn: &Connection,
     collection_id: i64,
     heartbeat_interval: Duration,
 ) -> Result<ShortLivedLease, VaultSyncError> {
+    start_short_lived_owner_leases_with_interval(conn, &[collection_id], heartbeat_interval)
+}
+
+fn start_short_lived_owner_leases_with_interval(
+    conn: &Connection,
+    collection_ids: &[i64],
+    heartbeat_interval: Duration,
+) -> Result<ShortLivedLease, VaultSyncError> {
     let db_path = database_path(conn)?;
     let session_id = register_session(conn)?;
-    if let Err(err) = acquire_owner_lease(conn, collection_id, &session_id) {
-        let _ = unregister_session(conn, &session_id);
-        return Err(err);
+    for collection_id in collection_ids {
+        if let Err(err) = acquire_owner_lease(conn, *collection_id, &session_id) {
+            let _ = unregister_session(conn, &session_id);
+            return Err(err);
+        }
     }
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -3900,7 +4100,6 @@ fn start_short_lived_owner_lease_with_interval(
         handle: Some(handle),
         _guard: LeaseGuard {
             db_path: Some(db_path),
-            collection_id,
             session_id: session_id.clone(),
         },
         session_id,
@@ -4260,7 +4459,11 @@ fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncErro
         let (frontmatter, body) = markdown::parse_frontmatter(&text);
         rows.push(NewRootFileRow {
             relative_path: relative_path.clone(),
-            uuid: frontmatter.get("memory_id").cloned(),
+            uuid: page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|error| {
+                VaultSyncError::InvariantViolation {
+                    message: error.to_string(),
+                }
+            })?,
             sha256: sha256_hex(&bytes),
             body_size_bytes: body.trim().len(),
             has_nonempty_body: !body.trim().is_empty(),
@@ -5174,6 +5377,424 @@ mod tests {
             .unwrap();
         assert_eq!(restoring_live.state, "restoring");
         assert!(restoring_live.restore_in_progress);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn ensure_unix_platform_fails_closed_on_windows() {
+        let error = ensure_unix_platform("quaid collection sync")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("UnsupportedPlatformError"));
+        assert!(error.contains("quaid collection sync"));
+    }
+
+    #[test]
+    fn build_restore_manifest_for_directory_sorts_paths_and_hashes_contents() {
+        let root = tempfile::TempDir::new().unwrap();
+        write_restore_file(root.path(), "notes/z.md", b"zeta");
+        write_restore_file(root.path(), "notes/a.md", b"alpha");
+
+        let manifest = build_restore_manifest_for_directory(root.path()).unwrap();
+
+        assert_eq!(
+            manifest
+                .entries
+                .iter()
+                .map(|entry| entry.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["notes/a.md", "notes/z.md"]
+        );
+        assert_eq!(manifest.entries[0].sha256, sha256_hex(b"alpha"));
+        assert_eq!(manifest.entries[0].size_bytes, 5);
+        assert_eq!(manifest.entries[1].sha256, sha256_hex(b"zeta"));
+        assert_eq!(manifest.entries[1].size_bytes, 4);
+    }
+
+    #[test]
+    fn list_memory_collections_reports_integrity_blocked_variants() {
+        let conn = open_test_db();
+        let manifest_tamper = insert_collection(&conn, "manifest-tamper", Path::new("vault-a"));
+        let manifest_retry = insert_collection(&conn, "manifest-retry", Path::new("vault-b"));
+        let duplicate_uuid = insert_collection(&conn, "duplicate-uuid", Path::new("vault-c"));
+        let trivial = insert_collection(&conn, "trivial", Path::new("vault-d"));
+        let unknown = insert_collection(&conn, "unknown", Path::new("vault-e"));
+        conn.execute(
+            "UPDATE collections
+             SET integrity_failed_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [manifest_tamper],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET pending_manifest_incomplete_at = datetime('now', '-7200 seconds')
+             WHERE id = ?1",
+            [manifest_retry],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-28T00:00:00Z',
+                 reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = ?1",
+            [duplicate_uuid],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-28T00:00:00Z',
+                 reconcile_halt_reason = 'unresolvable_trivial_content'
+             WHERE id = ?1",
+            [trivial],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-28T00:00:00Z',
+                 reconcile_halt_reason = 'mystery'
+             WHERE id = ?1",
+            [unknown],
+        )
+        .unwrap();
+
+        let views = list_memory_collections(&conn).unwrap();
+
+        assert_eq!(
+            views
+                .iter()
+                .find(|view| view.name == "manifest-tamper")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("manifest_tampering")
+        );
+        assert_eq!(
+            views
+                .iter()
+                .find(|view| view.name == "manifest-retry")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("manifest_incomplete_escalated")
+        );
+        assert_eq!(
+            views
+                .iter()
+                .find(|view| view.name == "duplicate-uuid")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("duplicate_uuid")
+        );
+        assert_eq!(
+            views
+                .iter()
+                .find(|view| view.name == "trivial")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("unresolvable_trivial_content")
+        );
+        assert!(views
+            .iter()
+            .find(|view| view.name == "unknown")
+            .unwrap()
+            .integrity_blocked
+            .is_none());
+    }
+
+    #[test]
+    fn integrity_blocked_reason_and_restore_in_progress_cover_all_helper_branches() {
+        assert_eq!(
+            integrity_blocked_label(
+                &Some("2026-04-28T00:00:00Z".to_owned()),
+                false,
+                &None,
+                &None
+            )
+            .as_deref(),
+            Some("manifest_tampering")
+        );
+        assert_eq!(
+            integrity_blocked_label(&None, true, &None, &None).as_deref(),
+            Some("manifest_incomplete_escalated")
+        );
+        assert_eq!(
+            integrity_blocked_label(
+                &None,
+                false,
+                &Some("2026-04-28T00:00:00Z".to_owned()),
+                &Some("duplicate_uuid".to_owned())
+            )
+            .as_deref(),
+            Some("duplicate_uuid")
+        );
+        assert_eq!(
+            integrity_blocked_label(
+                &None,
+                false,
+                &Some("2026-04-28T00:00:00Z".to_owned()),
+                &Some("unresolvable_trivial_content".to_owned())
+            )
+            .as_deref(),
+            Some("unresolvable_trivial_content")
+        );
+        assert!(integrity_blocked_label(
+            &None,
+            false,
+            &Some("2026-04-28T00:00:00Z".to_owned()),
+            &Some("mystery".to_owned())
+        )
+        .is_none());
+        assert!(integrity_blocked_label(&None, false, &None, &None).is_none());
+
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "work", Path::new("vault"));
+        let mut collection = load_collection_by_id(&conn, collection_id).unwrap();
+        collection.state = CollectionState::Restoring;
+        collection.restore_command_id = Some("restore-1".to_owned());
+        collection.watcher_released_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(restore_in_progress(&collection));
+        collection.watcher_released_at = None;
+        assert!(!restore_in_progress(&collection));
+        collection.watcher_released_at = Some("2026-04-28T00:00:00Z".to_owned());
+        collection.restore_command_id = None;
+        assert!(!restore_in_progress(&collection));
+        collection.state = CollectionState::Active;
+        collection.restore_command_id = Some("restore-1".to_owned());
+        assert!(!restore_in_progress(&collection));
+    }
+
+    #[test]
+    fn ensure_restore_not_blocked_reports_pending_finalize_progress_and_integrity_failures() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "work", Path::new("vault"));
+        let base = load_collection_by_id(&conn, collection_id).unwrap();
+
+        let mut integrity_blocked = base.clone();
+        integrity_blocked.state = CollectionState::Restoring;
+        integrity_blocked.pending_root_path = Some("D:\\restored".to_owned());
+        integrity_blocked.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&integrity_blocked).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "integrity_failed_at",
+                ..
+            }
+        ));
+
+        let mut manifest_blocked = base.clone();
+        manifest_blocked.state = CollectionState::Restoring;
+        manifest_blocked.pending_root_path = Some("D:\\restored".to_owned());
+        manifest_blocked.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&manifest_blocked).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "pending_manifest_incomplete_at",
+                ..
+            }
+        ));
+
+        let mut pending_finalize = base.clone();
+        pending_finalize.state = CollectionState::Restoring;
+        pending_finalize.pending_root_path = Some("D:\\restored".to_owned());
+        let pending_error = ensure_restore_not_blocked(&pending_finalize)
+            .unwrap_err()
+            .to_string();
+        assert!(pending_error.contains("RestorePendingFinalizeError"));
+        assert!(pending_error.contains("D:\\restored"));
+
+        let mut in_progress = base.clone();
+        in_progress.state = CollectionState::Restoring;
+        let progress_error = ensure_restore_not_blocked(&in_progress)
+            .unwrap_err()
+            .to_string();
+        assert!(progress_error.contains("RestoreInProgressError"));
+
+        let mut active_integrity = base.clone();
+        active_integrity.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&active_integrity).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "integrity_failed_at",
+                ..
+            }
+        ));
+
+        let mut active_manifest = base.clone();
+        active_manifest.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&active_manifest).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "pending_manifest_incomplete_at",
+                ..
+            }
+        ));
+
+        assert!(ensure_restore_not_blocked(&base).is_ok());
+    }
+
+    #[test]
+    fn ensure_restore_target_is_empty_accepts_missing_and_empty_paths_only() {
+        let root = tempfile::TempDir::new().unwrap();
+        let missing = root.path().join("missing");
+        assert!(ensure_restore_target_is_empty(&missing).is_ok());
+
+        let empty_dir = root.path().join("empty");
+        fs::create_dir_all(&empty_dir).unwrap();
+        assert!(ensure_restore_target_is_empty(&empty_dir).is_ok());
+
+        let file_target = root.path().join("file.txt");
+        fs::write(&file_target, b"occupied").unwrap();
+        let file_error = ensure_restore_target_is_empty(&file_target)
+            .unwrap_err()
+            .to_string();
+        assert!(file_error.contains("RestoreNonEmptyTargetError"));
+
+        let busy_dir = root.path().join("busy");
+        fs::create_dir_all(&busy_dir).unwrap();
+        fs::write(busy_dir.join("child.txt"), b"occupied").unwrap();
+        let busy_error = ensure_restore_target_is_empty(&busy_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(busy_error.contains("RestoreNonEmptyTargetError"));
+    }
+
+    #[test]
+    fn restore_reset_reports_each_block_reason_before_terminal_reset() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+
+        conn.execute(
+            "UPDATE collections
+             SET pending_manifest_incomplete_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let manifest_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(manifest_error.contains("RestoreResetBlockedError"));
+        assert!(manifest_error.contains("manifest_incomplete_retryable"));
+
+        conn.execute(
+            "UPDATE collections
+             SET pending_manifest_incomplete_at = NULL,
+                 state = 'restoring',
+                 pending_root_path = 'D:\\restored'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let pending_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(pending_error.contains("RestoreResetBlockedError"));
+        assert!(pending_error.contains("pending_finalize"));
+
+        conn.execute(
+            "UPDATE collections
+             SET pending_root_path = NULL,
+                 state = 'restoring',
+                 needs_full_sync = 1
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let progress_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(progress_error.contains("RestoreResetBlockedError"));
+        assert!(progress_error.contains("restore_in_progress"));
+
+        conn.execute(
+            "UPDATE collections
+             SET state = 'active',
+                 needs_full_sync = 0
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let clean_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(clean_error.contains("RestoreResetBlockedError"));
+        assert!(clean_error.contains("no_integrity_failure"));
+    }
+
+    #[test]
+    fn reconcile_reset_reports_missing_collection() {
+        assert!(matches!(
+            reconcile_reset(&open_test_db(), "missing"),
+            Err(VaultSyncError::CollectionNotFound { name }) if name == "missing"
+        ));
+    }
+
+    #[test]
+    fn restore_reset_can_return_collection_to_detached_and_finalize_covers_remaining_outcomes() {
+        let conn = open_test_db();
+        let placeholder_id = insert_collection(&conn, "placeholder", Path::new("vault"));
+        conn.execute(
+            "UPDATE collections
+             SET root_path = '',
+                 state = 'restoring',
+                 integrity_failed_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [placeholder_id],
+        )
+        .unwrap();
+        restore_reset(&conn, "placeholder").unwrap();
+        let placeholder = load_collection_by_id(&conn, placeholder_id).unwrap();
+        assert_eq!(placeholder.state, CollectionState::Detached);
+        assert_eq!(placeholder.root_path, "");
+
+        let no_pending_id = insert_collection(&conn, "no-pending", Path::new("vault-no-pending"));
+        let no_pending = finalize_pending_restore(
+            &conn,
+            no_pending_id,
+            FinalizeCaller::ExternalFinalize {
+                session_id: "serve-1".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(no_pending, FinalizeOutcome::NoPendingWork);
+
+        let orphan_id = insert_collection(&conn, "orphan", Path::new("vault-orphan"));
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 restore_command_id = 'restore-1',
+                 pending_root_path = NULL
+             WHERE id = ?1",
+            [orphan_id],
+        )
+        .unwrap();
+        let orphan = finalize_pending_restore(
+            &conn,
+            orphan_id,
+            FinalizeCaller::ExternalFinalize {
+                session_id: "serve-1".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(orphan, FinalizeOutcome::OrphanRecovered);
+
+        let aborted_id = insert_collection(&conn, "aborted", Path::new("vault-aborted"));
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 pending_root_path = 'D:\\missing-restore-root',
+                 pending_restore_manifest = '{\"entries\":[]}',
+                 restore_command_id = 'restore-1',
+                 pending_command_heartbeat_at = datetime('now', '-120 seconds')
+             WHERE id = ?1",
+            [aborted_id],
+        )
+        .unwrap();
+        let aborted = finalize_pending_restore(
+            &conn,
+            aborted_id,
+            FinalizeCaller::ExternalFinalize {
+                session_id: "serve-1".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(aborted, FinalizeOutcome::Aborted);
     }
 
     #[cfg(unix)]
@@ -7135,7 +7756,6 @@ mod tests {
         {
             let lease_guard = LeaseGuard {
                 db_path: Some(db_path),
-                collection_id,
                 session_id: session_id.clone(),
             };
             drop(lease_guard);
@@ -7943,6 +8563,105 @@ mod tests {
         assert!(row.0.is_none());
         assert_eq!(row.1, 0);
         assert_eq!(row.2, 0);
+    }
+
+    #[test]
+    fn short_lived_owner_lease_for_root_path_requires_existing_collection_rows() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let root_path = temp.path().display().to_string();
+
+        match start_short_lived_owner_lease_for_root_path(&conn, &root_path) {
+            Err(VaultSyncError::InvariantViolation { message }) => {
+                assert!(message.contains("missing collection rows for short-lived owner lease"));
+                assert!(message.contains(&root_path));
+            }
+            Ok(_) => panic!("expected InvariantViolationError"),
+            Err(other) => panic!("expected InvariantViolationError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn short_lived_owner_lease_for_root_path_claims_same_root_aliases_and_cleans_up() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let temp = tempfile::TempDir::new().unwrap();
+        let root_path = temp.path().display().to_string();
+        let work_id = insert_collection(&conn, "work", temp.path());
+        let alias_id = insert_collection(&conn, "alias", temp.path());
+
+        let lease = start_short_lived_owner_lease_for_root_path(&conn, &root_path).unwrap();
+        let claimed_rows: Vec<(i64, Option<String>)> = conn
+            .prepare(
+                "SELECT id, active_lease_session_id
+                 FROM collections
+                 WHERE root_path = ?1
+                 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([root_path.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            claimed_rows,
+            vec![
+                (work_id, Some(lease.session_id.clone())),
+                (alias_id, Some(lease.session_id.clone()))
+            ]
+        );
+
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-live', 2, 'host')",
+            [],
+        )
+        .unwrap();
+        let error = acquire_owner_lease(&conn, alias_id, "serve-live").unwrap_err();
+        assert!(error.to_string().contains("ServeOwnsCollectionError"));
+
+        drop(lease);
+
+        let row: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM collection_owners),
+                     (SELECT COUNT(*) FROM serve_sessions WHERE session_id != 'serve-live'),
+                     (SELECT COUNT(*) FROM collections
+                      WHERE root_path = ?1 AND active_lease_session_id IS NULL)",
+                [root_path.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 0);
+        assert_eq!(row.1, 0);
+        assert_eq!(row.2, 2);
+    }
+
+    #[test]
+    fn ensure_no_live_serve_owner_for_root_path_reports_same_root_alias_owner() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        insert_collection(&conn, "alias", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 77, 'batch3-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error =
+            ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string())
+                .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("collection=work"));
+        assert!(text.contains("owner_pid=77"));
+        assert!(text.contains("owner_host=batch3-host"));
     }
 
     #[cfg(unix)]

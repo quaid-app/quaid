@@ -88,8 +88,7 @@ impl PutTestHooks {
 ///   `--expected-version`; omission fails closed before sentinel creation.
 /// - Non-Unix paths fail closed with `UnsupportedPlatformError`.
 pub fn run(db: &Connection, slug: &str, expected_version: Option<i64>) -> anyhow::Result<()> {
-    vault_sync::ensure_unix_platform("quaid put")
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    vault_sync::ensure_unix_platform("quaid put").map_err(anyhow::Error::new)?;
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
     put_from_string(db, slug, &input, expected_version)?;
@@ -103,6 +102,25 @@ pub fn put_from_string(
     content: &str,
     expected_version: Option<i64>,
 ) -> anyhow::Result<()> {
+    put_from_string_with_output(db, slug_input, content, expected_version, true)
+}
+
+pub(crate) fn put_from_string_quiet(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    expected_version: Option<i64>,
+) -> anyhow::Result<()> {
+    put_from_string_with_output(db, slug_input, content, expected_version, false)
+}
+
+fn put_from_string_with_output(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    expected_version: Option<i64>,
+    emit_status: bool,
+) -> anyhow::Result<()> {
     let (frontmatter, body) = markdown::parse_frontmatter(content);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
@@ -111,10 +129,10 @@ pub fn put_from_string(
     } else {
         crate::core::collections::OpKind::WriteCreate
     };
-    let resolved = vault_sync::resolve_slug_for_op(db, slug_input, op_kind)
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let resolved =
+        vault_sync::resolve_slug_for_op(db, slug_input, op_kind).map_err(anyhow::Error::new)?;
     vault_sync::ensure_collection_vault_write_allowed(db, resolved.collection_id)
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+        .map_err(anyhow::Error::new)?;
     let slug = resolved.slug.as_str();
     let wing = palace::derive_wing(slug);
     let room = palace::derive_room(&compiled_truth);
@@ -172,21 +190,23 @@ pub fn put_from_string(
                 &relative_path,
                 expected_version,
             )
-            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+            .map_err(anyhow::Error::new)?;
             Ok((prepared, outcome))
         },
     )
-    .map_err(|err| anyhow::anyhow!(err.to_string()))??;
+    .map_err(anyhow::Error::new)??;
 
     let verb = if outcome.created {
         "Created"
     } else {
         "Updated"
     };
-    println!(
-        "{verb} {}::{} (version {})",
-        prepared.collection_name, prepared.slug, outcome.version
-    );
+    if emit_status {
+        println!(
+            "{verb} {}::{} (version {})",
+            prepared.collection_name, prepared.slug, outcome.version
+        );
+    }
 
     Ok(())
 }
@@ -1138,9 +1158,9 @@ mod tests {
     }
 
     #[test]
-    fn update_without_memory_id_frontmatter_keeps_existing_page_uuid() {
+    fn update_without_quaid_id_frontmatter_keeps_existing_page_uuid() {
         let conn = open_test_db();
-        let original = "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\nOriginal.\n";
+        let original = "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\nOriginal.\n";
         put_from_string(&conn, "people/alice", original, None).unwrap();
 
         let updated = "---\ntitle: Alice\ntype: person\n---\nUpdated.\n";
@@ -1804,7 +1824,7 @@ mod tests {
         // Read back through get path
         let page = crate::commands::get::get_page(&conn, "people/carol").unwrap();
         let rendered = markdown::render_page(&page);
-        assert!(rendered.contains("memory_id: "));
+        assert!(rendered.contains("quaid_id: "));
         assert!(rendered.contains("title: Carol"));
         assert!(rendered.contains("type: person"));
         assert!(rendered.contains("# Carol\n\nCarol builds things."));
@@ -1812,9 +1832,9 @@ mod tests {
     }
 
     #[test]
-    fn put_render_cannot_strip_existing_memory_id_when_update_omits_it() {
+    fn put_render_cannot_strip_existing_quaid_id_when_update_omits_it() {
         let conn = open_test_db();
-        let original = "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Carol\ntype: person\n---\n# Carol\n\nOriginal.\n";
+        let original = "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Carol\ntype: person\n---\n# Carol\n\nOriginal.\n";
         put_from_string(&conn, "people/carol", original, None).unwrap();
 
         let updated = "---\ntitle: Carol\ntype: person\n---\n# Carol\n\nUpdated.\n";
@@ -1824,8 +1844,8 @@ mod tests {
         let rendered = markdown::render_page(&page);
 
         assert!(
-            rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
-            "memory_put must not let a UUID-bearing page render back out without memory_id"
+            rendered.contains("quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
+            "memory_put must not let a UUID-bearing page render back out without quaid_id"
         );
     }
 

@@ -1120,7 +1120,7 @@ mod tests {
         let source_dir = tempfile::TempDir::new().unwrap();
         fs::write(
             source_dir.path().join("alice.md"),
-            "---\nmemory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+            "---\nquaid_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
         )
         .unwrap();
 
@@ -1132,8 +1132,8 @@ mod tests {
         let exported =
             fs::read_to_string(export_dir_path.path().join("people").join("alice.md")).unwrap();
         assert!(
-            exported.contains("memory_id: 0195c7c0-2d06-7df0-bf59-acde48001122\n"),
-            "exported markdown must keep memory_id frontmatter, got: {exported}"
+            exported.contains("quaid_id: 0195c7c0-2d06-7df0-bf59-acde48001122\n"),
+            "exported markdown must keep quaid_id frontmatter, got: {exported}"
         );
 
         let reimport_db = open_test_db();
@@ -1148,7 +1148,7 @@ mod tests {
             .unwrap();
         let frontmatter: HashMap<String, String> = serde_json::from_str(&frontmatter_json).unwrap();
         assert_eq!(
-            frontmatter.get("memory_id").map(String::as_str),
+            frontmatter.get("quaid_id").map(String::as_str),
             Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
     }

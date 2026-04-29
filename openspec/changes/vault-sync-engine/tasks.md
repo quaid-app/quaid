@@ -113,11 +113,11 @@
 - [x] 5a.4 Ingest pipeline: if `frontmatter.quaid_id` is present, adopt it as `pages.uuid`; if absent, generate UUIDv7 server-side and store in `pages.uuid` ONLY. Default ingest is READ-ONLY with respect to user bytes — no self-write enqueued.
 - [x] 5a.4a Regression test: save a `.md` without `quaid_id`; observe watcher event; assert file bytes unchanged, `file_state.sha256` equals user hash, dedup set empty, git remains clean.
   > **Batch E note:** Current coverage is at the compatibility-ingest boundary (`quaid ingest` / import path): generated UUIDs stay DB-only, source bytes remain unchanged, and a git worktree stays clean. Watcher dedup/file_state assertions remain deferred with watcher work.
-- [ ] 5a.5 Opt-in UUID write-back for `--write-quaid-id`, `migrate-uuids`, and `memory_put` only. Uses the full rename-before-commit discipline (sentinel, tempfile, `O_NOFOLLOW`, atomic rename, fsync parent, post-rename stat, single tx with `file_state` + `raw_imports` rotation). Read-only files (EACCES/EROFS) are skipped with WARN; `pages.uuid` remains set.
-- [ ] 5a.5a CLI: `quaid collection add --write-quaid-id` and `quaid collection migrate-uuids <name> [--dry-run]`. Both are `WriteAdmin`, honor the restoring-state interlock, and only self-write files missing `quaid_id`. Summary reports `migrated/skipped_readonly/already_had_uuid`.
+- [x] 5a.5 Opt-in UUID write-back for `--write-quaid-id`, `migrate-uuids`, and `memory_put` only. Uses the full rename-before-commit discipline (sentinel, tempfile, `O_NOFOLLOW`, atomic rename, fsync parent, post-rename stat, single tx with `file_state` + `raw_imports` rotation). Read-only files (EACCES/EROFS) are skipped with WARN; `pages.uuid` remains set.
+- [x] 5a.5a CLI: `quaid collection add --write-quaid-id` and `quaid collection migrate-uuids <name> [--dry-run]`. Both are `WriteAdmin`, honor the restoring-state interlock, and only self-write files missing `quaid_id`. Summary reports `migrated/skipped_readonly/already_had_uuid`.
 - [x] 5a.6 `memory_put` preserves `quaid_id`: `render_page()` is the explicit `memory_put` seam and always emits existing `pages.uuid` in frontmatter so agents cannot inadvertently strip it.
   > **Complete (Batch G):** `render_page()` now always re-emits persisted `pages.uuid` as `quaid_id`, so `memory_put` / `memory_get` surfaces cannot strip UUID identity when incoming markdown omits it.
-- [ ] 5a.7 Unit tests: default-ingest read-only; `quaid_id` adoption; opt-in rewrite rotates `file_state`/`raw_imports` atomically; `migrate-uuids --dry-run` mutates nothing; `memory_put` always emits preserved `quaid_id`; UUIDv7 monotonicity; frontmatter round-trip preserves `quaid_id`; Batch G also covers unchanged-hash no-rotation, changed-hash rotation, and zero-active abort.
+- [x] 5a.7 Unit tests: default-ingest read-only; `quaid_id` adoption; opt-in rewrite rotates `file_state`/`raw_imports` atomically; `migrate-uuids --dry-run` mutates nothing; `memory_put` always emits preserved `quaid_id`; UUIDv7 monotonicity; frontmatter round-trip preserves `quaid_id`; Batch G also covers unchanged-hash no-rotation, changed-hash rotation, and zero-active abort.
   > **Batch G partial:** Added direct coverage for `memory_put`/`render_page` UUID preservation, full-hash unchanged-hash no-rotation, full-hash changed-hash rotation, and full-hash zero-active abort. The remaining UUID write-back / migrate-uuids coverage stays deferred with tasks 5a.5–5a.5a.
 
 ## 6. Watcher pipeline
@@ -171,7 +171,7 @@
 
 - [x] 9.1 Implement `src/commands/collection.rs` with clap subcommands.
 - [x] 9.2 `quaid collection add <name> <path> [--writable/--read-only]`: validate name (no `::`), validate/open `root_fd` with `O_NOFOLLOW` before row creation, persist the detached row, and run the fresh-attach reconciliation path. K1 keeps default attach read-only with respect to vault bytes; `--write-quaid-id` / watcher-mode remain deferred.
-- [ ] 9.2a `--write-quaid-id` triggers opt-in UUID write-back during the initial walk; default is read-only.
+- [x] 9.2a `--write-quaid-id` triggers opt-in UUID write-back during the initial walk; default is read-only.
 - [x] 9.2b Capability probe: attempt a tempfile write inside the root; if EACCES/EROFS, set `collections.writable=0` with WARN; subsequent K1-scoped vault-byte writes (`quaid put`) refuse with `CollectionReadOnlyError`.
   > **Scope note (Leela, K1 repair):** "K1-scoped vault-byte writes" means only `quaid put` / MCP `memory_put`. DB-only mutators (`memory_check`, `memory_link`, `memory_tags`, `memory_raw`, slug-bound `memory_gap`) intentionally do NOT check `CollectionReadOnly` per Professor's ruling: the vault-byte gate and the DB-only write-interlock are separate concerns. This is the correct and complete K1 behaviour.
 - [x] 9.3 `quaid collection list` prints `name | state | writable | write_target | root_path | page_count | last_sync_at | queue_depth`.
@@ -233,7 +233,8 @@
 - [x] 12.5 Enforce `CollectionReadOnlyError` when `collections.writable=0`. **Closure note:** vault-byte write entry points only (`quaid put` and `memory_put` via `put_from_string`). The live enforcement site is `ensure_collection_vault_write_allowed`; DB-only mutators remain deferred.
 - [ ] 12.6 Enforce the per-write `expected_version` contract across MCP + CLI + any future interface — no blind-update escape hatch.
 - [ ] 12.6a CLI write routing — `quaid put` (single-file): detect a live owner via `collection_owners` + `serve_sessions.ipc_path`. Live owner → Proxy mode over IPC (keeps the in-process dedup set coherent). No live owner → acquire the offline `collection_owners` lease with heartbeat and write directly.
-- [ ] 12.6b CLI write routing — bulk rewrites are **Refuse-by-default**, NOT Proxy. `quaid collection migrate-uuids` and `quaid collection add --write-quaid-id` SHALL refuse with `ServeOwnsCollectionError` when any live owner exists, naming pid/host and instructing the operator to stop serve (or `detach --online`), run the bulk rewrite offline, then restart serve. Per-file proxy of thousands of rewrites is explicitly out of scope for this change; a batched proxy protocol is a follow-up.
+- [x] 12.6b CLI write routing — bulk rewrites are **Refuse-by-default**, NOT Proxy. `quaid collection migrate-uuids` and `quaid collection add --write-quaid-id` SHALL refuse with `ServeOwnsCollectionError` when any live owner exists, naming pid/host and instructing the operator to stop serve (or `detach --online`), run the bulk rewrite offline, then restart serve. Per-file proxy of thousands of rewrites is explicitly out of scope for this change; a batched proxy protocol is a follow-up.
+  > **Revision note (Mom, 2026-04-29T21:29:11.071+08:00):** Closure is now tied to root-scoped proof, not just the target row: bulk UUID rewrites refuse when any same-root alias row is live-owned, and the non-dry-run path holds a short-lived owner lease across every same-root collection row for the entire batch so serve cannot claim an alias mid-rewrite. CLI refusal text now explicitly tells the operator to stop serve first, rerun offline, then restart serve.
 - [ ] 12.6c IPC socket placement: serve creates the parent directory at mode `0700` under `$XDG_RUNTIME_DIR/quaid/` on Linux (fallback `$HOME/.cache/quaid/run/` if unset) or `$HOME/Library/Application Support/quaid/run/` on macOS. If the directory exists with broader permissions or non-matching UID, refuse startup with `IpcDirectoryInsecureError`. Socket path: `<dir>/<session_id>.sock` with the UUIDv7 session_id embedded.
 - [ ] 12.6d Bind-time audit: after `bind()`, serve `stat()`s the socket, verifies mode `0600` and owning UID matches its own. Any deviation → `IpcSocketPermissionError`, serve aborts startup. Stale sockets from dead prior sessions are `unlink`ed before `bind()`. Collision with a live same-UID different-session holder → `IpcSocketCollisionError`.
 - [ ] 12.6e Server-side peer verification: on every `accept()`, serve calls `getsockopt(SO_PEERCRED)` (Linux) or `LOCAL_PEERCRED` / `getpeereid()` (macOS) and refuses any connection whose peer UID ≠ serve's UID. Peer PID is logged at INFO for observability (not a security boundary).
@@ -370,7 +371,8 @@
 - [ ] 17.5ii5 Remap Phase 1: non-zero drift refuses with `RemapDriftConflictError`; second pass after operator verifies `/new/path` contains the edits succeeds with zero drift.
 - [x] 17.5ii6 TOCTOU dirty-recheck between Phase 2 and the destructive step aborts with `CollectionDirtyError`.
 - [x] 17.5ii7 `dirty-preflight` guard refuses restore/remap when `is_collection_dirty` or sentinel directory is non-empty; clears once RCRT / `sync` runs.
-- [ ] 17.5ii9 Bulk UUID writes: `migrate-uuids` and `--write-quaid-id` refuse with `ServeOwnsCollectionError` when serve is live; succeed offline.
+- [x] 17.5ii9 Bulk UUID writes: `migrate-uuids` and `--write-quaid-id` refuse with `ServeOwnsCollectionError` when serve is live; succeed offline.
+  > **Revision note (Mom, 2026-04-29T21:29:11.071+08:00):** Proof now includes same-root alias refusal on `collection add --write-quaid-id`, live-owner guidance that says "stop serve first", and a source-invariant test that the root-scoped short-lived lease wraps the bulk rewrite loop before any file rewrite begins.
 - [x] 17.5ii9a UUID-migration preflight refuses remap/restore when any trivial-content page lacks a frontmatter `quaid_id`, naming count + samples + `migrate-uuids` directive. Running `migrate-uuids` then retrying succeeds.
 - [ ] 17.5ii10 IPC socket placement: parent-dir mode `0755` refuses startup with `IpcDirectoryInsecureError`; stale socket from a dead session is unlinked cleanly at startup.
 - [ ] 17.5ii11 IPC bind-time audit catches a simulated mode regression (`0644`) with `IpcSocketPermissionError`.
@@ -415,10 +417,10 @@
 - [ ] 17.5vv5 `WriteAdmin` honors `CollectionRestoringError` interlock.
 - [ ] 17.5vv5b `WriteAdmin` honors write-gate (`needs_full_sync=1`).
 - [ ] 17.5vv6 Slug-less `memory_gap` routes via Read and succeeds during restoring.
-- [ ] 17.5ww UUID write-back: `--write-quaid-id` rotates `file_state`+`raw_imports` atomically.
-- [ ] 17.5ww2 `migrate-uuids --dry-run` mutates nothing.
-- [ ] 17.5ww3 UUID write-back on EACCES/EROFS skips with WARN; `pages.uuid` remains set.
-- [ ] 17.5www `memory_put` preserves `quaid_id` across write.
+- [x] 17.5ww UUID write-back: `--write-quaid-id` rotates `file_state`+`raw_imports` atomically. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
+- [x] 17.5ww2 `migrate-uuids --dry-run` mutates nothing. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
+- [x] 17.5ww3 UUID write-back on EACCES/EROFS skips with WARN; `pages.uuid` remains set. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
+- [x] 17.5www `memory_put` preserves `quaid_id` across write.
 - [x] 17.5xx `raw_imports` rotation atomic per content-changing write.
 - [x] 17.5yy Inline GC enforces `KEEP` + `TTL_DAYS`; active row never touched.
 - [x] 17.5zz `KEEP_ALL=1` disables GC; active row remains singular.

@@ -43,7 +43,13 @@ fn run_quaid_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::proc
 }
 
 fn parse_stdout_json(output: &std::process::Output) -> Value {
-    serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON")
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "stdout must be valid JSON: {err}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
 }
 
 fn combined_output(output: &std::process::Output) -> String {
@@ -74,6 +80,13 @@ fn assert_ambiguous_slug_failure(output: &std::process::Output, slug: &str, cand
 
 fn test_db_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
     dir.path().join(name)
+}
+
+#[cfg(unix)]
+fn init_db(dir: &tempfile::TempDir) -> PathBuf {
+    let db_path = test_db_path(dir, "test.db");
+    drop(open_test_db(&db_path));
+    db_path
 }
 
 fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
@@ -196,6 +209,20 @@ fn insert_page_with_raw_import(
         ],
     )
     .expect("insert file state");
+}
+
+#[cfg(unix)]
+fn raw_import_counts(conn: &Connection, page_id: i64) -> (i64, i64) {
+    conn.query_row(
+        "SELECT
+             SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END),
+             COUNT(*)
+         FROM raw_imports
+         WHERE page_id = ?1",
+        [page_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("load raw import counts")
 }
 
 #[test]
@@ -1943,4 +1970,252 @@ fn cli_list_search_and_query_emit_canonical_slugs() {
     assert!(query.status.success(), "query should succeed: {query:?}");
     let query_json = parse_stdout_json(&query);
     assert_eq!(query_json[0]["slug"].as_str(), Some("work::people/alice"));
+}
+
+#[cfg(unix)]
+#[test]
+fn collection_add_write_quaid_id_updates_file_and_rotates_raw_imports() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = init_db(&dir);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::write(
+        root.join("note.md"),
+        "---\ntitle: Note\ntype: concept\n---\nhello from add\n",
+    )
+    .expect("write note");
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "add",
+            "work",
+            root.to_str().expect("root path"),
+            "--write-quaid-id",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "collection add should succeed: {output:?}"
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["uuid_write_back"]["migrated"].as_u64(), Some(1));
+    assert_eq!(
+        json["uuid_write_back"]["skipped_readonly"].as_u64(),
+        Some(0)
+    );
+    assert_eq!(
+        json["uuid_write_back"]["already_had_uuid"].as_u64(),
+        Some(0)
+    );
+
+    let rendered = std::fs::read_to_string(root.join("note.md")).expect("read migrated note");
+    assert!(rendered.contains("quaid_id: "));
+    assert!(!rendered.contains("memory_id: "));
+
+    let conn = open_test_db(&db_path);
+    let collection_id: i64 = conn
+        .query_row(
+            "SELECT id FROM collections WHERE name = 'work'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let page_id = page_id(&conn, collection_id, "note");
+    let (active_rows, total_rows) = raw_import_counts(&conn, page_id);
+    assert_eq!(active_rows, 1);
+    assert_eq!(total_rows, 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn collection_migrate_uuids_dry_run_reports_without_mutation() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = init_db(&dir);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    let original = "---\ntitle: Note\ntype: concept\n---\nhello from dry run\n";
+    std::fs::write(root.join("note.md"), original).expect("write note");
+
+    let add = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "add",
+            "work",
+            root.to_str().expect("root path"),
+        ],
+    );
+    assert!(
+        add.status.success(),
+        "collection add should succeed: {add:?}"
+    );
+
+    let dry_run = run_quaid(
+        &db_path,
+        &["--json", "collection", "migrate-uuids", "work", "--dry-run"],
+    );
+    assert!(
+        dry_run.status.success(),
+        "dry-run should succeed: {dry_run:?}"
+    );
+    let json = parse_stdout_json(&dry_run);
+    assert_eq!(json["migrated"].as_u64(), Some(1));
+    assert_eq!(json["skipped_readonly"].as_u64(), Some(0));
+    assert_eq!(json["already_had_uuid"].as_u64(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(root.join("note.md")).expect("read note"),
+        original
+    );
+
+    let conn = open_test_db(&db_path);
+    let collection_id: i64 = conn
+        .query_row(
+            "SELECT id FROM collections WHERE name = 'work'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let page_id = page_id(&conn, collection_id, "note");
+    let (active_rows, total_rows) = raw_import_counts(&conn, page_id);
+    assert_eq!(active_rows, 1);
+    assert_eq!(total_rows, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn collection_migrate_uuids_refuses_live_owner_with_pid_and_host() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = init_db(&dir);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::write(
+        root.join("note.md"),
+        "---\ntitle: Note\ntype: concept\n---\nhello from migrate\n",
+    )
+    .expect("write note");
+
+    let add = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "add",
+            "work",
+            root.to_str().expect("root path"),
+        ],
+    );
+    assert!(
+        add.status.success(),
+        "collection add should succeed: {add:?}"
+    );
+
+    let conn = open_test_db(&db_path);
+    let collection_id: i64 = conn
+        .query_row(
+            "SELECT id FROM collections WHERE name = 'work'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+         VALUES ('serve-live', 9876, 'truth-host', datetime('now'))",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+        [collection_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["collection", "migrate-uuids", "work"]);
+    assert!(
+        !output.status.success(),
+        "migrate-uuids should refuse: {output:?}"
+    );
+    let text = combined_output(&output);
+    assert!(text.contains("ServeOwnsCollectionError"));
+    assert!(text.contains("owner_pid=9876"));
+    assert!(text.contains("owner_host=truth-host"));
+    assert!(text.contains("stop serve first"));
+}
+
+#[cfg(unix)]
+#[test]
+fn collection_add_write_quaid_id_refuses_same_root_live_owner_before_alias_attach() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = init_db(&dir);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::write(
+        root.join("note.md"),
+        "---\ntitle: Note\ntype: concept\n---\nhello from add\n",
+    )
+    .expect("write note");
+
+    let add = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "add",
+            "work",
+            root.to_str().expect("root path"),
+        ],
+    );
+    assert!(add.status.success(), "initial add should succeed: {add:?}");
+
+    let conn = open_test_db(&db_path);
+    let collection_id: i64 = conn
+        .query_row(
+            "SELECT id FROM collections WHERE name = 'work'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+         VALUES ('serve-live', 2468, 'alias-host', datetime('now'))",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+        [collection_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "add",
+            "alias",
+            root.to_str().expect("root path"),
+            "--write-quaid-id",
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "same-root live owner should block alias write-back add: {output:?}"
+    );
+    let text = combined_output(&output);
+    assert!(text.contains("ServeOwnsCollectionError"));
+    assert!(text.contains("owner_pid=2468"));
+    assert!(text.contains("owner_host=alias-host"));
+    assert!(text.contains("stop serve first"));
+
+    let conn = open_test_db(&db_path);
+    let alias_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM collections WHERE name = 'alias'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(alias_count, 0);
 }

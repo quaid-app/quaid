@@ -1684,7 +1684,7 @@ fn load_new_tree_identities(
         let (compiled_truth, timeline) = markdown::split_content(&body);
         let uuid = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "resolve_rename_resolution: {} has invalid memory_id: {err}",
+                "resolve_rename_resolution: {} has invalid frontmatter uuid: {err}",
                 path.display()
             ))
         })?;
@@ -1724,7 +1724,7 @@ fn detect_duplicate_uuids_in_tree(
         let (frontmatter, _) = markdown::parse_frontmatter(&raw);
         if let Some(uuid) = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "detect_duplicate_uuids_in_tree: {} has invalid memory_id: {err}",
+                "detect_duplicate_uuids_in_tree: {} has invalid frontmatter uuid: {err}",
                 relative_path.display()
             ))
         })? {
@@ -3698,6 +3698,93 @@ mod tests {
         assert_eq!(status.sentinel_count, 1);
     }
 
+    #[test]
+    fn collection_dirty_status_is_clean_without_flags_or_sentinels() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let recovery_root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+
+        let status = is_collection_dirty(&conn, collection.id, recovery_root.path()).unwrap();
+
+        assert!(!status.is_dirty());
+        assert!(!status.needs_full_sync);
+        assert_eq!(status.sentinel_count, 0);
+        assert!(!status.recovery_in_progress);
+        assert!(status.last_sync_at.is_none());
+    }
+
+    #[test]
+    fn raw_import_invariant_result_reports_zero_rows_and_multi_active_histories() {
+        let missing =
+            raw_import_invariant_result(7, 0, 0, "reconcile", RawImportInvariantPolicy::Enforce)
+                .unwrap_err()
+                .to_string();
+        assert!(missing.contains("InvariantViolationError"));
+        assert!(missing.contains("page_id=7 has zero total raw_imports rows"));
+
+        let multi_active = raw_import_invariant_result(
+            9,
+            3,
+            2,
+            "full_hash_reconcile",
+            RawImportInvariantPolicy::Enforce,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(multi_active.contains("InvariantViolationError"));
+        assert!(
+            multi_active.contains("page_id=9 has 2 active raw_imports rows across 3 total rows")
+        );
+    }
+
+    #[test]
+    fn canonical_body_refusal_reason_covers_empty_small_and_nontrivial_bodies() {
+        assert_eq!(
+            canonical_body_refusal_reason("missing", 0, false).as_deref(),
+            Some("missing_empty_body")
+        );
+        assert_eq!(
+            canonical_body_refusal_reason("new", 63, true).as_deref(),
+            Some("new_below_min_body_bytes")
+        );
+        assert!(canonical_body_refusal_reason("new", 64, true).is_none());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn windows_reconciler_helpers_fail_closed_with_explicit_platform_errors() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+
+        let reconcile_error = reconcile(&conn, &collection).unwrap_err().to_string();
+        assert!(reconcile_error.contains("fd-relative operations not supported on Windows"));
+
+        let full_hash_error = full_hash_reconcile_authorized(
+            &conn,
+            collection.id,
+            FullHashReconcileMode::OverflowRecovery,
+            FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(full_hash_error.contains("active-lease authorization"));
+        assert!(full_hash_error.contains("overflow-recovery mode"));
+
+        let snapshot_error = take_stat_snapshot(&conn, &collection)
+            .unwrap_err()
+            .to_string();
+        assert!(snapshot_error
+            .contains("take_stat_snapshot: fd-relative operations not supported on Windows"));
+
+        let mount_error = verify_read_only_mount(&collection).unwrap_err().to_string();
+        assert!(mount_error.contains("restore/remap safety checks are not supported on Windows"));
+        assert!(mount_error.contains("collection=test"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn verify_read_only_mount_rejects_writable_mounts() {
@@ -5400,7 +5487,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(error.contains("invalid memory_id"));
+        assert!(error.contains("invalid frontmatter uuid"));
         assert_eq!(committed_count, 0);
     }
 

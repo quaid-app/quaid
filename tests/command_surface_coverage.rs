@@ -450,3 +450,41 @@ fn serve_command_fails_closed_on_windows() {
         "unexpected stderr: {stderr}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn collection_migrate_uuids_command_runs_through_main_dispatch() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = init_db(&dir);
+    let root = dir.path().join("vault");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("note.md"),
+        "---\ntitle: Note\ntype: note\n---\ncommand coverage\n",
+    )
+    .unwrap();
+
+    let add = run_quaid(
+        &db_path,
+        &["collection", "add", "work", root.to_str().unwrap()],
+    );
+    assert!(
+        add.status.success(),
+        "collection add stderr: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let migrate = run_quaid(
+        &db_path,
+        &["collection", "migrate-uuids", "work", "--dry-run", "--json"],
+    );
+    assert!(
+        migrate.status.success(),
+        "migrate stderr: {}",
+        String::from_utf8_lossy(&migrate.stderr)
+    );
+    let migrate_json: Value = serde_json::from_slice(&migrate.stdout).unwrap();
+    assert_eq!(migrate_json["migrated"], 1);
+    assert_eq!(migrate_json["skipped_readonly"], 0);
+    assert_eq!(migrate_json["already_had_uuid"], 0);
+}

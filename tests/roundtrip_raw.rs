@@ -7,7 +7,7 @@ use quaid::core::migrate::{export_dir, import_dir};
 fn export_reproduces_canonical_markdown_fixture_byte_for_byte() {
     let canonical = concat!(
         "---\n",
-        "memory_id: 01969f11-9448-7d79-8d3f-c68f54761234\n",
+        "quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\n",
         "slug: notes/canonical-person\n",
         "title: Canonical Person\n",
         "type: person\n",

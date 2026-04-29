@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn page_serde_roundtrip_preserves_memory_id_frontmatter() {
+    fn page_serde_roundtrip_preserves_quaid_id_frontmatter() {
         let page = Page {
             slug: "people/alice".to_string(),
             uuid: "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
@@ -262,7 +262,7 @@ mod tests {
             timeline: "- **2024** | role — Joined Acme".to_string(),
             frontmatter: HashMap::from([
                 (
-                    "memory_id".to_string(),
+                    "quaid_id".to_string(),
                     "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
                 ),
                 ("title".to_string(), "Alice".to_string()),
@@ -280,7 +280,7 @@ mod tests {
         let round_trip: Page = serde_json::from_str(&json).unwrap();
 
         assert_eq!(
-            round_trip.frontmatter.get("memory_id").map(String::as_str),
+            round_trip.frontmatter.get("quaid_id").map(String::as_str),
             Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
     }

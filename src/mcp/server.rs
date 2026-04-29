@@ -1836,7 +1836,7 @@ mod tests {
         server
             .memory_put(MemoryPutInput {
                 slug: "notes/uuid".to_string(),
-                content: "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
+                content: "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
                 expected_version: None,
             })
             .unwrap();
@@ -1855,7 +1855,7 @@ mod tests {
             .unwrap();
         let rendered = extract_text(&result);
 
-        assert!(rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
+        assert!(rendered.contains("quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
         assert!(rendered.contains("slug: default::notes/uuid"));
         assert!(rendered.contains("Updated"));
     }

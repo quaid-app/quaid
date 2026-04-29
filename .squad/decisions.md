@@ -1,3 +1,52 @@
+# Professor coverage delta review
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Requested by:** macro88
+- **Worktree:** `D:\repos\quaid-vault-sync-batch3-v0120`
+- **Scope:** Review delta `67f4091..397d7c7` for Batch 3 coverage-fix follow-up
+- **Verdict:** APPROVE
+
+## Why
+
+1. The delta is test-only in code plus OpenSpec wording repair. I found no production-path widening in `src\commands\collection.rs`, `src\core\reconciler.rs`, or `src\core\vault_sync.rs`, so the previously approved root-scoped live-owner and offline-lease seams stay intact.
+2. The new tests are aimed at Windows-reachable helper/fail-closed branches and collection/status formatting rather than faking Unix success paths. That matches the accepted coverage-helper seam and is maintainable.
+3. The `17.5ww` / `17.5ww2` / `17.5ww3` task notes are now truthful: the real behavioral proof remains in Unix-gated tests, and the wording explicitly says the Windows coverage lane does not certify those items by itself.
+
+## Non-blocking notes
+
+- Some new tests are smoke-style coverage probes rather than deep contract tests, but that is acceptable here because the public behavior they touch is already covered elsewhere and this patch does not change production behavior.
+
+
+# Nibbler coverage delta review
+
+- Reviewed at: `2026-04-29T21:29:11.071+08:00`
+- Worktree: `D:\repos\quaid-vault-sync-batch3-v0120`
+- Delta: `67f4091..397d7c7`
+- Verdict: **APPROVE**
+
+## Scope reviewed
+
+- `src\commands\collection.rs`
+- `src\core\reconciler.rs`
+- `src\core\vault_sync.rs`
+- `openspec\changes\vault-sync-engine\tasks.md`
+
+## Blocking findings
+
+None.
+
+## Why this clears
+
+1. The delta does not alter production ownership, lease, or write-order logic. The code changes are test-only additions under existing `mod tests` blocks plus task wording.
+2. The Windows-oriented coverage additions stay on fail-closed or helper seams. They do not reopen the prior same-root ownership/race issue, do not bypass the single-writer path, and do not widen any destructive write surface.
+3. The new `17.5ww*` annotation is honest: it explicitly says current proof is Unix-only and that the available Windows coverage lane does not certify those items by itself. That matches the unchanged proof surface instead of laundering helper coverage into a cross-platform claim.
+
+## Residual non-blocking risks
+
+- Future closure notes must keep `17.5ww*` framed as Unix-only until a real Windows-reachable proof exists; these helper tests should not be cited as destructive-path certification.
+- Coverage pressure can still incentivize helper-only tests in `reconciler.rs` / `vault_sync.rs`; reviewers should keep checking that any added proof remains narrow and does not silently imply ownership or race guarantees it never exercised.
+
+
 
 # Batch 3 validation gate verdict
 
@@ -7693,4 +7742,5 @@ The revised Batch 3 implementation now honestly closes the prior rejection findi
 ## Non-blocking follow-ups
 
 - None.
+
 

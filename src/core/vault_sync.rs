@@ -4833,7 +4833,7 @@ pub fn remap_collection(
             "DELETE FROM file_state WHERE collection_id = ?1",
             [collection.id],
         )?;
-        return Ok(summary);
+        Ok(summary)
     } else {
         let lease = start_short_lived_owner_lease(conn, collection.id)?;
         let request = RestoreRemapSafetyRequest {
@@ -4884,7 +4884,7 @@ pub fn remap_collection(
                 ),
             });
         }
-        return Ok(summary);
+        Ok(summary)
     }
 }
 
@@ -8678,7 +8678,7 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Vault sync commands require Unix"));
-        let row: (
+        type RestoreWindowsFailureRow = (
             String,
             String,
             i64,
@@ -8687,7 +8687,9 @@ mod tests {
             Option<String>,
             i64,
             i64,
-        ) = conn
+        );
+
+        let row: RestoreWindowsFailureRow = conn
             .query_row(
                 "SELECT state,
                         root_path,
@@ -10580,7 +10582,7 @@ mod tests {
             .find("let lease = start_short_lived_owner_lease")
             .unwrap();
         let offline_end = remap_source[offline_start..]
-            .find("return Ok(summary);")
+            .find("Ok(summary)")
             .map(|offset| offline_start + offset)
             .unwrap();
         let offline_source = &remap_source[offline_start..offline_end];
@@ -10721,7 +10723,7 @@ mod tests {
 
         let runtime = start_serve_runtime(db_path.clone()).unwrap();
 
-        let row: (
+        type StartupRecoveryStealsLeaseRow = (
             String,
             String,
             i64,
@@ -10731,7 +10733,9 @@ mod tests {
             i64,
             i64,
             Option<String>,
-        ) = wait_for_collection_update(
+        );
+
+        let row: StartupRecoveryStealsLeaseRow = wait_for_collection_update(
             &db_path,
             collection_id,
             Duration::from_secs(5),
@@ -10823,8 +10827,7 @@ mod tests {
         let runtime = start_serve_runtime(db_path.clone()).unwrap();
         thread::sleep(Duration::from_millis(500));
 
-        let verify = Connection::open(&db_path).unwrap();
-        let row: (
+        type RecoveryRow = (
             String,
             String,
             i64,
@@ -10834,7 +10837,10 @@ mod tests {
             Option<String>,
             Option<i64>,
             Option<String>,
-        ) = verify
+        );
+
+        let verify = Connection::open(&db_path).unwrap();
+        let row: RecoveryRow = verify
             .query_row(
                 "SELECT state,
                         root_path,

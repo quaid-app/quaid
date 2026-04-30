@@ -593,10 +593,8 @@ pub(crate) struct IpcPeerCredentials {
 #[cfg(unix)]
 #[derive(Debug, Clone)]
 pub(crate) struct LiveServeEndpoint {
-    pub collection_name: String,
     pub session_id: String,
     pub pid: i64,
-    pub host: String,
     pub ipc_path: String,
 }
 
@@ -2108,7 +2106,7 @@ pub(crate) fn live_serve_endpoint_for_root_path(
 ) -> Result<Option<LiveServeEndpoint>, VaultSyncError> {
     let row = conn
         .query_row(
-            "SELECT c.name, o.session_id, s.pid, s.host, s.ipc_path
+            "SELECT o.session_id, s.pid, s.ipc_path
              FROM collections c
              JOIN collection_owners o ON o.collection_id = c.id
              JOIN serve_sessions s ON s.session_id = o.session_id
@@ -2121,26 +2119,22 @@ pub(crate) fn live_serve_endpoint_for_root_path(
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
                 ))
             },
         )
         .optional()?;
     match row {
         None => Ok(None),
-        Some((collection_name, session_id, pid, host, Some(ipc_path))) => {
+        Some((session_id, pid, Some(ipc_path))) => {
             Ok(Some(LiveServeEndpoint {
-                collection_name,
                 session_id,
                 pid,
-                host,
                 ipc_path,
             }))
         }
-        Some((_collection_name, session_id, _pid, _host, None)) => {
+        Some((session_id, _pid, None)) => {
             Err(VaultSyncError::InvariantViolation {
                 message: format!("live serve session {session_id} missing ipc_path"),
             })
@@ -3593,7 +3587,7 @@ fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
                 create_runtime_root: false,
             });
         }
-        return dirs::home_dir()
+        dirs::home_dir()
             .map(|home| {
                 let runtime_root = home.join(".cache").join("quaid");
                 IpcSocketLocation {
@@ -3604,7 +3598,7 @@ fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
             })
             .ok_or_else(|| VaultSyncError::InvariantViolation {
                 message: "unable to resolve HOME for IPC directory".to_owned(),
-            });
+            })
     }
     #[cfg(target_os = "macos")]
     {
@@ -3801,10 +3795,10 @@ pub(crate) fn peer_credentials_for_stream(
         if rc != 0 {
             return Err(io::Error::last_os_error().into());
         }
-        return Ok(IpcPeerCredentials {
+        Ok(IpcPeerCredentials {
             pid: creds.pid,
             uid: creds.uid,
-        });
+        })
     }
     #[cfg(target_os = "macos")]
     {

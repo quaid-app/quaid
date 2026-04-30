@@ -5349,6 +5349,15 @@ mod tests {
         ENV_MUTATION_LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    #[cfg(all(unix, target_os = "linux"))]
+    fn secure_runtime_root() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
@@ -5468,7 +5477,7 @@ mod tests {
     #[test]
     fn start_serve_runtime_refuses_insecure_ipc_directory_permissions() {
         let _env_lock = env_mutation_lock().lock().unwrap();
-        let runtime_root = tempfile::TempDir::new().unwrap();
+        let runtime_root = secure_runtime_root();
         let socket_dir = runtime_root.path().join("quaid");
         fs::create_dir_all(&socket_dir).unwrap();
         fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o755)).unwrap();
@@ -5529,7 +5538,7 @@ mod tests {
     #[test]
     fn publish_ipc_socket_unlinks_stale_socket_before_bind() {
         let _env_lock = env_mutation_lock().lock().unwrap();
-        let runtime_root = tempfile::TempDir::new().unwrap();
+        let runtime_root = secure_runtime_root();
         let socket_dir = runtime_root.path().join("quaid");
         fs::create_dir_all(&socket_dir).unwrap();
         fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700)).unwrap();
@@ -5558,7 +5567,7 @@ mod tests {
     #[test]
     fn audit_bound_ipc_socket_rejects_mode_regression() {
         let _env_lock = env_mutation_lock().lock().unwrap();
-        let runtime_root = tempfile::TempDir::new().unwrap();
+        let runtime_root = secure_runtime_root();
         let socket_dir = runtime_root.path().join("quaid");
         fs::create_dir_all(&socket_dir).unwrap();
         fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700)).unwrap();

@@ -1135,6 +1135,15 @@ mod tests {
     }
 
     #[cfg(all(unix, target_os = "linux"))]
+    fn secure_runtime_root() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
@@ -2190,7 +2199,7 @@ mod tests {
     #[test]
     fn cli_put_proxies_through_live_serve_socket() {
         let _env_lock = env_mutation_lock().lock().unwrap();
-        let runtime_root = tempfile::TempDir::new().unwrap();
+        let runtime_root = secure_runtime_root();
         let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
         let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         let runtime = vault_sync::start_serve_runtime(db_path.clone()).unwrap();
@@ -2235,7 +2244,7 @@ mod tests {
     #[test]
     fn cli_put_refuses_same_uid_socket_spoof_with_pid_mismatch() {
         let _env_lock = env_mutation_lock().lock().unwrap();
-        let runtime_root = tempfile::TempDir::new().unwrap();
+        let runtime_root = secure_runtime_root();
         let socket_dir = runtime_root.path().join("quaid");
         let socket_path = socket_dir.join("serve-live.sock");
         let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());

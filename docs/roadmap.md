@@ -164,6 +164,7 @@ These are known design choices that are _not_ oversights:
 | `v0.11.0` | Batch 2 embedding worker: background queue drain, retry/resume handling, `embedding_queue_depth` in `memory_collections`, and `failing_jobs` in `quaid collection info` |
 | `v0.12.0` | Batch 3 UUID identity hardening: opt-in `--write-quaid-id`, offline `quaid collection migrate-uuids [--dry-run]`, UUID-migration preflight before restore/remap, and `memory_put` preserving `quaid_id` |
 | `v0.13.0` | Batch 4 full rename-before-commit hardening: CLI write routing (`quaid put` refuses while serve owns the collection), `DuplicateWriteDedupError` on concurrent dedup collision, and complete test coverage for all 13-step rename-before-commit failure modes |
+| `v0.14.0` | Batch 5 live-serve single-file write proxying: same-root `quaid put` now authenticates and proxies through the serve-owned per-session IPC socket, while bulk rewrite flows remain offline-only |
 
 ---
 
@@ -187,6 +188,7 @@ Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, qua
 - **Write-through `memory_put`** *(Unix)* — full rename-before-commit sequence (recovery sentinel → tempfile → `renameat` → fsync parent dir → single SQLite tx); mandatory `expected_version` for updates; `check_fs_precondition` four-field CAS
 - **UUID identity hardening** *(Unix write surface)* — `quaid collection add --write-quaid-id` can persist missing `quaid_id` frontmatter during first attach, `quaid collection migrate-uuids <name> [--dry-run]` backfills it later offline, restore/remap preflights now fail closed with `UuidMigrationRequiredError` when trivial-content notes still lack frontmatter IDs, and `memory_put` preserves existing `quaid_id` on write
 - **Write interlock** — `state='restoring'` or `needs_full_sync=1` blocks all mutating CLI/MCP ops with `CollectionRestoringError`
+- **Authenticated CLI live-write proxy** *(Unix single-file `quaid put`)* — same-root live-owner writes now route through a per-session UNIX socket published by `quaid serve`; the CLI verifies socket mode/ownership plus kernel peer UID/PID before forwarding, and collection-wide rewrite flows still refuse with `ServeOwnsCollectionError`
 - **Offline restore** — `quaid collection restore <name> <target>` → Tx-A → atomic rename → Tx-B; `sync --finalize-pending` drives full-hash reconcile and reopens writes
 - **`memory_collections` MCP tool** — frozen 13-field per-collection object; truthful state, recovery, and ignore-diagnostic surfacing (17 MCP tools total)
 - **Collection filter** — `memory_search`, `memory_query`, `memory_list` accept an optional `collection` filter; default to the sole active collection when exactly one exists
@@ -197,7 +199,7 @@ Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, qua
 | Item | Why deferred |
 | ---- | ------------ |
 | Windows `quarantine restore`, IPC socket restore proxying, and online restore handshake | The narrow Unix restore seam shipped in `v0.9.6`; non-Unix restore hosting and live-handshake routing remain deferred |
-| IPC socket write proxying (`12.6*`) | Full trust-boundary design for `SO_PEERCRED` peer auth still in progress |
+| Bulk rewrite proxying beyond single-file `quaid put` | Batch 5 proxies only the single-file CLI write path; collection-wide rewrites such as `migrate-uuids` and `--write-quaid-id` still refuse when a live serve owner exists |
 | Per-event-type watcher handlers (`6.5–6.11`) | Create/Modify/Delete/Rename handlers; overflow recovery, `.quaidignore` live reload, and watcher supervisor not yet wired |
 | `quaid collection remove` | Detach + optional purge not yet implemented |
 | `quaid stats` per-collection augmentation | Per-collection row + aggregate totals pending |

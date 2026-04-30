@@ -2127,18 +2127,14 @@ pub(crate) fn live_serve_endpoint_for_root_path(
         .optional()?;
     match row {
         None => Ok(None),
-        Some((session_id, pid, Some(ipc_path))) => {
-            Ok(Some(LiveServeEndpoint {
-                session_id,
-                pid,
-                ipc_path,
-            }))
-        }
-        Some((session_id, _pid, None)) => {
-            Err(VaultSyncError::InvariantViolation {
-                message: format!("live serve session {session_id} missing ipc_path"),
-            })
-        }
+        Some((session_id, pid, Some(ipc_path))) => Ok(Some(LiveServeEndpoint {
+            session_id,
+            pid,
+            ipc_path,
+        })),
+        Some((session_id, _pid, None)) => Err(VaultSyncError::InvariantViolation {
+            message: format!("live serve session {session_id} missing ipc_path"),
+        }),
     }
 }
 

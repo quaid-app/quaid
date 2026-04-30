@@ -603,6 +603,7 @@ pub fn check_update_expected_version(
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 fn inspect_fs_precondition(
     conn: &Connection,
     collection_id: i64,
@@ -710,6 +711,7 @@ fn inspect_fs_precondition_with_parent_fd<Fd: AsFd>(
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 pub(crate) fn check_fs_precondition_before_sentinel(
     conn: &Connection,
     collection_id: i64,

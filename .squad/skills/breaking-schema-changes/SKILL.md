@@ -41,6 +41,12 @@ When a schema change tightens a data invariant (e.g., "exactly one `is_active=1`
 
 Changing a unique key from `UNIQUE(slug)` to `UNIQUE(collection_id, slug)` cascades to every query, index hint, and ORM-style struct that assumes the old uniqueness contract. Map all affected code before starting.
 
+### 7. Prove the bootstrap crash window reopens cleanly
+
+When schema bootstrap and runtime metadata hydration are separate steps, matching the seeded version number is necessary but not sufficient. Add a regression for the exact crash-partial state that can exist between those steps (for Quaid: current embedded DDL + legacy `config.version` written, but `quaid_config` still empty) and prove the normal open path succeeds afterward. A preflight-only test can hide a real reopen failure.
+
+Only auto-repair that window when the database is still bootstrap-fresh (default collection only, no user rows in mutable tables). If `embedding_models` already has an active row, treat that registry row as the authoritative model hint for reconstructing `quaid_config`; never fall back to the legacy `config.embedding_model` value once model selection became runtime-configurable.
+
 ## Examples
 
 ```

@@ -66,6 +66,12 @@ Draft releases don't emit `release: published` event. Workflows MUST:
 ### Build Script Protection
 Set `SKIP_BUILD_BUMP=1` (or `$env:SKIP_BUILD_BUMP = "1"` on Windows) before ANY release build. bump-build.mjs is for dev builds ONLY — it silently mutates versions.
 
+### Merge-Lane Status Gate
+Before merging, inspect the PR's full status-check rollup — not just GitHub Actions jobs. Third-party contexts like `codecov/patch` can still block the base-branch policy after the repo's own CI, coverage, and test workflows are green.
+
+### Env-Mutating Test Guard
+Any test that mutates process-global environment variables must serialize access with a shared lock and restore the previous value via a guard. Parallel default/online test lanes can otherwise fail nondeterministically, and small helper changes can also sink `codecov/patch` unless both restore branches (`previous = None` and `Some(_)`) are exercised.
+
 ## Known Failure Modes (v0.8.22 Incident)
 
 | # | What Happened | Root Cause | Prevention |

@@ -1,4 +1,5 @@
 # bender history
 
 - [2026-04-29T07-04-07Z] History summarized and archived
+- [2026-04-29T06-55-46Z] Investigated BEIR Regression Gate timeout on PR #114 (release/v0.11.0). Root cause: both beir_nq and beir_fiqa ran the full 10k-doc import+embed+query pipeline before checking whether a baseline existed — both baselines are null/pending in beir.json, so CI burned the entire 60-minute budget every time with no assertion. Fixed by moving the null-baseline early-exit guard to the top of each test function. Committed as 52b46e9, pushed to release/v0.11.0. This is a test-logic fix, not a branch search/embedding regression.
 - [2026-04-30T08:30Z] **Batch 4 third-revision cycle complete.** Closed Nibbler's rejection: `mark_collection_restoring_for_handshake` + `wait_for_exact_ack` now use typed `live_collection_owner()` (session_type='serve' enforced) instead of untyped `owner_session_id()` + `session_is_live()`. Removed dead `session_is_live()`. Two tests added (behavioral + source-seam). Clippy clean. 843/843 tests pass. 91.09% line coverage. Committed `714ec48` on `spec/vault-sync-engine-batch4-v0130`. `12.7` remains open (unrelated). Ready for Nibbler re-review.

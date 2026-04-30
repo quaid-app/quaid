@@ -1,3 +1,127 @@
+## Archived entries - 2026-04-29 (from history.md summarization)
+
+**Role:** P3 Release gate review (task 5.2 coverage inspectability)
+
+**What happened:**
+- Scruffy's initial review (task 5.2) verified coverage outputs are free and GitHub-visible (lcov.info artifact + job summary), but identified two blocking issues: coverage surface not documented in public docs, README/docs-site status messaging still drifts.
+- Marked task 5.2 blocked with specific doc revision requirements. Amy added coverage guidance to README/docs pages pointing to GitHub Actions surface and stating coverage is informational. Hermes synced docs-site roadmap/status with README.
+- Re-reviewed after fixes. Both doc accuracy issues resolved. Task 5.2 **APPROVED**.
+
+**Outcome:** P3 Release gate 5.2 (inspectability) **COMPLETE & APPROVED**. Coverage surface documented and GitHub-visible, status messaging aligned across all surfaces, sign-off complete.
+
+**Decision notes:** `.squad/decisions.md` (merged from inbox) — documents Scruffy's task 5.2 review, blocking issues, and re-review approval.
+
+## 2026-04-15 Cross-team Update
+
+- **Professor completed graph parent-aware tree rendering** (commit `44ad720`). Multi-hop depth-2 edges now render beneath actual parent instead of flattening under root. Depth-2 integration test strengthened with exact text shape assertions. All validation gates pass.
+- **Fry advancing slices:** Progressive retrieval (tasks 5.1–5.6) and assertions/check (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Decisions merged into canonical ledger. Awaiting Nibbler's final graph re-review and completion.
+
+## 2026-04-16T14:59:20Z Simplified-install v0.9.0 Release — Scruffy Completion
+
+- **Task:** Validated installer and package paths, normalized line endings, updated task documentation, added validation skill
+- **Changes:**
+  1. Installer path validation — confirmed `simplified-install/` paths and script locations
+  2. Package paths normalization — verified `scripts/install.sh` and Windows/Unix consistency
+  3. Line endings normalization — updated `scripts/install.sh` to consistent CRLF/LF handling
+  4. Task documentation — updated `simplified-install/tasks.md` with validation guidance
+  5. Validation skill — created/appended skill documentation for install validation
+- **Status:** ✅ COMPLETE. Installer paths validated and documented. scripts/install.sh ready for v0.9.0 release.
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-scruffy.md`
+
+## 2026-04-22: Vault-Sync Batch B Coverage Seams Locked
+
+**What:** Completed targeted coverage work on vault-sync Batch B seams before full reconciler lands. Locked parse_slug routing matrix, .gbrainignore error-shape contracts, and file_state drift/upsert behavior.
+
+**Decisions:**
+
+### Early Seam Coverage Prevents Silent Refactor Failures
+Helper-level tests as integration scaffold. Tests serve double duty: immediate validation of parse/ignore/stat helpers AND early warning system for integration hazards.
+
+### Coverage Delivered
+- parse_slug() routing matrix: all branching cases covered
+- .gbrainignore error-shape contracts: all error codes and line-level reporting fidelity proved
+- file_state stat-diff behavior: ctime/inode-only and mtime/size changes both trigger re-hash
+
+**Validation:** 10 new direct unit tests for coverage seams. All tests pass. Error paths tested and will fail loudly if later changes break contracts.
+
+**Why:** These are touched-surface seams with branchy behavior that future reconciler/watcher work will reuse directly. Guarding them now keeps Batch B credible even before the larger integration paths exist.
+
+**Status:** ✅ COMPLETE. Ready for full reconciler implementation.
+
+## 2026-04-22 Vault Sync Batch C — Re-gate (Approved)
+
+**Session:** Scruffy coverage validation after Leela's targeted repair pass.
+
+**What happened:**
+- Scruffy re-reviewed the repaired Batch C to validate that foundation seams are locked with direct tests, safety-critical stubs explicitly error, and task claims are truthful.
+- Focused on three seams: ile_state::stat_file_fd() (wrapper layer), 
+econciler stubs (error contracts), 	asks.md (truthfulness).
+
+**Key findings:**
+1. **Direct seam coverage locked:** stat_file_fd() directly tested for nofollow preservation and full Unix stat field population. ull_hash_reconcile() and has_db_only_state() directly tested for explicit Err return. stat_diff() foundation behavior (DB rows as "missing") pinned by direct assertion.
+2. **Safety-critical stubs explicitly error:** No more silent success defaults. 
+econcile(), ull_hash_reconcile(), has_db_only_state() all required to return Err("not yet implemented") rather than Ok(empty).
+3. **Task surface truthful:** Unchecked items remain pending; checked items annotated as foundation/scaffold. Deferred walk/hash/apply behavior not claimed complete.
+
+**Validation rerun:**
+- cargo test --quiet ✅
+- GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model ✅
+
+**Outcome:** APPROVE. Coverage sufficient on touched surface. Safety-critical stub behavior asserted directly. Ready to land.
+
+
+### 2026-04-22 17:02:27 - Vault-Sync Batch E Coverage Lane
+
+**Session:** Lock honest Batch E test coverage on real seams
+
+**Coverage strategy:**
+
+Do not add tests that would accidentally bless incomplete implementation or imply finished behavior. Focus on gbrain_id round-trip fidelity and ingest safety.
+
+**Tests added (and locked):**
+
+1. **gbrain_id frontmatter round-trip:**
+   - parse_frontmatter() preserves gbrain_id
+   - render_page() re-emits when present
+   - import/export round-trip fidelity
+   - serde serialization preserves the field
+
+2. **Ingest non-rewrite behavior:**
+   - Default ingest does not modify source markdown
+   - Generated UUIDs stored in DB only, not in file
+   - Git worktree stays clean after import
+
+3. **Explicit delete-vs-quarantine outcomes:**
+   - Quarantine classification on ambiguous/trivial cases
+   - Delete predicate respects source_kind boundaries
+
+**Tests explicitly NOT added:**
+
+- Rename inference (native events, UUID matching, hash pairing) — these are deferred to Batch F apply pipeline
+- Frontmatter write-back (brain_put UUID preservation) — deferred to later batch
+- Watcher-produced rename events — Group 6 deferred entirely
+
+**Why this matters:**
+
+- gbrain_id is already a data-fidelity guard even before pages.uuid becomes fully non-optional
+- Honest coverage prevents accidental false confidence in incomplete rename logic
+- Round-trip tests survive rename implementation without false-positive regressions
+
+**Validation:**
+
+- cargo test --quiet: all 439 tests pass
+- cargo clippy --quiet -- -D warnings: clean
+- Default model validation: green
+- Online-model validation: green
+
+**Next coverage focus:**
+- Batch F: direct tests for rename inference outcomes (UUID → page_id preservation, hash ambiguity → quarantine)
+- Later: watcher-native event seam once Group 6 lands
+- Batch 1 watcher-reliability coverage map (2026-04-27): the `.quaidignore` lane is now split cleanly: parser-level semantics live in `src/core/ignore_patterns.rs`, while watcher delivery into reload/reconcile is covered directly in `src/core/vault_sync.rs`. The remaining Batch 1 proof debt is overflow recovery timing/gating, native→poll fallback, crash backoff/restart, and watcher-health surfacing. I landed low-conflict guard tests in `src/commands/collection.rs` for the restoring-vs-pending-attach-vs-active-reconcile CLI status split and in `src/core/vault_sync.rs` for `memory_collections.restore_in_progress` only flipping true after a real restore ack (`state='restoring'` + `restore_command_id` + `watcher_released_at`).
+
+
+
+---
 # Project Context
 
 - **Owner:** macro88
@@ -209,3 +333,4 @@
 - Pattern note: semantic round-trip needs normalized line endings because some fixtures carry CRLF timeline bytes through the first export before canonical re-import collapses them to LF.
 
 ## 2026-04-15 P3 Release — Inspectability Gate Review & Re-review & Approval
+

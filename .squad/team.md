@@ -64,3 +64,8 @@
 1. Every meaningful code, docs, benchmark, or site change starts with an OpenSpec change proposal that follows the local instructions in `openspec\`.
 2. Scribe logs and merges decisions after work; Scribe does not replace the OpenSpec proposal step.
 3. `docs\spec.md` is the core product spec until superseded by accepted OpenSpec changes.
+
+## 2026-04-29T21:29:11+08:00 — Zapp Release v0.12.0 Complete
+
+Zapp release lane completed successfully. Schema v7 finalized. Release workflow green. Tag v0.12.0 published to origin. See orchestration-log/ for details.
+

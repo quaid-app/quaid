@@ -20,6 +20,20 @@ Key questions:
 - Is there any unstaged work that belongs in the release?
 - Does a tag for this version already exist (locally or on remote)?
 
+If you're releasing from a dedicated worktree, also verify the **exact target SHA** before tagging:
+
+```bash
+git fetch origin main --tags
+git rev-parse origin/main
+git show -s --format='%H %s' <target-sha>
+git diff --name-status <target-sha>..origin/main -- \
+  Cargo.toml .github/workflows/release.yml .github/release-assets.txt \
+  README.md docs/getting-started.md docs/roadmap.md \
+  website/src/content/docs/tutorials/install.mdx
+```
+
+Why: a parked release worktree can be on a different HEAD than the commit you actually intend to ship. Tag the requested SHA, not "whatever this worktree currently has checked out."
+
 ### 2. Create a named release branch from current HEAD
 
 ```bash

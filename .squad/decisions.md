@@ -1,110 +1,3 @@
-# Amy decision inbox — v0.11.0 doc truth repair
-
-- **Date:** 2026-04-28T21:46:33.929+08:00
-- **Requested by:** macro88
-
-## Decision
-
-For a release branch that exists before the GitHub tag is published, user-facing docs must separate:
-
-1. **The branch target** — what the upcoming release is preparing (here: `v0.11.0` / Batch 2).
-2. **The latest published tag** — what GitHub Releases downloads and `install.sh` can actually install today.
-
-## Applied rule
-
-- Status and release-summary prose may describe the upcoming slice on the branch.
-- Install snippets that fetch GitHub Release assets must use `<published-tag>` placeholders or explicit "latest published tag" wording until the release workflow completes.
-- If readers need the unreleased branch behavior, docs should point them to a source build instead of implying the tag already exists.
-
-## Why
-
-This branch already carries the Batch 2 embedding-worker work, but a literal `v0.11.0` install/download command would be false until the tag is live. Separating "branch target" from "published asset" keeps README, getting-started, and docs-site install guidance truthful during the release lane.
-
-
-# Decision: Clippy type_complexity fix — release/v0.11.0
-
-**Date:** 2026-04-28T21:46:33.929+08:00  
-**Author:** Bender  
-**Branch:** release/v0.11.0  
-**Commit:** e42b7b3
-
-## Decision
-
-Introduce a `type` alias `EmbeddingJobRow = (i64, i64, String, i64, i64)` in `src/core/vault_sync.rs` to resolve the `clippy::type_complexity` lint error that was blocking the `cargo clippy --all-targets -- -D warnings` gate.
-
-## Rationale
-
-- Professor rejected the release because `cargo clippy --all-targets -D warnings` was red.
-- The sole blocker was the return type of `load_embedding_job_candidates` — a 5-tuple inside `Vec` inside `Result` crosses Clippy's complexity threshold.
-- A `type` alias is the minimal, behavior-preserving fix. Using `#[allow(clippy::type_complexity)]` was rejected as suppression rather than resolution.
-- No OpenSpec tasks affected — this is a lint-only fix with no semantic change.
-
-## Scope
-
-- **Changed:** `src/core/vault_sync.rs` — 4-line addition (doc comment + type alias line + blank line + updated fn signature).
-- **Not changed:** Any test, OpenSpec task, documentation, or other source file.
-
-## Gate verification
-
-`cargo clippy --all-targets -- -D warnings` → exits 0 after fix.
-
-
-# Leela Batch 2 Revision Decision
-
-- **Timestamp:** 2026-04-28T21:46:33.929+08:00
-- **Change:** `vault-sync-engine`
-- **Scope:** Batch 2 release revision for `v0.11.0`
-
-## Decision
-
-1. **Schema v7 parity is mandatory across embedded DDL and open-path checks.** `src/schema.sql` now seeds `config.version='7'` so a crash-partial fresh database is not misclassified as legacy by `preflight_existing_schema()` while `src/core/db.rs` already enforces `SCHEMA_VERSION = 7`.
-2. **Task 8.6 stays closed only under the accepted frozen-MCP contract.** `memory_collections` remains frozen at 13 fields; failed embedding jobs are surfaced via `quaid collection info` (plain text and `--json`) rather than widening MCP in a release patch.
-
-## Why
-
-- Professor's rejection named the schema-version mismatch as the highest-priority release blocker; leaving the DDL seed at `6` while the open path enforced `7` made the schema bump non-atomic.
-- The accepted OpenSpec contract after Batch 1 repair freezes `memory_collections`. Reintroducing `failing_jobs` there would silently reopen task 13.6 and break the exact-key test in `src/mcp/server.rs`.
-- Hiding `failing_jobs` from `quaid collection info --json` was still a truth gap, because JSON output is part of the public CLI surface.
-
-## Files
-
-- `src/schema.sql`
-- `src/core/db.rs`
-- `src/commands/collection.rs`
-- `tests/collection_cli_truth.rs`
-- `openspec/changes/vault-sync-engine/implementation_plan.md`
-- `openspec/changes/vault-sync-engine/tasks.md`
-
-
-# Decision: v7 bootstrap crash-window recovery stays fail-closed outside fresh bootstrap state
-
-**Date:** 2026-04-28T21:46:33.929+08:00  
-**By:** Mom  
-**Status:** Proposed
-
-## Context
-
-Professor rejected the prior Batch 2 revision because `preflight_existing_schema()` accepted a crash-partial fresh v7 database while `open_with_model()` still rejected the same database when `quaid_config` was empty. That left the real bootstrap crash window unresolved.
-
-## Decision
-
-1. Treat an empty `quaid_config` as recoverable **only** when the database is still bootstrap-fresh:
-   - exactly the seeded default collection exists
-   - no user rows exist in mutable runtime tables (`pages`, `raw_imports`, `file_state`, `embedding_jobs`, links/assertions/gaps, etc.)
-   - `embedding_models` has at most one active row and no inactive leftovers
-2. If `embedding_models` already has an active row, use that row as the authoritative model hint when rebuilding `quaid_config`.
-3. Any non-fresh database with an empty `quaid_config` still fails closed and requires re-init / operator intervention.
-
-## Why
-
-This closes the real crash window without silently “repairing” databases that already carry user state. It also avoids trusting the legacy `config.embedding_model` seed, which is only a bootstrap default and can disagree with the true runtime-selected model.
-
-## Proof
-
-- `src/core/db.rs` regression tests now prove both `open_with_model()` and `init()` recover the fresh crash-partial v7 state.
-- A separate regression keeps the fail-closed path for databases that already contain page data.
-
-
 2026-04-28T21:46:33.929+08:00 — Professor final Batch 2 / release v0.11.0 gate
 
 Decision: REJECT the current Batch 2 + release-lane artifact.
@@ -2561,268 +2454,6 @@ All four tests pass. Existing lib-level quarantine tests remain green.
 - **Revision author:** Mom
 - **Rejection reviewers:** Professor, Nibbler
 - **Next reviewers:** TBD (different reviewers per phase 3 workflow)
-
-
-# Mom — Vault-Sync Edge Case Audit
-
-**Status:** Audit complete; no code modified  
-**Date:** 2026-04-25  
-**Author:** Mom (read-only audit)  
-**Scope:** `vault_sync.rs`, `quarantine.rs`, `collection.rs`, `tests/watcher_core.rs`, `tests/quarantine_revision_fixes.rs`
-
----
-
-## Findings
-
-### Finding 1 — Deferred-restore tests assert the bail, not the validation logic
-
-All four restore tests in `tests/quarantine_revision_fixes.rs` assert the same bail string:
-
-```
-"quarantine restore is deferred in this batch until crash-durable cleanup and no-replace install land"
-```
-
-Their names describe behaviors that are not exercised:
-
-| Test name | Named behavior | Actually tested |
-|---|---|---|
-| `restore_surface_is_deferred_for_non_markdown_target` | `.md` extension validation | CLI bail fires before function call |
-| `restore_surface_is_deferred_for_live_owned_collection` | live-owner gate | CLI bail fires before function call |
-| `restore_surface_is_deferred_before_target_conflict_mutation` | conflict detection + no mutation | CLI bail fires before function call |
-| `restore_surface_is_deferred_for_read_only_collection` | writable flag enforcement | CLI bail fires before function call |
-
-**Impact:** The test names create false confidence that these behaviors are tested. When restore is re-enabled, the tests must be updated — but there is no indication of this in the test code itself. The bail string is also a substring match, so if the message changes the assertion still passes vacuously if the substring happens to reappear.
-
-**Action:** When restore is re-enabled at the CLI layer, all four tests must be rewritten to assert actual behavior. Until then, a comment at the top of the test file should state: _"These tests assert the deferred-surface bail, not the validation logic their names describe."_
-
----
-
-### Finding 2 — Discard happy-path after successful export is untested
-
-`blocker_1_failed_export_does_not_unlock_discard` (the sole real production-behavior test in `quarantine_revision_fixes.rs`) proves the negative case: failed export → `quarantine_exports` row not written → discard remains blocked.
-
-**The positive case is not tested anywhere:**
-- Successful export → `quarantine_exports` row written with current epoch → `has_current_export = true` → `discard_quarantined_page(force=false)` succeeds even when `counts.any() = true`
-
-This is the direct intended behavior of the blocker-1 fix. Only one side of the contract is tested.
-
-**Highest-value missing test:** `discard_succeeds_after_current_epoch_export_with_db_only_state`  
-**File:** `src/core/quarantine.rs` unit tests or `tests/quarantine_revision_fixes.rs`
-
-```rust
-#[test]
-fn discard_succeeds_after_current_epoch_export_with_db_only_state() {
-    // insert quarantined page with knowledge_gap (db_only_state)
-    // call export_quarantined_page → should succeed
-    // assert quarantine_exports row exists with current epoch
-    // call discard_quarantined_page(force=false) → should succeed
-    // assert page deleted from DB
-}
-```
-
----
-
-### Finding 3 — `discard` with `force=true` is untested
-
-The `force=true` branch in `discard_quarantined_page` bypasses the `ExportRequired` guard entirely:
-
-```rust
-if counts.any() && !force && !exported_before_discard {
-    return Err(QuarantineError::ExportRequired { ... });
-}
-```
-
-No test at any level (unit or integration) exercises `force=true` with `counts.any()=true`. The force path is used by the CLI `--force` flag but is untested.
-
-**Missing test:** `discard_with_force_and_db_only_state_skips_export_guard`  
-**File:** `src/core/quarantine.rs` unit tests
-
----
-
-### Finding 4 — `discard_quarantined_page` writable-flag policy is undocumented and untested
-
-`discard_quarantined_page` calls `ensure_collection_write_allowed`, which checks only `state` and `needs_full_sync`. It does **not** check the `writable` flag. This means discarding a quarantined page from a `writable=false` collection succeeds.
-
-This is probably intentional: `discard` is a pure SQLite `DELETE FROM pages` with no vault filesystem bytes written. The `writable` flag guards vault-byte writes. Discard is not a vault write.
-
-But it is undocumented and there is no test asserting this is the contract.
-
-**Decision needed (P1):** Is `discard` on a read-only collection intentionally allowed? If yes, add a test and a code comment on the call site. If no, replace `ensure_collection_write_allowed` with `ensure_collection_vault_write_allowed`.
-
-**Recommendation:** The intentional reading is correct. Add a test and a comment.
-
-**Missing test:** `discard_allowed_on_read_only_active_collection`  
-**File:** `src/core/quarantine.rs` unit tests  
-
-```rust
-// writable=false should not block discard because discard writes no vault bytes
-fn insert_collection_readonly(conn: &Connection) -> i64 {
-    conn.execute(
-        "INSERT INTO collections (name, root_path, state, writable, is_write_target)
-         VALUES ('work', '/vault', 'active', 0, 0)",
-        [],
-    ).unwrap();
-    conn.last_insert_rowid()
-}
-
-#[test]
-fn discard_allowed_on_read_only_active_collection() {
-    let conn = open_test_db();
-    let cid = insert_collection_readonly(&conn);
-    let page_id = insert_quarantined_page(&conn, cid, "notes/q", "2026-01-01T00:00:00Z");
-    // no db_only_state, no force needed
-    let receipt = discard_quarantined_page(&conn, "work::notes/q", false).unwrap();
-    assert_eq!(receipt.slug, "notes/q");
-    // page is gone
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM pages WHERE id=?1", [page_id], |r| r.get(0)).unwrap();
-    assert_eq!(n, 0);
-}
-```
-
----
-
-### Finding 5 — `record_quarantine_export` upsert silently overwrites audit trail
-
-```sql
-ON CONFLICT(page_id, quarantined_at) DO UPDATE SET
-    exported_at = excluded.exported_at,
-    output_path = excluded.output_path
-```
-
-Re-exporting a quarantined page to a different output path silently updates `exported_at` and `output_path`. The original export timestamp is lost. If re-export is a valid user operation (exporting to a different path), the behavior is correct. If the intent is an append-only audit trail, it is wrong.
-
-The current test (`current_export_only_matches_current_quarantine_epoch`) tests epoch-matching only. No test exercises re-export.
-
-**Decision needed (P2):** Is re-export a valid user operation? If yes, document the upsert semantics and add a test. If no, add an existence check before INSERT and return a conflict error.
-
-**Recommendation:** Re-export to a different path is a legitimate use case (e.g., relocating the output file). Keep the upsert. Add a test documenting the behavior and an `eprintln!` noting the overwrite.
-
-**Missing test:** `re_export_updates_exported_at_and_output_path`  
-**File:** `src/core/quarantine.rs` unit tests
-
----
-
-### Finding 6 — `sweep` with `GBRAIN_QUARANTINE_TTL_DAYS=0` is untested
-
-`sweep_expired_quarantined_pages` uses:
-```sql
-CAST(strftime('%s', 'now') - strftime('%s', quarantined_at) AS INTEGER) >= (?1 * 86400)
-```
-
-With `ttl_days=0`, the filter becomes `>= 0` which matches every quarantined page. The existing test uses a fixed past date (`2026-01-01T00:00:00Z`) which is always expired, bypassing the boundary condition.
-
-**Missing test:** `sweep_with_zero_ttl_discards_page_quarantined_just_now`  
-**File:** `src/core/quarantine.rs` unit tests  
-
-```rust
-#[test]
-fn sweep_with_zero_ttl_discards_page_quarantined_just_now() {
-    std::env::set_var("GBRAIN_QUARANTINE_TTL_DAYS", "0");
-    let conn = open_test_db();
-    let cid = insert_collection(&conn);
-    // insert page with quarantined_at = strftime now
-    conn.execute(
-        "INSERT INTO pages ... quarantined_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') ...",
-        ...
-    ).unwrap();
-    let page_id = conn.last_insert_rowid();
-    let summary = sweep_expired_quarantined_pages(&conn).unwrap();
-    assert_eq!(summary.discarded, 1);
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM pages WHERE id=?1", [page_id], |r| r.get(0)).unwrap();
-    assert_eq!(n, 0);
-    std::env::remove_var("GBRAIN_QUARANTINE_TTL_DAYS");
-}
-```
-
----
-
-### Finding 7 — Watcher integration coverage is minimal
-
-`tests/watcher_core.rs` has exactly one test: `start_serve_runtime_defers_fresh_restore_without_mutating_page_rows`. This proves that `start_serve_runtime` does not mutate a collection in `restoring` state with a live foreign heartbeat. The watcher itself is essentially integration-untested.
-
-**Missing coverage areas:**
-
-| Gap | File target | Difficulty |
-|---|---|---|
-| Non-.md file events filtered by `relative_markdown_path` | `src/core/vault_sync.rs` unit tests | Low — unit test `relative_markdown_path(Path::new("file.json"))` returns `None` |
-| Watcher replaced on `generation` bump (`sync_collection_watchers`) | `tests/watcher_core.rs` | Medium — two sequential serve sessions, verify watcher rebuilt |
-| Reconcile halt written via `convert_reconcile_error` | `src/core/vault_sync.rs` unit tests | Low — can call `convert_reconcile_error` directly with a halt-class error |
-| Channel overflow → `needs_full_sync` | `tests/watcher_core.rs` | High — requires flooding the channel before poll drains it |
-
-**Minimum valuable addition:** Add a unit test for `relative_markdown_path` with non-.md inputs. This is a two-line test that closes a gap in the event-filtering contract.
-
----
-
-### Finding 8 — `QUARANTINE_SWEEP_INTERVAL_SECS` is not configurable
-
-`start_serve_runtime` uses a hardcoded `const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60`. There is no env-var override. Writing an integration test that proves the serve loop fires the sweep requires either a 24-hour wait or a testability escape hatch.
-
-**Action if serve-loop sweep integration test is desired:** Add `GBRAIN_QUARANTINE_SWEEP_INTERVAL_SECS` env var override (analogous to the existing `GBRAIN_QUARANTINE_TTL_DAYS` override).
-
----
-
-## Prioritized test backlog
-
-| Priority | Test | File | Complexity |
-|---|---|---|---|
-| P1 | `discard_succeeds_after_current_epoch_export_with_db_only_state` | `quarantine.rs` unit tests | Low |
-| P1 | `discard_with_force_and_db_only_state_skips_export_guard` | `quarantine.rs` unit tests | Low |
-| P1 | `discard_allowed_on_read_only_active_collection` (+ decision) | `quarantine.rs` unit tests | Low |
-| P2 | `re_export_updates_exported_at_and_output_path` | `quarantine.rs` unit tests | Low |
-| P2 | `sweep_with_zero_ttl_discards_page_quarantined_just_now` | `quarantine.rs` unit tests | Low |
-| P3 | `relative_markdown_path_returns_none_for_non_md_inputs` | `vault_sync.rs` unit tests | Low |
-| P3 | `convert_reconcile_error_writes_reconcile_halted_at` | `vault_sync.rs` unit tests | Low |
-| P4 | `watcher_rebuilt_on_generation_bump` | `tests/watcher_core.rs` | Medium |
-| P5 | Convert 4 deferred-restore tests to real behavior tests | `tests/quarantine_revision_fixes.rs` | High (needs restore re-enabled first) |
-| P5 | `sweep_fires_in_serve_loop` (needs interval override) | `tests/watcher_core.rs` | High (needs FIX-3) |
-
----
-
-## Production fix candidates
-
-### FIX-1: Clarify discard writable-gate policy (comment + test)
-
-Add a comment on the `ensure_collection_write_allowed` call in `discard_quarantined_page`:
-
-```rust
-// discard is a pure DB operation (DELETE FROM pages); it writes no vault bytes,
-// so we enforce state/sync guards only — not the writable flag.
-vault_sync::ensure_collection_write_allowed(conn, resolved.collection_id)?;
-```
-
-Add unit test `discard_allowed_on_read_only_active_collection` to lock this in.
-
-**Risk:** Low. Documents existing behavior.
-
-### FIX-2: Log re-export overwrite in `record_quarantine_export`
-
-Add an `eprintln!` when the INSERT detects a conflict (re-export case):
-
-```rust
-// After execute: check rows_changed. If 0 rows inserted (conflict handled by DO UPDATE),
-// log the overwrite.
-eprintln!(
-    "INFO: quarantine_re_exported page_id={} quarantined_at={} new_output_path={}",
-    page_id, quarantined_at, output_path
-);
-```
-
-This makes re-export visible in logs without changing semantics.
-
-**Risk:** Low. Additive logging only.
-
-### FIX-3 (if needed): Add `GBRAIN_QUARANTINE_SWEEP_INTERVAL_SECS` env override
-
-Analogous to existing `GBRAIN_QUARANTINE_TTL_DAYS`. Required only if a serve-loop sweep integration test is planned.
-
-**Risk:** Low. Additive env var.
-
-
-## 2026-04-24: Vault-sync-engine Batch 13.3 review
-**By:** Nibbler
-**What:** REJECT Batch 13.3 in its current form.
-**Why:** The main CLI slug-bearing paths are close: explicit `<collection>::<slug>` routing looks aligned with MCP, canonical page references now show up across get/link/graph/timeline/check/list/search/query surfaces, and the coupled `assertions.rs` UUID-first fallback is justified because duplicate-slug brains would otherwise let `extract_assertions()` bind import assertions to the wrong page_id. But two fail-closed seams remain open: `src/core/search.rs::exact_slug_result_canonical()` collapses `SlugResolution::Ambiguous` into `Ok(None)` and silently falls through to generic search semantics for `gbrain query`, and `src/commands/link.rs::unlink()` still emits `no matching link found between {from} and {to}` using raw user input after both pages were already resolved collection-aware.
-**Required follow-up:** Make exact-slug query mode surface the same ambiguity failure instead of degrading into search/no-results behavior, canonicalize the resolved `unlink` no-match failure path, and keep the closure note tightly scoped to CLI slug-routing/output parity only. Do not claim `13.5` collection filters/defaults, `13.6`, or anything broader than the narrowly necessary duplicate-slug assertion binding fix.
 
 
 # 2026-04-24 — Nibbler review of Batch 13.6 + 17.5ddd
@@ -5435,68 +5066,6 @@ a full retroactive rewrite of historical tool names.
 **Decision 5:** The `.gbrainignore` file rename to `.quaidignore` must be coordinated with
 Fry as it affects file-system conventions used by the reconciler and watcher.
 
-# Decision: Quaid Hard Rename — Documentation & Skills Implementation
-
-**Date:** 2025-07-22  
-**Author:** Amy (Technical Writer)  
-**Status:** Implemented — Phases G and H complete
-
----
-
-## What was done
-
-Applied the hard rename from GigaBrain/gbrain/brain terminology to Quaid/quaid/memory across all documentation, agent-facing markdown, and skill files:
-
-**Files updated (Phase G — Documentation):**
-- `README.md` — title, subtitle, all CLI examples, env vars, MCP tool names, install URLs, binary asset names
-- `CLAUDE.md` — product name, all CLI/MCP tool/env var references, architecture table, quaid_config
-- `AGENTS.md` — all CLI commands, MCP tool names, DB path, product description
-- `docs/spec.md` — comprehensive pass; ~245 occurrences resolved
-- `docs/getting-started.md` — all quickstart CLI examples
-- `docs/contributing.md` — repo layout, release process, tool references
-- `docs/roadmap.md` — all phase descriptions and CLI examples
-- `docs/gigabrain-vs-qmd-friction-analysis.md` — product name references; file not renamed (per tasks.md: consult macro88 first)
-
-**Files updated (Phase H — Skills):**
-- All 8 `skills/*/SKILL.md` files — gbrain→quaid CLI, brain_*→memory_* tools, GBRAIN_*→QUAID_* env vars
-
----
-
-## Key decisions made during implementation
-
-### 1. "Garry Tan's GBrain" kept as historical reference
-The phrase "Garry Tan's GBrain work" in `README.md`, `CLAUDE.md`, and `docs/spec.md` was preserved. This is attribution to prior art (a Gist) and should remain as-is. The surrounding prose uses "Quaid" throughout.
-
-### 2. docs/gigabrain-vs-qmd-friction-analysis.md — file not renamed
-Per tasks.md instruction (G.7): "consult with macro88 before renaming files in `docs/`". All product-name content inside the file was updated; the filename itself was not changed. A follow-up decision from macro88 is needed.
-
-### 3. README subtitle and Why section rewritten
-The original opening used "personal knowledge brain" framing. The new subtitle is "Persistent memory for AI agents" to match the agent-first positioning in the proposal. The "Git doesn't scale past ~5,000 files" paragraph was removed; the Why section now leads with the agent use case.
-
-### 4. Default init path updated
-CLI examples throughout changed from `quaid init ~/memory.db` → `quaid init ~/.quaid/memory.db`, consistent with the `~/.quaid/` config directory rename.
-
-### 5. Upgrade skill binary filename pattern
-In `skills/upgrade/SKILL.md`, patterns like `gbrain.new`, `$(which gbrain)`, and `gbrain.new.sha256` were renamed to `quaid.new`, `$(which quaid)`, and `quaid.new.sha256`. These were not caught by the simple space/backtick patterns and required targeted fixes.
-
-### 6. spec.md upgrade section
-References to `https://github.com/[owner]/gbrain/releases/...` URLs updated to `[owner]/quaid`. Checksum staging file names updated from `gbrain.sha256` to `quaid.sha256`. Error message "Upgrade gbrain" updated to "Upgrade quaid".
-
-### 7. Comparison table in spec.md
-`| SQLite (gbrain) |` updated to `| SQLite (quaid) |`. The adjacent `PGLite (Garry's GBrain)` column header was preserved as it refers to Garry Tan's separate project.
-
----
-
-## Phases not in scope for Amy
-
-Phases B–F (schema, Cargo, MCP server code, env vars in scripts, CI/release workflows) and Phases I–L (test suite, final audit, migration guide, PR) are owned by engineering roles per the ownership table in tasks.md.
-
----
-
-## Verification
-
-Final check confirmed zero remaining occurrences of `GigaBrain|gbrain|GBRAIN_|brain\.db|~/.gbrain|macro88` in all updated files (excluding historical "Garry Tan's GBrain" references intentionally preserved).
-
 # Decision: Release note body — breaking-rename warning fix
 
 **Author:** Amy  
@@ -6464,60 +6033,6 @@ and are out of scope for this lane.
 ## Benchmark lane status
 
 All offline benchmark / stress gates are green.  No regressions introduced.
-
-# Decision: Align publish-npm.yml to "npm not yet live" contract
-
-**Date:** 2025-07-25  
-**Author:** Leela  
-**Status:** Accepted
-
-## Context
-
-`.github/workflows/publish-npm.yml` was triggering automatically on every `v*.*.*` tag via a
-`push: tags` event. This directly contradicts the truthful stance held by:
-
-- `README.md` — npm row marked "❌ Not yet published — use binary release or build from source"
-- `docs/getting-started.md` — same row with identical wording
-- `MIGRATION.md` — "quaid is staged but not yet in the public registry — `npm install -g quaid` will not work yet"
-- `.github/RELEASE_CHECKLIST.md` — npm listed under **Deferred distribution channels**, explicitly labelled "not available; label as planned follow-on, not yet live"
-
-Nibbler's rejection cited this contradiction correctly.
-
-Zapp and Amy are locked out of this artifact cycle (prior rejected release-message artifacts).
-
-## Decision
-
-Replace the `push: tags` trigger in `publish-npm.yml` with `workflow_dispatch` only.
-
-This is the smallest safe change that:
-1. Removes the contradiction — no auto-publish fires on release tags.
-2. Preserves the full workflow so it is ready to activate when npm goes live (flip trigger back to `push: tags` at that point).
-3. Adds a comment in the file stating the rationale so the next person knows why it is manual-only.
-4. Does not introduce any forbidden legacy literals.
-
-## Alternatives considered
-
-- **Delete the workflow** — too destructive; the pipeline work should not be lost.
-- **Add `if: false` to the job** — less clear than removing the trigger; YAML linters may warn.
-- **Keep trigger but gate on a repo variable** — adds indirection with no benefit over `workflow_dispatch`.
-
-## Affected files
-
-- `.github/workflows/publish-npm.yml` — trigger changed from `push: tags` to `workflow_dispatch`
-
-## Follow-on
-
-When the npm channel is opened, the trigger should be restored to:
-
-```yaml
-on:
-  push:
-    tags:
-      - "v[0-9]*.[0-9]*.[0-9]*"
-```
-
-and the explanatory comment removed. The `RELEASE_CHECKLIST.md` npm deferred-channel checkbox
-should be updated at the same time.
 
 # Batch 1 — Watcher Reliability: Scope, Sequencing, and Release Gate
 
@@ -7822,3 +7337,637 @@ most directly breaking of the three Nibbler findings.
 - `packages/quaid-npm/` file content — all four files (package.json, README.md,
   bin/quaid, scripts/postinstall.js) were already correct; only the git tracking was missing.
 
+
+### 2026-04-29T21:29:11.071+08:00: User directive
+**By:** macro88 (via Copilot)
+**What:** Start implementation branches from main/origin-main, not from an existing release or dirty branch.
+**Why:** User request — captured for team memory
+
+
+# Fry Batch 3 implementation
+
+- Date: 2026-04-29T20:33:01.970+08:00
+- Decision: Keep `page_uuid` dual-read (`quaid_id` first, legacy `memory_id` fallback) but canonicalize every render/write/export to `quaid_id`.
+- Why: Batch 3 needs an explicit migration target for files missing `quaid_id`, while existing vault content and fixtures can still be ingested safely during the transition. Reusing `put_from_string` for write-back preserves the rename-before-commit and raw_import invariants without maintaining a second file writer.
+
+
+# Fry Batch 3 Recon
+
+- **Timestamp:** 2026-04-29T20:33:01.970+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Batch 3 reconnaissance and execution order for `v0.12.0`
+
+## Decision
+
+Implement Batch 3 in this order:
+
+1. Settle the UUID/frontmatter contract seam first (`memory_id` vs `quaid_id`) and thread that decision through the shared UUID helpers.
+2. Extract or reuse the existing rename-before-commit writer path so UUID write-back uses the same sentinel + dedup + post-rename stat + single-tx `file_state`/`raw_imports` rotation as `memory_put`.
+3. Add bulk-write guard helpers for WriteAdmin/offline-live-owner checks before exposing new CLI entrypoints.
+4. Only then wire `collection migrate-uuids` and `collection add --write-quaid-id`, followed immediately by task-aligned tests and OpenSpec checkbox updates.
+
+## Why
+
+The current tree has three coupled seams: the frontmatter key name is still `memory_id`, the only production rename-before-commit implementation lives in `src\commands\put.rs`, and live-owner refusal currently reports only `owner_session_id` even though pid/host data already exists in `serve_sessions`. Landing CLI surface changes before those seams are resolved would either duplicate the write path, produce dishonest task closures, or force follow-up churn across tests and error text.
+
+This ordering also keeps task checkboxes honest. `5a.5`/`17.5ww*` become true when the shared writer path is real, `17.5ii9` becomes true when the live-owner helper is wired, and `5a.5a`/`9.2a` only close once the CLI commands are actually surfaced on top of those lower-level guarantees.
+
+## Notes
+
+- Existing write-gate semantics already live in `src\core\vault_sync.rs::ensure_collection_write_allowed`; Batch 3 should preserve the restoring/`needs_full_sync` fail-closed behavior for WriteAdmin flows.
+- The reconciler preflight already points operators at `quaid collection migrate-uuids`, so the new CLI should be added in the same lane as the real write-back implementation, not earlier.
+
+
+# Leela Batch 3 lane
+
+- **Timestamp:** 2026-04-29T20:33:01.970+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Safe execution lane + release sequencing for Batch 3 / `v0.12.0`
+
+## Decision
+
+Use a separate clean worktree for Batch 3 implementation and release prep staging.
+
+- **Keep untouched:** `D:\repos\quaid` on `release/v0.11.0` (dirty `.squad/` state, ahead of origin by 1 commit)
+- **Implementation lane:** `D:\repos\quaid-vault-sync-batch3-v0120`
+- **Branch:** `spec/vault-sync-engine-batch3-v0120`
+- **Base:** `origin/main` at `fdc20a0` (`Cargo.toml` = `0.11.6`, latest published release = `v0.11.6`)
+
+## Why
+
+The current checkout is not safe for Batch 3 or release work: it is on an old release branch, has uncommitted `.squad/` changes, and diverges from `origin/main`. A sibling worktree isolates implementation from that state and lines Batch 3 up with the real release base.
+
+## Release sequencing constraints
+
+1. Batch 3 is still open in OpenSpec (`5a.5`, `5a.5a`, `9.2a`, `5a.7`, `17.5ww`, `17.5ww2`, `17.5ww3`, `17.5ii9`), so `v0.12.0` cannot ship yet.
+2. The next release must not start from `release/v0.11.0`; it must start from the clean main-based lane and merge back to `main` first, per the user instruction.
+3. `Cargo.toml` on main is still `0.11.6`; a `v0.12.0` tag would require a version bump before tagging.
+4. Release automation is tag-driven (`.github\workflows\release.yml`) and fails if the tag/version mismatch or the 17-file release manifest is incomplete.
+5. Coverage over 90% must be checked explicitly via `cargo llvm-cov`; CI reports coverage but does not fail the build for dipping below the requested threshold.
+
+## Routing
+
+- **Fry first:** implement Batch 3 in the clean worktree using the existing recon order (UUID/frontmatter seam → shared write path → live-owner guard → CLI surfaces/tests/OpenSpec checkboxes).
+- **Professor second:** review `src\core\vault_sync.rs`, `src\core\page_uuid.rs`, and any shared writer extraction before merge.
+- **Scruffy third:** run targeted test/coverage passes and verify the coverage report stays above 90%.
+- **Nibbler fourth:** adversarial review of serve-live refusal, write-gate enforcement, and rename-before-commit safety.
+- **Zapp last:** only after PR review is complete, comments are resolved, CI is green, and the branch is merged to `main`; then run the release checklist and tag/release `v0.12.0` from the merged state.
+
+
+# Leela Batch 3 branch ancestry
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Batch 3 branch ancestry and conflict-risk only
+
+## Decision
+
+No branch-base recovery is needed.
+
+The Batch 3 worktree branch `spec/vault-sync-engine-batch3-v0120` was created from `origin/main` at `fdc20a0` and then received one Batch 3 commit (`4401ed7`). It was not started from `origin/release/v0.11.0`.
+
+## Why
+
+- The branch reflog records the branch creation point as `origin/main`.
+- `HEAD` is a single-child commit on top of `fdc20a0`, which is `origin/main` / `v0.11.6`.
+- Relative to `origin/release/v0.11.0`, the branch is three commits ahead because it includes the newer main-line commits plus the Batch 3 commit; that is expected ancestry, not evidence of a wrong starting branch.
+
+## Recovery action
+
+Do not rebase, cherry-pick, or rebuild the branch for base-branch reasons. If merge conflicts appear later, treat them as normal forward-integration conflicts from subsequent changes, not as fallout from starting Batch 3 on the wrong base.
+
+
+# Nibbler Batch 3 review
+
+- **Date:** 2026-04-29T20:33:01.970+08:00
+- **Requested by:** macro88
+- **Verdict:** REJECT
+
+## Decision
+
+Batch 3 safety is not acceptable to ship.
+
+## Blocking findings
+
+1. `collection add --write-quaid-id` does not truly refuse live serve ownership for the same vault root. The guard is keyed to the newly created `collection_id`, while `collections.root_path` is not unique and `add()` only rejects duplicate names. A second collection row can point at the same canonical root and run bulk UUID rewrites while serve still owns the original row.
+2. The bulk UUID rewrite path does not hold an offline owner lease for the duration of the batch. `run_uuid_write_back()` only performs a one-time `ensure_no_live_serve_owner()` preflight, and `collection add --write-quaid-id` drops the fresh-attach short-lived lease before starting the rewrite. A serve session can claim ownership after preflight and race the rewrite mid-batch.
+3. The completion claims overstate proof. The landed tests cover `migrate-uuids` live-owner refusal for an existing collection, dry-run, and permission skip, but they do not prove `collection add --write-quaid-id` refusal, the same-root alias case, or the missing lease/race seam.
+
+## Rejected artifacts
+
+- `D:\repos\quaid-vault-sync-batch3-v0120\src\commands\collection.rs`
+- `D:\repos\quaid-vault-sync-batch3-v0120\src\core\vault_sync.rs`
+- `D:\repos\quaid-vault-sync-batch3-v0120\tests\collection_cli_truth.rs`
+- `D:\repos\quaid-vault-sync-batch3-v0120\openspec\changes\vault-sync-engine\tasks.md` (the checked closure claims for `5a.5a`, `9.2a`, `12.6b`, `17.5ii9`)
+
+
+# Professor Batch 3 Review
+
+**Date:** 2026-04-29T20:33:01.970+08:00
+**Reviewer:** Professor
+**Verdict:** REJECT
+
+## Blocking findings
+
+1. `src\commands\collection.rs` / `src\core\vault_sync.rs`
+   - Batch 3 closes `12.6b` and `17.5ii9` in `openspec\changes\vault-sync-engine\tasks.md`, and the implementation plan says the refusal must name pid/host **and instruct the operator to stop serve first**.
+   - The landed `ServeOwnsCollectionError` now includes pid/host, but neither the error text nor the CLI handler adds the required operator guidance. Current tests only assert the tag plus pid/host, so the claimed task closure is not truthful.
+
+## Non-blocking notes
+
+- The shared rename-before-commit seam reuse is honest: `write_quaid_id_to_file(...)` delegates to `put::put_from_string(...)`, so UUID write-back rides the existing sentinel/tempfile/rename/fsync/post-rename-stat/single-tx path instead of introducing a parallel writer.
+- The frozen `brain_collections` MCP contract stays closed: `failing_jobs` remains skipped from serialization and the exact-key test still enforces the existing field set.
+
+
+## 2026-04-29T20:33:01.970+08:00 — Batch 3 coverage lane split
+
+- Keep the Batch 3 proof on the real seams:
+  - `src/core/vault_sync.rs` owns atomic UUID write-back, read-only skip, `file_state`/`raw_imports` rotation, and live-owner refusal helpers.
+  - `src/commands/collection.rs` owns `collection add --write-quaid-id` / `collection migrate-uuids --dry-run` routing, restoring-state/write-gate checks, and summary shaping.
+  - `tests/collection_cli_truth.rs` owns subprocess truth: exit codes, JSON summary, plain-text operator guidance, and serve-live refusal wording.
+- Treat `tests/command_surface_coverage.rs` as a last-mile dispatch smoke only; do not spend Batch 3 effort there until the real helper and CLI truth seams are locked.
+- Windows iteration should stay cheap: targeted tests first, then `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1`, then `cargo llvm-cov report --json --output-path target\llvm-cov-report.json` for missed-line movement.
+
+
+
+# Mom Batch 3 Revision
+
+## Mom Batch 3 Revision
+
+- **Date:** 2026-04-29T21:29:11.071+08:00
+- **Decision:** Treat bulk UUID rewrite ownership as a canonical-root seam, not a single-row seam.
+
+### Why
+
+`collection_owners` is keyed by `collection_id`, but `collections.root_path` is not unique. That means `collection add --write-quaid-id` can create an alias row that points at the same vault root while serve still owns a different row, and a row-scoped preflight/lease is not enough to keep the watcher out.
+
+### Applied rule
+
+1. Before `collection add --write-quaid-id` inserts the alias row, preflight the canonical root and fail closed if any same-root row has a live serve owner.
+2. For non-dry-run bulk UUID rewrites, acquire one short-lived offline session across **all** collection rows sharing the canonical root and hold it for the entire rewrite loop.
+3. Keep the operator-facing refusal honest: tell them to stop serve first, run the bulk rewrite offline, then restart serve.
+
+### Scope
+
+This is intentionally narrow to bulk UUID rewrites (`migrate-uuids` and `collection add --write-quaid-id`). It does not widen generic duplicate-root policy or imply that all collection commands are now root-unique.
+
+
+
+# Nibbler Batch 3 rereview
+
+# Nibbler Batch 3 rereview
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Worktree:** `D:\repos\quaid-vault-sync-batch3-v0120`
+- **Branch/Commit:** `spec/vault-sync-engine-batch3-v0120` @ `67f4091`
+- **Verdict:** **APPROVE**
+
+## Why
+
+1. The same-root alias bypass is closed in both directions:
+   - `collection add --write-quaid-id` now refuses before inserting a second row when any same-root alias is live-owned.
+   - Bulk UUID rewrite refusal now resolves live ownership by canonical root, not only the target collection row.
+2. The offline race is closed at the right seam:
+   - non-dry-run UUID write-back acquires a short-lived owner lease covering every same-root collection row before the rewrite loop starts;
+   - helper coverage proves the root-scoped lease claims aliases together and cleans up after drop.
+3. The operator-facing story is now honest:
+   - refusal text explicitly tells operators to stop serve first, rerun offline, then restart serve;
+   - task closure notes were narrowed to the actual proof: same-root alias refusal plus a root-scoped lease/source-invariant seam, not a broader claim.
+
+## Residual non-blocking risks
+
+- The end-to-end refusal tests remain Unix-gated, so on a Windows host the rerun evidence comes from helper/unit proof rather than executing the CLI path directly. That matches the current Unix-only command surface, but it is still narrower evidence than a native Unix validation lane.
+
+
+
+# Professor Batch 3 re-review
+
+# Professor Batch 3 re-review
+
+- **Date:** 2026-04-29T21:29:11.071+08:00
+- **Requested by:** macro88
+- **Verdict:** APPROVE
+- **Revision reviewed:** 67f4091 on spec/vault-sync-engine-batch3-v0120
+
+## Decision
+
+The revised Batch 3 implementation now honestly closes the prior rejection findings.
+
+## What changed enough to pass
+
+1. collection add --write-quaid-id now refuses before inserting an alias row when any same-root collection is live-owned. The refusal is root-scoped rather than keyed only to the newly created row.
+2. Non-dry-run bulk UUID rewrite now acquires a short-lived owner lease across every collection row sharing the canonical root before the rewrite loop begins, so serve cannot claim an alias mid-batch.
+3. Operator-facing refusal text now includes the required stop serve first guidance, and the tests/proof seam were updated to cover that wording and the root-scoped lease ordering.
+4. openspec/changes/vault-sync-engine/tasks.md no longer overclaims the repaired seam: the revised notes explicitly tie closure to same-root alias refusal, root-scoped lease coverage, and the stop-serve guidance.
+
+## Non-blocking follow-ups
+
+- None.
+
+
+
+
+
+
+---
+---
+timestamp: 2026-04-29T21:29:11.071+08:00
+requested_by: macro88
+worktree: D:\repos\quaid-v0.12.0-release
+branch: release/v0.12.0
+head: 90f888ab48fd7e36869b84757a04c5abecffa8ef
+topic: v0.12.0 docs/release truth review
+---
+
+# Decision: APPROVE `release/v0.12.0` docs truth
+
+## Verdict
+
+APPROVE
+
+## Why
+
+1. `Cargo.toml` is bumped to `0.12.0`, and the public install surfaces now treat `v0.12.0` as branch-prep state rather than pretending the tag is already published.
+2. `README.md`, `docs/getting-started.md`, `docs/roadmap.md`, and `website/src/content/docs/tutorials/install.mdx` now truthfully describe the shipped Batch 3 UUID slice: opt-in `quaid collection add --write-quaid-id`, offline `quaid collection migrate-uuids [--dry-run]`, UUID-migration preflight before restore/remap, and `memory_put` preserving `quaid_id`.
+3. The docs match the implementation boundary: bulk UUID rewrites are Unix-only and offline, while preserved-UUID behavior is covered on the write/read path.
+
+## Blocking findings
+
+None.
+
+## Non-blocking polish
+
+- Optional: mirror the getting-started page's explicit "Unix-only bulk rewrite" caveat into the README Batch 3 mention so every top-level surface carries the same constraint wording.
+
+---
+# Leela decision — v0.12.0 merge lane
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Requested by:** macro88
+- **PR:** `#123`
+- **Scope:** `release/v0.12.0` final merge lane
+
+## Decision
+
+Clear only the real merge blockers inside the release branch, then merge normally. That meant fixing the flaky env-var test race, adding coverage for the env-guard restore path so `codecov/patch` cleared, accepting the docs correction raised in review, resolving the review threads, and explicitly avoiding an admin merge.
+
+## Why
+
+- The branch itself was already the intended release-prep lane and was only blocked by merge policy.
+- The failing `Test` / `codecov/patch` gate and the unresolved review conversations were all scoped to the branch and could be repaired surgically without reopening release scope.
+- Admin merge would have hidden a real quality gate failure and violated the no-bypass rule already established for merge-lane work.
+
+## Outcome
+
+- PR `#123` merged cleanly into `main`.
+- The exact `main` SHA to tag for `v0.12.0` is `5a8bdf068bf54be52f9b2bc661af34056473221a`.
+
+
+
+
+# Fry Batch 4 gap audit
+
+- **Date:** 2026-04-30T06:37:20.531+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Read-only Batch 4 audit for tasks `12.1`, `12.6`, `12.6a`, `12.6b`, `12.7`
+
+## Decision
+
+Do **not** start Batch 4 implementation on this branch state yet. The rename-before-commit core is close, but `12.6b` is blocked by missing Batch 3 UUID-write surfaces, and the remaining `12.1` gap is still a real source-seam issue rather than a checkbox cleanup.
+
+## Guardrails
+
+1. Keep the Unix platform gate narrow; do **not** widen Windows vault-write support as part of this slice.
+2. Keep `memory_collections` on the frozen 13-field MCP schema; no Batch 4 work should add fields there.
+
+## Task 12.1 — full 13-step rename-before-commit
+
+### Already implemented
+
+- Shared writer core exists and is used by both CLI and MCP through `src\commands\put.rs::put_from_string(...)` and `persist_with_vault_write(...)` (`src\commands\put.rs:100-191`, `342-623`).
+- The current writer already covers most of the design sequence:
+  - step 1 CAS / write gate: `resolve_slug_for_op`, `ensure_collection_vault_write_allowed`, `check_update_expected_version` (`src\commands\put.rs:109-117`, `376-381`; `src\core\vault_sync.rs:556-577`)
+  - step 3 precondition: `check_fs_precondition_before_sentinel(...)` (`src\commands\put.rs:382-387`; `src\core\vault_sync.rs:667-674`)
+  - step 4 sha256: `prepared.sha256` (`src\commands\put.rs:166`, `372-375`)
+  - steps 5-6 sentinel + tempfile fsync: `create_recovery_sentinel(...)`, `create_tempfile(...)` (`src\commands\put.rs:390`, `424-438`, `652-719`)
+  - step 7 symlink guard: `stat_at_nofollow(...)` check before rename (`src\commands\put.rs:439-451`)
+  - step 8 dedup insert: `insert_write_dedup(...)` + `remember_self_write_path(...)` (`src\commands\put.rs:467-489`)
+  - steps 9-11 rename, parent fsync, post-rename stat/inode/hash guard (`src\commands\put.rs:506-595`)
+  - steps 12-13 single SQLite tx + sentinel unlink (`src\commands\put.rs:597-623`)
+
+### Partially implemented
+
+- The filesystem precondition logic itself is good and tested (`src\core\vault_sync.rs:581-700`, `5259-5402`), but it is still wired as a separate helper that reopens the root / parent rather than operating on the final trusted parent fd that the writer later uses.
+- Post-rename abort handling is already fail-closed and sentinel-backed (`src\commands\put.rs:750-778`), so the recovery model is mostly correct even before the last seam is repaired.
+
+### Still missing
+
+- **Step 2 is not design-complete.** `walk_to_parent(...)` has no `create_dirs=true` mode (`src\core\fs_safety.rs:58-132`), and the writer still falls back to path-based `fs::create_dir_all(parent)` before reopening the parent fd (`src\commands\put.rs:392-412`). That is the main remaining `12.1` gap.
+- The actual step ordering is still split: precondition runs through `check_fs_precondition_before_sentinel(...)` before the final parent fd is opened for writing (`src\commands\put.rs:382-387` vs `399-412`), instead of one exact fd-relative sequence.
+- The symlink refusal path still returns a generic I/O error string (`"target path is a symlink"`) rather than a dedicated typed write error (`src\commands\put.rs:439-449`).
+- The implementation-plan pointer is stale: it says audit `put_from_string` in `vault_sync.rs`, but the production writer lives in `src\commands\put.rs`.
+
+### Tests that already exist
+
+- Precondition/OCC before sentinel: `unix_update_without_expected_version_conflicts_before_sentinel_creation`, `unix_stale_expected_version_conflicts_before_sentinel_creation`, `unix_external_delete_conflicts_before_sentinel_creation`, `unix_external_create_conflicts_before_sentinel_creation`, `unix_fresh_create_succeeds_without_existing_file_state` (`src\commands\put.rs:1221-1347`)
+- Failure matrix and recovery: sentinel failure, pre-rename failure, rename failure, parent fsync failure, foreign rename, commit busy recovery, foreign-rename + startup recovery (`src\commands\put.rs:1462-1754`)
+- Filesystem-precondition behavior: fast path, ctime self-heal, hash mismatch, same-size external rewrite (`src\core\vault_sync.rs:5259-5402`)
+
+### Tests still missing
+
+- Explicit tempfile `fsync` failure coverage (today there is no dedicated hook for the tempfile fsync branch)
+- Explicit post-rename `stat` failure coverage
+- Explicit dedup-insert collision / duplicate-entry failure coverage
+- Typed symlink-escape coverage (today only the raw error string is present)
+
+## Task 12.6 — mandatory `expected_version` everywhere
+
+### Already implemented
+
+- MCP enforces the contract up front:
+  - existing page + missing `expected_version` → conflict (`src\mcp\server.rs:589-615`, tests at `1651-1673`, `1677-1707`)
+  - stale `expected_version` → conflict (`src\mcp\server.rs:589-615`, tests at `1711-1740`)
+  - create with unexpected `expected_version` → conflict (`src\mcp\server.rs:597-604`, tests at `1814-1828`)
+- The Unix CLI/write-through core also enforces missing/stale update versions before sentinel creation (`src\commands\put.rs:376-381`, tests at `1221-1280`).
+- CLI help text already documents the intended rule: `--expected-version` required for Unix updates, optional for creates (`src\main.rs:41-46`).
+
+### Partially implemented
+
+- The real OCC rule is already present for the shipped MCP and direct Unix CLI path, so this task is mostly a truth-closure task rather than a missing-core-logic task.
+
+### Still missing
+
+- The contract is not yet closed through the deferred live-routing path from `12.6a`; `quaid put` still writes directly regardless of serve ownership.
+- There is still a non-Unix fallback path and test that allow unconditional update semantics (`src\commands\put.rs:323-339`, `1780-1792`). Do **not** widen platform support to “fix” this; instead keep the Unix gate truthful and keep Batch 4 scoped to vault-write surfaces only.
+
+### Tests that already exist
+
+- MCP OCC tests: `src\mcp\server.rs:1651-1828`
+- Unix CLI-core OCC tests: `src\commands\put.rs:1221-1280`
+
+### Tests still missing
+
+- A serve-owned CLI-routing test proving the same OCC contract still holds once `12.6a` is implemented
+
+## Task 12.6a — `quaid put` live-owner/offline routing
+
+### Already implemented
+
+- Core owner-lease infrastructure exists:
+  - `acquire_owner_lease(...)` / `owner_session_id(...)` (`src\core\vault_sync.rs:1865-1910`)
+  - tests for refusing a live foreign owner and reclaiming stale residue (`src\core\vault_sync.rs:6422-6492`)
+
+### Partially implemented
+
+- `ServeOwnsCollectionError` exists, but it only carries `owner_session_id`, not the `pid/host` detail required by the Batch 4 wording (`src\core\vault_sync.rs:307-310`).
+
+### Still missing
+
+- `quaid put` is still direct-dispatch only:
+  - `main.rs` sends `Commands::Put` straight to `commands::put::run(...)` (`src\main.rs:301-305`)
+  - `commands::put::run(...)` only applies the Unix gate, reads stdin, and calls `put_from_string(...)` (`src\commands\put.rs:90-97`)
+  - there is **no** live-owner detection, no refusal instructing “use MCP or stop serve”, no offline temporary lease/heartbeat wrapper, and no IPC path
+- This task must stay in the refuse-or-offline shape only; do not reopen Batch 5 IPC work here.
+
+### Tests that already exist
+
+- Only lower-level lease helper tests in `vault_sync.rs` (`6422-6492`)
+
+### Tests still missing
+
+- `quaid put` refuses while a live serve owner exists
+- `quaid put` acquires/releases an offline owner lease when no live owner exists
+- refusal message includes pid/host once the error surface is repaired
+
+## Task 12.6b — bulk rewrite routing
+
+### Already implemented
+
+- Nothing user-facing for this task is actually implemented yet.
+
+### Partially implemented
+
+- The branch has prerequisite clues only:
+  - restore/reconcile status text already tells operators to run `migrate-uuids work` in the trivial-content halt case (`src\commands\collection.rs:3000-3005`)
+  - Batch 3 tasks remain open in `tasks.md` (`openspec\changes\vault-sync-engine\tasks.md:116-121`, `174`, `236`, `373`, `418-419`)
+
+### Still missing
+
+- `CollectionAction` still has **no** `MigrateUuids` variant (`src\commands\collection.rs:19-55`)
+- `CollectionAddArgs` still uses the old `write_memory_id` field name, and `add(...)` explicitly rejects it as deferred (`src\commands\collection.rs:58-67`, `234-237`)
+- There is a direct defer-test proving the flag is still blocked (`src\commands\collection.rs:1790-1812`)
+- No live-owner refusal exists for bulk UUID rewrites because the bulk UUID rewrite commands themselves do not exist yet
+- Even if they did exist, the current `ServeOwnsCollectionError` cannot yet name pid/host
+
+### Batch 3 stale/incomplete callout
+
+- `tasks.md` is honest that Batch 3 remains open (`5a.5`, `5a.5a`, `9.2a`, `17.5ii9`, `17.5ww`, `17.5ww2` are still unchecked), but the current `implementation_plan.md` is stale where it says Batch 3 bulk-write routing “already implements” the `12.6b` refusal (`openspec\changes\vault-sync-engine\implementation_plan.md:221`).
+- That stale assumption is contradicted by the live code in `src\commands\collection.rs`, which still rejects `--write-quaid-id` and exposes no `migrate-uuids` command.
+
+### Tests that already exist
+
+- Only the defer test: `add_rejects_write_memory_id_before_creating_collection_row` (`src\commands\collection.rs:1790-1812`)
+
+### Tests still missing
+
+- `migrate-uuids` offline success
+- `migrate-uuids --dry-run` no-op
+- `collection add --write-quaid-id` live-owner refusal
+- bulk refusal message naming pid/host and stop-serve guidance
+
+## Task 12.7 — tests
+
+### What already exists
+
+- Strong direct coverage already exists for:
+  - OCC-before-sentinel and filesystem-precondition cases (`src\commands\put.rs:1221-1347`)
+  - per-slug mutex behavior (`src\commands\put.rs:1351-1458`)
+  - sentinel/pre-rename/rename cleanup (`src\commands\put.rs:1462-1538`)
+  - parent-fsync failure (`src\commands\put.rs:1578-1615`)
+  - foreign rename / concurrent rename (`src\commands\put.rs:1619-1653`)
+  - commit failure and sentinel-driven startup recovery (`src\commands\put.rs:1657-1754`)
+  - MCP-side OCC / no-vault-mutation assertions (`src\mcp\server.rs:1651-1828`)
+
+### What is still missing
+
+- explicit tempfile fsync failure
+- explicit post-rename stat failure
+- explicit dedup-entry collision
+- CLI live-owner routing tests (`12.6a`)
+- bulk UUID rewrite routing tests (`12.6b`, blocked by missing Batch 3 commands)
+
+## Concrete implementation checklist once branch state is corrected
+
+1. **Do not touch platform scope or MCP schema.**
+   - Keep the Unix gate closed.
+   - Keep `memory_collections` frozen at 13 fields.
+2. **Repair Batch 3 first; Batch 4 depends on it.**
+   - Add `CollectionAction::MigrateUuids { name, dry_run }`
+   - Rename `write_memory_id` to the truthful `write_quaid_id`
+   - Implement the actual bulk UUID writer by reusing the production writer path, not a second file rewrite path
+   - Add the live-owner refusal for those bulk commands, with pid/host detail
+   - Mark Batch 3 tasks immediately as each one is truly done
+3. **Finish the real `12.1` seam.**
+   - Replace the path-based `fs::create_dir_all(...)` fallback with an fd-relative parent-directory creation/walk flow
+   - Unify the write sequence so the precondition and rename operate on the same trusted parent-fd path
+   - Add a typed symlink-escape error instead of a generic I/O string
+4. **Implement `12.6a` in the narrowed Batch 4 shape only.**
+   - Before direct `quaid put`, detect a live owner from `collection_owners` + `serve_sessions`
+   - If live owner exists, refuse and instruct the operator to use MCP or stop serve
+   - If no live owner exists, acquire a temporary offline lease + heartbeat around the direct write, then release it
+5. **Close `12.7` with the missing failure tests.**
+   - tempfile fsync failure
+   - post-rename stat failure
+   - dedup collision
+   - CLI live-owner refusal / offline lease flow
+   - bulk UUID rewrite routing once Batch 3 surfaces exist
+6. **Protect the >90% coverage bar during the implementation lane.**
+   - keep new tests inline with the touched modules
+   - rerun the existing coverage command after Batch 3 + Batch 4 land together
+
+
+---
+created_at: 2026-04-30T06:37:20.531+08:00
+author: Leela
+type: routing-decision
+subject: Batch 4 execution lane — recovery path from stale checkout
+---
+
+# Decision: Batch 4 Branch Routing and Recovery Path
+
+## Context
+
+The current working directory (`D:\repos\quaid`) is parked on `release/v0.11.0`, which is
+12 commits ahead of `origin/release/v0.11.0` (all Scribe log commits) and is **not on main**.
+`origin/main` is at `v0.12.0` (SHA `5a8bdf0`). The local tasks.md shows Batch 3 items as
+open only because the stale branch predates the Batch 3 merge — all Batch 3 closures
+(`5a.5`, `5a.5a`, `9.2a`, `5a.7`, `17.5ww`, `17.5ww2`, `17.5ww3`, `17.5ii9`, `12.6b`, `17.5www`)
+are confirmed closed on `origin/main`. No `v0.13.0` tag or `release/v0.13.0` branch exists.
+There are 2 modified `.squad/` files and 1 untracked `.squad/` health report in the working tree.
+
+## Decision
+
+**Batch 4 work begins in a sibling worktree created from `origin/main`.**
+
+The `D:\repos\quaid` checkout is NOT touched for Batch 4 code work. The stale
+`release/v0.11.0` working tree's dirty files are low-risk (`.squad/` only) and do not
+conflict with a sibling worktree's object store.
+
+### Worktree setup
+
+```powershell
+cd D:\repos\quaid
+git fetch origin main --tags
+git worktree add ..\quaid-vault-sync-batch4-v0130 -b spec/vault-sync-engine-batch4-v0130 origin/main
+```
+
+Starting SHA: `5a8bdf0` (tagged `v0.12.0`, confirmed clean).
+
+### Batch 4 task scope
+
+Open tasks on `origin/main`:
+- `12.1` — complete the 13-step rename-before-commit sequence (audit `put_from_string` against all 13 steps; wire steps 2 `walk_to_parent`, 3 `check_fs_precondition`, 7 symlink defense-in-depth, and 8 dedup insert timing on ALL vault-byte write paths)
+- `12.6` — mandatory `expected_version` enforcement audit across MCP + CLI (no blind-update escape hatch)
+- `12.6a` — CLI write routing for `quaid put` single-file (refuse with `ServeOwnsCollectionError` when live owner exists; offline lease path when no live owner)
+- `12.6b` — **ALREADY CLOSED** on main (Batch 3 Mom revision). Verify guard in place; no re-implementation needed.
+- `12.7` — tests covering every rename-before-commit failure mode (tempfile fsync error, parent fsync error, commit error, foreign rename in window, concurrent dedup entries, external write mid-precondition)
+
+### Agent assignments
+
+| Agent | Task |
+|-------|------|
+| Fry | Implements 12.1, 12.6, 12.6a, 12.7 in the sibling worktree |
+| Scruffy | Monitors unit test coverage ≥ 90% throughout |
+| Professor | Code peer review of 12.1 (security-adjacent) and 12.6 (contract enforcement) |
+| Nibbler | Adversarial review of 12.6a (CLI write routing, live-owner detection) |
+| Bender | End-to-end validation pass after Fry signals implementation complete |
+| Amy | Documentation review for any new error types or CLI changes |
+| Zapp | Release lane: `release/v0.13.0` → PR → merge to main → tag `v0.13.0` after all gates clear |
+
+### Gate sequence before code begins
+
+1. ✅ No active reviewer gate (all prior Batch 3 gates cleared at v0.12.0 merge)
+2. ✅ No v0.13.0 tag collision
+3. ✅ `origin/main` is clean at `5a8bdf0`
+4. ✅ Batch 3 closures verified on `origin/main` — no re-closure needed
+5. **Required before first commit:** Fry creates the worktree as specified above
+
+### Gate sequence before release
+
+1. `cargo test` green in the worktree
+2. Coverage ≥ 90% confirmed by Scruffy (CI publishes coverage evidence; Scruffy must confirm manually)
+3. Professor and Nibbler approve (no admin-merge around reviewer gates — lesson from v0.12.0)
+4. All review threads resolved
+5. `release/v0.13.0` branch PR opened against `main`
+6. PR merged cleanly
+7. Zapp creates annotated tag `v0.13.0` from merge SHA and pushes it
+
+### Constraints
+
+- **Do NOT merge Batch 4 into or from `release/v0.11.0`** — that branch is dead.
+- **Do NOT touch the 3 dirty files in `D:\repos\quaid`** during Batch 4 — they are Scribe artifacts and should be committed or pruned separately by Scribe.
+- Tasks `12.6c`–`12.6g` (IPC socket) are **Batch 5 scope** — do not pull them into Batch 4.
+- `12.6b` is already closed; Batch 4 only needs to verify the guard is present, not re-implement it.
+
+## Risk flags
+
+- `12.1` is security-adjacent (rename-before-commit discipline). Professor must review before merge, not after.
+- The coverage threshold is not CI-enforced — human confirmation required before Zapp starts release lane.
+- `now.md` is stale (updated 2026-04-25). The active branch field says `spec/vault-sync-engine` but actual work branch is a sibling worktree. No action needed for Batch 4 execution, but Scribe should update `now.md` after Batch 4 lands.
+
+
+---
+created_at: 2026-04-30T06:37:20.531+08:00
+author: Scruffy
+type: testing-decision
+subject: Batch 4 coverage baseline and closure guard
+---
+
+# Decision: Batch 4 coverage baseline and truthful closure gate
+
+## Context
+
+A read-only Batch 4 assessment on `D:\repos\quaid` found that the current repo-wide Rust
+coverage baseline is **89.47%** from
+`cargo llvm-cov --lib --tests --summary-only --no-clean -j 1`.
+
+The Batch 4 lane is uneven:
+
+- `src\core\vault_sync.rs` — 83.22% line coverage
+- `src\commands\put.rs` — 95.70%
+- `src\commands\collection.rs` — 91.70%
+- `src\mcp\server.rs` — 96.90%
+
+The same assessment also confirmed that Batch 4 routing tasks are still genuinely open:
+`quaid put` does not yet perform live-owner routing, `ServeOwnsCollectionError` still lacks
+the pid/host detail required by the spec, `--write-quaid-id` is still explicitly deferred,
+and there is no `migrate-uuids` collection subcommand in the current command surface.
+
+## Decision
+
+**Do not claim Batch 4 is above 90% or closure-complete unless validation includes both:**
+
+1. a fresh `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` run, and
+2. a refreshed `target\llvm-cov-report.json` via
+   `cargo llvm-cov report --json --output-path target\llvm-cov-report.json`.
+
+**Do not close `12.6`, `12.6a`, `12.6b`, or `12.7` on the current surface.**
+
+## Rationale
+
+- The repo is already below the stated 90% bar before any Batch 4 code lands.
+- `vault_sync.rs` is the dominant coverage risk, so touching it without direct backfill is
+  likely to worsen both patch and project coverage.
+- The current codebase has good low-level OCC and rename-failure proof, but it still lacks the
+  live-owner routing and bulk UUID rewrite surfaces needed for truthful closure of the open
+  Batch 4 tasks.
+
+## Lean validation path
+
+For Batch 4 implementation work, the lean honest path is:
+
+1. targeted Rust tests for `src\commands\put.rs` and `src\core\vault_sync.rs`
+2. any new CLI truth tests needed for live-owner refusal / offline lease flow
+3. final coverage rerun with the two-command llvm-cov loop above
+
+This keeps scope tight while still proving the real Batch 4 contract.

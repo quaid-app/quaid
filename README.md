@@ -86,13 +86,13 @@ Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the 
 ### Download a binary
 
 ```bash
-VERSION="<published-tag>"   # for example: the latest public tag until v0.13.0 is published
+VERSION="<published-tag>"   # for example: the latest public tag until v0.14.0 is published
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
 ```
 
-Use a published tag here. This branch is preparing `v0.13.0`, so build from source if you need the unreleased Batch 4 rename-before-commit hardening before the tag exists.
+Use a published tag here. This branch is preparing `v0.14.0`, so build from source if you need the unreleased Batch 5 live-serve single-file `quaid put` proxying and IPC trust-boundary hardening before the tag exists.
 
 ### Build from source
 
@@ -169,7 +169,7 @@ quaid serve
 
 ## MCP tools
 
-The MCP surface stays at 17 tools on this branch and in the current release line. The `v0.13.0` docs pass is about Batch 4 full rename-before-commit hardening — CLI write routing (`quaid put` refuses while serve owns the collection), duplicate write-dedup entry detection (`DuplicateWriteDedupError`), and complete test coverage for all rename-before-commit failure modes — not new tool names:
+The MCP surface stays at 17 tools on this branch and in the current release line. The `v0.14.0` docs pass is about Batch 5 Unix live-write handling — same-root single-file `quaid put` now proxies through a live `quaid serve` owner with authenticated per-session IPC, while bulk rewrites stay offline-only — not new tool names:
 
 | Category | Tools |
 |----------|-------|

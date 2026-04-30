@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.13.0`: it keeps the 17-tool surface, carries Batches 1–3 vault-sync follow-ons already on `main`, and adds Batch 4 full rename-before-commit hardening for collection-backed vaults.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.14.0`: it keeps the 17-tool surface, carries Batches 1–4 vault-sync follow-ons already on `main`, and adds Batch 5 authenticated live-serve single-file write proxying for collection-backed vaults on Unix.
 
 ## What it does
 
@@ -15,9 +15,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete, and the vault-sync line is in Batch 4.** This branch prepares `v0.13.0`: it preserves the current 17-tool surface, keeps Batches 1–3 vault-sync follow-ons already shipped, and adds Batch 4 full rename-before-commit hardening (CLI write routing, duplicate write-dedup entry detection, and complete test coverage for all rename-before-commit failure modes).
+> **Phase 3 is complete, and the vault-sync line is in Batch 5.** This branch prepares `v0.14.0`: it preserves the current 17-tool surface, keeps Batches 1–4 vault-sync follow-ons already shipped, and adds Batch 5 authenticated same-root single-file `quaid put` proxying through a live `quaid serve` owner on Unix, with the reviewed IPC trust boundary and peer-auth checks.
 >
-> Published GitHub Release binaries still come from the latest public tag until the `v0.13.0` workflow completes. See [roadmap.md](roadmap.md) for the full delivery plan.
+> Published GitHub Release binaries still come from the latest public tag until the `v0.14.0` workflow completes. See [roadmap.md](roadmap.md) for the full delivery plan.
 
 ---
 
@@ -25,14 +25,14 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect this branch, including the Batch 3 UUID write-back / `migrate-uuids` slice |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — use the latest published tag until `v0.13.0` is cut |
+| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect this branch, including the Batch 5 same-root `quaid put` live-proxy / IPC-auth slice |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — use the latest published tag until `v0.14.0` is cut |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
 > **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
 >
-> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.13.0` Batch 4 rename-before-commit hardening before the tag exists.
+> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.14.0` Batch 5 live-serve single-file write proxying before the tag exists.
 
 ---
 
@@ -69,7 +69,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first memory store
 
-> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the full branch state described below before `v0.13.0` is published; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the full branch state described below before `v0.14.0` is published; see [Status](#status) and [Install options](#install-options) above.
 
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
@@ -101,7 +101,7 @@ Quaid ingests each markdown file, parses frontmatter, splits compiled-truth from
 > quaid serve
 > ```
 >
-> Use `quaid import` for one-shot bulk ingest. Use collections when you want Quaid to stay in sync with a markdown or Obsidian vault. On Unix, Batch 3 also lets you persist missing `quaid_id` frontmatter during attach (`quaid collection add <name> <path> --write-quaid-id`) or backfill it later with `quaid collection migrate-uuids <name> [--dry-run]`. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
+> Use `quaid import` for one-shot bulk ingest. Use collections when you want Quaid to stay in sync with a markdown or Obsidian vault. On Unix, Batch 3 lets you persist missing `quaid_id` frontmatter during attach (`quaid collection add <name> <path> --write-quaid-id`) or backfill it later with `quaid collection migrate-uuids <name> [--dry-run]`. Batch 5 additionally upgrades same-root single-file `quaid put` so the CLI authenticates the live `quaid serve` owner and proxies the write instead of refusing; bulk rewrite flows still stay offline-only. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
 
 ### 3. Search
 
@@ -192,7 +192,7 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **vault-sync tools:** `memory_collections` — read-only per-collection status including state, ignore diagnostics, recovery flags, and embedding queue health
 
-All 17 tools remain live on this branch and in the current release line. Batch 3 adds UUID identity hardening for collection-backed vaults — opt-in `--write-quaid-id`, offline `migrate-uuids`, and `memory_put` preserving existing `quaid_id` frontmatter — not new MCP tool names. See [spec.md](spec.md#mcp-server) for tool signatures.
+All 17 tools remain live on this branch and in the current release line. The `v0.14.0` slice keeps the tool names stable while carrying Batch 3 UUID identity hardening, Batch 4 rename-before-commit completion, and Batch 5 authenticated same-root single-file `quaid put` proxying on Unix. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
@@ -403,7 +403,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands first shipped in `v0.9.6`. This branch carries the `v0.13.0` follow-on: Batches 1–3 vault-sync follow-ons stay in place, while Batch 4 adds CLI write routing (`quaid put` refuses while serve owns the collection), duplicate write-dedup entry detection, and complete rename-before-commit failure mode test coverage.
+> These commands first shipped in `v0.9.6`. This branch carries the `v0.14.0` follow-on: Batches 1–4 vault-sync follow-ons stay in place, while Batch 5 upgrades same-root single-file `quaid put` to proxy through the live serve owner over authenticated per-session IPC on Unix. Bulk rewrites still refuse and stay offline-only.
 
 ### Attach a vault
 
@@ -429,7 +429,7 @@ In this release line, `quaid collection info` also surfaces `queue_depth` and `f
 
 Once attached, `quaid serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 
-Collection attach and other filesystem-mutating collection operations in this release line are Unix-only, including `quaid collection add`, `quaid collection migrate-uuids`, and `quaid collection add --write-quaid-id`. These offline rewrite flows refuse when `quaid serve` already owns the collection, so stop `serve`, run the migration or attach step offline, then restart.
+Collection attach and other filesystem-mutating collection operations in this release line are Unix-only, including `quaid collection add`, `quaid collection migrate-uuids`, and `quaid collection add --write-quaid-id`. These offline rewrite flows refuse when `quaid serve` already owns the collection, so stop `serve`, run the migration or attach step offline, then restart. Single-file `quaid put` is the Batch 5 exception: when a same-root Unix `quaid serve` owner is live, the CLI authenticates that serve session over the published per-session socket and proxies the write instead of refusing.
 
 > **Platform note.** `quaid serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `quaid serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`memory_get`, `memory_put`, `memory_query`, etc.) work on all platforms.
 

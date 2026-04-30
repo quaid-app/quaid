@@ -18,6 +18,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
 };
+#[cfg(unix)]
+use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -3900,23 +3902,59 @@ pub(crate) fn authorize_client_peer(
     Ok(())
 }
 
+/// Maximum concurrent in-flight IPC handler threads.  Connections that arrive
+/// when this cap is reached are immediately closed so a rogue same-UID caller
+/// cannot exhaust OS thread resources and impact serve liveness.
+#[cfg(unix)]
+const IPC_HANDLER_LIMIT: usize = 8;
+
+/// RAII guard: decrements the in-flight counter when dropped so the slot is
+/// always released even if the handler returns early or panics.
+#[cfg(unix)]
+struct IpcHandlerGuard(Arc<AtomicUsize>);
+
+#[cfg(unix)]
+impl Drop for IpcHandlerGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 #[cfg(unix)]
 fn accept_ipc_clients(
     listener: &UnixListener,
     socket_path: &Path,
     db_path: &str,
     session_id: &str,
+    in_flight: &Arc<AtomicUsize>,
 ) {
     loop {
         match listener.accept() {
             Ok((stream, _addr)) => {
+                // Enforce the in-flight cap before spawning.  fetch_add is atomic
+                // so concurrent accept calls on the same listener are race-free.
+                if in_flight.fetch_add(1, Ordering::AcqRel) >= IPC_HANDLER_LIMIT {
+                    // Already at or over the cap: roll back and discard the stream.
+                    in_flight.fetch_sub(1, Ordering::AcqRel);
+                    eprintln!(
+                        "WARN: ipc_handler_limit_reached path={} limit={} connection_closed",
+                        socket_path.display(),
+                        IPC_HANDLER_LIMIT,
+                    );
+                    // `stream` is dropped here, closing the connection immediately.
+                    continue;
+                }
                 // Offload each client to its own thread so that blocking reads/writes
                 // (up to 5 s per IPC timeout) cannot stall the main serve loop and
                 // cause a false-dead live-owner verdict.
+                // `guard` is moved into the closure and drops when the thread exits,
+                // decrementing the in-flight counter even on panic or early return.
+                let guard = IpcHandlerGuard(Arc::clone(in_flight));
                 let socket_path_owned = socket_path.to_path_buf();
                 let db_path_owned = db_path.to_owned();
                 let session_id_owned = session_id.to_owned();
                 thread::spawn(move || {
+                    let _guard = guard;
                     if let Err(error) = handle_ipc_client(
                         stream,
                         &socket_path_owned,
@@ -4068,9 +4106,13 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let stop = Arc::new(AtomicBool::new(false));
     let stop_signal = Arc::clone(&stop);
     let session_id_for_thread = session_id.clone();
+    #[cfg(unix)]
+    let ipc_in_flight = Arc::new(AtomicUsize::new(0));
     let handle = thread::spawn(move || {
         #[cfg(unix)]
         let published_ipc = published_ipc;
+        #[cfg(unix)]
+        let ipc_in_flight = ipc_in_flight;
         let mut last_heartbeat = Instant::now();
         let mut last_quarantine_sweep = Instant::now();
         let mut last_generations = initial_generations;
@@ -4102,6 +4144,7 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                         &published_ipc.path,
                         &db_path,
                         &session_id_for_thread,
+                        &ipc_in_flight,
                     );
                     let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
                     for (collection_id, state) in &mut watchers {
@@ -9882,6 +9925,60 @@ mod tests {
         assert!(
             spawn_region.contains("handle_ipc_client("),
             "handle_ipc_client must be called inside the thread::spawn closure"
+        );
+        // The function must enforce the in-flight cap before spawning.
+        assert!(
+            fn_body.contains("IPC_HANDLER_LIMIT"),
+            "accept_ipc_clients must reference IPC_HANDLER_LIMIT"
+        );
+        assert!(
+            fn_body.contains("fetch_add("),
+            "accept_ipc_clients must use fetch_add for the in-flight counter"
+        );
+        // Rollback path: fetch_sub must appear for the saturation branch.
+        assert!(
+            fn_body.contains("fetch_sub("),
+            "accept_ipc_clients must roll back via fetch_sub when saturated"
+        );
+        // Guard must be created before the spawn closure.
+        assert!(
+            fn_body.contains("IpcHandlerGuard("),
+            "accept_ipc_clients must construct an IpcHandlerGuard before spawning"
+        );
+    }
+
+    /// Unit test: `IpcHandlerGuard` must decrement the counter when dropped,
+    /// including via normal scope exit.
+    #[cfg(unix)]
+    #[test]
+    fn ipc_handler_guard_decrements_on_drop() {
+        let counter = Arc::new(AtomicUsize::new(1));
+        {
+            let _guard = IpcHandlerGuard(Arc::clone(&counter));
+            // Counter unchanged while guard is alive.
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
+        }
+        // Guard dropped — counter must be back to 0.
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "IpcHandlerGuard must decrement the counter exactly once on drop"
+        );
+    }
+
+    /// Structural: `IPC_HANDLER_LIMIT` must be a small positive value so the
+    /// cap is intentional and not effectively infinite.
+    #[cfg(unix)]
+    #[test]
+    fn ipc_handler_limit_is_small_and_positive() {
+        assert!(
+            IPC_HANDLER_LIMIT > 0,
+            "IPC_HANDLER_LIMIT must be > 0"
+        );
+        assert!(
+            IPC_HANDLER_LIMIT <= 64,
+            "IPC_HANDLER_LIMIT should be small (<=64); current value {} looks unintentionally large",
+            IPC_HANDLER_LIMIT
         );
     }
 

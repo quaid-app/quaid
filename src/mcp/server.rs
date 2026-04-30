@@ -4735,7 +4735,9 @@ mod tests {
         )
         .unwrap();
         // Locate the memory_put function body.
-        let fn_start = source.find("pub fn memory_put(").expect("memory_put fn present");
+        let fn_start = source
+            .find("pub fn memory_put(")
+            .expect("memory_put fn present");
         // Find the closing brace of memory_put by looking at the next tool-decorated fn.
         let fn_body_end = source[fn_start..]
             .find("\n    #[tool(")

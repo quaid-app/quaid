@@ -14,12 +14,12 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
 };
-#[cfg(unix)]
-use std::sync::atomic::AtomicUsize;
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -9877,8 +9877,7 @@ mod tests {
         )
         .unwrap();
 
-        let result =
-            live_serve_endpoint_for_root_path(&conn, &temp.path().display().to_string());
+        let result = live_serve_endpoint_for_root_path(&conn, &temp.path().display().to_string());
 
         assert!(
             matches!(result, Ok(None)),
@@ -9971,10 +9970,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ipc_handler_limit_is_small_and_positive() {
-        assert!(
-            IPC_HANDLER_LIMIT > 0,
-            "IPC_HANDLER_LIMIT must be > 0"
-        );
+        assert!(IPC_HANDLER_LIMIT > 0, "IPC_HANDLER_LIMIT must be > 0");
         assert!(
             IPC_HANDLER_LIMIT <= 64,
             "IPC_HANDLER_LIMIT should be small (<=64); current value {} looks unintentionally large",

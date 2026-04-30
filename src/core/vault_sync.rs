@@ -634,28 +634,6 @@ struct IpcSocketLocation {
     create_runtime_root: bool,
 }
 
-#[cfg(unix)]
-struct UmaskGuard {
-    previous: libc::mode_t,
-}
-
-#[cfg(unix)]
-impl UmaskGuard {
-    fn set(mask: libc::mode_t) -> Self {
-        let previous = unsafe { libc::umask(mask) };
-        Self { previous }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for UmaskGuard {
-    fn drop(&mut self) {
-        unsafe {
-            libc::umask(self.previous);
-        }
-    }
-}
-
 impl Drop for ServeRuntime {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -3560,8 +3538,8 @@ fn publish_ipc_socket(
     if socket_path.exists() {
         clear_stale_ipc_socket(&socket_path)?;
     }
-    let _umask = UmaskGuard::set(0o177);
     let listener = UnixListener::bind(&socket_path)?;
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     listen_with_backlog(&listener)?;
     audit_bound_ipc_socket(&socket_path)?;
@@ -5703,6 +5681,9 @@ mod tests {
         let stale_idx = publish_source
             .find("clear_stale_ipc_socket(&socket_path)")
             .expect("stale socket cleanup");
+        let set_perms_idx = publish_source
+            .find("fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))")
+            .expect("explicit socket permissions set after bind");
         let audit_idx = publish_source
             .find("audit_bound_ipc_socket(&socket_path)")
             .expect("bind-time audit");
@@ -5712,7 +5693,8 @@ mod tests {
         assert!(
             runtime_root_idx < dir_idx
                 && dir_idx < stale_idx
-                && stale_idx < audit_idx
+                && stale_idx < set_perms_idx
+                && set_perms_idx < audit_idx
                 && audit_idx < publish_idx
         );
 

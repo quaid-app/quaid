@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "quaid"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2075,6 +2075,7 @@ dependencies = [
  "globset",
  "hex",
  "ignore",
+ "libc",
  "notify",
  "pulldown-cmark",
  "regex",

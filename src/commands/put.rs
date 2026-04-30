@@ -3,9 +3,11 @@ use std::io::{self, Read};
 #[cfg(unix)]
 use std::fs::{self, File};
 #[cfg(unix)]
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
 
@@ -111,29 +113,20 @@ fn put_from_cli_string(
         vault_sync::resolve_slug_for_op(db, slug_input, op_kind).map_err(anyhow::Error::new)?;
     let collection = vault_sync::load_collection_by_id(db, resolved.collection_id)
         .map_err(anyhow::Error::new)?;
-    match vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path) {
-        Ok(()) => {}
-        Err(err @ vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }) => {
-            return Err(anyhow::anyhow!(
-                "{err}. use MCP while serve is running, or stop serve and run `quaid put` directly."
-            ));
+    let canonical_slug = format!("{}::{}", resolved.collection_name, resolved.slug);
+    match vault_sync::live_serve_endpoint_for_root_path(db, &collection.root_path) {
+        Ok(Some(endpoint)) => {
+            let status =
+                proxy_put_via_live_serve(&endpoint, &canonical_slug, content, expected_version)?;
+            println!("{status}");
+            return Ok(());
         }
+        Ok(None) => {}
         Err(other) => return Err(anyhow::Error::new(other)),
     }
-    let _lease =
-        vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
-            .map_err(|err| match err {
-                vault_sync::VaultSyncError::ServeOwnsCollectionError { .. } => anyhow::anyhow!(
-                    "{err}. use MCP while serve is running, or stop serve and run `quaid put` directly."
-                ),
-                other => anyhow::Error::new(other),
-            })?;
-    put_from_string(
-        db,
-        &format!("{}::{}", resolved.collection_name, resolved.slug),
-        content,
-        expected_version,
-    )
+    let _lease = vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
+        .map_err(anyhow::Error::new)?;
+    put_from_string(db, &canonical_slug, content, expected_version)
 }
 
 #[cfg(not(unix))]
@@ -153,7 +146,9 @@ pub fn put_from_string(
     content: &str,
     expected_version: Option<i64>,
 ) -> anyhow::Result<()> {
-    put_from_string_with_output(db, slug_input, content, expected_version, true)
+    let status = put_from_string_status(db, slug_input, content, expected_version)?;
+    println!("{status}");
+    Ok(())
 }
 
 pub(crate) fn put_from_string_quiet(
@@ -162,7 +157,16 @@ pub(crate) fn put_from_string_quiet(
     content: &str,
     expected_version: Option<i64>,
 ) -> anyhow::Result<()> {
-    put_from_string_with_output(db, slug_input, content, expected_version, false)
+    put_from_string_status(db, slug_input, content, expected_version).map(|_| ())
+}
+
+pub(crate) fn put_from_string_status(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    expected_version: Option<i64>,
+) -> anyhow::Result<String> {
+    put_from_string_with_output(db, slug_input, content, expected_version)
 }
 
 fn put_from_string_with_output(
@@ -170,8 +174,7 @@ fn put_from_string_with_output(
     slug_input: &str,
     content: &str,
     expected_version: Option<i64>,
-    emit_status: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let (frontmatter, body) = markdown::parse_frontmatter(content);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
@@ -252,14 +255,196 @@ fn put_from_string_with_output(
     } else {
         "Updated"
     };
-    if emit_status {
-        println!(
-            "{verb} {}::{} (version {})",
-            prepared.collection_name, prepared.slug, outcome.version
-        );
+    Ok(format!(
+        "{verb} {}::{} (version {})",
+        prepared.collection_name, prepared.slug, outcome.version
+    ))
+}
+
+#[cfg(unix)]
+fn proxy_put_via_live_serve(
+    endpoint: &vault_sync::LiveServeEndpoint,
+    slug: &str,
+    content: &str,
+    expected_version: Option<i64>,
+) -> anyhow::Result<String> {
+    let socket_path = Path::new(&endpoint.ipc_path);
+    let metadata = fs::symlink_metadata(socket_path).map_err(|error| {
+        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
+            path: endpoint.ipc_path.clone(),
+            reason: error.to_string(),
+        })
+    })?;
+    let mode = metadata.mode() & 0o777;
+    if !metadata.file_type().is_socket() {
+        return Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: "path is not a unix socket".to_owned(),
+            },
+        ));
+    }
+    if metadata.uid() != vault_sync::current_effective_uid() {
+        return Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: format!(
+                    "socket uid {} does not match current uid {}",
+                    metadata.uid(),
+                    vault_sync::current_effective_uid()
+                ),
+            },
+        ));
+    }
+    if mode != 0o600 {
+        return Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: format!("socket mode {:o} is not 600", mode),
+            },
+        ));
+    }
+    let path_session_id = vault_sync::session_id_from_ipc_path(socket_path).ok_or_else(|| {
+        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
+            path: endpoint.ipc_path.clone(),
+            reason: "socket path does not embed a session id".to_owned(),
+        })
+    })?;
+
+    let mut stream = UnixStream::connect(socket_path).map_err(|error| {
+        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
+            path: endpoint.ipc_path.clone(),
+            reason: error.to_string(),
+        })
+    })?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(anyhow::Error::new)?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(anyhow::Error::new)?;
+    let peer = vault_sync::peer_credentials_for_stream(&stream).map_err(anyhow::Error::new)?;
+    if path_session_id != endpoint.session_id {
+        return Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: format!(
+                    "path session {} does not match owner session {}",
+                    path_session_id, endpoint.session_id
+                ),
+            },
+        ));
+    }
+    if peer.uid != vault_sync::current_effective_uid() {
+        return Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: format!(
+                    "peer uid {} does not match current uid {}",
+                    peer.uid,
+                    vault_sync::current_effective_uid()
+                ),
+            },
+        ));
+    }
+    if i64::from(peer.pid) != endpoint.pid {
+        return Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: format!(
+                    "peer pid {} does not match owner pid {}",
+                    peer.pid, endpoint.pid
+                ),
+            },
+        ));
     }
 
+    let read_stream = stream.try_clone()?;
+    let mut reader = BufReader::new(read_stream);
+    send_ipc_request(&mut stream, &vault_sync::IpcRequest::WhoAmI)?;
+    let whoami = read_ipc_response(&mut reader, socket_path)?;
+    let whoami_session_id = match whoami {
+        vault_sync::IpcResponse::WhoAmI { session_id } => session_id,
+        vault_sync::IpcResponse::Error { error } => {
+            return Err(anyhow::Error::new(
+                vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                    path: endpoint.ipc_path.clone(),
+                    reason: error,
+                },
+            ));
+        }
+        other => {
+            return Err(anyhow::Error::new(
+                vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                    path: endpoint.ipc_path.clone(),
+                    reason: format!("unexpected whoami response: {other:?}"),
+                },
+            ));
+        }
+    };
+
+    vault_sync::authorize_client_peer(
+        socket_path,
+        &path_session_id,
+        &endpoint.session_id,
+        endpoint.pid,
+        &peer,
+        &whoami_session_id,
+    )
+    .map_err(anyhow::Error::new)?;
+
+    send_ipc_request(
+        &mut stream,
+        &vault_sync::IpcRequest::Put {
+            slug: slug.to_owned(),
+            content: content.to_owned(),
+            expected_version,
+        },
+    )?;
+    match read_ipc_response(&mut reader, socket_path)? {
+        vault_sync::IpcResponse::PutOk { status } => Ok(status),
+        vault_sync::IpcResponse::Error { error } => Err(anyhow::anyhow!("{error}")),
+        other => Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: format!("unexpected put response: {other:?}"),
+            },
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn send_ipc_request(
+    stream: &mut UnixStream,
+    request: &vault_sync::IpcRequest,
+) -> anyhow::Result<()> {
+    serde_json::to_writer(&mut *stream, request)?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn read_ipc_response(
+    reader: &mut BufReader<UnixStream>,
+    socket_path: &Path,
+) -> anyhow::Result<vault_sync::IpcResponse> {
+    let mut line = String::new();
+    let bytes_read = reader.read_line(&mut line)?;
+    if bytes_read == 0 {
+        return Err(anyhow::Error::new(
+            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+                path: socket_path.display().to_string(),
+                reason: "connection closed before response".to_owned(),
+            },
+        ));
+    }
+    serde_json::from_str(line.trim_end()).map_err(|error| {
+        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
+            path: socket_path.display().to_string(),
+            reason: format!("invalid ipc response: {error}"),
+        })
+    })
 }
 
 /// Get current UTC timestamp in ISO 8601 format from SQLite.
@@ -927,6 +1112,8 @@ mod tests {
     use crate::core::db;
     use crate::core::markdown;
     use std::collections::HashMap;
+    #[cfg(all(unix, target_os = "linux"))]
+    use std::ffi::OsString;
     use std::fs as stdfs;
     use std::path::Path;
     #[cfg(unix)]
@@ -935,6 +1122,45 @@ mod tests {
     use std::thread;
     #[cfg(unix)]
     use std::time::{Duration, Instant};
+
+    #[cfg(all(unix, target_os = "linux"))]
+    static ENV_MUTATION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    #[cfg(all(unix, target_os = "linux"))]
+    fn env_mutation_lock() -> &'static std::sync::Mutex<()> {
+        ENV_MUTATION_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = self.previous.as_ref() {
+                    std::env::set_var(self.key, value);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1107,6 +1333,63 @@ mod tests {
         let (dir, db_path, conn, vault_root) = open_test_db_with_vault();
         let guard = HookGuard::acquire(db_path.clone());
         (guard, dir, db_path, conn, vault_root)
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    fn spawn_fake_ipc_server(socket_path: &Path, session_id: &str) -> std::thread::JoinHandle<()> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::UnixListener;
+
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        if socket_path.exists() {
+            std::fs::remove_file(socket_path).unwrap();
+        }
+        let listener = UnixListener::bind(socket_path).unwrap();
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let session_id = session_id.to_owned();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let read_stream = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(read_stream);
+            let mut writer = stream;
+            loop {
+                let mut line = String::new();
+                let bytes = reader.read_line(&mut line).unwrap();
+                if bytes == 0 {
+                    break;
+                }
+                let request: vault_sync::IpcRequest =
+                    serde_json::from_str(line.trim_end()).unwrap();
+                match request {
+                    vault_sync::IpcRequest::WhoAmI => {
+                        serde_json::to_writer(
+                            &mut writer,
+                            &vault_sync::IpcResponse::WhoAmI {
+                                session_id: session_id.clone(),
+                            },
+                        )
+                        .unwrap();
+                        writer.write_all(b"\n").unwrap();
+                        writer.flush().unwrap();
+                    }
+                    vault_sync::IpcRequest::Put { .. } => {
+                        serde_json::to_writer(
+                            &mut writer,
+                            &vault_sync::IpcResponse::PutOk {
+                                status: "spoofed".to_owned(),
+                            },
+                        )
+                        .unwrap();
+                        writer.write_all(b"\n").unwrap();
+                        writer.flush().unwrap();
+                        break;
+                    }
+                }
+            }
+        })
     }
 
     fn active_raw_import_count_for_slug(conn: &Connection, slug: &str) -> i64 {
@@ -1901,14 +2184,65 @@ mod tests {
         assert_eq!(page_count(&conn, "notes/cli-owned"), 1);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, target_os = "linux"))]
     #[test]
-    fn cli_put_refuses_live_owner_and_instructs_operator() {
+    fn cli_put_proxies_through_live_serve_socket() {
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        let runtime_root = tempfile::TempDir::new().unwrap();
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        let runtime = vault_sync::start_serve_runtime(db_path.clone()).unwrap();
+
+        put_from_cli_string(
+            &conn,
+            "notes/live-owner",
+            "---\ntitle: Live owner\ntype: note\n---\nProxied\n",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            stdfs::read_to_string(vault_root.join("notes").join("live-owner.md")).unwrap(),
+            "---\ntitle: Live owner\ntype: note\n---\nProxied\n"
+        );
+        assert_eq!(page_count(&conn, "notes/live-owner"), 1);
+        let active_owner: Option<String> = conn
+            .query_row(
+                "SELECT active_lease_session_id FROM collections WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active_owner.as_deref(), Some(runtime.session_id.as_str()));
+        let ipc_path: String = conn
+            .query_row(
+                "SELECT ipc_path FROM serve_sessions WHERE session_id = ?1",
+                [runtime.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(runtime);
+        assert!(!Path::new(&ipc_path).exists());
+        let post_runtime_sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM serve_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(post_runtime_sessions, 0);
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn cli_put_refuses_same_uid_socket_spoof_with_pid_mismatch() {
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        let runtime_root = tempfile::TempDir::new().unwrap();
+        let socket_dir = runtime_root.path().join("quaid");
+        let socket_path = socket_dir.join("serve-live.sock");
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
         let (_guard, _dir, _db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        let fake_server = spawn_fake_ipc_server(&socket_path, "serve-live");
         conn.execute(
-            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
-             VALUES ('serve-live', 4321, 'serve-host', datetime('now'))",
-            [],
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at, ipc_path)
+             VALUES ('serve-live', 4321, 'serve-host', datetime('now'), ?1)",
+            [socket_path.display().to_string()],
         )
         .unwrap();
         conn.execute(
@@ -1926,18 +2260,87 @@ mod tests {
         .unwrap_err();
 
         let text = error.to_string();
-        assert!(text.contains("ServeOwnsCollectionError"));
-        assert!(text.contains("owner_pid=4321"));
-        assert!(text.contains("owner_host=serve-host"));
-        assert!(text.contains("use MCP while serve is running"));
+        assert!(text.contains("IpcPeerAuthFailedError"));
+        assert!(text.contains("peer pid"));
         assert!(!vault_root.join("notes").join("live-owner.md").exists());
         assert_eq!(page_count(&conn, "notes/live-owner"), 0);
-        let owner_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM collection_owners", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(owner_count, 1);
+        drop(conn);
+        fake_server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_put_source_routes_live_owner_through_ipc_without_direct_fallback() {
+        let source = stdfs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("commands")
+                .join("put.rs"),
+        )
+        .unwrap();
+        let cli_start = source
+            .find("fn put_from_cli_string(")
+            .expect("cli put source present");
+        let cli_end = source[cli_start..]
+            .find("/// Apply page content supplied by the caller.")
+            .map(|offset| cli_start + offset)
+            .expect("cli helper boundary");
+        let cli_source = &source[cli_start..cli_end];
+        let proxy_idx = cli_source
+            .find("vault_sync::live_serve_endpoint_for_root_path")
+            .expect("live serve owner lookup");
+        let direct_idx = cli_source
+            .find("start_short_lived_owner_lease_for_root_path")
+            .expect("offline lease path");
+        assert!(
+            proxy_idx < direct_idx,
+            "live owner check must precede offline lease"
+        );
+        assert!(
+            cli_source.contains(
+                "proxy_put_via_live_serve(&endpoint, &canonical_slug, content, expected_version)?;"
+            ),
+            "live owner branch must proxy through IPC"
+        );
+        let return_idx = cli_source[proxy_idx..]
+            .find("return Ok(());")
+            .map(|offset| proxy_idx + offset)
+            .expect("live owner branch returns immediately after proxy");
+        assert!(
+            return_idx < direct_idx,
+            "live owner branch must return after IPC proxy instead of falling back to direct write"
+        );
+    }
+
+    #[test]
+    fn proxy_put_source_verifies_kernel_peer_before_whoami() {
+        let source = stdfs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("commands")
+                .join("put.rs"),
+        )
+        .unwrap();
+        let proxy_start = source
+            .find("fn proxy_put_via_live_serve(")
+            .expect("proxy helper present");
+        let proxy_end = source[proxy_start..]
+            .find("fn send_ipc_request(")
+            .map(|offset| proxy_start + offset)
+            .expect("proxy helper boundary");
+        let proxy_source = &source[proxy_start..proxy_end];
+        let peer_idx = proxy_source
+            .find("vault_sync::peer_credentials_for_stream(&stream)")
+            .expect("peer credential call present");
+        let whoami_idx = proxy_source
+            .find("send_ipc_request(&mut stream, &vault_sync::IpcRequest::WhoAmI)")
+            .expect("whoami call present");
+        assert!(
+            peer_idx < whoami_idx,
+            "kernel peer auth must happen before whoami"
+        );
+        assert!(proxy_source.contains("socket mode {:o} is not 600"));
+        assert!(proxy_source.contains("socket uid {} does not match current uid {}"));
+        assert!(proxy_source.contains("peer pid {} does not match owner pid {}"));
     }
 
     #[cfg(unix)]

@@ -13,7 +13,9 @@ use std::process::{Command, Output, Stdio};
 
 fn init_db(dir: &tempfile::TempDir) -> PathBuf {
     let db_path = dir.path().join("memory.db");
-    let output = Command::new(common::quaid_bin())
+    let mut command = Command::new(common::quaid_bin());
+    common::configure_test_command(&mut command);
+    let output = command
         .arg("init")
         .arg(&db_path)
         .output()
@@ -27,7 +29,9 @@ fn init_db(dir: &tempfile::TempDir) -> PathBuf {
 }
 
 fn run_quaid(db_path: &Path, args: &[&str]) -> Output {
-    Command::new(common::quaid_bin())
+    let mut command = Command::new(common::quaid_bin());
+    common::configure_test_command(&mut command);
+    command
         .arg("--db")
         .arg(db_path)
         .args(args)
@@ -36,7 +40,9 @@ fn run_quaid(db_path: &Path, args: &[&str]) -> Output {
 }
 
 fn run_quaid_in_dir(db_path: &Path, dir: &Path, args: &[&str], home_dir: &Path) -> Output {
-    Command::new(common::quaid_bin())
+    let mut command = Command::new(common::quaid_bin());
+    common::configure_test_command(&mut command);
+    command
         .current_dir(dir)
         .env("HOME", home_dir)
         .env("USERPROFILE", home_dir)
@@ -71,7 +77,9 @@ fn provision_vault(dir: &tempfile::TempDir, conn: &Connection) {
 }
 
 fn run_quaid_with_input(db_path: &Path, args: &[&str], input: &str) -> Output {
-    let mut child = Command::new(common::quaid_bin())
+    let mut command = Command::new(common::quaid_bin());
+    common::configure_test_command(&mut command);
+    let mut child = command
         .arg("--db")
         .arg(db_path)
         .args(args)
@@ -91,10 +99,9 @@ fn run_quaid_with_input(db_path: &Path, args: &[&str], input: &str) -> Output {
 
 #[test]
 fn version_command_runs_without_opening_a_database() {
-    let output = Command::new(common::quaid_bin())
-        .arg("version")
-        .output()
-        .expect("run quaid version");
+    let mut command = Command::new(common::quaid_bin());
+    common::configure_test_command(&mut command);
+    let output = command.arg("version").output().expect("run quaid version");
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("quaid"));
@@ -487,4 +494,58 @@ fn collection_migrate_uuids_command_runs_through_main_dispatch() {
     assert_eq!(migrate_json["migrated"], 1);
     assert_eq!(migrate_json["skipped_readonly"], 0);
     assert_eq!(migrate_json["already_had_uuid"], 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn collection_restore_sync_remap_and_audit_fail_closed_on_windows() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = init_db(&dir);
+    let remap_root = dir.path().join("remapped");
+    let restore_root = dir.path().join("restored");
+    fs::create_dir_all(&remap_root).unwrap();
+
+    let sync = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "sync",
+            "default",
+            "--remap-root",
+            remap_root.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        !sync.status.success(),
+        "collection sync must fail closed: {sync:?}"
+    );
+
+    let restore = run_quaid(
+        &db_path,
+        &[
+            "collection",
+            "restore",
+            "default",
+            restore_root.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        !restore.status.success(),
+        "collection restore must fail closed: {restore:?}"
+    );
+
+    let audit = run_quaid(&db_path, &["collection", "audit", "default"]);
+    assert!(
+        !audit.status.success(),
+        "collection audit must fail closed: {audit:?}"
+    );
+
+    for output in [&sync, &restore, &audit] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("UnsupportedPlatformError")
+                || stderr.contains("Vault sync commands require Unix"),
+            "Windows collection surface must report the Unix gate clearly: {stderr}"
+        );
+    }
 }

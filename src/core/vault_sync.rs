@@ -1,6 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-#[cfg(unix)]
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
 #[cfg(unix)]
@@ -51,12 +49,17 @@ use crate::core::db;
 use crate::core::file_state;
 #[cfg(unix)]
 use crate::core::fs_safety;
+use crate::core::ignore_patterns;
 use crate::core::markdown;
 use crate::core::page_uuid;
 use crate::core::quarantine;
+use crate::core::raw_imports;
 use crate::core::reconciler::{
-    fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, reconcile,
-    FullHashReconcileAuthorization, FullHashReconcileMode, ReconcileError, ReconcileStats,
+    fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, is_markdown_file,
+    reconcile, resolve_page_identity, run_restore_remap_safety_pipeline_without_mount_check,
+    scheduled_full_hash_audit_authorized, CanonicalIdentityRecord, FullHashReconcileAuthorization,
+    FullHashReconcileMode, PageIdentityResolution, ReconcileError, ReconcileStats,
+    RestoreRemapOperation, RestoreRemapSafetyRequest,
 };
 
 const SESSION_LIVENESS_SECS: i64 = 15;
@@ -65,7 +68,11 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFERRED_RETRY_SECS: u64 = 1;
 const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
+const REMAP_VERIFICATION_SAMPLE_LIMIT: usize = 5;
 const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const DEFAULT_FULL_HASH_AUDIT_DAYS: i64 = 7;
 #[cfg(unix)]
 const WATCH_CHANNEL_CAPACITY: usize = 4096;
 #[cfg(unix)]
@@ -388,6 +395,15 @@ pub enum VaultSyncError {
     },
 
     #[error(
+        "ServeOwnershipChangedError: collection={collection_name} expected_session_id={expected_session_id} actual_session_id={actual_session_id}"
+    )]
+    ServeOwnershipChanged {
+        collection_name: String,
+        expected_session_id: String,
+        actual_session_id: String,
+    },
+
+    #[error(
         "HandshakeTimeoutError: collection={collection_name} expected_session_id={expected_session_id} reload_generation={reload_generation}"
     )]
     HandshakeTimeout {
@@ -397,13 +413,16 @@ pub enum VaultSyncError {
     },
 
     #[error(
-        "NewRootVerificationFailedError: collection={collection_name} missing={missing} mismatched={mismatched} extra={extra}"
+        "NewRootVerificationFailedError: collection={collection_name} missing={missing} mismatched={mismatched} extra={extra} missing_samples={missing_samples} mismatched_samples={mismatched_samples} extra_samples={extra_samples}"
     )]
     NewRootVerificationFailed {
         collection_name: String,
         missing: usize,
         mismatched: usize,
         extra: usize,
+        missing_samples: String,
+        mismatched_samples: String,
+        extra_samples: String,
     },
 
     #[error("NewRootUnstableError: collection={collection_name}")]
@@ -2416,16 +2435,9 @@ fn convert_reconcile_error(
 }
 
 #[cfg(unix)]
-fn is_markdown_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-}
-
-#[cfg(unix)]
 fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root_path).ok()?;
-    is_markdown_path(relative).then(|| relative.to_path_buf())
+    is_markdown_file(relative).then(|| relative.to_path_buf())
 }
 
 #[cfg(unix)]
@@ -3128,9 +3140,10 @@ pub fn wait_for_exact_ack(
                 });
             }
             Some(ref owner) if owner.session_id != expected_session_id => {
-                return Err(VaultSyncError::ServeDiedDuringHandshake {
+                return Err(VaultSyncError::ServeOwnershipChanged {
                     collection_name: collection.name,
                     expected_session_id: expected_session_id.to_owned(),
+                    actual_session_id: owner.session_id.clone(),
                 });
             }
             Some(_) => {}
@@ -3150,6 +3163,133 @@ pub fn wait_for_exact_ack(
         }
         thread::sleep(Duration::from_millis(HANDSHAKE_POLL_MS));
     }
+}
+
+fn configured_full_hash_audit_days() -> i64 {
+    std::env::var("QUAID_FULL_HASH_AUDIT_DAYS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_FULL_HASH_AUDIT_DAYS)
+        .max(0)
+}
+
+fn full_hash_audit_ttl_cutoff() -> String {
+    format!("-{} days", configured_full_hash_audit_days())
+}
+
+fn scheduled_full_hash_audit_budget(total_files: usize) -> usize {
+    if total_files == 0 {
+        return 0;
+    }
+    // Keep the serve loop bounded even when the TTL is configured to "all files are due now".
+    let audit_days = usize::try_from(configured_full_hash_audit_days())
+        .ok()
+        .filter(|days| *days > 0)
+        .unwrap_or(DEFAULT_FULL_HASH_AUDIT_DAYS as usize);
+    total_files.div_ceil(audit_days).max(1)
+}
+
+pub fn run_full_hash_audit_pass(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<(i64, String, ReconcileStats)>, VaultSyncError> {
+    let ttl_cutoff = full_hash_audit_ttl_cutoff();
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.name
+         FROM collections c
+         WHERE c.state = 'active'
+           AND c.active_lease_session_id = ?1
+           AND EXISTS (
+               SELECT 1
+               FROM file_state fs
+               WHERE fs.collection_id = c.id
+                 AND (fs.last_full_hash_at IS NULL OR fs.last_full_hash_at < datetime('now', ?2))
+           )
+         ORDER BY c.id ASC",
+    )?;
+    let due = stmt
+        .query_map(params![session_id, ttl_cutoff], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    let mut audited = Vec::new();
+    for (collection_id, collection_name) in due {
+        let total_files: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM file_state WHERE collection_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )?;
+        let audit_budget = scheduled_full_hash_audit_budget(total_files.max(0) as usize);
+        if audit_budget == 0 {
+            continue;
+        }
+        let mut due_stmt = conn.prepare(
+            "SELECT relative_path
+             FROM file_state
+             WHERE collection_id = ?1
+               AND (last_full_hash_at IS NULL OR last_full_hash_at < datetime('now', ?2))
+             ORDER BY COALESCE(last_full_hash_at, ''), relative_path ASC
+             LIMIT ?3",
+        )?;
+        let due_relative_paths = due_stmt
+            .query_map(
+                params![collection_id, ttl_cutoff, audit_budget as i64],
+                |row| Ok(PathBuf::from(row.get::<_, String>(0)?)),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(due_stmt);
+        if due_relative_paths.is_empty() {
+            continue;
+        }
+
+        let stats = scheduled_full_hash_audit_authorized(
+            conn,
+            collection_id,
+            &due_relative_paths,
+            FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: session_id.to_owned(),
+            },
+        )?;
+        conn.execute(
+            "UPDATE collections
+             SET last_sync_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?1",
+            [collection_id],
+        )?;
+        audited.push((collection_id, collection_name, stats));
+    }
+
+    Ok(audited)
+}
+
+pub fn audit_collection(
+    conn: &Connection,
+    collection_name: &str,
+) -> Result<ReconcileStats, VaultSyncError> {
+    let collection = collections::get_by_name(conn, collection_name)?.ok_or_else(|| {
+        VaultSyncError::CollectionNotFound {
+            name: collection_name.to_owned(),
+        }
+    })?;
+    let stats = full_hash_reconcile_authorized(
+        conn,
+        collection.id,
+        FullHashReconcileMode::Audit,
+        FullHashReconcileAuthorization::AuditCommand,
+    )?;
+    conn.execute(
+        "UPDATE collections
+         SET last_sync_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?1",
+        [collection.id],
+    )?;
+    Ok(stats)
+}
+
+pub fn sweep_raw_import_ttl(conn: &Connection) -> Result<usize, VaultSyncError> {
+    raw_imports::sweep_expired_inactive_rows(conn).map_err(VaultSyncError::from)
 }
 
 pub fn write_supervisor_ack_if_needed(
@@ -4104,6 +4244,10 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         let mut last_dedup_sweep = Instant::now();
         #[cfg(unix)]
         let mut last_overflow_recovery = Instant::now();
+        let mut last_full_hash_audit =
+            Instant::now() - Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS);
+        let mut last_raw_import_ttl_sweep =
+            Instant::now() - Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS);
         let mut last_embedding_drain =
             Instant::now() - Duration::from_secs(embedding_drain_interval_secs());
         while !stop_signal.load(Ordering::SeqCst) {
@@ -4184,6 +4328,18 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                             last_generations.insert(collection_id, generation);
                         }
                     }
+                }
+                if last_full_hash_audit.elapsed()
+                    >= Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS)
+                {
+                    let _ = run_full_hash_audit_pass(&conn, &session_id_for_thread);
+                    last_full_hash_audit = Instant::now();
+                }
+                if last_raw_import_ttl_sweep.elapsed()
+                    >= Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS)
+                {
+                    let _ = sweep_raw_import_ttl(&conn);
+                    last_raw_import_ttl_sweep = Instant::now();
                 }
                 let _ = run_rcrt_pass(&conn, &session_id_for_thread);
                 let _ = sync_supervisor_handles(&conn, &session_id_for_thread);
@@ -4457,11 +4613,37 @@ pub fn begin_restore(
     })?;
     ensure_restore_not_blocked(&collection)?;
     ensure_restore_target_is_empty(target_path)?;
+    let db_path = PathBuf::from(database_path(conn)?);
+    let recovery_root = recovery_root_for_db_path(&db_path);
+    bootstrap_recovery_directories(conn, &recovery_root)?;
 
     if online {
         let (_, expected_session_id, generation) =
             mark_collection_restoring_for_handshake(conn, collection.id)?;
         wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?;
+        #[cfg(unix)]
+        {
+            let request = RestoreRemapSafetyRequest {
+                collection_id: collection.id,
+                db_path: &db_path,
+                recovery_root: &recovery_root,
+                operation: RestoreRemapOperation::Restore,
+                authorization: FullHashReconcileAuthorization::ActiveLease {
+                    lease_session_id: expected_session_id.clone(),
+                },
+                allow_finalize_pending: false,
+                stability_max_iters: 0,
+            };
+            if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request)
+            {
+                return Err(convert_reconcile_error(
+                    conn,
+                    collection.id,
+                    &collection.name,
+                    err,
+                )?);
+            }
+        }
         let command_id = Uuid::now_v7().to_string();
         let staging_path = staging_path_for_target(target_path);
         if staging_path.exists() {
@@ -4501,20 +4683,38 @@ pub fn begin_restore(
         )?;
         Ok(command_id)
     } else {
-        let session_id = register_session(conn)?;
+        let lease = start_short_lived_owner_lease(conn, collection.id)?;
+        #[cfg(unix)]
+        {
+            let request = RestoreRemapSafetyRequest {
+                collection_id: collection.id,
+                db_path: &db_path,
+                recovery_root: &recovery_root,
+                operation: RestoreRemapOperation::Restore,
+                authorization: FullHashReconcileAuthorization::ActiveLease {
+                    lease_session_id: lease.session_id.clone(),
+                },
+                allow_finalize_pending: false,
+                stability_max_iters: 0,
+            };
+            if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request)
+            {
+                return Err(convert_reconcile_error(
+                    conn,
+                    collection.id,
+                    &collection.name,
+                    err,
+                )?);
+            }
+        }
         let command_id = Uuid::now_v7().to_string();
-        acquire_owner_lease(conn, collection.id, &session_id)?;
-        let _lease_guard = LeaseGuard {
-            db_path: database_path(conn).ok(),
-            session_id: session_id.clone(),
-        };
         conn.execute(
             "UPDATE collections
              SET state = 'restoring',
-                 restore_lease_session_id = ?2,
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-             WHERE id = ?1",
-            params![collection.id, session_id],
+                   restore_lease_session_id = ?2,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?1",
+            params![collection.id, lease.session_id.clone()],
         )?;
         let staging_path = staging_path_for_target(target_path);
         if staging_path.exists() {
@@ -4557,7 +4757,20 @@ pub fn begin_restore(
                 })
             }
         }
-        unregister_session(conn, &session_id)?;
+        let attached = complete_attach(
+            conn,
+            collection.id,
+            &lease.session_id,
+            AttachReason::RestorePostFinalize,
+        )?;
+        if !attached {
+            return Err(VaultSyncError::InvariantViolation {
+                message: format!(
+                    "collection={} restore offline path did not complete attach",
+                    collection.name
+                ),
+            });
+        }
         Ok(command_id)
     }
 }
@@ -4574,12 +4787,34 @@ pub fn remap_collection(
         }
     })?;
     ensure_restore_not_blocked(&collection)?;
-    let summary = verify_remap_root(conn, &collection, new_root)?;
+    let db_path = PathBuf::from(database_path(conn)?);
+    let recovery_root = recovery_root_for_db_path(&db_path);
+    bootstrap_recovery_directories(conn, &recovery_root)?;
 
     if online {
         let (_, expected_session_id, generation) =
             mark_collection_restoring_for_handshake(conn, collection.id)?;
         wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?;
+        let request = RestoreRemapSafetyRequest {
+            collection_id: collection.id,
+            db_path: &db_path,
+            recovery_root: &recovery_root,
+            operation: RestoreRemapOperation::Remap,
+            authorization: FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: expected_session_id.clone(),
+            },
+            allow_finalize_pending: false,
+            stability_max_iters: 0,
+        };
+        if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request) {
+            return Err(convert_reconcile_error(
+                conn,
+                collection.id,
+                &collection.name,
+                err,
+            )?);
+        }
+        let summary = verify_remap_root(conn, &collection, new_root)?;
         conn.execute(
             "UPDATE collections
              SET root_path = ?2,
@@ -4598,27 +4833,59 @@ pub fn remap_collection(
             "DELETE FROM file_state WHERE collection_id = ?1",
             [collection.id],
         )?;
+        return Ok(summary);
     } else {
-        let session_id = register_session(conn)?;
-        acquire_owner_lease(conn, collection.id, &session_id)?;
+        let lease = start_short_lived_owner_lease(conn, collection.id)?;
+        let request = RestoreRemapSafetyRequest {
+            collection_id: collection.id,
+            db_path: &db_path,
+            recovery_root: &recovery_root,
+            operation: RestoreRemapOperation::Remap,
+            authorization: FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: lease.session_id.clone(),
+            },
+            allow_finalize_pending: false,
+            stability_max_iters: 0,
+        };
+        if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request) {
+            return Err(convert_reconcile_error(
+                conn,
+                collection.id,
+                &collection.name,
+                err,
+            )?);
+        }
+        let summary = verify_remap_root(conn, &collection, new_root)?;
         conn.execute(
             "UPDATE collections
              SET root_path = ?2,
-                 state = 'restoring',
-                 needs_full_sync = 1,
-                 restore_lease_session_id = ?3,
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                  state = 'restoring',
+                  needs_full_sync = 1,
+                  restore_lease_session_id = NULL,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?1",
-            params![collection.id, new_root.display().to_string(), session_id],
+            params![collection.id, new_root.display().to_string()],
         )?;
         conn.execute(
             "DELETE FROM file_state WHERE collection_id = ?1",
             [collection.id],
         )?;
-        unregister_session(conn, &session_id)?;
+        let attached = complete_attach(
+            conn,
+            collection.id,
+            &lease.session_id,
+            AttachReason::RemapPostReconcile,
+        )?;
+        if !attached {
+            return Err(VaultSyncError::InvariantViolation {
+                message: format!(
+                    "collection={} remap offline path did not complete attach",
+                    collection.name
+                ),
+            });
+        }
+        return Ok(summary);
     }
-
-    Ok(summary)
 }
 
 pub fn verify_remap_root(
@@ -4636,19 +4903,18 @@ pub fn verify_remap_root(
             collection_name: collection.name.clone(),
         });
     }
-    let missing = page_rows
-        .len()
-        .saturating_sub(page_matches.resolved_page_ids.len());
+    let missing = page_matches.missing_count;
     let mismatched = page_matches.mismatched_pages;
-    let extra = file_rows
-        .len()
-        .saturating_sub(page_matches.resolved_file_paths.len());
+    let extra = page_matches.extra_count;
     if missing != 0 || mismatched != 0 || extra != 0 {
         return Err(VaultSyncError::NewRootVerificationFailed {
             collection_name: collection.name.clone(),
             missing,
             mismatched,
             extra,
+            missing_samples: format_diff_samples(&page_matches.missing_pages),
+            mismatched_samples: format_diff_samples(&page_matches.mismatched_samples),
+            extra_samples: format_diff_samples(&page_matches.extra_files),
         });
     }
     Ok(RemapVerificationSummary {
@@ -5133,7 +5399,7 @@ struct RemapPageRow {
     slug: String,
     uuid: Option<String>,
     sha256: String,
-    body_size_bytes: usize,
+    body_size_bytes: i64,
     has_nonempty_body: bool,
 }
 
@@ -5142,14 +5408,27 @@ struct NewRootFileRow {
     relative_path: PathBuf,
     uuid: Option<String>,
     sha256: String,
-    body_size_bytes: usize,
+    body_size_bytes: i64,
     has_nonempty_body: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeFenceEntry {
+    mtime_ns: i64,
+    ctime_ns: i64,
+    size_bytes: u64,
+    inode: u64,
+    quaidignore_sha256: Option<String>,
 }
 
 struct PageMatchResolution {
     resolved_page_ids: HashSet<i64>,
-    resolved_file_paths: HashSet<PathBuf>,
     mismatched_pages: usize,
+    mismatched_samples: Vec<String>,
+    missing_count: usize,
+    missing_pages: Vec<String>,
+    extra_count: usize,
+    extra_files: Vec<String>,
 }
 
 fn load_remap_page_rows(
@@ -5175,7 +5454,7 @@ fn load_remap_page_rows(
                 slug: row.get(1)?,
                 uuid: row.get(2)?,
                 sha256: sha256_hex(&raw_bytes),
-                body_size_bytes: body.trim().len(),
+                body_size_bytes: body.trim().len() as i64,
                 has_nonempty_body: !body.trim().is_empty(),
             })
         })?
@@ -5184,15 +5463,25 @@ fn load_remap_page_rows(
 }
 
 fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncError> {
+    let ignore_globset = build_new_root_ignore_globset(root)?;
     let walked = walk_tree(root)?;
     let mut rows = Vec::new();
     for relative_path in walked.keys() {
         if relative_path == Path::new(".quaidignore") {
             continue;
         }
+        if !is_markdown_file(relative_path) {
+            continue;
+        }
+        if ignore_globset.is_match(relative_path) {
+            continue;
+        }
         let bytes = fs::read(root.join(relative_path))?;
         let text = String::from_utf8_lossy(&bytes);
         let (frontmatter, body) = markdown::parse_frontmatter(&text);
+        let (compiled_truth, timeline) = markdown::split_content(&body);
+        let trimmed_ct = compiled_truth.trim();
+        let trimmed_tl = timeline.trim();
         rows.push(NewRootFileRow {
             relative_path: relative_path.clone(),
             uuid: page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|error| {
@@ -5201,79 +5490,198 @@ fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncErro
                 }
             })?,
             sha256: sha256_hex(&bytes),
-            body_size_bytes: body.trim().len(),
-            has_nonempty_body: !body.trim().is_empty(),
+            body_size_bytes: (trimmed_ct.len() + trimmed_tl.len()) as i64,
+            has_nonempty_body: !(trimmed_ct.is_empty() && trimmed_tl.is_empty()),
         });
     }
     Ok(rows)
 }
 
-fn resolve_page_matches(pages: &[RemapPageRow], files: &[NewRootFileRow]) -> PageMatchResolution {
-    let mut files_by_uuid: HashMap<&str, Vec<&NewRootFileRow>> = HashMap::new();
-    let mut files_by_hash: HashMap<&str, Vec<&NewRootFileRow>> = HashMap::new();
-    for file in files {
-        if let Some(uuid) = file.uuid.as_deref() {
-            files_by_uuid.entry(uuid).or_default().push(file);
-        }
-        files_by_hash
-            .entry(file.sha256.as_str())
-            .or_default()
-            .push(file);
-    }
-
-    let mut resolved_page_ids = HashSet::new();
-    let mut resolved_file_paths = HashSet::new();
-    let mut mismatched_pages = 0;
-
-    for page in pages {
-        if let Some(uuid) = page.uuid.as_deref() {
-            if let Some(matches) = files_by_uuid.get(uuid) {
-                if matches.len() == 1 {
-                    resolved_page_ids.insert(page.page_id);
-                    resolved_file_paths.insert(matches[0].relative_path.clone());
-                    continue;
-                }
-                mismatched_pages += 1;
-                continue;
+fn build_new_root_ignore_globset(root: &Path) -> Result<globset::GlobSet, VaultSyncError> {
+    let ignore_path = root.join(".quaidignore");
+    let user_patterns_json = if ignore_path.exists() {
+        let content = fs::read_to_string(&ignore_path)?;
+        match ignore_patterns::parse_ignore_file(&content) {
+            ignore_patterns::ParseResult::Valid(patterns) => Some(
+                serde_json::to_string(&patterns)
+                    .expect("serializing validated .quaidignore patterns should never fail"),
+            ),
+            ignore_patterns::ParseResult::Invalid(errors) => {
+                let first = errors
+                    .first()
+                    .expect("invalid parse must include at least one error");
+                return Err(VaultSyncError::InvariantViolation {
+                    message: format!(
+                        "invalid .quaidignore in remap root at line {}: {}",
+                        first.line, first.message
+                    ),
+                });
             }
         }
-        let hash_matches = files_by_hash
-            .get(page.sha256.as_str())
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|file| {
-                page.body_size_bytes >= 64
-                    && page.has_nonempty_body
-                    && file.body_size_bytes >= 64
-                    && file.has_nonempty_body
-            })
-            .collect::<Vec<_>>();
-        if hash_matches.len() == 1 {
-            resolved_page_ids.insert(page.page_id);
-            resolved_file_paths.insert(hash_matches[0].relative_path.clone());
-        } else {
-            let _ = &page.slug;
+    } else {
+        None
+    };
+    ignore_patterns::build_globset_from_patterns(user_patterns_json.as_deref()).map_err(|message| {
+        VaultSyncError::InvariantViolation {
+            message: format!("failed to build remap ignore matcher: {message}"),
+        }
+    })
+}
+
+fn resolve_page_matches(pages: &[RemapPageRow], files: &[NewRootFileRow]) -> PageMatchResolution {
+    let file_records = files
+        .iter()
+        .map(|file| CanonicalIdentityRecord {
+            key: file.relative_path.clone(),
+            label: path_string(&file.relative_path),
+            uuid: file.uuid.clone(),
+            sha256: file.sha256.clone(),
+            body_size_bytes: file.body_size_bytes,
+            has_nonempty_body: file.has_nonempty_body,
+        })
+        .collect::<Vec<_>>();
+    let file_lookup = files
+        .iter()
+        .map(|file| (file.relative_path.clone(), file))
+        .collect::<HashMap<_, _>>();
+    let mut page_hash_counts = HashMap::new();
+    for page in pages {
+        *page_hash_counts
+            .entry(page.sha256.as_str())
+            .or_insert(0usize) += 1;
+    }
+    let mut resolved_page_ids = HashSet::new();
+    let mut accounted_page_ids = HashSet::new();
+    let mut accounted_file_paths = HashSet::new();
+    let mut mismatched_pages = 0;
+    let mut mismatched_samples = Vec::new();
+
+    for page in pages {
+        let page_record = CanonicalIdentityRecord {
+            key: (),
+            label: page.slug.clone(),
+            uuid: page.uuid.clone(),
+            sha256: page.sha256.clone(),
+            body_size_bytes: page.body_size_bytes,
+            has_nonempty_body: page.has_nonempty_body,
+        };
+        match resolve_page_identity(
+            &page_record,
+            page_hash_counts
+                .get(page.sha256.as_str())
+                .copied()
+                .unwrap_or(0),
+            &file_records,
+        ) {
+            PageIdentityResolution::Matched(relative_path) => {
+                let Some(file) = file_lookup.get(&relative_path) else {
+                    continue;
+                };
+                accounted_page_ids.insert(page.page_id);
+                accounted_file_paths.insert(relative_path.clone());
+                if file.sha256 == page.sha256 {
+                    resolved_page_ids.insert(page.page_id);
+                } else {
+                    mismatched_pages += 1;
+                    push_sample(
+                        &mut mismatched_samples,
+                        format!(
+                            "{} -> {} sha256_mismatch",
+                            page.slug,
+                            path_string(&relative_path)
+                        ),
+                    );
+                }
+            }
+            PageIdentityResolution::DuplicateUuid { candidate_labels } => {
+                mismatched_pages += 1;
+                push_sample(
+                    &mut mismatched_samples,
+                    format!("{} -> {}", page.slug, candidate_labels.join("|")),
+                );
+            }
+            PageIdentityResolution::Missing
+            | PageIdentityResolution::AmbiguousHash
+            | PageIdentityResolution::TrivialHashRefusal { .. } => {}
         }
     }
+
+    let missing_count = pages
+        .iter()
+        .filter(|page| !accounted_page_ids.contains(&page.page_id))
+        .count();
+    let missing_pages = pages
+        .iter()
+        .filter(|page| !accounted_page_ids.contains(&page.page_id))
+        .map(|page| page.slug.clone())
+        .take(REMAP_VERIFICATION_SAMPLE_LIMIT)
+        .collect::<Vec<_>>();
+    let extra_count = files
+        .iter()
+        .filter(|file| !accounted_file_paths.contains(&file.relative_path))
+        .count();
+    let extra_files = files
+        .iter()
+        .filter(|file| !accounted_file_paths.contains(&file.relative_path))
+        .map(|file| path_string(&file.relative_path))
+        .take(REMAP_VERIFICATION_SAMPLE_LIMIT)
+        .collect::<Vec<_>>();
 
     PageMatchResolution {
         resolved_page_ids,
-        resolved_file_paths,
         mismatched_pages,
+        mismatched_samples,
+        missing_count,
+        missing_pages,
+        extra_count,
+        extra_files,
     }
 }
 
-fn take_tree_fence(root: &Path) -> Result<BTreeMap<String, (u64, u128)>, VaultSyncError> {
+#[cfg(unix)]
+fn metadata_timestamp_ns(seconds: i64, nanos: i64) -> i64 {
+    seconds.saturating_mul(1_000_000_000).saturating_add(nanos)
+}
+
+#[cfg(unix)]
+fn metadata_fence_tuple(metadata: &fs::Metadata) -> (i64, i64, u64) {
+    (
+        metadata_timestamp_ns(metadata.mtime(), metadata.mtime_nsec()),
+        metadata_timestamp_ns(metadata.ctime(), metadata.ctime_nsec()),
+        metadata.ino(),
+    )
+}
+
+#[cfg(not(unix))]
+fn metadata_fence_tuple(metadata: &fs::Metadata) -> (i64, i64, u64) {
+    let mtime_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .and_then(|value| i64::try_from(value.as_nanos()).ok())
+        .unwrap_or_default();
+    (mtime_ns, 0, 0)
+}
+
+fn take_tree_fence(root: &Path) -> Result<BTreeMap<String, TreeFenceEntry>, VaultSyncError> {
     let mut fence = BTreeMap::new();
     for (relative_path, metadata) in walk_tree(root)? {
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-            .map(|value| value.as_nanos())
-            .unwrap_or_default();
-        fence.insert(path_string(&relative_path), (metadata.len(), modified));
+        let (mtime_ns, ctime_ns, inode) = metadata_fence_tuple(&metadata);
+        let quaidignore_sha256 = if relative_path == Path::new(".quaidignore") {
+            Some(sha256_hex(&fs::read(root.join(&relative_path))?))
+        } else {
+            None
+        };
+        fence.insert(
+            path_string(&relative_path),
+            TreeFenceEntry {
+                mtime_ns,
+                ctime_ns,
+                size_bytes: metadata.len(),
+                inode,
+                quaidignore_sha256,
+            },
+        );
     }
     Ok(fence)
 }
@@ -5287,16 +5695,24 @@ fn walk_tree(root: &Path) -> Result<BTreeMap<PathBuf, fs::Metadata>, VaultSyncEr
         for entry in fs::read_dir(current)? {
             let entry = entry?;
             let path = entry.path();
-            let metadata = entry.metadata()?;
-            if metadata.is_dir() {
-                walk_dir(root, &path, output)?;
-            } else {
-                let relative = path
-                    .strip_prefix(root)
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|_| path.clone());
-                output.insert(relative, metadata);
+            let relative = path
+                .strip_prefix(root)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| path.clone());
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                eprintln!("WARN: skipping symlinked entry {}", relative.display());
+                continue;
             }
+            if file_type.is_dir() {
+                walk_dir(root, &path, output)?;
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let metadata = entry.metadata()?;
+            output.insert(relative, metadata);
         }
         Ok(())
     }
@@ -5313,6 +5729,20 @@ fn path_string(path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn push_sample(samples: &mut Vec<String>, sample: String) {
+    if samples.len() < REMAP_VERIFICATION_SAMPLE_LIMIT {
+        samples.push(sample);
+    }
+}
+
+fn format_diff_samples(samples: &[String]) -> String {
+    if samples.is_empty() {
+        "-".to_owned()
+    } else {
+        samples.join(",")
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -6361,6 +6791,99 @@ mod tests {
         assert!(restoring_live.restore_in_progress);
     }
 
+    #[test]
+    fn collection_recovery_in_progress_guard_sets_and_clears_flag() {
+        init_process_registries().unwrap();
+        let collection_id = 77;
+
+        assert!(!collection_recovery_in_progress(collection_id));
+        {
+            let _guard = RecoveryInProgressGuard::enter(collection_id).unwrap();
+            assert!(collection_recovery_in_progress(collection_id));
+        }
+        assert!(!collection_recovery_in_progress(collection_id));
+    }
+
+    #[test]
+    fn load_collection_by_id_round_trips_optional_restore_metadata() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "work", Path::new("vault"));
+        conn.execute(
+            "UPDATE collections
+             SET active_lease_session_id = 'serve-1',
+                 restore_command_id = 'restore-1',
+                 restore_lease_session_id = 'cli-lease',
+                 reload_generation = 9,
+                 watcher_released_session_id = 'serve-1',
+                 watcher_released_generation = 8,
+                 watcher_released_at = '2026-04-28T00:00:00Z',
+                 pending_command_heartbeat_at = '2026-04-28T00:01:00Z',
+                 pending_root_path = 'D:\\restored',
+                 pending_restore_manifest = '{\"entries\":[]}',
+                 restore_command_pid = 42,
+                 restore_command_host = 'host-a',
+                 integrity_failed_at = '2026-04-28T00:02:00Z',
+                 pending_manifest_incomplete_at = '2026-04-28T00:03:00Z',
+                 reconcile_halted_at = '2026-04-28T00:04:00Z',
+                 reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+
+        assert_eq!(
+            collection.active_lease_session_id.as_deref(),
+            Some("serve-1")
+        );
+        assert_eq!(collection.restore_command_id.as_deref(), Some("restore-1"));
+        assert_eq!(
+            collection.restore_lease_session_id.as_deref(),
+            Some("cli-lease")
+        );
+        assert_eq!(collection.reload_generation, 9);
+        assert_eq!(
+            collection.watcher_released_session_id.as_deref(),
+            Some("serve-1")
+        );
+        assert_eq!(collection.watcher_released_generation, Some(8));
+        assert_eq!(
+            collection.pending_root_path.as_deref(),
+            Some("D:\\restored")
+        );
+        assert_eq!(
+            collection.pending_restore_manifest.as_deref(),
+            Some("{\"entries\":[]}")
+        );
+        assert_eq!(collection.restore_command_pid, Some(42));
+        assert_eq!(collection.restore_command_host.as_deref(), Some("host-a"));
+        assert_eq!(
+            collection.reconcile_halt_reason.as_deref(),
+            Some("duplicate_uuid")
+        );
+    }
+
+    #[test]
+    fn load_collection_by_id_rejects_invalid_collection_state() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "work", Path::new("vault"));
+        conn.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        conn.execute(
+            "UPDATE collections SET state = 'bogus' WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = load_collection_by_id(&conn, collection_id)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("invalid collection state"));
+        assert!(error.contains("bogus"));
+    }
+
     #[cfg(not(unix))]
     #[test]
     fn ensure_unix_platform_fails_closed_on_windows() {
@@ -6641,6 +7164,136 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(busy_error.contains("RestoreNonEmptyTargetError"));
+    }
+
+    #[test]
+    fn infer_restore_relative_path_prefers_relative_inputs_and_strips_collection_root() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+
+        assert_eq!(
+            infer_restore_relative_path(
+                &collection,
+                "notes/example",
+                Some("ignored.md"),
+                Some("notes/explicit.md")
+            ),
+            PathBuf::from("notes/explicit.md")
+        );
+        assert_eq!(
+            infer_restore_relative_path(&collection, "notes/example", Some("notes/raw.md"), None),
+            PathBuf::from("notes/raw.md")
+        );
+        assert_eq!(
+            infer_restore_relative_path(
+                &collection,
+                "notes/example",
+                Some(
+                    root.path()
+                        .join("notes")
+                        .join("absolute.md")
+                        .to_string_lossy()
+                        .as_ref()
+                ),
+                None
+            ),
+            PathBuf::from("notes").join("absolute.md")
+        );
+        assert_eq!(
+            infer_restore_relative_path(
+                &collection,
+                "notes/example",
+                Some(r"D:\elsewhere\foreign.md"),
+                None
+            ),
+            PathBuf::from("notes/example.md")
+        );
+        assert_eq!(
+            infer_restore_relative_path(&collection, "notes/example", None, None),
+            PathBuf::from("notes/example.md")
+        );
+    }
+
+    #[test]
+    fn materialize_collection_to_path_replaces_existing_tree_and_writes_nested_files() {
+        let conn = open_test_db();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let output_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            "nested/notes/a.md",
+        );
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let materialized = output_root.path().join("materialized");
+        fs::create_dir_all(&materialized).unwrap();
+        fs::write(materialized.join("stale.txt"), b"stale").unwrap();
+
+        materialize_collection_to_path(&conn, &collection, &materialized).unwrap();
+
+        assert!(!materialized.join("stale.txt").exists());
+        assert_eq!(
+            fs::read(materialized.join("nested").join("notes").join("a.md")).unwrap(),
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a"
+        );
+    }
+
+    #[test]
+    fn materialize_collection_to_path_rejects_missing_active_raw_imports() {
+        let conn = open_test_db();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let output_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES (?1, 'notes/missing', ?2, 'concept', 'missing', '', 'compiled', '', '{}', '', '', 1)",
+            params![collection_id, Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let error =
+            materialize_collection_to_path(&conn, &collection, output_root.path()).unwrap_err();
+
+        assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
+        assert!(error.to_string().contains("missing active raw_imports"));
+    }
+
+    #[test]
+    fn verify_remap_root_rejects_invalid_quaidignore_in_new_root() {
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            raw_bytes,
+            "notes/a.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(new_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
+        fs::write(new_root.path().join(".quaidignore"), "[broken\n").unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
+
+        assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
+        assert!(error
+            .to_string()
+            .contains("invalid .quaidignore in remap root"));
     }
 
     #[test]
@@ -8000,6 +8653,81 @@ mod tests {
         assert!(error.to_string().contains("RestoreNonEmptyTargetError"));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn begin_restore_on_windows_releases_cli_lease_after_inline_attach_failure() {
+        let (_db_dir, _db_path, conn) = open_test_db_file();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let target_parent = tempfile::TempDir::new().unwrap();
+        let target_root = target_parent.path().join("restored");
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            raw_bytes,
+            "notes/a.md",
+        );
+
+        let error = begin_restore(&conn, "work", &target_root, false).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Vault sync commands require Unix"));
+        let row: (
+            String,
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+            i64,
+        ) = conn
+            .query_row(
+                "SELECT state,
+                        root_path,
+                        needs_full_sync,
+                        pending_root_path,
+                        restore_command_id,
+                        restore_lease_session_id,
+                        (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1),
+                        (SELECT COUNT(*) FROM serve_sessions WHERE session_type = 'cli')
+                 FROM collections
+                 WHERE id = ?1",
+                [collection_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "restoring");
+        assert_eq!(row.1, target_root.display().to_string());
+        assert_eq!(row.2, 1);
+        assert!(row.3.is_none());
+        assert!(row.4.is_none());
+        assert!(row.5.is_none());
+        assert_eq!(row.6, 0);
+        assert_eq!(row.7, 0);
+        assert_eq!(
+            fs::read(target_root.join("notes").join("a.md")).unwrap(),
+            raw_bytes
+        );
+    }
+
     #[test]
     fn mark_collection_restoring_uses_collection_owners_and_clears_ack_residue() {
         let conn = open_test_db();
@@ -8107,6 +8835,41 @@ mod tests {
                  use live_collection_owner instead"
             );
         }
+    }
+
+    #[test]
+    fn wait_for_exact_ack_short_circuits_when_live_owner_disappears() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-1', 1, 'host')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-1')",
+            [collection_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections SET state = 'restoring', reload_generation = 2 WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        unregister_session(&conn, "serve-1").unwrap();
+
+        let started = Instant::now();
+        let error = wait_for_exact_ack(&conn, collection_id, "serve-1", 2).unwrap_err();
+
+        assert!(matches!(
+            error,
+            VaultSyncError::ServeDiedDuringHandshake { .. }
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "owner-loss path must short-circuit instead of waiting for the full handshake timeout"
+        );
     }
 
     #[test]
@@ -8465,6 +9228,81 @@ mod tests {
             .unwrap();
         assert_eq!(row.0, "restoring");
         assert_eq!(row.1, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remap_online_source_defers_attach_to_rcrt_and_remap_attach_reason_appears_once() {
+        let source = production_vault_sync_source();
+
+        let remap_start = source.find("pub fn remap_collection(").unwrap();
+        let remap_end = source[remap_start..]
+            .find("pub fn verify_remap_root(")
+            .map(|offset| remap_start + offset)
+            .unwrap();
+        let remap_source = &source[remap_start..remap_end];
+        assert!(
+            remap_source.contains(
+                "wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?"
+            ),
+            "online remap must wait for the exact watcher ack before mutating DB state"
+        );
+        assert!(
+            remap_source.contains("needs_full_sync = 1"),
+            "online remap must arm the write gate for the post-remap attach pass"
+        );
+        assert!(
+            remap_source.contains("DELETE FROM file_state WHERE collection_id = ?1"),
+            "online remap must limit itself to the DB state flip plus file_state reset"
+        );
+        assert!(
+            !remap_source.contains("complete_attach(")
+                && !remap_source.contains("full_hash_reconcile_authorized("),
+            "remap_collection must not run attach or full-hash reconcile inline"
+        );
+
+        let rcrt_start = source.find("pub fn run_rcrt_pass(").unwrap();
+        let rcrt_end = source[rcrt_start..]
+            .find("fn embedding_drain_interval_secs(")
+            .map(|offset| rcrt_start + offset)
+            .unwrap();
+        let rcrt_source = &source[rcrt_start..rcrt_end];
+        assert_eq!(
+            rcrt_source
+                .matches("AttachReason::RemapPostReconcile")
+                .count(),
+            1,
+            "RCRT should have exactly one remap attach arm"
+        );
+        assert!(
+            rcrt_source.contains("if complete_attach(conn, collection_id, session_id, reason)? {"),
+            "RCRT must own the attach transition after remap"
+        );
+    }
+
+    #[test]
+    fn complete_attach_source_is_reentry_guarded_by_needs_full_sync() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn complete_attach(").unwrap();
+        let end = source[start..]
+            .find("pub fn run_rcrt_pass(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("if !collection.needs_full_sync")
+                && snippet.contains("return Ok(false);"),
+            "complete_attach must fail closed to a no-op when the write gate is already cleared"
+        );
+        assert!(
+            snippet.contains("reload_generation = reload_generation + 1"),
+            "attach completion must advance generation exactly on the guarded transition"
+        );
+        assert!(
+            snippet.contains("AND needs_full_sync = 1"),
+            "the attach-completion UPDATE must be gated on needs_full_sync so re-entry cannot bump generation again"
+        );
     }
 
     #[cfg(unix)]
@@ -8881,8 +9719,9 @@ mod tests {
         assert_eq!(row.2, 0);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn offline_restore_keeps_write_gate_closed_until_rcrt_owns_attach() {
+    fn offline_restore_runs_attach_inline_and_reopens_writes() {
         let conn = open_test_db();
         let source_root = tempfile::TempDir::new().unwrap();
         let target_parent = tempfile::TempDir::new().unwrap();
@@ -8901,17 +9740,201 @@ mod tests {
         begin_restore(&conn, "work", &target_root, false).unwrap();
 
         let collection = load_collection_by_id(&conn, collection_id).unwrap();
-        assert_eq!(collection.state, CollectionState::Restoring);
-        assert!(collection.needs_full_sync);
+        assert_eq!(collection.state, CollectionState::Active);
+        assert!(!collection.needs_full_sync);
         assert!(collection.active_lease_session_id.is_none());
         assert!(collection.restore_lease_session_id.is_none());
         assert!(owner_session_id(&conn, collection_id).unwrap().is_none());
-        let error = ensure_collection_write_allowed(&conn, collection_id).unwrap_err();
-        assert!(error.to_string().contains("CollectionRestoringError"));
+        ensure_collection_write_allowed(&conn, collection_id).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_remap_runs_reconcile_inline_and_preserves_uuid_identity_across_reorganization() {
+        let (_db_dir, _db_path, conn) = open_test_db_file();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let raw_bytes_a =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
+        let raw_bytes_b =
+            b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\n---\nhello world from note b";
+        let page_a = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            raw_bytes_a,
+            "notes/old-a.md",
+        );
+        let page_b = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/b",
+            "22222222-2222-7222-8222-222222222222",
+            "hello world from note b",
+            raw_bytes_b,
+            "notes/b.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::create_dir_all(new_root.path().join("nested")).unwrap();
+        fs::write(
+            new_root.path().join("nested").join("renamed-a.md"),
+            raw_bytes_a,
+        )
+        .unwrap();
+        fs::write(new_root.path().join("notes").join("b.md"), raw_bytes_b).unwrap();
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship, context, source_kind)
+             VALUES (?1, ?2, 'depends_on', '', 'programmatic')",
+            params![page_a, page_b],
+        )
+        .unwrap();
+
+        let summary = remap_collection(&conn, "work", new_root.path(), false).unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        assert_eq!(collection.root_path, new_root.path().display().to_string());
+        assert_eq!(collection.state, CollectionState::Active);
+        assert!(!collection.needs_full_sync);
+        assert_eq!(summary.resolved_pages, 2);
+        assert!(collection.active_lease_session_id.is_none());
+        assert!(collection.restore_lease_session_id.is_none());
+        assert!(owner_session_id(&conn, collection_id).unwrap().is_none());
+        ensure_collection_write_allowed(&conn, collection_id).unwrap();
+        let remapped_page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE collection_id = ?1 AND slug = 'notes/a'",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remapped_page_id, page_a);
+        let relative_path: String = conn
+            .query_row(
+                "SELECT relative_path FROM file_state WHERE page_id = ?1",
+                [page_a],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(relative_path, "nested/renamed-a.md");
+        let link_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM links WHERE from_page_id = ?1 AND to_page_id = ?2",
+                params![page_a, page_b],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(link_count, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remap_collection_refuses_phase1_drift_until_new_root_catches_up() {
+        let (_db_dir, _db_path, conn) = open_test_db_file();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let original =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            original,
+            "notes/a.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(new_root.path().join("notes").join("a.md"), original).unwrap();
+
+        let updated =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nupdated body before remap";
+        fs::write(old_root.path().join("notes").join("a.md"), updated).unwrap();
+
+        let first = remap_collection(&conn, "work", new_root.path(), false).unwrap_err();
+        assert!(first.to_string().contains("RemapDriftConflictError"));
+        let active_raw_import: Vec<u8> = conn
+            .query_row(
+                "SELECT raw_bytes FROM raw_imports WHERE page_id = (SELECT id FROM pages WHERE collection_id = ?1 AND slug = 'notes/a') AND is_active = 1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active_raw_import, updated);
+
+        fs::write(new_root.path().join("notes").join("a.md"), updated).unwrap();
+        let second = remap_collection(&conn, "work", new_root.path(), false).unwrap();
+        assert_eq!(second.missing_pages, 0);
+        assert_eq!(second.mismatched_pages, 0);
+        assert_eq!(second.extra_files, 0);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn remap_collection_fails_closed_on_windows_before_mutating_collection_state() {
+        let (_db_dir, _db_path, conn) = open_test_db_file();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let original_root = old_root.path().display().to_string();
+
+        let error = remap_collection(&conn, "work", new_root.path(), false).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Vault sync commands require Unix"));
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT root_path, state, needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, original_root);
+        assert_eq!(row.1, "active");
+        assert_eq!(row.2, 0);
     }
 
     #[test]
-    fn offline_remap_keeps_write_gate_closed_until_rcrt_owns_attach() {
+    fn verify_remap_root_uses_unique_hash_fallback_and_ignores_quaidignore_patterns() {
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let raw_bytes = b"---\ntitle: Hash Fallback\ntype: concept\n---\nthis body is intentionally long enough to cross the remap hash fallback threshold.\n";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/hash-fallback",
+            "11111111-1111-7111-8111-111111111111",
+            "this body is intentionally long enough to cross the remap hash fallback threshold.",
+            raw_bytes,
+            "notes/hash-fallback.md",
+        );
+        fs::create_dir_all(new_root.path().join("nested")).unwrap();
+        fs::write(new_root.path().join("nested").join("moved.md"), raw_bytes).unwrap();
+        fs::write(new_root.path().join(".quaidignore"), "ignored/**\n").unwrap();
+        fs::create_dir_all(new_root.path().join("ignored")).unwrap();
+        fs::write(
+            new_root.path().join("ignored").join("secret.md"),
+            b"top secret",
+        )
+        .unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let summary = verify_remap_root(&conn, &collection, new_root.path()).unwrap();
+
+        assert_eq!(summary.resolved_pages, 1);
+        assert_eq!(summary.missing_pages, 0);
+        assert_eq!(summary.mismatched_pages, 0);
+        assert_eq!(summary.extra_files, 0);
+    }
+
+    #[test]
+    fn verify_remap_root_ignores_non_markdown_files() {
         let conn = open_test_db();
         let old_root = tempfile::TempDir::new().unwrap();
         let new_root = tempfile::TempDir::new().unwrap();
@@ -8928,23 +9951,69 @@ mod tests {
             "notes/a.md",
         );
         fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::create_dir_all(new_root.path().join("assets")).unwrap();
         fs::write(new_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
-
-        remap_collection(&conn, "work", new_root.path(), false).unwrap();
+        fs::write(
+            new_root.path().join("assets").join("logo.png"),
+            b"not markdown, not a remap extra",
+        )
+        .unwrap();
 
         let collection = load_collection_by_id(&conn, collection_id).unwrap();
-        assert_eq!(collection.root_path, new_root.path().display().to_string());
-        assert_eq!(collection.state, CollectionState::Restoring);
-        assert!(collection.needs_full_sync);
-        assert!(collection.active_lease_session_id.is_none());
-        assert!(collection.restore_lease_session_id.is_none());
-        assert!(owner_session_id(&conn, collection_id).unwrap().is_none());
-        let error = ensure_collection_write_allowed(&conn, collection_id).unwrap_err();
-        assert!(error.to_string().contains("CollectionRestoringError"));
+        let summary = verify_remap_root(&conn, &collection, new_root.path()).unwrap();
+
+        assert_eq!(summary.resolved_pages, 1);
+        assert_eq!(summary.missing_pages, 0);
+        assert_eq!(summary.mismatched_pages, 0);
+        assert_eq!(summary.extra_files, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_remap_root_skips_symlinked_entries_in_new_root() {
+        use std::os::unix::fs::symlink;
+
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let linked = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            raw_bytes,
+            "notes/a.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(new_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
+        fs::create_dir_all(linked.path().join("shadow")).unwrap();
+        fs::write(
+            linked.path().join("shadow").join("extra.md"),
+            b"reachable only through symlink",
+        )
+        .unwrap();
+        symlink(
+            linked.path().join("shadow"),
+            new_root.path().join("linked-shadow"),
+        )
+        .unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let summary = verify_remap_root(&conn, &collection, new_root.path()).unwrap();
+
+        assert_eq!(summary.resolved_pages, 1);
+        assert_eq!(summary.missing_pages, 0);
+        assert_eq!(summary.mismatched_pages, 0);
+        assert_eq!(summary.extra_files, 0);
     }
 
     #[test]
-    fn verify_remap_root_detects_missing_extra_and_mismatched_files() {
+    fn verify_remap_root_rejects_invalid_frontmatter_uuid_in_new_root() {
         let conn = open_test_db();
         let old_root = tempfile::TempDir::new().unwrap();
         let new_root = tempfile::TempDir::new().unwrap();
@@ -8960,6 +10029,116 @@ mod tests {
         );
         fs::create_dir_all(new_root.path().join("notes")).unwrap();
         fs::write(
+            new_root.path().join("notes").join("broken.md"),
+            b"---\nmemory_id: definitely-not-a-uuid\n---\nhello world from note a",
+        )
+        .unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
+
+        assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
+        assert!(error.to_string().contains("invalid"));
+    }
+
+    #[test]
+    fn verify_remap_root_does_not_use_hash_fallback_for_short_body() {
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let raw_bytes = b"---\ntitle: Short\n---\nshort\n";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/short",
+            "11111111-1111-7111-8111-111111111111",
+            "short",
+            raw_bytes,
+            "notes/short.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(new_root.path().join("notes").join("moved.md"), raw_bytes).unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            VaultSyncError::NewRootVerificationFailed {
+                missing: 1,
+                mismatched: 0,
+                extra: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_remap_root_rejects_duplicate_hash_candidates_without_uuid_match() {
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        let raw_bytes = b"---\ntitle: Duplicate Hash\n---\nthis body is intentionally long enough to cross the remap hash fallback threshold.\n";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/hash-duplicate",
+            "11111111-1111-7111-8111-111111111111",
+            "this body is intentionally long enough to cross the remap hash fallback threshold.",
+            raw_bytes,
+            "notes/hash-duplicate.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(new_root.path().join("notes").join("one.md"), raw_bytes).unwrap();
+        fs::write(new_root.path().join("notes").join("two.md"), raw_bytes).unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            VaultSyncError::NewRootVerificationFailed {
+                missing: 1,
+                mismatched: 0,
+                extra: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_remap_root_reports_missing_and_extra_counts() {
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            "notes/a.md",
+        );
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/b",
+            "22222222-2222-7222-8222-222222222222",
+            "hello world from note b",
+            b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\n---\nhello world from note b",
+            "notes/b.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(
+            new_root.path().join("notes").join("a.md"),
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+        )
+        .unwrap();
+        fs::write(
             new_root.path().join("notes").join("extra.md"),
             b"extra file",
         )
@@ -8967,7 +10146,479 @@ mod tests {
 
         let collection = load_collection_by_id(&conn, collection_id).unwrap();
         let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
-        assert!(error.to_string().contains("NewRootVerificationFailedError"));
+        assert!(matches!(
+            error,
+            VaultSyncError::NewRootVerificationFailed {
+                missing: 1,
+                mismatched: 0,
+                extra: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_remap_root_error_includes_sampled_diffs() {
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            "notes/a.md",
+        );
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/b",
+            "22222222-2222-7222-8222-222222222222",
+            "hello world from note b",
+            b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\n---\nhello world from note b",
+            "notes/b.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(
+            new_root.path().join("notes").join("a.md"),
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nchanged bytes",
+        )
+        .unwrap();
+        fs::write(
+            new_root.path().join("notes").join("extra.md"),
+            b"extra file",
+        )
+        .unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("missing_samples=notes/b"));
+        assert!(rendered.contains("mismatched_samples=notes/a -> notes/a.md sha256_mismatch"));
+        assert!(rendered.contains("extra_samples=notes/extra.md"));
+    }
+
+    #[test]
+    fn verify_remap_root_reports_mismatched_count_for_duplicate_uuid_candidates() {
+        let conn = open_test_db();
+        let old_root = tempfile::TempDir::new().unwrap();
+        let new_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", old_root.path());
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            "hello world from note a",
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            "notes/a.md",
+        );
+        fs::create_dir_all(new_root.path().join("notes")).unwrap();
+        fs::write(
+            new_root.path().join("notes").join("a-one.md"),
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nfirst duplicate",
+        )
+        .unwrap();
+        fs::write(
+            new_root.path().join("notes").join("a-two.md"),
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nsecond duplicate",
+        )
+        .unwrap();
+
+        let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            VaultSyncError::NewRootVerificationFailed {
+                missing: 1,
+                mismatched: 1,
+                extra: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_remap_root_source_uses_before_and_after_tree_fences() {
+        let source = production_vault_sync_source();
+        let start = source.find("pub fn verify_remap_root(").unwrap();
+        let end = source[start..]
+            .find("pub fn restore_reset(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("let before = take_tree_fence(new_root)?;")
+                && snippet.contains("let after = take_tree_fence(new_root)?;"),
+            "verify_remap_root must fence the tree before and after matching to catch mid-flight drift"
+        );
+        assert!(
+            snippet.contains("return Err(VaultSyncError::NewRootUnstable"),
+            "verify_remap_root must fail closed with NewRootUnstableError when the fence changes"
+        );
+    }
+
+    #[test]
+    fn load_new_root_files_source_applies_new_root_ignore_matcher() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn load_new_root_files(").unwrap();
+        let end = source[start..]
+            .find("fn resolve_page_matches(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("let ignore_globset = build_new_root_ignore_globset(root)?;"),
+            "load_new_root_files must build a fresh ignore matcher from the remap root before counting files"
+        );
+        assert!(
+            snippet.contains("if ignore_globset.is_match(relative_path) {"),
+            "load_new_root_files must exclude .quaidignore-matched files from remap verification counts"
+        );
+        assert!(
+            snippet.contains("if !is_markdown_file(relative_path) {"),
+            "load_new_root_files must reuse the reconciler's Markdown gate so Phase 4 extra counts stay in parity"
+        );
+    }
+
+    #[test]
+    fn resolve_page_matches_source_uses_canonical_resolver_helper() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn resolve_page_matches(").unwrap();
+        let end = source[start..]
+            .find("fn take_tree_fence(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("resolve_page_identity("),
+            "Phase 4 remap verification must invoke the canonical resolve_page_identity helper instead of bespoke matching"
+        );
+    }
+
+    #[test]
+    fn take_tree_fence_hashes_quaidignore_contents() {
+        let root = tempfile::TempDir::new().unwrap();
+        let bytes = b"ignored/**\n";
+        let expected_hash = sha256_hex(bytes);
+        fs::write(root.path().join(".quaidignore"), bytes).unwrap();
+
+        let fence = take_tree_fence(root.path()).unwrap();
+        let entry = fence.get(".quaidignore").unwrap();
+
+        assert_eq!(entry.size_bytes, bytes.len() as u64);
+        assert_eq!(
+            entry.quaidignore_sha256.as_deref(),
+            Some(expected_hash.as_str()),
+            "Phase 4 tree fence must hash .quaidignore contents, not just trust size/mtime"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn take_tree_fence_detects_same_size_rewrite_with_preserved_mtime() {
+        let root = tempfile::TempDir::new().unwrap();
+        let notes_dir = root.path().join("notes");
+        fs::create_dir_all(&notes_dir).unwrap();
+        let path = notes_dir.join("rewrite.md");
+        fs::write(&path, b"aaaaaaaaaaaaaaaa").unwrap();
+
+        let before = take_tree_fence(root.path()).unwrap();
+        let original_modified = fs::metadata(&path).unwrap().modified().unwrap();
+        {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .unwrap();
+            use std::io::Write;
+            file.write_all(b"bbbbbbbbbbbbbbbb").unwrap();
+            file.sync_all().unwrap();
+            let times = std::fs::FileTimes::new().set_modified(original_modified);
+            file.set_times(times).unwrap();
+        }
+        let after = take_tree_fence(root.path()).unwrap();
+
+        let before_entry = before.get("notes/rewrite.md").unwrap();
+        let after_entry = after.get("notes/rewrite.md").unwrap();
+        assert_eq!(after_entry.mtime_ns, before_entry.mtime_ns);
+        assert_eq!(after_entry.size_bytes, before_entry.size_bytes);
+        assert_eq!(after_entry.inode, before_entry.inode);
+        assert_ne!(
+            after_entry.ctime_ns, before_entry.ctime_ns,
+            "Phase 4 tree fence must notice same-size rewrites even when mtime is preserved"
+        );
+        assert_ne!(
+            before, after,
+            "Phase 4 tree fence must fail closed when only ctime changes across the verified tree"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn take_tree_fence_detects_atomic_replace_with_preserved_mtime() {
+        let root = tempfile::TempDir::new().unwrap();
+        let notes_dir = root.path().join("notes");
+        fs::create_dir_all(&notes_dir).unwrap();
+        let path = notes_dir.join("replace.md");
+        fs::write(&path, b"aaaaaaaaaaaaaaaa").unwrap();
+
+        let before = take_tree_fence(root.path()).unwrap();
+        let original_metadata = fs::metadata(&path).unwrap();
+        let replacement = notes_dir.join("replace.tmp");
+        fs::write(&replacement, b"cccccccccccccccc").unwrap();
+        let replacement_file = fs::OpenOptions::new()
+            .write(true)
+            .open(&replacement)
+            .unwrap();
+        let times = std::fs::FileTimes::new().set_modified(original_metadata.modified().unwrap());
+        replacement_file.set_times(times).unwrap();
+        replacement_file.sync_all().unwrap();
+        drop(replacement_file);
+        fs::rename(&replacement, &path).unwrap();
+
+        let after = take_tree_fence(root.path()).unwrap();
+
+        let before_entry = before.get("notes/replace.md").unwrap();
+        let after_entry = after.get("notes/replace.md").unwrap();
+        assert_eq!(after_entry.mtime_ns, before_entry.mtime_ns);
+        assert_eq!(after_entry.size_bytes, before_entry.size_bytes);
+        assert_ne!(
+            after_entry.inode, before_entry.inode,
+            "Phase 4 tree fence must notice atomic replacements even when the replacement backdates mtime"
+        );
+        assert_ne!(
+            before, after,
+            "Phase 4 tree fence must fail closed when the verified file is atomically replaced"
+        );
+    }
+
+    #[test]
+    fn take_tree_fence_source_uses_full_stat_tuple() {
+        let source = production_vault_sync_source();
+        assert!(
+            source.contains("metadata_timestamp_ns(metadata.mtime(), metadata.mtime_nsec())")
+                && source.contains("metadata_timestamp_ns(metadata.ctime(), metadata.ctime_nsec())")
+                && source.contains("metadata.ino()"),
+            "Phase 4 tree fence must capture the full per-file stat tuple so same-size rewrites and atomic replacements cannot slip past remap verification"
+        );
+    }
+
+    #[test]
+    fn walk_tree_source_skips_symlinked_entries() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn walk_tree(").unwrap();
+        let end = source[start..]
+            .find("fn path_string(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("let file_type = entry.file_type()?;")
+                && snippet.contains("if file_type.is_symlink() {"),
+            "Phase 4 tree walks must inspect entry file types without following symlinks"
+        );
+    }
+
+    #[test]
+    fn remap_source_runs_safety_pipeline_before_new_root_verification() {
+        let source = production_vault_sync_source();
+        let remap_start = source.find("pub fn remap_collection(").unwrap();
+        let remap_end = source[remap_start..]
+            .find("pub fn verify_remap_root(")
+            .map(|offset| remap_start + offset)
+            .unwrap();
+        let remap_source = &source[remap_start..remap_end];
+
+        let safety_idx = remap_source
+            .find("run_restore_remap_safety_pipeline_without_mount_check")
+            .unwrap();
+        let verify_idx = remap_source
+            .find("verify_remap_root(conn, &collection, new_root)?")
+            .unwrap();
+        assert!(
+            safety_idx < verify_idx,
+            "remap_collection must capture old-root drift before trusting the new root"
+        );
+    }
+
+    #[test]
+    fn remap_online_source_waits_for_exact_ack_before_safety_pipeline() {
+        let source = production_vault_sync_source();
+        let remap_start = source.find("pub fn remap_collection(").unwrap();
+        let remap_end = source[remap_start..]
+            .find("pub fn verify_remap_root(")
+            .map(|offset| remap_start + offset)
+            .unwrap();
+        let remap_source = &source[remap_start..remap_end];
+        let ack_idx = remap_source
+            .find("wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?")
+            .unwrap();
+        let safety_idx = remap_source
+            .find("run_restore_remap_safety_pipeline_without_mount_check")
+            .unwrap();
+
+        assert!(
+            ack_idx < safety_idx,
+            "online remap must release the live watcher and then capture old-root drift under the acknowledged owner lease"
+        );
+    }
+
+    #[test]
+    fn restore_source_runs_safety_pipeline_before_materialization() {
+        let source = production_vault_sync_source();
+        let restore_start = source.find("pub fn begin_restore(").unwrap();
+        let restore_end = source[restore_start..]
+            .find("pub fn remap_collection(")
+            .map(|offset| restore_start + offset)
+            .unwrap();
+        let restore_source = &source[restore_start..restore_end];
+
+        let online_start = restore_source
+            .find("let (_, expected_session_id, generation) =")
+            .unwrap();
+        let online_end = restore_source[online_start..]
+            .find("} else {")
+            .map(|offset| online_start + offset)
+            .unwrap();
+        let online_source = &restore_source[online_start..online_end];
+        let online_safety_idx = online_source
+            .find("run_restore_remap_safety_pipeline_without_mount_check")
+            .unwrap();
+        let online_materialize_idx = online_source
+            .find("materialize_collection_to_path(conn, &collection, &staging_path)?;")
+            .unwrap();
+        assert!(
+            online_safety_idx < online_materialize_idx,
+            "online restore must capture old-root drift before materializing raw_imports into the target"
+        );
+
+        let offline_start = restore_source
+            .find("let lease = start_short_lived_owner_lease(conn, collection.id)?;")
+            .unwrap();
+        let offline_source = &restore_source[offline_start..];
+        let offline_safety_idx = offline_source
+            .find("run_restore_remap_safety_pipeline_without_mount_check")
+            .unwrap();
+        let offline_materialize_idx = offline_source
+            .find("materialize_collection_to_path(conn, &collection, &staging_path)?;")
+            .unwrap();
+        assert!(
+            offline_safety_idx < offline_materialize_idx,
+            "offline restore must capture old-root drift before materializing raw_imports into the target"
+        );
+    }
+
+    #[test]
+    fn restore_online_source_waits_for_exact_ack_before_safety_pipeline() {
+        let source = production_vault_sync_source();
+        let restore_start = source.find("pub fn begin_restore(").unwrap();
+        let restore_end = source[restore_start..]
+            .find("pub fn remap_collection(")
+            .map(|offset| restore_start + offset)
+            .unwrap();
+        let restore_source = &source[restore_start..restore_end];
+        let online_start = restore_source
+            .find("let (_, expected_session_id, generation) =")
+            .unwrap();
+        let online_end = restore_source[online_start..]
+            .find("} else {")
+            .map(|offset| online_start + offset)
+            .unwrap();
+        let online_source = &restore_source[online_start..online_end];
+        let ack_idx = online_source
+            .find("wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?")
+            .unwrap();
+        let safety_idx = online_source
+            .find("run_restore_remap_safety_pipeline_without_mount_check")
+            .unwrap();
+
+        assert!(
+            ack_idx < safety_idx,
+            "online restore must wait for the acknowledged owner lease before drift capture"
+        );
+    }
+
+    #[test]
+    fn remap_source_verifies_new_root_before_switching_root_path() {
+        let source = production_vault_sync_source();
+        let remap_start = source.find("pub fn remap_collection(").unwrap();
+        let remap_end = source[remap_start..]
+            .find("pub fn verify_remap_root(")
+            .map(|offset| remap_start + offset)
+            .unwrap();
+        let remap_source = &source[remap_start..remap_end];
+        let verify_idx = remap_source
+            .find("verify_remap_root(conn, &collection, new_root)?")
+            .unwrap();
+        let update_idx = remap_source.find("SET root_path = ?2,").unwrap();
+
+        assert!(
+            verify_idx < update_idx,
+            "remap_collection must prove the target tree before rewriting the collection root"
+        );
+    }
+
+    #[test]
+    fn remap_offline_source_uses_short_lived_lease_and_inline_attach() {
+        let source = production_vault_sync_source();
+        let remap_start = source.find("pub fn remap_collection(").unwrap();
+        let remap_end = source[remap_start..]
+            .find("pub fn verify_remap_root(")
+            .map(|offset| remap_start + offset)
+            .unwrap();
+        let remap_source = &source[remap_start..remap_end];
+        let offline_start = remap_source
+            .find("let lease = start_short_lived_owner_lease")
+            .unwrap();
+        let offline_end = remap_source[offline_start..]
+            .find("return Ok(summary);")
+            .map(|offset| offline_start + offset)
+            .unwrap();
+        let offline_source = &remap_source[offline_start..offline_end];
+
+        assert!(
+            offline_source.contains("complete_attach(")
+                && offline_source.contains("AttachReason::RemapPostReconcile"),
+            "offline remap must run the attach/full-hash path inline while the CLI lease is live"
+        );
+        assert!(
+            !offline_source.contains("unregister_session("),
+            "offline remap must not drop its lease before the inline attach finishes"
+        );
+    }
+
+    #[test]
+    fn restore_offline_source_uses_short_lived_lease_and_inline_attach() {
+        let source = production_vault_sync_source();
+        let restore_start = source.find("pub fn begin_restore(").unwrap();
+        let restore_end = source[restore_start..]
+            .find("pub fn remap_collection(")
+            .map(|offset| restore_start + offset)
+            .unwrap();
+        let restore_source = &source[restore_start..restore_end];
+        let offline_start = restore_source
+            .find("let lease = start_short_lived_owner_lease(conn, collection.id)?;")
+            .unwrap();
+        let offline_source = &restore_source[offline_start..];
+
+        assert!(
+            offline_source.contains("complete_attach(")
+                && offline_source.contains("AttachReason::RestorePostFinalize"),
+            "offline restore must run the attach/full-hash path inline while the CLI lease is live"
+        );
+        assert!(
+            !offline_source.contains("unregister_session("),
+            "offline restore must not drop its lease before the inline attach finishes"
+        );
     }
 
     #[test]
@@ -9173,14 +10824,27 @@ mod tests {
         thread::sleep(Duration::from_millis(500));
 
         let verify = Connection::open(&db_path).unwrap();
-        let row: (String, String, i64, Option<String>, Option<String>, i64) = verify
+        let row: (
+            String,
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+            i64,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+        ) = verify
             .query_row(
                 "SELECT state,
                         root_path,
                         needs_full_sync,
                         pending_root_path,
                         restore_command_id,
-                        (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2)
+                        (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2),
+                        watcher_released_session_id,
+                        watcher_released_generation,
+                        watcher_released_at
                  FROM collections
                  WHERE id = ?1",
                 params![collection_id, runtime.session_id.as_str()],
@@ -9192,6 +10856,9 @@ mod tests {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
@@ -9202,6 +10869,10 @@ mod tests {
         assert_eq!(row.3.as_deref(), Some(pending_root.to_str().unwrap()));
         assert_eq!(row.4.as_deref(), Some("restore-1"));
         assert_eq!(row.5, 1);
+        assert!(
+            row.6.is_none() && row.7.is_none() && row.8.is_none(),
+            "fresh serve must not impersonate the originator by writing the watcher ack triple"
+        );
 
         drop(runtime);
     }
@@ -9620,6 +11291,372 @@ mod tests {
             .unwrap();
         assert_eq!(ack.0.as_deref(), Some("serve-1"));
         assert_eq!(ack.1, Some(2));
+    }
+
+    #[test]
+    fn wait_for_exact_ack_reports_when_serve_ownership_changes_mid_handshake() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-1', 1, 'host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-2', 2, 'host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-2')",
+            [collection_id],
+        )
+        .unwrap();
+
+        match wait_for_exact_ack(&conn, collection_id, "serve-1", 2) {
+            Err(VaultSyncError::ServeOwnershipChanged {
+                collection_name,
+                expected_session_id,
+                actual_session_id,
+            }) => {
+                assert_eq!(collection_name, "work");
+                assert_eq!(expected_session_id, "serve-1");
+                assert_eq!(actual_session_id, "serve-2");
+            }
+            other => panic!("expected ServeOwnershipChangedError, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn full_hash_audit_pass_rehashes_due_active_lease_collections_only() {
+        let conn = open_test_db();
+        let due_root = tempfile::TempDir::new().unwrap();
+        let skipped_root = tempfile::TempDir::new().unwrap();
+        let due_id = insert_collection(&conn, "due", due_root.path());
+        let skipped_id = insert_collection(&conn, "skipped", skipped_root.path());
+
+        let due_uuid = Uuid::now_v7().to_string();
+        let due_bytes = format!(
+            "---\nmemory_id: {due_uuid}\nslug: notes/due\ntitle: Due\ntype: concept\n---\nBody.\n"
+        );
+        fs::create_dir_all(due_root.path().join("notes")).unwrap();
+        fs::write(due_root.path().join("notes/due.md"), due_bytes.as_bytes()).unwrap();
+        insert_page_with_raw_import(
+            &conn,
+            due_id,
+            "notes/due",
+            &due_uuid,
+            "Body.",
+            due_bytes.as_bytes(),
+            "notes/due.md",
+        );
+        conn.execute(
+            "UPDATE file_state
+             SET last_full_hash_at = datetime('now', '-8 days')
+             WHERE collection_id = ?1",
+            [due_id],
+        )
+        .unwrap();
+
+        let skipped_uuid = Uuid::now_v7().to_string();
+        let skipped_bytes = format!(
+            "---\nmemory_id: {skipped_uuid}\nslug: notes/skipped\ntitle: Skipped\ntype: concept\n---\nBody.\n"
+        );
+        fs::create_dir_all(skipped_root.path().join("notes")).unwrap();
+        fs::write(
+            skipped_root.path().join("notes/skipped.md"),
+            skipped_bytes.as_bytes(),
+        )
+        .unwrap();
+        insert_page_with_raw_import(
+            &conn,
+            skipped_id,
+            "notes/skipped",
+            &skipped_uuid,
+            "Body.",
+            skipped_bytes.as_bytes(),
+            "notes/skipped.md",
+        );
+        conn.execute(
+            "UPDATE file_state
+             SET last_full_hash_at = datetime('now', '-1 days')
+             WHERE collection_id = ?1",
+            [skipped_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-audit', 1, 'host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-audit')",
+            [due_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-audit')",
+            [skipped_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections SET active_lease_session_id = 'serve-audit' WHERE id IN (?1, ?2)",
+            rusqlite::params![due_id, skipped_id],
+        )
+        .unwrap();
+
+        let audited = run_full_hash_audit_pass(&conn, "serve-audit").unwrap();
+
+        assert_eq!(audited.len(), 1);
+        assert_eq!(audited[0].0, due_id);
+        assert_eq!(audited[0].1, "due");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn full_hash_audit_pass_limits_each_cycle_to_a_daily_subset() {
+        let _guard = env_mutation_lock().lock().unwrap();
+        let _env = EnvVarGuard::set("QUAID_FULL_HASH_AUDIT_DAYS", "3");
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+
+        fs::create_dir_all(root.path().join("notes")).unwrap();
+        for index in 0..7 {
+            let relative_path = format!("notes/{index:02}.md");
+            let slug = format!("notes/{index:02}");
+            let uuid = Uuid::now_v7().to_string();
+            let raw = format!(
+                "---\nmemory_id: {uuid}\nslug: {slug}\ntitle: Note {index}\ntype: concept\n---\nBody {index}.\n"
+            );
+            fs::write(root.path().join(&relative_path), raw.as_bytes()).unwrap();
+            insert_page_with_raw_import(
+                &conn,
+                collection_id,
+                &slug,
+                &uuid,
+                &format!("Body {index}."),
+                raw.as_bytes(),
+                &relative_path,
+            );
+        }
+        conn.execute(
+            "UPDATE file_state
+             SET last_full_hash_at = datetime('now', '-8 days')
+             WHERE collection_id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-audit', 1, 'host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-audit')",
+            [collection_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections SET active_lease_session_id = 'serve-audit' WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let audited = run_full_hash_audit_pass(&conn, "serve-audit").unwrap();
+
+        assert_eq!(audited.len(), 1);
+        assert_eq!(
+            audited[0].2.walked, 3,
+            "7 files over 3 days should hash only ceil(7/3) files per cycle"
+        );
+        assert_eq!(audited[0].2.unchanged, 3);
+        let fresh_paths = conn
+            .prepare(
+                "SELECT relative_path
+                 FROM file_state
+                 WHERE collection_id = ?1
+                   AND last_full_hash_at > datetime('now', '-1 minute')
+                 ORDER BY relative_path ASC",
+            )
+            .unwrap()
+            .query_map([collection_id], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let stale_paths = conn
+            .prepare(
+                "SELECT relative_path
+                 FROM file_state
+                 WHERE collection_id = ?1
+                   AND last_full_hash_at < datetime('now', '-7 days')
+                 ORDER BY relative_path ASC",
+            )
+            .unwrap()
+            .query_map([collection_id], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            fresh_paths,
+            vec![
+                "notes/00.md".to_owned(),
+                "notes/01.md".to_owned(),
+                "notes/02.md".to_owned()
+            ],
+            "scheduled audit must update only the first budgeted subset this cycle"
+        );
+        assert_eq!(stale_paths.len(), 4);
+
+        let audited_again = run_full_hash_audit_pass(&conn, "serve-audit").unwrap();
+
+        assert_eq!(audited_again.len(), 1);
+        assert_eq!(
+            audited_again[0].2.walked, 3,
+            "the next serve-loop cycle must stay bounded to the same daily subset size"
+        );
+        let remaining_stale = conn
+            .prepare(
+                "SELECT relative_path
+                 FROM file_state
+                 WHERE collection_id = ?1
+                   AND last_full_hash_at < datetime('now', '-7 days')
+                 ORDER BY relative_path ASC",
+            )
+            .unwrap()
+            .query_map([collection_id], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            remaining_stale,
+            vec!["notes/06.md".to_owned()],
+            "scheduled audit must advance to the next oldest subset instead of re-running a whole-vault pass"
+        );
+    }
+
+    #[test]
+    fn run_full_hash_audit_pass_batches_due_rows_instead_of_inline_full_vault_reconcile() {
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("core")
+                .join("vault_sync.rs"),
+        )
+        .unwrap();
+        let fn_start = source
+            .find("pub fn run_full_hash_audit_pass(")
+            .expect("run_full_hash_audit_pass fn present");
+        let fn_end = source[fn_start..]
+            .find("pub fn audit_collection(")
+            .map(|offset| fn_start + offset)
+            .expect("audit_collection fn follows run_full_hash_audit_pass");
+        let fn_body = &source[fn_start..fn_end];
+
+        assert!(
+            fn_body.contains("scheduled_full_hash_audit_budget(total_files.max(0) as usize)"),
+            "scheduled audit must compute a bounded per-cycle budget before hashing overdue rows"
+        );
+        assert!(
+            fn_body.contains("LIMIT ?3"),
+            "scheduled audit must select only the budgeted overdue rows per serve-loop cycle"
+        );
+        assert!(
+            fn_body.contains("scheduled_full_hash_audit_authorized("),
+            "scheduled audit must hash only the selected overdue subset"
+        );
+        assert!(
+            !fn_body.contains("full_hash_reconcile_authorized("),
+            "run_full_hash_audit_pass must not collapse back into a whole-vault inline reconcile"
+        );
+    }
+
+    #[test]
+    fn full_hash_audit_helpers_respect_env_override_and_floor_at_zero() {
+        let _guard = env_mutation_lock().lock().unwrap();
+
+        {
+            let _env = EnvVarGuard::clear("QUAID_FULL_HASH_AUDIT_DAYS");
+            assert_eq!(
+                configured_full_hash_audit_days(),
+                DEFAULT_FULL_HASH_AUDIT_DAYS
+            );
+            assert_eq!(
+                full_hash_audit_ttl_cutoff(),
+                format!("-{} days", DEFAULT_FULL_HASH_AUDIT_DAYS)
+            );
+        }
+
+        {
+            let _env = EnvVarGuard::set("QUAID_FULL_HASH_AUDIT_DAYS", "12");
+            assert_eq!(configured_full_hash_audit_days(), 12);
+            assert_eq!(full_hash_audit_ttl_cutoff(), "-12 days");
+        }
+
+        {
+            let _env = EnvVarGuard::set("QUAID_FULL_HASH_AUDIT_DAYS", "-5");
+            assert_eq!(configured_full_hash_audit_days(), 0);
+            assert_eq!(full_hash_audit_ttl_cutoff(), "-0 days");
+            assert_eq!(
+                scheduled_full_hash_audit_budget(14),
+                2,
+                "a zero-day TTL may make every row due, but the serve loop must keep hashing bounded per cycle"
+            );
+        }
+
+        {
+            let _env = EnvVarGuard::set("QUAID_FULL_HASH_AUDIT_DAYS", "bogus");
+            assert_eq!(
+                configured_full_hash_audit_days(),
+                DEFAULT_FULL_HASH_AUDIT_DAYS
+            );
+        }
+    }
+
+    #[test]
+    fn scheduled_full_hash_audit_budget_spreads_work_across_audit_days() {
+        let _guard = env_mutation_lock().lock().unwrap();
+
+        {
+            let _env = EnvVarGuard::set("QUAID_FULL_HASH_AUDIT_DAYS", "3");
+            assert_eq!(scheduled_full_hash_audit_budget(0), 0);
+            assert_eq!(scheduled_full_hash_audit_budget(1), 1);
+            assert_eq!(scheduled_full_hash_audit_budget(7), 3);
+            assert_eq!(scheduled_full_hash_audit_budget(10), 4);
+        }
+
+        {
+            let _env = EnvVarGuard::set("QUAID_FULL_HASH_AUDIT_DAYS", "0");
+            assert_eq!(
+                scheduled_full_hash_audit_budget(7),
+                1,
+                "0 days still falls back to a bounded per-cycle budget"
+            );
+        }
+    }
+
+    #[test]
+    fn finalize_outcome_label_covers_all_batch6_finalize_variants() {
+        let cases = [
+            (FinalizeOutcome::Finalized, "Finalized"),
+            (FinalizeOutcome::Deferred, "Deferred"),
+            (FinalizeOutcome::ManifestIncomplete, "ManifestIncomplete"),
+            (FinalizeOutcome::IntegrityFailed, "IntegrityFailed"),
+            (FinalizeOutcome::OrphanRecovered, "OrphanRecovered"),
+            (FinalizeOutcome::Aborted, "Aborted"),
+            (FinalizeOutcome::NoPendingWork, "NoPendingWork"),
+        ];
+
+        for (outcome, expected) in cases {
+            assert_eq!(finalize_outcome_label(&outcome), expected);
+        }
     }
 
     #[test]

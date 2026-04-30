@@ -149,6 +149,31 @@ fn prune_inactive_rows(conn: &Connection, page_id: i64) -> rusqlite::Result<()> 
     Ok(())
 }
 
+pub fn sweep_expired_inactive_rows(conn: &Connection) -> rusqlite::Result<usize> {
+    if keep_all_enabled() {
+        return Ok(0);
+    }
+
+    let ttl_days = integer_env("QUAID_RAW_IMPORTS_TTL_DAYS", DEFAULT_TTL_DAYS).max(0);
+    let ttl_cutoff = format!("-{ttl_days} days");
+    let mut stmt = conn.prepare(
+        "SELECT id
+         FROM raw_imports
+         WHERE is_active = 0
+           AND julianday(created_at) < julianday('now', ?1)
+         ORDER BY created_at ASC, id ASC",
+    )?;
+    let ids = stmt
+        .query_map([ttl_cutoff], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    for id in &ids {
+        conn.execute("DELETE FROM raw_imports WHERE id = ?1", [id])?;
+    }
+
+    Ok(ids.len())
+}
+
 fn keep_all_enabled() -> bool {
     std::env::var("QUAID_RAW_IMPORTS_KEEP_ALL").as_deref() == Ok("1")
 }
@@ -417,5 +442,87 @@ mod tests {
 
         assert!(error.contains("InvariantViolationError"));
         assert!(error.contains("0 active raw_imports rows"));
+    }
+
+    #[test]
+    fn expired_inactive_rows_are_swept_even_when_page_is_idle() {
+        let conn = open_test_db();
+        let page_id = page_id(&conn);
+        let _env_guard = env_mutation_lock().lock().unwrap();
+        let _keep_all = EnvVarGuard::clear("QUAID_RAW_IMPORTS_KEEP_ALL");
+        let _keep = EnvVarGuard::set("QUAID_RAW_IMPORTS_KEEP", "10");
+        let _ttl = EnvVarGuard::set("QUAID_RAW_IMPORTS_TTL_DAYS", "30");
+
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 1, ?3, ?4, datetime('now'))",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"active",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, '2025-01-10T00:00:00Z')",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"expired",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, datetime('now', '-1 day'))",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"recent",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+
+        let deleted = sweep_expired_inactive_rows(&conn).unwrap();
+        assert_eq!(deleted, 1);
+
+        let remaining_inactive: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM raw_imports
+                 WHERE page_id = ?1 AND is_active = 0",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_inactive, 1);
+        assert_eq!(active_raw_import_count(&conn, page_id).unwrap(), 1);
+    }
+
+    #[test]
+    fn ttl_sweep_respects_keep_all_override() {
+        let conn = open_test_db();
+        let page_id = page_id(&conn);
+        let _env_guard = env_mutation_lock().lock().unwrap();
+        let _keep_all = EnvVarGuard::set("QUAID_RAW_IMPORTS_KEEP_ALL", "1");
+
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, '2025-01-10T00:00:00Z')",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"expired",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+
+        let deleted = sweep_expired_inactive_rows(&conn).unwrap();
+        assert_eq!(deleted, 0);
     }
 }

@@ -19,12 +19,14 @@ fn bin_path() -> &'static Path {
 
 fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(bin_path());
+    common::configure_test_command(&mut command);
     command.arg("--db").arg(db_path).args(args);
     command.output().expect("run quaid")
 }
 
 fn run_quaid_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::process::Output {
     let mut command = Command::new(bin_path());
+    common::configure_test_command(&mut command);
     command
         .arg("--db")
         .arg(db_path)
@@ -223,6 +225,30 @@ fn raw_import_counts(conn: &Connection, page_id: i64) -> (i64, i64) {
         |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .expect("load raw import counts")
+}
+
+#[cfg(unix)]
+fn assert_cli_lease_released(conn: &Connection, collection_id: i64) {
+    let owner_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .expect("load owner count");
+    assert_eq!(owner_count, 0, "short-lived owner lease must be released");
+
+    let cli_session_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_type = 'cli'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("load cli session count");
+    assert_eq!(
+        cli_session_count, 0,
+        "short-lived CLI session must be cleaned up after inline completion"
+    );
 }
 
 #[test]
@@ -425,6 +451,116 @@ fn collection_sync_active_root_reports_active_root_reconciled_success() {
     assert_eq!(row.1, 0);
 }
 
+#[cfg(unix)]
+#[test]
+fn collection_sync_finalize_pending_attaches_pending_root_and_releases_cli_lease() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "collection-sync-finalize-success.db");
+    let conn = open_test_db(&db_path);
+    let source_root = dir.path().join("source");
+    let pending_root = dir.path().join("restored");
+    std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
+    std::fs::create_dir_all(pending_root.join("notes")).expect("create pending root");
+    let collection_id = insert_collection(&conn, "work", &source_root);
+    let raw_bytes =
+        b"---\nmemory_id: 33333333-3333-7333-8333-333333333333\ntitle: Finalized Note\ntype: concept\n---\nfinalize pending should attach this root inline\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/a",
+        "33333333-3333-7333-8333-333333333333",
+        raw_bytes,
+        "notes/a.md",
+    );
+    std::fs::write(pending_root.join("notes").join("a.md"), raw_bytes).expect("write pending note");
+    conn.execute(
+        "UPDATE collections
+         SET state = 'restoring',
+             pending_root_path = ?2,
+             pending_restore_manifest = ?3,
+             restore_command_id = 'restore-1',
+             pending_command_heartbeat_at = datetime('now', '-120 seconds')
+         WHERE id = ?1",
+        params![
+            collection_id,
+            pending_root.display().to_string(),
+            serde_json::json!({
+                "entries": [{
+                    "relative_path": "notes/a.md",
+                    "sha256": format!("{:x}", sha2::Sha256::digest(raw_bytes)),
+                    "size_bytes": raw_bytes.len()
+                }]
+            })
+            .to_string()
+        ],
+    )
+    .expect("seed pending restore");
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &["--json", "collection", "sync", "work", "--finalize-pending"],
+    );
+
+    assert!(
+        output.status.success(),
+        "finalize-pending should attach the pending root: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed["status"].as_str(), Some("ok"));
+    assert_eq!(parsed["command"].as_str(), Some("sync"));
+    assert_eq!(parsed["collection"].as_str(), Some("work"));
+    assert_eq!(parsed["finalize_pending"].as_str(), Some("Attached"));
+
+    let conn = open_test_db(&db_path);
+    let row: (
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = conn
+        .query_row(
+            "SELECT state,
+                    root_path,
+                    needs_full_sync,
+                    pending_root_path,
+                    restore_command_id,
+                    restore_lease_session_id,
+                    pending_command_heartbeat_at,
+                    (SELECT relative_path FROM file_state WHERE page_id = pages.id LIMIT 1)
+             FROM collections
+             JOIN pages ON pages.collection_id = collections.id AND pages.slug = 'notes/a'
+             WHERE collections.id = ?1",
+            [collection_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .expect("load finalized collection");
+    assert_eq!(row.0, "active");
+    assert_eq!(row.1, pending_root.display().to_string());
+    assert_eq!(row.2, 0);
+    assert!(row.3.is_none());
+    assert!(row.4.is_none());
+    assert!(row.5.is_none());
+    assert!(row.6.is_none());
+    assert_eq!(row.7, "notes/a.md");
+    assert_cli_lease_released(&conn, collection_id);
+}
+
 #[test]
 fn collection_info_json_reports_restore_integrity_blockers() {
     let dir = tempfile::TempDir::new().expect("temp dir");
@@ -481,7 +617,7 @@ fn collection_info_json_reports_restore_integrity_blockers() {
 
 #[cfg(unix)]
 #[test]
-fn offline_restore_can_complete_via_explicit_cli_finalize_path() {
+fn offline_restore_completes_inline_and_releases_cli_lease() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = test_db_path(&dir, "offline-restore-cli.db");
     let conn = open_test_db(&db_path);
@@ -520,35 +656,119 @@ fn offline_restore_can_complete_via_explicit_cli_finalize_path() {
     assert_eq!(restore_json["status"].as_str(), Some("ok"));
     assert!(restore_json["command_identity"].as_str().is_some());
 
-    let info_output = run_quaid(&db_path, &["--json", "collection", "info", "work"]);
-    assert!(
-        info_output.status.success(),
-        "collection info should succeed: {info_output:?}"
-    );
-    let info_json = parse_stdout_json(&info_output);
-    assert_eq!(info_json["blocked_state"].as_str(), Some("pending_attach"));
+    let conn = open_test_db(&db_path);
+    let row: (
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = conn
+        .query_row(
+            "SELECT state, root_path, needs_full_sync, pending_root_path, integrity_failed_at,
+                    pending_manifest_incomplete_at, restore_lease_session_id
+             FROM collections WHERE id = ?1",
+            [collection_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .expect("load finalized collection");
+    assert_eq!(row.0, "active");
+    assert_eq!(row.1, target_root.to_str().expect("utf-8 target"));
+    assert_eq!(row.2, 0);
+    assert!(row.3.is_none());
+    assert!(row.4.is_none());
+    assert!(row.5.is_none());
+    assert!(row.6.is_none());
+    assert_cli_lease_released(&conn, collection_id);
     assert_eq!(
-        info_json["suggested_command"].as_str(),
-        Some("quaid collection sync work --finalize-pending")
+        std::fs::read(target_root.join("notes").join("a.md")).expect("read restored file"),
+        raw_bytes
     );
+}
 
-    let finalize_output = run_quaid(
+#[cfg(unix)]
+#[test]
+fn offline_restore_captures_source_drift_and_added_pages_before_inline_attach() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "offline-restore-drift-cli.db");
+    let conn = open_test_db(&db_path);
+    let source_root = dir.path().join("source");
+    let target_root = dir.path().join("restored");
+    std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
+    std::fs::create_dir_all(&target_root).expect("create empty target");
+
+    let collection_id = insert_collection(&conn, "work", &source_root);
+    let stale_bytes =
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored Note\ntype: concept\n---\nstale restore body\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/a",
+        "11111111-1111-7111-8111-111111111111",
+        stale_bytes,
+        "notes/a.md",
+    );
+    drop(conn);
+
+    let refreshed_bytes =
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Restored Note\ntype: concept\n---\nrefreshed restore body captured from the live source root before restore completes\n";
+    std::fs::write(source_root.join("notes").join("a.md"), refreshed_bytes)
+        .expect("write refreshed source note");
+    let added_bytes =
+        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\nslug: notes/b\ntitle: Added During Drift Capture\ntype: concept\n---\nthis note only existed on disk when restore began, so phase 1 must ingest it before materialization\n";
+    std::fs::write(source_root.join("notes").join("b.md"), added_bytes)
+        .expect("write added source note");
+
+    let restore_output = run_quaid(
         &db_path,
-        &["--json", "collection", "sync", "work", "--finalize-pending"],
+        &[
+            "--json",
+            "collection",
+            "restore",
+            "work",
+            target_root.to_str().expect("utf-8 target"),
+        ],
     );
 
     assert!(
-        finalize_output.status.success(),
-        "explicit finalize path should reopen the restored collection: {finalize_output:?}"
+        restore_output.status.success(),
+        "offline restore should capture live drift and complete inline: {restore_output:?}"
     );
-    let finalize_json = parse_stdout_json(&finalize_output);
-    assert_eq!(finalize_json["finalize_pending"].as_str(), Some("Attached"));
+    let restore_json = parse_stdout_json(&restore_output);
+    assert_eq!(restore_json["status"].as_str(), Some("ok"));
+    assert_eq!(restore_json["restored"].as_u64(), Some(2));
+    assert_eq!(restore_json["byte_exact"].as_u64(), Some(2));
 
     let conn = open_test_db(&db_path);
-    let row: (String, String, i64, Option<String>, Option<String>, Option<String>) = conn
+    let row: (
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = conn
         .query_row(
-            "SELECT state, root_path, needs_full_sync, pending_root_path, integrity_failed_at, pending_manifest_incomplete_at
-             FROM collections WHERE id = ?1",
+            "SELECT state,
+                    root_path,
+                    needs_full_sync,
+                    pending_root_path,
+                    restore_command_id,
+                    restore_lease_session_id
+             FROM collections
+             WHERE id = ?1",
             [collection_id],
             |row| {
                 Ok((
@@ -561,17 +781,312 @@ fn offline_restore_can_complete_via_explicit_cli_finalize_path() {
                 ))
             },
         )
-        .expect("load finalized collection");
+        .expect("load restored collection");
     assert_eq!(row.0, "active");
     assert_eq!(row.1, target_root.to_str().expect("utf-8 target"));
     assert_eq!(row.2, 0);
     assert!(row.3.is_none());
     assert!(row.4.is_none());
     assert!(row.5.is_none());
+    assert_cli_lease_released(&conn, collection_id);
+
+    let restored_page_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pages WHERE collection_id = ?1 AND quarantined_at IS NULL",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .expect("count restored pages");
+    assert_eq!(restored_page_count, 2);
     assert_eq!(
-        std::fs::read(target_root.join("notes").join("a.md")).expect("read restored file"),
-        raw_bytes
+        std::fs::read(target_root.join("notes").join("a.md")).expect("read restored note a"),
+        refreshed_bytes
     );
+    assert_eq!(
+        std::fs::read(target_root.join("notes").join("b.md")).expect("read restored note b"),
+        added_bytes
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn offline_remap_completes_inline_and_preserves_page_identity() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "offline-remap-cli.db");
+    let conn = open_test_db(&db_path);
+    let source_root = dir.path().join("source");
+    let target_root = dir.path().join("remapped");
+    std::fs::create_dir_all(&source_root).expect("create source root");
+    let collection_id = insert_collection(&conn, "work", &source_root);
+    let raw_bytes =
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Remapped Note\ntype: concept\n---\nhello from remap\n";
+    let sibling_bytes =
+        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\ntitle: Sibling Note\ntype: concept\n---\nhello from sibling\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/a",
+        "11111111-1111-7111-8111-111111111111",
+        raw_bytes,
+        "notes/old-a.md",
+    );
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/b",
+        "22222222-2222-7222-8222-222222222222",
+        sibling_bytes,
+        "notes/b.md",
+    );
+    let page_a = page_id(&conn, collection_id, "notes/a");
+    let page_b = page_id(&conn, collection_id, "notes/b");
+    insert_programmatic_link(&conn, page_a, page_b);
+    drop(conn);
+
+    std::fs::create_dir_all(target_root.join("nested")).expect("create nested dir");
+    std::fs::create_dir_all(target_root.join("notes")).expect("create notes dir");
+    std::fs::write(target_root.join("nested").join("renamed-a.md"), raw_bytes)
+        .expect("write remapped note");
+    std::fs::write(target_root.join("notes").join("b.md"), sibling_bytes)
+        .expect("write sibling note");
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "sync",
+            "work",
+            "--remap-root",
+            target_root.to_str().expect("utf-8 target"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "offline remap should succeed: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed["resolved_pages"].as_u64(), Some(2));
+
+    let conn = open_test_db(&db_path);
+    let row: (String, String, i64, String) = conn
+        .query_row(
+            "SELECT c.state, c.root_path, c.needs_full_sync, fs.relative_path
+             FROM collections c
+             JOIN pages p ON p.collection_id = c.id AND p.slug = 'notes/a'
+             JOIN file_state fs ON fs.page_id = p.id
+             WHERE c.id = ?1",
+            [collection_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("load remapped collection");
+    assert_eq!(row.0, "active");
+    assert_eq!(row.1, target_root.to_str().expect("utf-8 target"));
+    assert_eq!(row.2, 0);
+    assert_eq!(row.3, "nested/renamed-a.md");
+    assert_eq!(page_id(&conn, collection_id, "notes/a"), page_a);
+    let link_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM links WHERE from_page_id = ?1 AND to_page_id = ?2",
+            params![page_a, page_b],
+            |row| row.get(0),
+        )
+        .expect("load preserved link count");
+    assert_eq!(link_count, 1);
+    assert_cli_lease_released(&conn, collection_id);
+}
+
+#[cfg(unix)]
+#[test]
+fn offline_remap_uses_hash_fallback_and_ignores_new_root_extras() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "offline-remap-hash-fallback-cli.db");
+    let conn = open_test_db(&db_path);
+    let source_root = dir.path().join("source");
+    let target_root = dir.path().join("remapped");
+    std::fs::create_dir_all(&source_root).expect("create source root");
+    let collection_id = insert_collection(&conn, "work", &source_root);
+    let hash_fallback_bytes =
+        b"---\ntitle: Hash Fallback\ntype: concept\n---\nthis body is intentionally long enough to cross the remap hash fallback threshold while still exercising the real CLI remap path end to end\n";
+    let sibling_bytes =
+        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\ntitle: Sibling Note\ntype: concept\n---\nhello from sibling\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/hash-fallback",
+        "11111111-1111-7111-8111-111111111111",
+        hash_fallback_bytes,
+        "notes/hash-fallback.md",
+    );
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/b",
+        "22222222-2222-7222-8222-222222222222",
+        sibling_bytes,
+        "notes/b.md",
+    );
+    let fallback_page = page_id(&conn, collection_id, "notes/hash-fallback");
+    let sibling_page = page_id(&conn, collection_id, "notes/b");
+    insert_programmatic_link(&conn, fallback_page, sibling_page);
+    drop(conn);
+
+    std::fs::create_dir_all(target_root.join("nested")).expect("create nested dir");
+    std::fs::create_dir_all(target_root.join("notes")).expect("create notes dir");
+    std::fs::create_dir_all(target_root.join("private")).expect("create ignored dir");
+    std::fs::write(target_root.join(".quaidignore"), "private/**\n").expect("write ignore file");
+    std::fs::write(
+        target_root.join("nested").join("moved.md"),
+        hash_fallback_bytes,
+    )
+    .expect("write moved fallback note");
+    std::fs::write(target_root.join("notes").join("b.md"), sibling_bytes)
+        .expect("write sibling note");
+    std::fs::write(
+        target_root.join("private").join("secret.md"),
+        b"ignored secret",
+    )
+    .expect("write ignored secret");
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "sync",
+            "work",
+            "--remap-root",
+            target_root.to_str().expect("utf-8 target"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "offline remap should honor hash fallback and .quaidignore extras: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed["resolved_pages"].as_u64(), Some(2));
+    assert_eq!(parsed["missing_pages"].as_u64(), Some(0));
+    assert_eq!(parsed["mismatched_pages"].as_u64(), Some(0));
+    assert_eq!(parsed["extra_files"].as_u64(), Some(0));
+
+    let conn = open_test_db(&db_path);
+    let row: (String, String, i64, String) = conn
+        .query_row(
+            "SELECT c.state, c.root_path, c.needs_full_sync, fs.relative_path
+             FROM collections c
+             JOIN pages p ON p.collection_id = c.id AND p.slug = 'notes/hash-fallback'
+             JOIN file_state fs ON fs.page_id = p.id
+             WHERE c.id = ?1",
+            [collection_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("load remapped collection");
+    assert_eq!(row.0, "active");
+    assert_eq!(row.1, target_root.to_str().expect("utf-8 target"));
+    assert_eq!(row.2, 0);
+    assert_eq!(row.3, "nested/moved.md");
+    assert_eq!(
+        page_id(&conn, collection_id, "notes/hash-fallback"),
+        fallback_page
+    );
+    let link_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM links WHERE from_page_id = ?1 AND to_page_id = ?2",
+            params![fallback_page, sibling_page],
+            |row| row.get(0),
+        )
+        .expect("load preserved link count");
+    assert_eq!(link_count, 1);
+    assert_cli_lease_released(&conn, collection_id);
+}
+
+#[cfg(unix)]
+#[test]
+fn collection_audit_reports_reconcile_stats_and_raw_import_gc_cleanup() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "collection-audit-cli.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(root.join("notes")).expect("create notes dir");
+    let collection_id = insert_collection(&conn, "work", &root);
+    let raw_bytes =
+        b"---\nmemory_id: 44444444-4444-7444-8444-444444444444\ntitle: Audit Note\ntype: concept\n---\naudit should keep this row active while pruning expired inactive history\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/a",
+        "44444444-4444-7444-8444-444444444444",
+        raw_bytes,
+        "notes/a.md",
+    );
+    let page_id = page_id(&conn, collection_id, "notes/a");
+    std::fs::write(root.join("notes").join("a.md"), raw_bytes).expect("write vault note");
+    conn.execute(
+        "UPDATE file_state
+         SET last_full_hash_at = datetime('now', '-8 days')
+         WHERE collection_id = ?1",
+        [collection_id],
+    )
+    .expect("age file_state for audit");
+    conn.execute(
+        "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+         VALUES (?1, ?2, 0, ?3, ?4, '2000-01-01T00:00:00Z')",
+        params![
+            page_id,
+            uuid::Uuid::now_v7().to_string(),
+            b"old audit bytes".as_slice(),
+            "notes/a.md"
+        ],
+    )
+    .expect("seed expired inactive raw import");
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &["--json", "collection", "audit", "work", "--raw-imports-gc"],
+    );
+
+    assert!(
+        output.status.success(),
+        "collection audit should succeed through the CLI: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed["status"].as_str(), Some("ok"));
+    assert_eq!(parsed["command"].as_str(), Some("audit"));
+    assert_eq!(parsed["collection"].as_str(), Some("work"));
+    assert_eq!(parsed["walked"].as_u64(), Some(1));
+    assert_eq!(parsed["unchanged"].as_u64(), Some(1));
+    assert_eq!(parsed["modified"].as_u64(), Some(0));
+    assert_eq!(parsed["new"].as_u64(), Some(0));
+    assert_eq!(parsed["missing"].as_u64(), Some(0));
+    assert_eq!(parsed["uuid_renamed"].as_u64(), Some(0));
+    assert_eq!(parsed["hash_renamed"].as_u64(), Some(0));
+    assert_eq!(parsed["raw_imports_deleted"].as_u64(), Some(1));
+
+    let conn = open_test_db(&db_path);
+    let (active_rows, total_rows) = raw_import_counts(&conn, page_id);
+    assert_eq!(
+        active_rows, 1,
+        "audit must preserve exactly one active raw_import"
+    );
+    assert_eq!(
+        total_rows, 1,
+        "audit GC must prune the expired inactive raw_import"
+    );
+    let row: (String, i64, Option<String>) = conn
+        .query_row(
+            "SELECT state, needs_full_sync, last_sync_at
+             FROM collections
+             WHERE id = ?1",
+            [collection_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load audited collection");
+    assert_eq!(row.0, "active");
+    assert_eq!(row.1, 0);
+    assert!(row.2.is_some(), "audit should stamp last_sync_at");
 }
 
 #[cfg(unix)]

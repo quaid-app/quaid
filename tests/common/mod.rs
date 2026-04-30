@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::OnceLock;
 
 #[cfg(windows)]
@@ -56,4 +57,15 @@ pub fn quaid_bin() -> &'static Path {
                 })
         })
         .as_path()
+}
+
+#[allow(dead_code)]
+pub fn configure_test_command(command: &mut Command) {
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        let profile_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("llvm-cov-target")
+            .join("quaid-subprocess-%p-%m.profraw");
+        command.env("LLVM_PROFILE_FILE", profile_path);
+    }
 }

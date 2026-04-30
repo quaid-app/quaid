@@ -27,6 +27,7 @@ fn bin_path() -> &'static Path {
 
 fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(bin_path());
+    common::configure_test_command(&mut command);
     command.arg("--db").arg(db_path).args(args);
     command.output().expect("run quaid")
 }

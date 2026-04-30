@@ -45,6 +45,8 @@ pub enum CollectionAction {
     Sync(CollectionSyncArgs),
     /// Restore a collection to a target path
     Restore(CollectionRestoreArgs),
+    /// Run an on-demand full-hash audit
+    Audit(CollectionAuditArgs),
     /// Clear restore-integrity blocked state
     #[command(name = "restore-reset")]
     RestoreReset {
@@ -90,6 +92,13 @@ pub struct CollectionRestoreArgs {
     pub target: PathBuf,
     #[arg(long)]
     pub online: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CollectionAuditArgs {
+    pub name: String,
+    #[arg(long = "raw-imports-gc")]
+    pub raw_imports_gc: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -216,6 +225,10 @@ pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> 
         CollectionAction::Restore(args) => {
             ensure_unix_collection_command("quaid collection restore")?;
             restore(db, args, json)
+        }
+        CollectionAction::Audit(args) => {
+            ensure_unix_collection_command("quaid collection audit")?;
+            audit(db, args, json)
         }
         CollectionAction::RestoreReset { name, confirm } => {
             if !confirm {
@@ -1235,6 +1248,31 @@ fn restore(db: &Connection, args: CollectionRestoreArgs, json: bool) -> Result<(
             "restored": page_count,
             "byte_exact": page_count,
             "pending_finalize": false
+        }),
+    )
+}
+
+fn audit(db: &Connection, args: CollectionAuditArgs, json: bool) -> Result<()> {
+    let stats = vault_sync::audit_collection(db, &args.name)?;
+    let raw_imports_deleted = if args.raw_imports_gc {
+        vault_sync::sweep_raw_import_ttl(db)?
+    } else {
+        0
+    };
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "audit",
+            "collection": args.name,
+            "walked": stats.walked,
+            "unchanged": stats.unchanged,
+            "modified": stats.modified,
+            "new": stats.new,
+            "missing": stats.missing,
+            "uuid_renamed": stats.uuid_renamed,
+            "hash_renamed": stats.hash_renamed,
+            "raw_imports_deleted": raw_imports_deleted
         }),
     )
 }
@@ -2391,6 +2429,48 @@ mod tests {
         assert!(production_source.contains("ignore_patterns::clear_patterns"));
     }
 
+    #[test]
+    fn audit_command_surface_keeps_platform_gate_and_gc_reporting_seam() {
+        let source = include_str!("collection.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        let run_audit_start = production_source
+            .find("CollectionAction::Audit(args) =>")
+            .expect("audit command arm");
+        let run_audit_end = production_source[run_audit_start..]
+            .find("CollectionAction::RestoreReset")
+            .map(|offset| run_audit_start + offset)
+            .expect("restore-reset arm");
+        let run_audit = &production_source[run_audit_start..run_audit_end];
+        assert!(
+            run_audit.contains("ensure_unix_collection_command(\"quaid collection audit\")?"),
+            "collection run() must keep the Unix platform gate on the audit surface"
+        );
+        assert!(
+            run_audit.contains("audit(db, args, json)"),
+            "collection run() must dispatch the audit surface through the shared helper"
+        );
+
+        let helper_start = production_source.find("fn audit(").expect("audit helper");
+        let helper_end = production_source[helper_start..]
+            .find("fn resolve_collection_root(")
+            .map(|offset| helper_start + offset)
+            .expect("resolve_collection_root helper");
+        let helper = &production_source[helper_start..helper_end];
+        assert!(
+            helper.contains("if args.raw_imports_gc"),
+            "audit helper must keep the raw-import GC branch explicit"
+        );
+        assert!(
+            helper.contains("vault_sync::sweep_raw_import_ttl(db)?"),
+            "audit helper must keep the TTL sweep on the guarded branch"
+        );
+        assert!(
+            helper.contains("\"raw_imports_deleted\": raw_imports_deleted"),
+            "audit helper must report the deleted-row count in its rendered output"
+        );
+    }
+
     #[cfg(not(unix))]
     #[test]
     fn add_refuses_windows_platform() {
@@ -2453,6 +2533,24 @@ mod tests {
         assert!(error.to_string().contains("UnsupportedPlatformError"));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn audit_refuses_windows_platform() {
+        let conn = open_test_db();
+
+        let error = run(
+            &conn,
+            CollectionAction::Audit(CollectionAuditArgs {
+                name: "work".to_owned(),
+                raw_imports_gc: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UnsupportedPlatformError"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn sync_finalize_pending_uses_external_finalize_path() {
@@ -2497,6 +2595,67 @@ mod tests {
         assert_eq!(row.1, pending_root.display().to_string());
         assert_eq!(row.2, 0);
         assert!(row.3.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_runs_full_hash_reconcile_and_optional_raw_import_gc() {
+        let (_db_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let relative_path = "notes/a.md";
+        let file_path = root.path().join(relative_path);
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        let uuid = Uuid::now_v7().to_string();
+        let raw_bytes =
+            format!("---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nBody.\n");
+        fs::write(&file_path, raw_bytes.as_bytes()).unwrap();
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            &uuid,
+            raw_bytes.as_bytes(),
+            relative_path,
+        );
+        conn.execute(
+            "UPDATE file_state
+             SET last_full_hash_at = datetime('now', '-8 days')
+             WHERE collection_id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, '2000-01-01T00:00:00Z')",
+            rusqlite::params![page_id, Uuid::now_v7().to_string(), b"old", relative_path],
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Audit(CollectionAuditArgs {
+                name: "work".to_owned(),
+                raw_imports_gc: true,
+            }),
+            true,
+        )
+        .unwrap();
+
+        let row: (Option<String>, i64) = conn
+            .query_row(
+                "SELECT last_sync_at,
+                        (SELECT COUNT(*)
+                         FROM raw_imports
+                         WHERE page_id = ?2 AND is_active = 0)
+                 FROM collections
+                 WHERE id = ?1",
+                rusqlite::params![collection_id, page_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(row.0.is_some());
+        assert_eq!(row.1, 0);
     }
 
     #[cfg(unix)]
@@ -2904,6 +3063,36 @@ mod tests {
             Some("quaid collection sync work")
         );
         assert!(status.status_message.contains("needs a real reconcile"));
+    }
+
+    #[test]
+    fn describe_collection_status_points_integrity_failure_to_restore_reset() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET integrity_failed_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "restore_integrity_blocked");
+        assert_eq!(
+            status.integrity_blocked.as_deref(),
+            Some("manifest_tampering")
+        );
+        assert_eq!(
+            status.suggested_command.as_deref(),
+            Some("quaid collection restore-reset work --confirm")
+        );
+        assert!(status
+            .status_message
+            .contains("restore-reset work --confirm"));
     }
 
     #[test]
@@ -3515,6 +3704,45 @@ mod tests {
         assert!(error.to_string().contains("NoPendingWork"));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_finalize_pending_reports_orphan_recovered_as_success() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 restore_command_id = 'restore-1'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: true,
+                online: false,
+            },
+            true,
+        )
+        .unwrap();
+
+        let row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT state, restore_command_id FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "active");
+        assert!(row.1.is_none());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn sync_remap_root_updates_collection_and_reports_summary_in_plain_text_mode() {
         let (_db_dir, conn) = open_test_db_file_any();
@@ -3554,12 +3782,100 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row.0, remapped_root.path().display().to_string());
-        assert_eq!(row.1, "restoring");
-        assert_eq!(row.2, 1);
+        assert_eq!(row.1, "active");
+        assert_eq!(row.2, 0);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn restore_helper_materializes_pages_and_reports_counts_in_plain_text_mode() {
+    fn sync_remap_root_updates_collection_in_json_mode() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let remapped_root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(remapped_root.path().join("nested")).unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Remapped Note\ntype: concept\n---\nhello from remap in json mode and long enough for verifier coverage\n";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            raw_bytes,
+            "notes/old-a.md",
+        );
+        fs::write(
+            remapped_root.path().join("nested").join("renamed-a.md"),
+            raw_bytes,
+        )
+        .unwrap();
+
+        sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: Some(remapped_root.path().to_path_buf()),
+                finalize_pending: false,
+                online: false,
+            },
+            true,
+        )
+        .unwrap();
+
+        let row: (String, String, i64, String) = conn
+            .query_row(
+                "SELECT root_path, state, needs_full_sync,
+                        (SELECT relative_path FROM file_state WHERE collection_id = ?1 LIMIT 1)
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, remapped_root.path().display().to_string());
+        assert_eq!(row.1, "active");
+        assert_eq!(row.2, 0);
+        assert_eq!(row.3, "nested/renamed-a.md");
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_remap_root_fails_closed_when_unix_backend_is_unavailable() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let remapped_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let original_root = source_root.path().display().to_string();
+
+        let error = sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: Some(remapped_root.path().to_path_buf()),
+                finalize_pending: false,
+                online: false,
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Vault sync commands require Unix"));
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT root_path, state, needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, original_root);
+        assert_eq!(row.1, "active");
+        assert_eq!(row.2, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_helper_materializes_pages_and_reopens_collection_in_plain_text_mode() {
         let (_db_dir, conn) = open_test_db_file_any();
         let source_root = tempfile::TempDir::new().unwrap();
         let target_parent = tempfile::TempDir::new().unwrap();
@@ -3591,18 +3907,19 @@ mod tests {
             fs::read(target_root.join("notes").join("a.md")).unwrap(),
             raw_bytes
         );
-        let row: (String, String, i64, Option<String>) = conn
+        let row: (String, String, i64, Option<String>, Option<String>) = conn
             .query_row(
-                "SELECT state, root_path, needs_full_sync, pending_root_path
+                "SELECT state, root_path, needs_full_sync, pending_root_path, restore_lease_session_id
                  FROM collections WHERE id = ?1",
                 [collection_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .unwrap();
-        assert_eq!(row.0, "restoring");
+        assert_eq!(row.0, "active");
         assert_eq!(row.1, target_root.display().to_string());
-        assert_eq!(row.2, 1);
+        assert_eq!(row.2, 0);
         assert!(row.3.is_none());
+        assert!(row.4.is_none());
     }
 
     #[test]

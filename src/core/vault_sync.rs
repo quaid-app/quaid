@@ -9967,14 +9967,17 @@ mod tests {
 
     /// Structural: `IPC_HANDLER_LIMIT` must be a small positive value so the
     /// cap is intentional and not effectively infinite.
+    ///
+    /// These are compile-time assertions (`const _: () = assert!(...)`) rather
+    /// than runtime `assert!` calls to avoid the `clippy::assertions_on_constants`
+    /// lint — the values are constants, so the checks belong at compile time.
     #[cfg(unix)]
     #[test]
     fn ipc_handler_limit_is_small_and_positive() {
-        assert!(IPC_HANDLER_LIMIT > 0, "IPC_HANDLER_LIMIT must be > 0");
-        assert!(
+        const _: () = assert!(IPC_HANDLER_LIMIT > 0, "IPC_HANDLER_LIMIT must be > 0");
+        const _: () = assert!(
             IPC_HANDLER_LIMIT <= 64,
-            "IPC_HANDLER_LIMIT should be small (<=64); current value {} looks unintentionally large",
-            IPC_HANDLER_LIMIT
+            "IPC_HANDLER_LIMIT should be small (<=64); current value looks unintentionally large",
         );
     }
 

@@ -1921,19 +1921,6 @@ pub fn sweep_stale_sessions(conn: &Connection) -> Result<usize, VaultSyncError> 
     Ok(removed)
 }
 
-pub fn session_is_live(conn: &Connection, session_id: &str) -> Result<bool, VaultSyncError> {
-    let live = conn.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM serve_sessions
-             WHERE session_id = ?1
-               AND heartbeat_at >= datetime('now', ?2)
-         )",
-        params![session_id, format!("-{SESSION_LIVENESS_SECS} seconds")],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(live != 0)
-}
-
 pub fn live_collection_owner(
     conn: &Connection,
     collection_id: i64,
@@ -2952,7 +2939,11 @@ pub fn mark_collection_restoring_for_handshake(
     collection_id: i64,
 ) -> Result<(Collection, String, i64), VaultSyncError> {
     let collection = load_collection_by_id(conn, collection_id)?;
-    let expected_session_id = owner_session_id(conn, collection_id)?.ok_or_else(|| {
+    // Must use live_collection_owner (not untyped owner_session_id) so that a live
+    // CLI lease in collection_owners is never mistaken for the serve supervisor that
+    // must write the ack.  live_collection_owner enforces session_type = 'serve' AND
+    // heartbeat liveness in one typed query (design.md §404-408).
+    let owner = live_collection_owner(conn, collection_id)?.ok_or_else(|| {
         VaultSyncError::ServeOwnsCollectionError {
             collection_name: collection.name.clone(),
             owner_session_id: "none".to_owned(),
@@ -2960,12 +2951,7 @@ pub fn mark_collection_restoring_for_handshake(
             owner_host: "unknown".to_owned(),
         }
     })?;
-    if !session_is_live(conn, &expected_session_id)? {
-        return Err(VaultSyncError::ServeDiedDuringHandshake {
-            collection_name: collection.name,
-            expected_session_id,
-        });
-    }
+    let expected_session_id = owner.session_id;
 
     conn.execute(
         "UPDATE collections
@@ -3000,17 +2986,23 @@ pub fn wait_for_exact_ack(
     let started = Instant::now();
     loop {
         let collection = load_collection_by_id(conn, collection_id)?;
-        if owner_session_id(conn, collection_id)?.as_deref() != Some(expected_session_id) {
-            return Err(VaultSyncError::ServeDiedDuringHandshake {
-                collection_name: collection.name,
-                expected_session_id: expected_session_id.to_owned(),
-            });
-        }
-        if !session_is_live(conn, expected_session_id)? {
-            return Err(VaultSyncError::ServeDiedDuringHandshake {
-                collection_name: collection.name,
-                expected_session_id: expected_session_id.to_owned(),
-            });
+        // Re-check owner via typed live_collection_owner so that a CLI lease or a
+        // stale/non-serve session can never satisfy the ownership invariant
+        // mid-handshake (design.md §404-408 do-not-impersonate rule).
+        match live_collection_owner(conn, collection_id)? {
+            None => {
+                return Err(VaultSyncError::ServeDiedDuringHandshake {
+                    collection_name: collection.name,
+                    expected_session_id: expected_session_id.to_owned(),
+                });
+            }
+            Some(ref owner) if owner.session_id != expected_session_id => {
+                return Err(VaultSyncError::ServeDiedDuringHandshake {
+                    collection_name: collection.name,
+                    expected_session_id: expected_session_id.to_owned(),
+                });
+            }
+            Some(_) => {}
         }
         if collection.watcher_released_session_id.as_deref() == Some(expected_session_id)
             && collection.watcher_released_generation == Some(reload_generation)
@@ -7092,6 +7084,70 @@ mod tests {
         assert!(collection.watcher_released_session_id.is_none());
         assert!(collection.watcher_released_generation.is_none());
         assert!(collection.watcher_released_at.is_none());
+    }
+
+    // design.md §404-408: mark_collection_restoring_for_handshake must use
+    // live_collection_owner (session_type='serve') so a live CLI lease in
+    // collection_owners is never treated as the expected serve supervisor.
+    #[test]
+    fn mark_collection_restoring_rejects_cli_session_as_handshake_owner() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        // Insert a CLI-type session directly into serve_sessions.
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, session_type)
+             VALUES ('cli-lease', 1, 'host', 'cli')",
+            [],
+        )
+        .unwrap();
+        // Force the CLI session as the collection owner (bypasses acquire_owner_lease
+        // type gate to exercise the production handshake path directly).
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'cli-lease')",
+            [collection_id],
+        )
+        .unwrap();
+
+        let err = mark_collection_restoring_for_handshake(&conn, collection_id).unwrap_err();
+
+        // live_collection_owner finds no serve-type owner → ServeOwnsCollectionError,
+        // NOT a timeout waiting for an ack only a serve supervisor can emit.
+        assert!(
+            err.to_string().contains("ServeOwnsCollectionError"),
+            "expected ServeOwnsCollectionError but got: {err}"
+        );
+    }
+
+    // Source-seam invariant: the production handshake paths must use
+    // live_collection_owner (typed) rather than owner_session_id + session_is_live
+    // (untyped).  This guards against regressions that re-open the CLI-as-owner hole.
+    #[test]
+    fn handshake_functions_use_typed_live_collection_owner_not_untyped_pair() {
+        let src = include_str!("vault_sync.rs");
+        // Locate the mark_collection_restoring_for_handshake body (up to its closing
+        // brace) and the wait_for_exact_ack body, and assert they call
+        // live_collection_owner rather than the untyped owner_session_id / session_is_live.
+        for fn_name in &[
+            "mark_collection_restoring_for_handshake",
+            "wait_for_exact_ack",
+        ] {
+            let fn_start = src
+                .find(&format!("pub fn {fn_name}"))
+                .unwrap_or_else(|| panic!("could not find fn {fn_name} in source"));
+            // Grab roughly 80 lines of body (sufficient for both functions).
+            let body: String = src[fn_start..].chars().take(3000).collect();
+            assert!(
+                body.contains("live_collection_owner"),
+                "{fn_name} must call live_collection_owner (typed) — \
+                 regression guard for design.md §404-408 CLI-owner hole"
+            );
+            assert!(
+                !body.contains("session_is_live(conn"),
+                "{fn_name} must NOT call untyped session_is_live — \
+                 use live_collection_owner instead"
+            );
+        }
     }
 
     #[test]

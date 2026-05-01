@@ -3798,7 +3798,7 @@ mod tests {
         std::fs::create_dir_all(remapped_root.path().join("nested")).unwrap();
         let collection_id = insert_collection(&conn, "work", source_root.path());
         let raw_bytes =
-            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Remapped Note\ntype: concept\n---\nhello from remap in json mode and long enough for verifier coverage\n";
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Remapped Note\ntype: concept\n---\nhello from remap in json mode and long enough for verifier coverage\n";
         insert_page_with_raw_import(
             &conn,
             collection_id,

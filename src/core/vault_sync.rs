@@ -9398,7 +9398,7 @@ mod tests {
 
     #[test]
     fn begin_restore_preserves_tx_b_residue_and_plain_sync_cannot_consume_it() {
-        let conn = open_test_db();
+        let (_db_dir, _db_path, conn) = open_test_db_file();
         let source_root = tempfile::TempDir::new().unwrap();
         let target_parent = tempfile::TempDir::new().unwrap();
         let target_root = target_parent.path().join("restored");
@@ -9728,7 +9728,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn offline_restore_runs_attach_inline_and_reopens_writes() {
-        let conn = open_test_db();
+        let (_db_dir, _db_path, conn) = open_test_db_file();
         let source_root = tempfile::TempDir::new().unwrap();
         let target_parent = tempfile::TempDir::new().unwrap();
         let target_root = target_parent.path().join("restored");
@@ -9767,9 +9767,9 @@ mod tests {
         fs::create_dir_all(old_root.path().join("notes")).unwrap();
         let collection_id = insert_collection(&conn, "work", old_root.path());
         let raw_bytes_a =
-            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\n---\nhello world from note a";
         let raw_bytes_b =
-            b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\n---\nhello world from note b";
+            b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\nslug: notes/b\n---\nhello world from note b";
         let page_a = insert_page_with_raw_import(
             &conn,
             collection_id,

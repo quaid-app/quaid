@@ -25,3 +25,4 @@ Use this when production behavior is intentionally narrow but the most valuable 
 - `finalize_pending_restore(...)` caller variants in `src/core/vault_sync.rs`
 - watcher lifecycle filters/replacement logic in `src/core/vault_sync.rs`
 - future hard-delete guard call-site proofs across `reconciler.rs` and `quarantine.rs`
+- remap/restore ordering seams in `src/core/vault_sync.rs`, such as exact-ack-before-safety, safety-pipeline-before-`verify_remap_root(...)`, and "hold short-lived owner lease until inline `complete_attach(..., AttachReason::RemapPostReconcile)` finishes"

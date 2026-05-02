@@ -5,6 +5,10 @@
 
 ## Learnings
 
+- 2026-05-02T18:31:04.840+08:00 — **Retroactive OpenSpec pattern:** When a change ships without a prior proposal, create the change with `openspec new change <name>`, write all artifacts to reflect shipped reality (not future plans), and pre-check all tasks in `tasks.md` so `openspec status` reports `isComplete: true`. Add `**Status:** complete — shipped in vX.Y.Z (PR #NNN)` to proposal.md and include a bundled-fixes section in tasks.md for any follow-up commits in the same PR.
+- 2026-05-02T18:31:04.840+08:00 — **Retroactive change name convention:** Derive the kebab-case change name from the feature branch slug used in the implementing PR (e.g., `feat/namespace-isolation-137` → `namespace-isolation`).
+- 2026-05-02T18:31:04.840+08:00 — **namespace-isolation (v0.16.0) key files:** `src/core/namespace.rs`, `src/core/db.rs` (legacy rebuild), `src/core/search.rs`/`fts.rs`/`progressive.rs` (namespace-aware variants), `src/commands/namespace.rs`, `src/mcp/server.rs` (2 new tools + 4 updated), `tests/namespace_isolation.rs`. Schema v6 adds `namespace TEXT NOT NULL DEFAULT ''` to `pages`, new `namespaces` table, updated UNIQUE constraint to `(collection_id, namespace, slug)`.
+
 - 2026-04-30T06:37:20.531+08:00 — When the working tree is parked on a stale release branch, read tasks.md from `origin/main` (via `git show origin/main:...`) rather than from the local checkout — the local view will lag by the entire merged batch and create false "all open" readings.
 - 2026-04-30T06:37:20.531+08:00 — Batch 4 target scope (v0.13.0): `12.1` (complete 13-step rename-before-commit audit), `12.6` (expected_version contract), `12.6a` (CLI write routing single-file), `12.7` (tests). Task `12.6b` was closed in Batch 3 — only verify presence, do not re-implement.
 - 2026-04-30T06:37:20.531+08:00 — The correct Batch 4 worktree setup is: `git worktree add ..\quaid-vault-sync-batch4-v0130 -b spec/vault-sync-engine-batch4-v0130 origin/main` from `D:\repos\quaid`. Starting SHA `5a8bdf0` (v0.12.0). Never branch Batch 4 from a stale release branch.

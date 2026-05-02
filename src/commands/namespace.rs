@@ -178,4 +178,61 @@ mod tests {
         )
         .expect("destroy json");
     }
+
+    #[test]
+    fn create_namespace_with_ttl_stores_ttl_hours() {
+        let conn = open_test_db();
+        run(
+            &conn,
+            NamespaceAction::Create {
+                id: "ns-ttl".to_string(),
+                ttl: Some(48.0),
+            },
+            false,
+        )
+        .expect("create with ttl");
+        let namespaces = namespace::list_namespaces(&conn).expect("list");
+        let ns = namespaces
+            .iter()
+            .find(|n| n.id == "ns-ttl")
+            .expect("ns-ttl");
+        assert_eq!(ns.ttl_hours, Some(48.0));
+    }
+
+    #[test]
+    fn list_namespaces_command_json_empty() {
+        let conn = open_test_db();
+        run(&conn, NamespaceAction::List, true).expect("list json empty");
+    }
+
+    #[test]
+    fn destroy_namespace_removes_its_pages() {
+        use crate::commands::put;
+        let conn = open_test_db();
+        run(
+            &conn,
+            NamespaceAction::Create {
+                id: "ns-pages".to_string(),
+                ttl: None,
+            },
+            false,
+        )
+        .expect("create");
+        put::put_from_string_with_namespace(
+            &conn,
+            "notes/test-page",
+            "---\ntitle: Test\ntype: note\n---\nContent\n",
+            Some("ns-pages"),
+            None,
+        )
+        .expect("write page");
+        run(
+            &conn,
+            NamespaceAction::Destroy {
+                id: "ns-pages".to_string(),
+            },
+            false,
+        )
+        .expect("destroy with pages");
+    }
 }

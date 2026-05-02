@@ -84,7 +84,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 quaid init ~/.quaid/memory.db
 ```
 
-This creates a new `memory.db` file with the full v7 schema — pages, embeddings, links, assertions, knowledge gaps, collections, `file_state`, `raw_imports`, and `embedding_jobs`.
+This creates a new `memory.db` file with the full v8 schema — pages, embeddings, links, assertions, knowledge gaps, collections, `file_state`, `raw_imports`, and `embedding_jobs`.
 
 ### 2. Attach a markdown directory or ingest a single file
 

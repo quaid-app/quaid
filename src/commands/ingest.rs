@@ -60,9 +60,15 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             .cloned()
             .unwrap_or_else(|| "concept".to_string());
         let existing_uuid: Option<String> = db
-            .query_row("SELECT uuid FROM pages WHERE slug = ?1", [&slug], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT uuid
+                 FROM pages
+                 WHERE collection_id = 1
+                   AND namespace = ''
+                   AND slug = ?1",
+                [&slug],
+                |row| row.get(0),
+            )
             .optional()?;
         let page_uuid = page_uuid::resolve_page_uuid(&frontmatter, existing_uuid.as_deref())?;
         let frontmatter_json = serde_json::to_string(&frontmatter)?;

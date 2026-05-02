@@ -469,6 +469,7 @@ CREATE TABLE IF NOT EXISTS raw_imports (
     page_id    INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
     import_id  TEXT    NOT NULL,            -- identifies the import batch
     is_active  INTEGER NOT NULL DEFAULT 1,  -- 1 = current snapshot for this page, 0 = historical
+    content_hash TEXT  NOT NULL DEFAULT '', -- SHA-256 of raw_bytes for indexed duplicate detection
     raw_bytes  BLOB   NOT NULL,            -- original file content, byte-for-byte
     file_path  TEXT   NOT NULL,            -- relative path within the import source
     created_at TEXT   NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -479,6 +480,7 @@ CREATE TABLE IF NOT EXISTS raw_imports (
 
 CREATE INDEX IF NOT EXISTS idx_raw_imports_page ON raw_imports(page_id);
 CREATE INDEX IF NOT EXISTS idx_raw_imports_active ON raw_imports(page_id, is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_raw_imports_content_hash ON raw_imports(content_hash) WHERE content_hash != '';
 
 -- Import manifest: tracks each import batch for rollback/audit
 CREATE TABLE IF NOT EXISTS import_manifest (
@@ -491,11 +493,13 @@ CREATE TABLE IF NOT EXISTS import_manifest (
 -- ============================================================
 -- raw_imports: byte-exact source storage for restore + duplicate checks
 -- ============================================================
--- Single-file ingest treats an exact `raw_imports.raw_bytes` match as already
--- ingested unless `--force` is used. Content-changing writes rotate the active
--- `raw_imports` row in the same transaction, preserving exactly one active
--- source snapshot per page for restore/export while bounded retention keeps
--- older inactive rows available for forensics.
+-- Single-file ingest first probes `raw_imports.content_hash` (SHA-256) via the
+-- partial index above, then confirms equality with `raw_imports.raw_bytes`
+-- before treating a file as already ingested unless `--force` is used.
+-- Content-changing writes rotate the active `raw_imports` row in the same
+-- transaction, preserving exactly one active source snapshot per page for
+-- restore/export while bounded retention keeps older inactive rows available
+-- for forensics.
 
 -- ============================================================
 -- config: memory-level settings
@@ -506,7 +510,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',              '4'),
+    ('version',              '8'),
     -- embedding_model and embedding_dimensions are derived from embedding_models
     -- at startup and kept in sync automatically. Do not write them directly.
     ('embedding_model',      'bge-small-en-v1.5'),   -- read-only alias, derived from embedding_models WHERE active=1

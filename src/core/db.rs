@@ -536,29 +536,34 @@ fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
         return Ok(());
     }
 
-    let rows_to_backfill: Vec<(i64, Vec<u8>)> = conn
-        .prepare(
-            "SELECT id, raw_bytes
-             FROM raw_imports
-             WHERE content_hash = ''",
-        )?
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<Result<_, _>>()?;
+    const BACKFILL_BATCH_SIZE: i64 = 128;
+    loop {
+        let rows_to_backfill: Vec<(i64, Vec<u8>)> = conn
+            .prepare(
+                "SELECT id, raw_bytes
+                 FROM raw_imports
+                 WHERE content_hash = ''
+                 ORDER BY id
+                 LIMIT ?1",
+            )?
+            .query_map([BACKFILL_BATCH_SIZE], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
 
-    if rows_to_backfill.is_empty() {
-        return Ok(());
-    }
+        if rows_to_backfill.is_empty() {
+            break;
+        }
 
-    let tx = conn.unchecked_transaction()?;
-    for (id, raw_bytes) in rows_to_backfill {
-        tx.execute(
-            "UPDATE raw_imports
-             SET content_hash = ?1
-             WHERE id = ?2",
-            params![crate::core::raw_imports::content_hash_hex(&raw_bytes), id],
-        )?;
+        let tx = conn.unchecked_transaction()?;
+        for (id, raw_bytes) in rows_to_backfill {
+            tx.execute(
+                "UPDATE raw_imports
+                 SET content_hash = ?1
+                 WHERE id = ?2",
+                params![crate::core::raw_imports::content_hash_hex(&raw_bytes), id],
+            )?;
+        }
+        tx.commit()?;
     }
-    tx.commit()?;
 
     Ok(())
 }

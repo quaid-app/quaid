@@ -1068,7 +1068,27 @@ pub fn search_vec(
     collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_vec_internal(query, k, wing_filter, collection_filter, conn, false)
+    search_vec_internal(query, k, wing_filter, collection_filter, None, conn, false)
+}
+
+/// Namespace-aware variant of [`search_vec`].
+pub fn search_vec_with_namespace(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_internal(
+        query,
+        k,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        conn,
+        false,
+    )
 }
 
 pub fn search_vec_canonical(
@@ -1078,7 +1098,27 @@ pub fn search_vec_canonical(
     collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_vec_internal(query, k, wing_filter, collection_filter, conn, true)
+    search_vec_internal(query, k, wing_filter, collection_filter, None, conn, true)
+}
+
+/// Namespace-aware canonical-slug variant of [`search_vec`].
+pub fn search_vec_canonical_with_namespace(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_internal(
+        query,
+        k,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        conn,
+        true,
+    )
 }
 
 fn search_vec_internal(
@@ -1086,6 +1126,7 @@ fn search_vec_internal(
     k: usize,
     wing_filter: Option<&str>,
     collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Vec<SearchResult>, SearchError> {
@@ -1147,6 +1188,19 @@ fn search_vec_internal(
         sql.push_str(" AND p.collection_id = ?");
         sql.push_str(&(params.len() + 1).to_string());
         params.push(Box::new(collection_id));
+    }
+
+    if let Some(namespace) = namespace_filter {
+        if namespace.is_empty() {
+            sql.push_str(" AND p.namespace = ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            params.push(Box::new(String::new()));
+        } else {
+            sql.push_str(" AND (p.namespace = ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            sql.push_str(" OR p.namespace = '')");
+            params.push(Box::new(namespace.to_owned()));
+        }
     }
 
     let limit_index = params.len() + 1;

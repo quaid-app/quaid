@@ -73,6 +73,8 @@ pub struct CollectionAddArgs {
     pub writable: bool,
     #[arg(long = "write-quaid-id", conflicts_with = "read_only")]
     pub write_quaid_id: bool,
+    #[arg(long)]
+    pub namespace: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -258,6 +260,8 @@ fn ensure_unix_collection_command(command: &'static str) -> Result<()> {
 }
 
 fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
+    crate::core::namespace::validate_optional_namespace(args.namespace.as_deref())
+        .map_err(|err| anyhow!(err.to_string()))?;
     collections::validate_collection_name(&args.name).map_err(|err| anyhow!(err.to_string()))?;
     if collections::get_by_name(db, &args.name)?.is_some() {
         bail!("collection already exists: {}", args.name);
@@ -321,6 +325,18 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
                 .context(format!("failed to attach collection '{}'", args.name)));
         }
     };
+    if let Some(namespace) = args
+        .namespace
+        .as_deref()
+        .filter(|namespace| !namespace.is_empty())
+    {
+        crate::core::namespace::create_namespace(db, namespace, None)
+            .map_err(|err| anyhow!(err.to_string()))?;
+        db.execute(
+            "UPDATE pages SET namespace = ?1 WHERE collection_id = ?2",
+            params![namespace, collection_id],
+        )?;
+    }
 
     let collection = collections::get_by_name(db, &args.name)?
         .ok_or_else(|| anyhow!("collection not found after attach: {}", args.name))?;
@@ -353,6 +369,7 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
             "queue_depth": metrics.queue_depth,
             "last_sync_at": collection.last_sync_at,
             "attach_command_id": attach_command_id,
+            "namespace": args.namespace,
             "walked": stats.walked,
             "modified": stats.modified,
             "new": stats.new,
@@ -1616,6 +1633,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1636,6 +1654,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1665,6 +1684,7 @@ mod tests {
                 read_only: true,
                 writable: false,
                 write_quaid_id: true,
+                namespace: None,
             }),
             true,
         )
@@ -1696,6 +1716,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1732,6 +1753,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1818,6 +1840,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             }),
             true,
         );
@@ -1864,6 +1887,7 @@ mod tests {
                 read_only: true,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1992,6 +2016,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             },
             true,
         )
@@ -2019,6 +2044,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: true,
+                namespace: None,
             },
             true,
         )
@@ -2117,6 +2143,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: true,
+                namespace: None,
             },
             true,
         )
@@ -2485,6 +2512,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -3500,6 +3528,7 @@ mod tests {
                 read_only: false,
                 writable: false,
                 write_quaid_id: false,
+                namespace: None,
             },
             true,
         )

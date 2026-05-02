@@ -230,12 +230,37 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.execute_batch(include_str!("../schema.sql"))?;
     ensure_pages_update_trigger_handles_quarantine(&conn)?;
+    ensure_namespace_schema(&conn)?;
     ensure_collection_owner_columns(&conn)?;
     ensure_serve_session_columns(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+fn ensure_namespace_schema(conn: &Connection) -> Result<(), DbError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(pages)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    if !existing_columns.contains("namespace") {
+        conn.execute_batch("ALTER TABLE pages ADD COLUMN namespace TEXT NOT NULL DEFAULT '';")?;
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS namespaces (
+             id         TEXT PRIMARY KEY,
+             ttl_hours  REAL DEFAULT NULL,
+             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+         ) STRICT;
+         CREATE INDEX IF NOT EXISTS idx_pages_namespace ON pages(namespace);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_collection_namespace_slug
+             ON pages(collection_id, namespace, slug);",
+    )?;
+
+    Ok(())
 }
 
 fn ensure_pages_update_trigger_handles_quarantine(conn: &Connection) -> Result<(), DbError> {
@@ -798,6 +823,7 @@ mod tests {
             "ingest_log",
             "knowledge_gaps",
             "links",
+            "namespaces",
             "page_embeddings",
             "page_fts",
             "pages",

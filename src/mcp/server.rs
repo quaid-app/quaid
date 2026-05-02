@@ -14,8 +14,9 @@ use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
 use crate::core::markdown;
-use crate::core::progressive::progressive_retrieve;
-use crate::core::search::hybrid_search_canonical;
+use crate::core::namespace;
+use crate::core::progressive::progressive_retrieve_with_namespace;
+use crate::core::search::hybrid_search_canonical_with_namespace;
 use crate::core::types::SearchError;
 use crate::core::vault_sync;
 
@@ -387,6 +388,18 @@ fn map_graph_error(e: GraphError) -> rmcp::Error {
     }
 }
 
+fn map_namespace_error(e: namespace::NamespaceError) -> rmcp::Error {
+    match e {
+        namespace::NamespaceError::NotFound { id } => rmcp::Error::new(
+            ErrorCode(-32001),
+            format!("namespace not found: {id}"),
+            None,
+        ),
+        namespace::NamespaceError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
+        other => invalid_params(other.to_string()),
+    }
+}
+
 fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp::Error> {
     match temporal.unwrap_or("active") {
         "active" | "current" => Ok(TemporalFilter::Active),
@@ -426,6 +439,8 @@ pub struct MemoryPutInput {
     pub content: String,
     /// Expected current version for optimistic concurrency control
     pub expected_version: Option<i64>,
+    /// Optional namespace to write into; omitted writes global memory
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -434,6 +449,8 @@ pub struct MemoryQueryInput {
     pub query: String,
     /// Optional collection filter
     pub collection: Option<String>,
+    /// Optional namespace filter
+    pub namespace: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Maximum results to return
@@ -448,6 +465,8 @@ pub struct MemorySearchInput {
     pub query: String,
     /// Optional collection filter
     pub collection: Option<String>,
+    /// Optional namespace filter
+    pub namespace: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Maximum results to return
@@ -458,6 +477,8 @@ pub struct MemorySearchInput {
 pub struct MemoryListInput {
     /// Optional collection filter
     pub collection: Option<String>,
+    /// Optional namespace filter
+    pub namespace: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Optional type filter
@@ -538,6 +559,20 @@ pub struct MemoryStatsInput {}
 pub struct MemoryCollectionsInput {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryNamespaceCreateInput {
+    /// Namespace ID to create
+    pub id: String,
+    /// Optional TTL in hours
+    pub ttl_hours: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryNamespaceDestroyInput {
+    /// Namespace ID to destroy
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryRawInput {
     /// Page slug to attach raw data to
     pub slug: String,
@@ -571,6 +606,9 @@ impl QuaidServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         validate_content(&input.content)?;
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
+        let namespace_filter = input.namespace.as_deref().unwrap_or("");
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let resolved = resolve_slug_for_mcp(
             &db,
@@ -588,8 +626,10 @@ impl QuaidServer {
             .map_err(map_vault_sync_error)?;
         let existing_version: Option<i64> = db
             .query_row(
-                "SELECT version FROM pages WHERE collection_id = ?1 AND slug = ?2",
-                rusqlite::params![resolved.collection_id, &resolved.slug],
+                "SELECT version
+                 FROM pages
+                 WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
+                rusqlite::params![resolved.collection_id, namespace_filter, &resolved.slug],
                 |row| row.get(0),
             )
             .optional()
@@ -613,10 +653,11 @@ impl QuaidServer {
             }
             _ => {}
         }
-        crate::commands::put::put_from_string_quiet(
+        crate::commands::put::put_from_string_quiet_with_namespace(
             &db,
             &canonical_slug(&resolved.collection_name, &resolved.slug),
             &input.content,
+            Some(namespace_filter),
             input.expected_version,
         )
         .map_err(|err| {
@@ -633,8 +674,10 @@ impl QuaidServer {
         })?;
         let version: i64 = db
             .query_row(
-                "SELECT version FROM pages WHERE collection_id = ?1 AND slug = ?2",
-                rusqlite::params![resolved.collection_id, &resolved.slug],
+                "SELECT version
+                 FROM pages
+                 WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
+                rusqlite::params![resolved.collection_id, namespace_filter, &resolved.slug],
                 |row| row.get(0),
             )
             .map_err(map_db_error)?;
@@ -655,14 +698,17 @@ impl QuaidServer {
         #[tool(aggr)] input: MemoryQueryInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
-        let results = hybrid_search_canonical(
+        let results = hybrid_search_canonical_with_namespace(
             &input.query,
             input.wing.as_deref(),
             collection_filter.as_ref().map(|collection| collection.id),
+            input.namespace.as_deref(),
             &db,
             limit,
         )
@@ -691,11 +737,12 @@ impl QuaidServer {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(4000);
-                progressive_retrieve(
+                progressive_retrieve_with_namespace(
                     results.clone(),
                     budget,
                     3,
                     collection_filter.as_ref().map(|c| c.id),
+                    input.namespace.as_deref(),
                     &db,
                 )
                 .unwrap_or(results)
@@ -714,15 +761,18 @@ impl QuaidServer {
         #[tool(aggr)] input: MemorySearchInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         let safe_query = sanitize_fts_query(&input.query);
-        let results = crate::core::fts::search_fts_canonical(
+        let results = crate::core::fts::search_fts_canonical_with_namespace(
             &safe_query,
             input.wing.as_deref(),
             collection_filter.as_ref().map(|collection| collection.id),
+            input.namespace.as_deref(),
             &db,
             limit,
         )
@@ -739,6 +789,8 @@ impl QuaidServer {
         #[tool(aggr)] input: MemoryListInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
@@ -762,6 +814,15 @@ impl QuaidServer {
         if let Some(collection) = collection_filter {
             sql.push_str(" AND p.collection_id = ?");
             params.push(Box::new(collection.id));
+        }
+        if let Some(namespace) = input.namespace.as_deref() {
+            if namespace.is_empty() {
+                sql.push_str(" AND p.namespace = ?");
+                params.push(Box::new(String::new()));
+            } else {
+                sql.push_str(" AND (p.namespace = ? OR p.namespace = '')");
+                params.push(Box::new(namespace.to_owned()));
+            }
         }
         sql.push_str(" ORDER BY p.updated_at DESC LIMIT ?");
         params.push(Box::new(limit));
@@ -1335,6 +1396,39 @@ impl QuaidServer {
         )]))
     }
 
+    #[tool(description = "Create namespace metadata")]
+    pub fn memory_namespace_create(
+        &self,
+        #[tool(aggr)] input: MemoryNamespaceCreateInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let namespace = namespace::create_namespace(&db, &input.id, input.ttl_hours)
+            .map_err(map_namespace_error)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&namespace)
+                .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?,
+        )]))
+    }
+
+    #[tool(description = "Destroy a namespace and all pages assigned to it")]
+    pub fn memory_namespace_destroy(
+        &self,
+        #[tool(aggr)] input: MemoryNamespaceDestroyInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let deleted_pages =
+            namespace::destroy_namespace(&db, &input.id).map_err(map_namespace_error)?;
+        let result = serde_json::json!({
+            "status": "ok",
+            "namespace": input.id,
+            "deleted_pages": deleted_pages,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result)
+                .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?,
+        )]))
+    }
+
     #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
     pub fn memory_raw(
         &self,
@@ -1532,6 +1626,16 @@ mod tests {
                 as fn(&QuaidServer, MemoryListInput) -> Result<CallToolResult, rmcp::Error>,
             QuaidServer::memory_collections
                 as fn(&QuaidServer, MemoryCollectionsInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_namespace_create
+                as fn(
+                    &QuaidServer,
+                    MemoryNamespaceCreateInput,
+                ) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_namespace_destroy
+                as fn(
+                    &QuaidServer,
+                    MemoryNamespaceDestroyInput,
+                ) -> Result<CallToolResult, rmcp::Error>,
         );
 
         assert!(info.capabilities.tools.is_some());
@@ -1632,6 +1736,7 @@ mod tests {
                 slug: "notes/test".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nInitial content\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
 
@@ -1640,6 +1745,7 @@ mod tests {
                 slug: "notes/test".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nUpdated content\n".to_string(),
                 expected_version: Some(0),
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1657,6 +1763,7 @@ mod tests {
                 slug: "notes/occ".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nInitial\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
 
@@ -1665,6 +1772,7 @@ mod tests {
                 slug: "notes/occ".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nSneaky overwrite\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1682,6 +1790,7 @@ mod tests {
                 slug: "notes/occ-happy".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nInitial body\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
         assert!(extract_text(&created).contains("Created"));
@@ -1691,6 +1800,7 @@ mod tests {
                 slug: "notes/occ-happy".to_string(),
                 content: "---\ntitle: Test\ntype: note\n---\nUpdated body\n".to_string(),
                 expected_version: Some(1),
+                namespace: None,
             })
             .unwrap();
 
@@ -1723,6 +1833,7 @@ mod tests {
                 slug: "notes/existing".to_string(),
                 content: original.to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
 
@@ -1732,6 +1843,7 @@ mod tests {
                 content: "---\ntitle: Existing\ntype: note\n---\nUnexpected overwrite\n"
                     .to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1757,6 +1869,7 @@ mod tests {
                 slug: "notes/stale".to_string(),
                 content: original.to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
 
@@ -1765,6 +1878,7 @@ mod tests {
                 slug: "notes/stale".to_string(),
                 content: "---\ntitle: Stale\ntype: note\n---\nStale overwrite\n".to_string(),
                 expected_version: Some(0),
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1795,6 +1909,7 @@ mod tests {
                 slug: "notes/blocked".to_string(),
                 content: "---\ntitle: Blocked\ntype: note\n---\nBlocked\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1827,6 +1942,7 @@ mod tests {
                 slug: "test/large".to_string(),
                 content: large_content,
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1843,6 +1959,7 @@ mod tests {
                 slug: "".to_string(),
                 content: "content".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1860,6 +1977,7 @@ mod tests {
                 slug: "notes/ghost".to_string(),
                 content: "---\ntitle: Ghost\ntype: note\n---\nContent\n".to_string(),
                 expected_version: Some(3),
+                namespace: None,
             })
             .unwrap_err();
 
@@ -1877,6 +1995,7 @@ mod tests {
                 slug: "notes/uuid".to_string(),
                 content: "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
         server
@@ -1884,6 +2003,7 @@ mod tests {
                 slug: "notes/uuid".to_string(),
                 content: "---\ntitle: UUID\ntype: note\n---\nUpdated\n".to_string(),
                 expected_version: Some(1),
+                namespace: None,
             })
             .unwrap();
 
@@ -1909,6 +2029,7 @@ mod tests {
                 slug: "notes/stampede".to_string(),
                 content: "---\ntitle: Stampede\ntype: note\n---\nOriginal alpha body\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
         server
@@ -1916,6 +2037,7 @@ mod tests {
                 slug: "notes/stampede".to_string(),
                 content: "---\ntitle: Stampede\ntype: note\n---\nUpdated omega body\n".to_string(),
                 expected_version: Some(1),
+                namespace: None,
             })
             .unwrap();
 
@@ -1967,6 +2089,7 @@ mod tests {
             .memory_query(MemoryQueryInput {
                 query: "who runs the moon colony".to_string(),
                 collection: None,
+                namespace: None,
                 wing: None,
                 limit: None,
                 depth: None,
@@ -2011,6 +2134,7 @@ mod tests {
             .memory_query(MemoryQueryInput {
                 query: "alpha".to_string(),
                 collection: None,
+                namespace: None,
                 wing: None,
                 limit: Some(1),
                 depth: Some("auto".to_string()),
@@ -2058,6 +2182,7 @@ mod tests {
             .memory_query(MemoryQueryInput {
                 query: "cross collection fence anchor".to_string(),
                 collection: Some("default".to_string()),
+                namespace: None,
                 wing: None,
                 limit: Some(5),
                 depth: Some("auto".to_string()),
@@ -2087,6 +2212,7 @@ mod tests {
             .memory_search(MemorySearchInput {
                 query: "fundraising".to_string(),
                 collection: None,
+                namespace: None,
                 wing: None,
                 limit: None,
             })
@@ -2106,6 +2232,7 @@ mod tests {
         let result = server.memory_search(MemorySearchInput {
             query: "what is CLARITY?".to_string(),
             collection: None,
+            namespace: None,
             wing: None,
             limit: None,
         });
@@ -2142,6 +2269,7 @@ mod tests {
         let result = server
             .memory_list(MemoryListInput {
                 collection: None,
+                namespace: None,
                 wing: Some("people".to_string()),
                 page_type: Some("person".to_string()),
                 limit: None,
@@ -2174,6 +2302,7 @@ mod tests {
             .memory_search(MemorySearchInput {
                 query: "shared".to_string(),
                 collection: Some("work".to_string()),
+                namespace: None,
                 wing: None,
                 limit: None,
             })
@@ -2205,6 +2334,7 @@ mod tests {
             .memory_query(MemoryQueryInput {
                 query: "robotics leadership".to_string(),
                 collection: Some("work".to_string()),
+                namespace: None,
                 wing: None,
                 limit: None,
                 depth: None,
@@ -2236,6 +2366,7 @@ mod tests {
         let result = server
             .memory_list(MemoryListInput {
                 collection: Some("work".to_string()),
+                namespace: None,
                 wing: Some("people".to_string()),
                 page_type: Some("person".to_string()),
                 limit: None,
@@ -2256,6 +2387,7 @@ mod tests {
             .memory_query(MemoryQueryInput {
                 query: "anything".to_string(),
                 collection: Some("missing".to_string()),
+                namespace: None,
                 wing: None,
                 limit: None,
                 depth: None,
@@ -2270,6 +2402,7 @@ mod tests {
             .memory_search(MemorySearchInput {
                 query: "anything".to_string(),
                 collection: Some("missing".to_string()),
+                namespace: None,
                 wing: None,
                 limit: None,
             })
@@ -2282,6 +2415,7 @@ mod tests {
         let list_error = server
             .memory_list(MemoryListInput {
                 collection: Some("missing".to_string()),
+                namespace: None,
                 wing: None,
                 page_type: None,
                 limit: None,
@@ -2308,6 +2442,7 @@ mod tests {
             .memory_search(MemorySearchInput {
                 query: "sole".to_string(),
                 collection: None,
+                namespace: None,
                 wing: None,
                 limit: None,
             })
@@ -2339,6 +2474,7 @@ mod tests {
             .memory_query(MemoryQueryInput {
                 query: "shared semantic marker".to_string(),
                 collection: None,
+                namespace: None,
                 wing: None,
                 limit: None,
                 depth: None,
@@ -2370,6 +2506,7 @@ mod tests {
         let result = server
             .memory_list(MemoryListInput {
                 collection: None,
+                namespace: None,
                 wing: Some("notes".to_string()),
                 page_type: Some("note".to_string()),
                 limit: None,
@@ -2389,6 +2526,7 @@ mod tests {
                 slug: slug.to_string(),
                 content: content.to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
     }
@@ -2404,6 +2542,7 @@ mod tests {
                 slug: format!("{collection_name}::{slug}"),
                 content: content.to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
     }
@@ -4369,6 +4508,7 @@ mod tests {
                 slug: "notes/blocked".to_string(),
                 content: "---\ntitle: Blocked\ntype: note\n---\nBlocked\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -4581,6 +4721,7 @@ mod tests {
                 slug: "notes/interlock-exists".to_string(),
                 content: "---\ntitle: Interlock\ntype: note\n---\novewrite attempt\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -4609,6 +4750,7 @@ mod tests {
                 slug: "notes/ghost-version".to_string(),
                 content: "---\ntitle: Ghost\ntype: note\n---\ncontent\n".to_string(),
                 expected_version: Some(1),
+                namespace: None,
             })
             .unwrap_err();
 
@@ -4634,6 +4776,7 @@ mod tests {
                 slug: "notes/read-only-page".to_string(),
                 content: "---\ntitle: Read Only\ntype: note\n---\nhello\n".to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap_err();
 
@@ -4656,6 +4799,7 @@ mod tests {
                 slug: "notes/happy".to_string(),
                 content: original.to_string(),
                 expected_version: None,
+                namespace: None,
             })
             .unwrap();
         server
@@ -4663,6 +4807,7 @@ mod tests {
                 slug: "notes/happy".to_string(),
                 content: updated.to_string(),
                 expected_version: Some(1),
+                namespace: None,
             })
             .unwrap();
 
@@ -4755,6 +4900,7 @@ mod tests {
         // The body MUST use a non-printing variant.
         assert!(
             fn_body.contains("put_from_string_quiet(")
+                || fn_body.contains("put_from_string_quiet_with_namespace(")
                 || fn_body.contains("put_from_string_status("),
             "memory_put must call put_from_string_quiet or put_from_string_status"
         );

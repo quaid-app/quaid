@@ -12,6 +12,7 @@ pub mod inference;
 pub mod links;
 pub mod markdown;
 pub mod migrate;
+pub mod namespace;
 pub mod novelty;
 pub mod page_uuid;
 pub mod palace;

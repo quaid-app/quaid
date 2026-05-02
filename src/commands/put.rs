@@ -28,6 +28,7 @@ use crate::core::{file_state, markdown, page_uuid, palace, raw_imports, vault_sy
 struct PreparedPut {
     collection_id: i64,
     collection_name: String,
+    namespace: String,
     slug: String,
     page_uuid: String,
     page_type: String,
@@ -91,11 +92,16 @@ impl PutTestHooks {
 /// - On Unix vault write-through paths, existing pages MUST provide
 ///   `--expected-version`; omission fails closed before sentinel creation.
 /// - Non-Unix paths fail closed with `UnsupportedPlatformError`.
-pub fn run(db: &Connection, slug: &str, expected_version: Option<i64>) -> anyhow::Result<()> {
+pub fn run(
+    db: &Connection,
+    slug: &str,
+    namespace: Option<&str>,
+    expected_version: Option<i64>,
+) -> anyhow::Result<()> {
     vault_sync::ensure_unix_platform("quaid put").map_err(anyhow::Error::new)?;
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
-    put_from_cli_string(db, slug, &input, expected_version)?;
+    put_from_cli_string(db, slug, &input, namespace, expected_version)?;
     Ok(())
 }
 
@@ -104,8 +110,10 @@ fn put_from_cli_string(
     db: &Connection,
     slug_input: &str,
     content: &str,
+    namespace: Option<&str>,
     expected_version: Option<i64>,
 ) -> anyhow::Result<()> {
+    crate::core::namespace::validate_optional_namespace(namespace)?;
     let op_kind = if expected_version.is_some() {
         crate::core::collections::OpKind::WriteUpdate
     } else {
@@ -128,7 +136,7 @@ fn put_from_cli_string(
     }
     let _lease = vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
         .map_err(anyhow::Error::new)?;
-    put_from_string(db, &canonical_slug, content, expected_version)
+    put_from_string_with_namespace(db, &canonical_slug, content, namespace, expected_version)
 }
 
 #[cfg(not(unix))]
@@ -136,9 +144,10 @@ fn put_from_cli_string(
     db: &Connection,
     slug_input: &str,
     content: &str,
+    namespace: Option<&str>,
     expected_version: Option<i64>,
 ) -> anyhow::Result<()> {
-    put_from_string(db, slug_input, content, expected_version)
+    put_from_string_with_namespace(db, slug_input, content, namespace, expected_version)
 }
 
 /// Apply page content supplied by the caller.
@@ -153,6 +162,25 @@ pub fn put_from_string(
     Ok(())
 }
 
+/// Apply page content supplied by the caller into a namespace.
+pub fn put_from_string_with_namespace(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    namespace: Option<&str>,
+    expected_version: Option<i64>,
+) -> anyhow::Result<()> {
+    let status = put_from_string_status_with_namespace(
+        db,
+        slug_input,
+        content,
+        namespace,
+        expected_version,
+    )?;
+    println!("{status}");
+    Ok(())
+}
+
 pub(crate) fn put_from_string_quiet(
     db: &Connection,
     slug_input: &str,
@@ -162,21 +190,45 @@ pub(crate) fn put_from_string_quiet(
     put_from_string_status(db, slug_input, content, expected_version).map(|_| ())
 }
 
+pub(crate) fn put_from_string_quiet_with_namespace(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    namespace: Option<&str>,
+    expected_version: Option<i64>,
+) -> anyhow::Result<()> {
+    put_from_string_status_with_namespace(db, slug_input, content, namespace, expected_version)
+        .map(|_| ())
+}
+
 pub(crate) fn put_from_string_status(
     db: &Connection,
     slug_input: &str,
     content: &str,
     expected_version: Option<i64>,
 ) -> anyhow::Result<String> {
-    put_from_string_with_output(db, slug_input, content, expected_version)
+    put_from_string_with_output(db, slug_input, content, None, expected_version)
+}
+
+pub(crate) fn put_from_string_status_with_namespace(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    namespace: Option<&str>,
+    expected_version: Option<i64>,
+) -> anyhow::Result<String> {
+    put_from_string_with_output(db, slug_input, content, namespace, expected_version)
 }
 
 fn put_from_string_with_output(
     db: &Connection,
     slug_input: &str,
     content: &str,
+    namespace: Option<&str>,
     expected_version: Option<i64>,
 ) -> anyhow::Result<String> {
+    crate::core::namespace::validate_optional_namespace(namespace)?;
+    let namespace = namespace.unwrap_or("").to_owned();
     let (frontmatter, body) = markdown::parse_frontmatter(content);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
@@ -210,10 +262,15 @@ fn put_from_string_with_output(
         || -> anyhow::Result<(PreparedPut, PutOutcome)> {
             maybe_block_inside_write_lock(db);
             let existing_row: Option<(i64, Option<String>)> = match db
-                .prepare("SELECT version, uuid FROM pages WHERE collection_id = ?1 AND slug = ?2")?
-                .query_row(rusqlite::params![resolved.collection_id, slug], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                }) {
+                .prepare(
+                    "SELECT version, uuid
+                     FROM pages
+                     WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
+                )?
+                .query_row(
+                    rusqlite::params![resolved.collection_id, namespace, slug],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ) {
                 Ok(v) => Some(v),
                 Err(rusqlite::Error::QueryReturnedNoRows) => None,
                 Err(e) => return Err(e.into()),
@@ -225,6 +282,7 @@ fn put_from_string_with_output(
             let prepared = PreparedPut {
                 collection_id: resolved.collection_id,
                 collection_name: resolved.collection_name.clone(),
+                namespace: namespace.clone(),
                 slug: slug.to_owned(),
                 page_uuid,
                 page_type,
@@ -472,9 +530,9 @@ fn persist_page_record(
             tx.execute(
                 "INSERT INTO pages \
                      (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, \
-                      frontmatter, wing, room, version, \
+                      frontmatter, wing, room, version, namespace, \
                         created_at, updated_at, truth_updated_at, timeline_updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12, ?12, ?12)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13, ?13, ?13, ?13)",
                 rusqlite::params![
                     prepared.collection_id,
                     prepared.slug,
@@ -487,6 +545,7 @@ fn persist_page_record(
                     prepared.frontmatter_json,
                     prepared.wing,
                     prepared.room,
+                    prepared.namespace,
                     prepared.now,
                 ],
             )?;
@@ -501,7 +560,7 @@ fn persist_page_record(
                           frontmatter = ?7, wing = ?8, room = ?9, \
                           version = version + 1, \
                           updated_at = ?10, truth_updated_at = ?10, timeline_updated_at = ?10 \
-                     WHERE collection_id = ?11 AND slug = ?12 AND version = ?13",
+                     WHERE collection_id = ?11 AND namespace = ?12 AND slug = ?13 AND version = ?14",
                     rusqlite::params![
                         prepared.page_uuid,
                         prepared.page_type,
@@ -514,6 +573,7 @@ fn persist_page_record(
                         prepared.room,
                         prepared.now,
                         prepared.collection_id,
+                        prepared.namespace,
                         prepared.slug,
                         expected,
                     ],
@@ -526,7 +586,7 @@ fn persist_page_record(
                           frontmatter = ?7, wing = ?8, room = ?9, \
                           version = version + 1, \
                           updated_at = ?10, truth_updated_at = ?10, timeline_updated_at = ?10 \
-                     WHERE collection_id = ?11 AND slug = ?12",
+                     WHERE collection_id = ?11 AND namespace = ?12 AND slug = ?13",
                     rusqlite::params![
                         prepared.page_uuid,
                         prepared.page_type,
@@ -539,6 +599,7 @@ fn persist_page_record(
                         prepared.room,
                         prepared.now,
                         prepared.collection_id,
+                        prepared.namespace,
                         prepared.slug,
                     ],
                 )?
@@ -555,8 +616,8 @@ fn persist_page_record(
     };
 
     let page_id: i64 = tx.query_row(
-        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![prepared.collection_id, prepared.slug],
+        "SELECT id FROM pages WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
+        rusqlite::params![prepared.collection_id, prepared.namespace, prepared.slug],
         |row| row.get(0),
     )?;
 
@@ -2197,6 +2258,7 @@ mod tests {
             "notes/cli-owned",
             "---\ntitle: CLI owned\ntype: note\n---\nOK\n",
             None,
+            None,
         )
         .unwrap();
 
@@ -2217,6 +2279,7 @@ mod tests {
             &conn,
             "notes/live-owner",
             "---\ntitle: Live owner\ntype: note\n---\nProxied\n",
+            None,
             None,
         )
         .unwrap();
@@ -2275,6 +2338,7 @@ mod tests {
             &conn,
             "notes/live-owner",
             "---\ntitle: Live owner\ntype: note\n---\nBlocked\n",
+            None,
             None,
         )
         .unwrap_err();
@@ -2381,6 +2445,7 @@ mod tests {
                 &worker_conn,
                 "notes/offline-lease",
                 "---\ntitle: Lease\ntype: note\n---\nHeld\n",
+                None,
                 None,
             )
         });

@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 use crate::core::page_uuid;
 
@@ -12,6 +13,7 @@ pub fn rotate_active_raw_import(
     raw_bytes: &[u8],
 ) -> rusqlite::Result<()> {
     assert_existing_active_row_invariant(conn, page_id)?;
+    let content_hash = content_hash_hex(raw_bytes);
 
     conn.execute(
         "UPDATE raw_imports
@@ -21,9 +23,15 @@ pub fn rotate_active_raw_import(
     )?;
 
     conn.execute(
-        "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
-         VALUES (?1, ?2, 1, ?3, ?4)",
-        rusqlite::params![page_id, page_uuid::generate_uuid_v7(), raw_bytes, file_path],
+        "INSERT INTO raw_imports (page_id, import_id, is_active, content_hash, raw_bytes, file_path)
+         VALUES (?1, ?2, 1, ?3, ?4, ?5)",
+        rusqlite::params![
+            page_id,
+            page_uuid::generate_uuid_v7(),
+            content_hash,
+            raw_bytes,
+            file_path
+        ],
     )?;
 
     if let Ok(raw_str) = std::str::from_utf8(raw_bytes) {
@@ -47,6 +55,10 @@ pub fn rotate_active_raw_import(
 
     prune_inactive_rows(conn, page_id)?;
     assert_exactly_one_active_row(conn, page_id)
+}
+
+pub fn content_hash_hex(raw_bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(raw_bytes))
 }
 
 pub fn enqueue_embedding_job(conn: &Connection, page_id: i64) -> rusqlite::Result<()> {
@@ -260,6 +272,14 @@ mod tests {
         rotate_active_raw_import(&conn, page_id, "notes/test.md", b"first").unwrap();
 
         assert_eq!(active_raw_import_count(&conn, page_id).unwrap(), 1);
+        let content_hash: String = conn
+            .query_row(
+                "SELECT content_hash FROM raw_imports WHERE page_id = ?1 AND is_active = 1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content_hash, content_hash_hex(b"first"));
     }
 
     #[test]

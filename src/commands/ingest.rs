@@ -121,12 +121,34 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
 }
 
 fn is_already_ingested(db: &Connection, raw_bytes: &[u8]) -> Result<bool> {
-    let count: i64 = db.query_row(
-        "SELECT COUNT(*) FROM raw_imports WHERE raw_bytes = ?1",
-        rusqlite::params![raw_bytes],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
+    let content_hash = raw_imports::content_hash_hex(raw_bytes);
+    let exact_match: Option<i64> = db
+        .query_row(
+            "SELECT 1
+             FROM raw_imports
+             WHERE content_hash = ?1
+               AND raw_bytes = ?2
+             LIMIT 1",
+            rusqlite::params![content_hash, raw_bytes],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exact_match.is_some() {
+        return Ok(true);
+    }
+
+    let legacy_match: Option<i64> = db
+        .query_row(
+            "SELECT 1
+             FROM raw_imports
+             WHERE content_hash = ''
+               AND raw_bytes = ?1
+             LIMIT 1",
+            rusqlite::params![raw_bytes],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(legacy_match.is_some())
 }
 
 fn refresh_source_mapping_for_duplicate(
@@ -135,6 +157,7 @@ fn refresh_source_mapping_for_duplicate(
     path: &str,
     raw_bytes: &[u8],
 ) -> Result<()> {
+    let content_hash = raw_imports::content_hash_hex(raw_bytes);
     db.execute(
         "UPDATE raw_imports
          SET file_path = ?1
@@ -145,11 +168,12 @@ fn refresh_source_mapping_for_duplicate(
              WHERE p.collection_id = 1
                AND p.slug = ?2
                AND ri.is_active = 1
-               AND ri.raw_bytes = ?3
+               AND ri.raw_bytes = ?4
+               AND (ri.content_hash = ?3 OR ri.content_hash = '')
              ORDER BY ri.created_at DESC, ri.id DESC
              LIMIT 1
          )",
-        rusqlite::params![path, slug, raw_bytes],
+        rusqlite::params![path, slug, content_hash, raw_bytes],
     )?;
     Ok(())
 }

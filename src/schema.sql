@@ -315,6 +315,7 @@ CREATE TABLE IF NOT EXISTS raw_imports (
     page_id    INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
     import_id  TEXT    NOT NULL,
     is_active  INTEGER NOT NULL DEFAULT 1,
+    content_hash TEXT  NOT NULL DEFAULT '',
     raw_bytes  BLOB    NOT NULL,
     file_path  TEXT    NOT NULL,
     created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),

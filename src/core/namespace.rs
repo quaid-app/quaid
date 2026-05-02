@@ -149,4 +149,56 @@ mod tests {
     fn validate_optional_namespace_allows_global_empty_namespace() {
         assert!(validate_optional_namespace(Some("")).is_ok());
     }
+
+    #[test]
+    fn validate_namespace_id_rejects_empty() {
+        assert!(matches!(
+            validate_namespace_id(""),
+            Err(NamespaceError::Empty)
+        ));
+    }
+
+    #[test]
+    fn validate_namespace_id_rejects_too_long() {
+        let long_id = "a".repeat(MAX_NAMESPACE_ID_LEN + 1);
+        assert!(matches!(
+            validate_namespace_id(&long_id),
+            Err(NamespaceError::TooLong)
+        ));
+    }
+
+    #[test]
+    fn validate_namespace_id_rejects_invalid_characters() {
+        assert!(matches!(
+            validate_namespace_id("invalid namespace!"),
+            Err(NamespaceError::InvalidCharacters)
+        ));
+    }
+
+    #[test]
+    fn validate_namespace_id_accepts_valid_chars() {
+        assert!(validate_namespace_id("session-abc123").is_ok());
+        assert!(validate_namespace_id("user.v2").is_ok());
+        assert!(validate_namespace_id("agent_1").is_ok());
+    }
+
+    #[test]
+    fn destroy_namespace_returns_not_found_when_missing() {
+        let conn = db::open(":memory:").expect("open db");
+        let err = destroy_namespace(&conn, "nonexistent").unwrap_err();
+        assert!(matches!(err, NamespaceError::NotFound { .. }));
+    }
+
+    #[test]
+    fn validate_optional_namespace_propagates_invalid_id_error() {
+        assert!(validate_optional_namespace(Some("bad namespace!")).is_err());
+    }
+
+    #[test]
+    fn create_namespace_without_ttl() {
+        let conn = db::open(":memory:").expect("open db");
+        let ns = create_namespace(&conn, "no-ttl", None).expect("create");
+        assert_eq!(ns.id, "no-ttl");
+        assert!(ns.ttl_hours.is_none());
+    }
 }

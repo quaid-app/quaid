@@ -700,6 +700,7 @@ impl QuaidServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         namespace::validate_optional_namespace(input.namespace.as_deref())
             .map_err(map_namespace_error)?;
+        let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
@@ -708,7 +709,7 @@ impl QuaidServer {
             &input.query,
             input.wing.as_deref(),
             collection_filter.as_ref().map(|collection| collection.id),
-            input.namespace.as_deref(),
+            namespace_filter,
             &db,
             limit,
         )
@@ -742,7 +743,7 @@ impl QuaidServer {
                     budget,
                     3,
                     collection_filter.as_ref().map(|c| c.id),
-                    input.namespace.as_deref(),
+                    namespace_filter,
                     &db,
                 )
                 .unwrap_or(results)
@@ -763,6 +764,7 @@ impl QuaidServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         namespace::validate_optional_namespace(input.namespace.as_deref())
             .map_err(map_namespace_error)?;
+        let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
@@ -772,7 +774,7 @@ impl QuaidServer {
             &safe_query,
             input.wing.as_deref(),
             collection_filter.as_ref().map(|collection| collection.id),
-            input.namespace.as_deref(),
+            namespace_filter,
             &db,
             limit,
         )
@@ -791,6 +793,7 @@ impl QuaidServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         namespace::validate_optional_namespace(input.namespace.as_deref())
             .map_err(map_namespace_error)?;
+        let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
@@ -815,7 +818,7 @@ impl QuaidServer {
             sql.push_str(" AND p.collection_id = ?");
             params.push(Box::new(collection.id));
         }
-        if let Some(namespace) = input.namespace.as_deref() {
+        if let Some(namespace) = namespace_filter {
             if namespace.is_empty() {
                 sql.push_str(" AND p.namespace = ?");
                 params.push(Box::new(String::new()));

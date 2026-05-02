@@ -10,6 +10,7 @@ use crate::core::{markdown, page_uuid, vault_sync};
 pub fn run(db: &Connection, slug: &str, namespace: Option<&str>, json: bool) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
     let resolved = vault_sync::resolve_page_for_read(db, slug)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let page = canonicalize_page_for_output(

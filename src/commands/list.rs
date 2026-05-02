@@ -22,6 +22,7 @@ pub fn run(
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
     let entries = list_pages(db, wing.as_deref(), page_type.as_deref(), namespace, limit)?;
 
     if json {

@@ -17,6 +17,7 @@ pub fn run(
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
     let effective_query = if raw {
         query.to_owned()
     } else {

@@ -110,8 +110,6 @@ CREATE TABLE IF NOT EXISTS pages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pages_namespace ON pages(namespace);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_collection_namespace_slug
-    ON pages(collection_id, namespace, slug);
 -- Partial index: SQLite allows multiple NULLs in unique indexes, but being
 -- explicit here avoids confusion when uuid is still unset.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_uuid ON pages(uuid) WHERE uuid IS NOT NULL;

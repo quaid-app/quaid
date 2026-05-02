@@ -31,6 +31,7 @@ pub async fn run(
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
     let results = hybrid_search_canonical_with_namespace(
         query,
         wing.as_deref(),

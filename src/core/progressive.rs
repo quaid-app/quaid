@@ -143,6 +143,14 @@ fn outbound_neighbours(
            AND (l.valid_until IS NULL OR l.valid_until >= date('now')) \
            AND (?3 IS NULL OR p2.collection_id = ?3) \
            AND (?4 IS NULL \
+                OR (?4 = '' AND p1.namespace = '') \
+                OR (?4 != '' AND (p1.namespace = ?4 \
+                    OR (p1.namespace = '' AND NOT EXISTS ( \
+                        SELECT 1 FROM pages p1_ns \
+                        WHERE p1_ns.collection_id = p1.collection_id \
+                          AND p1_ns.slug = p1.slug \
+                          AND p1_ns.namespace = ?4))))) \
+           AND (?4 IS NULL \
                 OR (?4 = '' AND p2.namespace = '') \
                 OR (?4 != '' AND (p2.namespace = ?4 OR p2.namespace = '')))"
     );

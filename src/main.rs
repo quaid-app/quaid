@@ -314,7 +314,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Init { .. } | Commands::Version => unreachable!(),
         Commands::Get { slug, namespace } => {
-            commands::get::run(&db, &slug, namespace.as_deref(), cli.json)
+            commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)
         }
         Commands::Put {
             slug,
@@ -326,7 +326,14 @@ async fn main() -> Result<()> {
             r#type,
             namespace,
             limit,
-        } => commands::list::run(&db, wing, r#type, namespace.as_deref(), limit, cli.json),
+        } => commands::list::run(
+            &db,
+            wing,
+            r#type,
+            namespace.as_deref().or(Some("")),
+            limit,
+            cli.json,
+        ),
         Commands::Search {
             query,
             wing,
@@ -337,7 +344,7 @@ async fn main() -> Result<()> {
             &db,
             &query,
             wing,
-            namespace.as_deref(),
+            namespace.as_deref().or(Some("")),
             limit,
             cli.json,
             raw,
@@ -357,7 +364,7 @@ async fn main() -> Result<()> {
                 limit,
                 token_budget,
                 wing,
-                namespace.as_deref(),
+                namespace.as_deref().or(Some("")),
                 cli.json,
             )
             .await

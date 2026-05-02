@@ -1,10 +1,10 @@
 use crate::core::gaps;
-use crate::core::progressive::progressive_retrieve;
+use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::types::SearchResult;
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::core::search::hybrid_search_canonical;
+use crate::core::search::hybrid_search_canonical_with_namespace;
 
 /// Read `default_token_budget` from the config table, falling back to 4000.
 fn read_token_budget(db: &Connection) -> usize {
@@ -18,6 +18,7 @@ fn read_token_budget(db: &Connection) -> usize {
     .unwrap_or(4000)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     db: &Connection,
     query: &str,
@@ -25,9 +26,20 @@ pub async fn run(
     limit: u32,
     token_budget: u32,
     wing: Option<String>,
+    namespace: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let results = hybrid_search_canonical(query, wing.as_deref(), None, db, limit as usize)?;
+    crate::core::namespace::validate_optional_namespace(namespace)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
+    let results = hybrid_search_canonical_with_namespace(
+        query,
+        wing.as_deref(),
+        None,
+        namespace,
+        db,
+        limit as usize,
+    )?;
 
     // Auto-log knowledge gap on weak results
     if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
@@ -44,7 +56,8 @@ pub async fn run(
         } else {
             read_token_budget(db)
         };
-        progressive_retrieve(results.clone(), budget, 3, None, db).unwrap_or(results)
+        progressive_retrieve_with_namespace(results.clone(), budget, 3, None, namespace, db)
+            .unwrap_or(results)
     } else {
         results
     };
@@ -178,6 +191,7 @@ mod tests {
             5,
             1000,
             None,
+            None,
             true,
         )
         .await;
@@ -195,6 +209,7 @@ mod tests {
             5,
             1000,
             None,
+            None,
             false,
         )
         .await;
@@ -206,7 +221,7 @@ mod tests {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
         // depth="auto" triggers read_token_budget + progressive_retrieve path
-        let result = run(&conn, "anything", "auto", 5, 0, None, false).await;
+        let result = run(&conn, "anything", "auto", 5, 0, None, None, false).await;
         assert!(result.is_ok());
     }
 
@@ -214,7 +229,7 @@ mod tests {
     async fn run_with_explicit_token_budget_uses_it() {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
-        let result = run(&conn, "query", "auto", 5, 2000, None, true).await;
+        let result = run(&conn, "query", "auto", 5, 2000, None, None, true).await;
         assert!(result.is_ok());
     }
 
@@ -232,7 +247,7 @@ mod tests {
         )
         .unwrap();
         // Multi-word query → exact_slug_query returns None → FTS5 path → finds the page
-        let result = run(&conn, "xqzfoo xqzbar", "none", 5, 10_000, None, false).await;
+        let result = run(&conn, "xqzfoo xqzbar", "none", 5, 10_000, None, None, false).await;
         assert!(result.is_ok());
     }
 
@@ -247,7 +262,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let result = run(&conn, "xqzjson xqzbaz", "none", 5, 10_000, None, true).await;
+        let result = run(&conn, "xqzjson xqzbaz", "none", 5, 10_000, None, None, true).await;
         assert!(result.is_ok());
     }
 }

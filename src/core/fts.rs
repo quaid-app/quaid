@@ -91,9 +91,31 @@ pub fn search_fts(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_internal(query, wing_filter, collection_filter, conn, limit, false)
+    search_fts_with_namespace(query, wing_filter, collection_filter, None, conn, limit)
 }
 
+/// Namespace-aware variant of [`search_fts`].
+#[allow(dead_code)]
+pub fn search_fts_with_namespace(
+    query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_internal(
+        query,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        conn,
+        limit,
+        false,
+    )
+}
+
+#[allow(dead_code)]
 pub fn search_fts_canonical(
     query: &str,
     wing_filter: Option<&str>,
@@ -101,7 +123,27 @@ pub fn search_fts_canonical(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_internal(query, wing_filter, collection_filter, conn, limit, true)
+    search_fts_canonical_with_namespace(query, wing_filter, collection_filter, None, conn, limit)
+}
+
+/// Namespace-aware canonical-slug variant of [`search_fts`].
+pub fn search_fts_canonical_with_namespace(
+    query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_internal(
+        query,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        conn,
+        limit,
+        true,
+    )
 }
 
 /// Expands a sanitized multi-token query into an explicit FTS5 OR chain.
@@ -124,6 +166,7 @@ pub fn expand_fts_query_or(sanitized: &str) -> String {
 /// chain so documents matching any individual term are surfaced.
 ///
 /// Callers must pass a **sanitized** query from [`sanitize_fts_query`].
+#[allow(dead_code)]
 pub fn search_fts_tiered(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -131,10 +174,30 @@ pub fn search_fts_tiered(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_tiered_with_namespace(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        None,
+        conn,
+        limit,
+    )
+}
+
+/// Namespace-aware variant of [`search_fts_tiered`].
+pub fn search_fts_tiered_with_namespace(
+    sanitized_query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_tiered_internal(
         sanitized_query,
         wing_filter,
         collection_filter,
+        namespace_filter,
         conn,
         limit,
         false,
@@ -143,6 +206,7 @@ pub fn search_fts_tiered(
 
 /// Canonical-slug variant of [`search_fts_tiered`].
 /// Returns slugs in `<collection>::<slug>` format.
+#[allow(dead_code)]
 pub fn search_fts_canonical_tiered(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -150,10 +214,30 @@ pub fn search_fts_canonical_tiered(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_canonical_tiered_with_namespace(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        None,
+        conn,
+        limit,
+    )
+}
+
+/// Namespace-aware canonical-slug variant of [`search_fts_tiered`].
+pub fn search_fts_canonical_tiered_with_namespace(
+    sanitized_query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_tiered_internal(
         sanitized_query,
         wing_filter,
         collection_filter,
+        namespace_filter,
         conn,
         limit,
         true,
@@ -164,6 +248,7 @@ fn search_fts_tiered_internal(
     sanitized_query: &str,
     wing_filter: Option<&str>,
     collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -173,6 +258,7 @@ fn search_fts_tiered_internal(
         sanitized_query,
         wing_filter,
         collection_filter,
+        namespace_filter,
         conn,
         limit,
         canonical_slug,
@@ -190,6 +276,7 @@ fn search_fts_tiered_internal(
         &or_query,
         wing_filter,
         collection_filter,
+        namespace_filter,
         conn,
         limit,
         canonical_slug,
@@ -200,6 +287,7 @@ fn search_fts_internal(
     query: &str,
     wing_filter: Option<&str>,
     collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -230,7 +318,8 @@ fn search_fts_internal(
     params.push(Box::new(trimmed.to_owned()));
 
     if let Some(wing) = wing_filter {
-        sql.push_str(" AND p.wing = ?2");
+        sql.push_str(" AND p.wing = ?");
+        sql.push_str(&(params.len() + 1).to_string());
         params.push(Box::new(wing.to_owned()));
     }
 
@@ -238,6 +327,19 @@ fn search_fts_internal(
         sql.push_str(" AND p.collection_id = ?");
         sql.push_str(&(params.len() + 1).to_string());
         params.push(Box::new(collection_id));
+    }
+
+    if let Some(namespace) = namespace_filter {
+        if namespace.is_empty() {
+            sql.push_str(" AND p.namespace = ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            params.push(Box::new(String::new()));
+        } else {
+            sql.push_str(" AND (p.namespace = ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            sql.push_str(" OR p.namespace = '')");
+            params.push(Box::new(namespace.to_owned()));
+        }
     }
 
     // bm25() returns negative values; ascending order = most relevant first.

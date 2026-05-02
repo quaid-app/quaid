@@ -7,11 +7,14 @@ use crate::core::types::Page;
 use crate::core::{markdown, page_uuid, vault_sync};
 
 /// Read a page by slug and print it to stdout.
-pub fn run(db: &Connection, slug: &str, json: bool) -> Result<()> {
+pub fn run(db: &Connection, slug: &str, namespace: Option<&str>, json: bool) -> Result<()> {
+    crate::core::namespace::validate_optional_namespace(namespace)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
     let resolved = vault_sync::resolve_page_for_read(db, slug)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let page = canonicalize_page_for_output(
-        get_page_by_key(db, resolved.collection_id, &resolved.slug)?,
+        get_page_by_key_with_namespace(db, resolved.collection_id, &resolved.slug, namespace)?,
         &resolved,
     );
 
@@ -26,20 +29,67 @@ pub fn run(db: &Connection, slug: &str, json: bool) -> Result<()> {
 
 /// Load a single page from the database by slug.
 pub fn get_page(db: &Connection, slug: &str) -> Result<Page> {
-    let resolved = vault_sync::resolve_page_for_read(db, slug)
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    get_page_by_key(db, resolved.collection_id, &resolved.slug)
+    get_page_with_namespace(db, slug, None)
 }
 
+/// Load a single page from the database by slug with an optional namespace filter.
+pub fn get_page_with_namespace(
+    db: &Connection,
+    slug: &str,
+    namespace: Option<&str>,
+) -> Result<Page> {
+    let resolved = vault_sync::resolve_page_for_read(db, slug)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    get_page_by_key_with_namespace(db, resolved.collection_id, &resolved.slug, namespace)
+}
+
+/// Load a single page from the database by collection and slug.
 pub fn get_page_by_key(db: &Connection, collection_id: i64, slug: &str) -> Result<Page> {
-    let mut stmt = db.prepare(
+    get_page_by_key_with_namespace(db, collection_id, slug, None)
+}
+
+/// Load a single page from the database by collection, slug, and namespace filter.
+pub fn get_page_by_key_with_namespace(
+    db: &Connection,
+    collection_id: i64,
+    slug: &str,
+    namespace: Option<&str>,
+) -> Result<Page> {
+    crate::core::namespace::validate_optional_namespace(namespace)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let mut sql = String::from(
         "SELECT slug, uuid, type, title, summary, compiled_truth, timeline, \
                 frontmatter, wing, room, version, created_at, updated_at, \
                 truth_updated_at, timeline_updated_at \
            FROM pages WHERE collection_id = ?1 AND slug = ?2",
-    )?;
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(collection_id), Box::new(slug.to_owned())];
 
-    let page = stmt.query_row(rusqlite::params![collection_id, slug], |row| {
+    if let Some(namespace) = namespace {
+        if namespace.is_empty() {
+            sql.push_str(" AND namespace = ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            params.push(Box::new(String::new()));
+        } else {
+            sql.push_str(" AND (namespace = ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            sql.push_str(" OR namespace = '')");
+            params.push(Box::new(namespace.to_owned()));
+        }
+    }
+    if let Some(namespace) = namespace.filter(|namespace| !namespace.is_empty()) {
+        sql.push_str(" ORDER BY CASE WHEN namespace = ?");
+        sql.push_str(&(params.len() + 1).to_string());
+        sql.push_str(" THEN 0 ELSE 1 END");
+        params.push(Box::new(namespace.to_owned()));
+    }
+    sql.push_str(" LIMIT 1");
+
+    let mut stmt = db.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+    let page = stmt.query_row(param_refs.as_slice(), |row| {
         let frontmatter_json: String = row.get(7)?;
         let frontmatter: HashMap<String, String> =
             serde_json::from_str(&frontmatter_json).unwrap_or_default();

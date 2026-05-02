@@ -105,6 +105,20 @@ pub fn dispatch_tool(server: &QuaidServer, tool: &str, params: Value) -> Result<
                 .memory_collections(input)
                 .map_err(|e| e.message.to_string())
         }
+        "memory_namespace_create" => {
+            let input: MemoryNamespaceCreateInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_namespace_create(input)
+                .map_err(|e| e.message.to_string())
+        }
+        "memory_namespace_destroy" => {
+            let input: MemoryNamespaceDestroyInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_namespace_destroy(input)
+                .map_err(|e| e.message.to_string())
+        }
         "memory_raw" => {
             let input: MemoryRawInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
@@ -185,6 +199,27 @@ mod tests {
         let result =
             dispatch_tool(&server, "memory_list", json!({})).expect("dispatch memory_list");
         assert!(result.as_array().is_some());
+    }
+
+    #[test]
+    fn dispatch_tool_routes_memory_namespace_create_and_destroy() {
+        let server = make_server();
+
+        let created = dispatch_tool(
+            &server,
+            "memory_namespace_create",
+            json!({"id": "call-test", "ttl_hours": 1.0}),
+        )
+        .expect("dispatch namespace create");
+        let destroyed = dispatch_tool(
+            &server,
+            "memory_namespace_destroy",
+            json!({"id": "call-test"}),
+        )
+        .expect("dispatch namespace destroy");
+
+        assert_eq!(created["id"], json!("call-test"));
+        assert_eq!(destroyed["namespace"], json!("call-test"));
     }
 
     #[test]

@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS pages (
     -- DEFAULT 1 routes legacy inserts to the default collection (id=1).
     -- A matching ensure_default_collection() call in db.rs guarantees the row exists.
     collection_id   INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,
+    namespace       TEXT    NOT NULL DEFAULT '',
     slug            TEXT    NOT NULL,
     -- NULL until UUID lifecycle (tasks 5a.*) is fully wired; allows NULL so
     -- legacy INSERT helpers that omit uuid continue to work.
@@ -105,9 +106,10 @@ CREATE TABLE IF NOT EXISTS pages (
     updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     truth_updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    UNIQUE(collection_id, slug)
+    UNIQUE(collection_id, namespace, slug)
 );
 
+CREATE INDEX IF NOT EXISTS idx_pages_namespace ON pages(namespace);
 -- Partial index: SQLite allows multiple NULLs in unique indexes, but being
 -- explicit here avoids confusion when uuid is still unset.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_uuid ON pages(uuid) WHERE uuid IS NOT NULL;
@@ -118,6 +120,12 @@ CREATE INDEX IF NOT EXISTS idx_pages_updated  ON pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_pages_wing     ON pages(wing);
 CREATE INDEX IF NOT EXISTS idx_pages_wing_room ON pages(wing, room);
 CREATE INDEX IF NOT EXISTS idx_pages_quarantined ON pages(quarantined_at) WHERE quarantined_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS namespaces (
+    id         TEXT PRIMARY KEY,
+    ttl_hours  REAL DEFAULT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS quarantine_exports (
     page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,

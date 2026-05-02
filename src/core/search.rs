@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 use super::collections::{self, OpKind, SlugResolution};
-use super::fts::{sanitize_fts_query, search_fts_canonical_tiered, search_fts_tiered};
-use super::inference::{search_vec, search_vec_canonical};
+use super::fts::{
+    sanitize_fts_query, search_fts_canonical_tiered_with_namespace,
+    search_fts_tiered_with_namespace,
+};
+use super::inference::{search_vec_canonical_with_namespace, search_vec_with_namespace};
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
@@ -19,9 +22,32 @@ pub fn hybrid_search(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(query, wing, collection_filter, conn, limit, false)
+    hybrid_search_with_namespace(query, wing, collection_filter, None, conn, limit)
 }
 
+/// Namespace-aware variant of [`hybrid_search`].
+#[allow(dead_code)]
+pub fn hybrid_search_with_namespace(
+    query: &str,
+    wing: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    hybrid_search_impl(
+        query,
+        wing,
+        collection_filter,
+        namespace_filter,
+        conn,
+        limit,
+        false,
+    )
+}
+
+/// Hybrid search returning canonical `<collection>::<slug>` identifiers.
+#[allow(dead_code)]
 pub fn hybrid_search_canonical(
     query: &str,
     wing: Option<&str>,
@@ -29,13 +55,34 @@ pub fn hybrid_search_canonical(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(query, wing, collection_filter, conn, limit, true)
+    hybrid_search_canonical_with_namespace(query, wing, collection_filter, None, conn, limit)
+}
+
+/// Namespace-aware canonical-slug variant of [`hybrid_search`].
+pub fn hybrid_search_canonical_with_namespace(
+    query: &str,
+    wing: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
+    hybrid_search_impl(
+        query,
+        wing,
+        collection_filter,
+        namespace_filter,
+        conn,
+        limit,
+        true,
+    )
 }
 
 fn hybrid_search_impl(
     query: &str,
     wing: Option<&str>,
     collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -46,9 +93,14 @@ fn hybrid_search_impl(
     }
 
     if let Some(slug) = exact_slug_query(trimmed) {
-        if let Some(result) =
-            exact_slug_result(slug, wing, collection_filter, conn, canonical_slug)?
-        {
+        if let Some(result) = exact_slug_result_with_namespace(
+            slug,
+            wing,
+            collection_filter,
+            namespace_filter,
+            conn,
+            canonical_slug,
+        )? {
             return Ok(vec![result]);
         }
     }
@@ -59,14 +111,35 @@ fn hybrid_search_impl(
     }
 
     let fts_results = if canonical_slug {
-        search_fts_canonical_tiered(&fts_safe, wing, collection_filter, conn, limit)?
+        search_fts_canonical_tiered_with_namespace(
+            &fts_safe,
+            wing,
+            collection_filter,
+            namespace_filter,
+            conn,
+            limit,
+        )?
     } else {
-        search_fts_tiered(&fts_safe, wing, collection_filter, conn, limit)?
+        search_fts_tiered_with_namespace(
+            &fts_safe,
+            wing,
+            collection_filter,
+            namespace_filter,
+            conn,
+            limit,
+        )?
     };
     let vec_results = if canonical_slug {
-        search_vec_canonical(trimmed, 10, wing, collection_filter, conn)?
+        search_vec_canonical_with_namespace(
+            trimmed,
+            10,
+            wing,
+            collection_filter,
+            namespace_filter,
+            conn,
+        )?
     } else {
-        search_vec(trimmed, 10, wing, collection_filter, conn)?
+        search_vec_with_namespace(trimmed, 10, wing, collection_filter, namespace_filter, conn)?
     };
 
     let mut merged = match read_merge_strategy(conn)? {
@@ -114,6 +187,7 @@ fn exact_slug_query(query: &str) -> Option<&str> {
     }
 }
 
+#[cfg(test)]
 fn exact_slug_result(
     slug: &str,
     wing: Option<&str>,
@@ -121,8 +195,25 @@ fn exact_slug_result(
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Option<SearchResult>, SearchError> {
+    exact_slug_result_with_namespace(slug, wing, collection_filter, None, conn, canonical_slug)
+}
+
+fn exact_slug_result_with_namespace(
+    slug: &str,
+    wing: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+    canonical_slug: bool,
+) -> Result<Option<SearchResult>, SearchError> {
     if canonical_slug {
-        return exact_slug_result_canonical(slug, wing, collection_filter, conn);
+        return exact_slug_result_canonical_with_namespace(
+            slug,
+            wing,
+            collection_filter,
+            namespace_filter,
+            conn,
+        );
     }
 
     let mut query = String::from("SELECT slug, title, summary, wing FROM pages WHERE slug = ?1");
@@ -137,6 +228,24 @@ fn exact_slug_result(
         query.push_str(" AND collection_id = ?");
         query.push_str(&(params.len() + 1).to_string());
         params.push(Box::new(collection_id));
+    }
+    if let Some(namespace) = namespace_filter {
+        if namespace.is_empty() {
+            query.push_str(" AND namespace = ?");
+            query.push_str(&(params.len() + 1).to_string());
+            params.push(Box::new(String::new()));
+        } else {
+            query.push_str(" AND (namespace = ?");
+            query.push_str(&(params.len() + 1).to_string());
+            query.push_str(" OR namespace = '')");
+            params.push(Box::new(namespace.to_owned()));
+        }
+    }
+    if let Some(namespace) = namespace_filter.filter(|namespace| !namespace.is_empty()) {
+        query.push_str(" ORDER BY CASE WHEN namespace = ?");
+        query.push_str(&(params.len() + 1).to_string());
+        query.push_str(" THEN 0 ELSE 1 END");
+        params.push(Box::new(namespace.to_owned()));
     }
     query.push_str(" LIMIT 1");
 
@@ -158,14 +267,31 @@ fn exact_slug_result(
     }
 }
 
+#[cfg(test)]
 fn exact_slug_result_canonical(
     slug: &str,
     wing: Option<&str>,
     collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
+    exact_slug_result_canonical_with_namespace(slug, wing, collection_filter, None, conn)
+}
+
+fn exact_slug_result_canonical_with_namespace(
+    slug: &str,
+    wing: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+) -> Result<Option<SearchResult>, SearchError> {
     if let Some(collection_id) = collection_filter {
-        return exact_slug_result_canonical_for_collection(slug, wing, collection_id, conn);
+        return exact_slug_result_canonical_for_collection_with_namespace(
+            slug,
+            wing,
+            collection_id,
+            namespace_filter,
+            conn,
+        );
     }
 
     let resolved = match collections::parse_slug(conn, slug, OpKind::Read) {
@@ -191,43 +317,7 @@ fn exact_slug_result_canonical(
         Err(_) => return Ok(None),
     };
 
-    let result = if let Some(wing) = wing {
-        conn.query_row(
-            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
-             FROM pages p
-             JOIN collections c ON c.id = p.collection_id
-             WHERE p.collection_id = ?1 AND p.slug = ?2 AND p.wing = ?3
-             LIMIT 1",
-            rusqlite::params![resolved.0, &resolved.2, wing],
-            |row| {
-                Ok(SearchResult {
-                    slug: row.get(0)?,
-                    title: row.get(1)?,
-                    summary: row.get(2)?,
-                    score: 1.0,
-                    wing: row.get(3)?,
-                })
-            },
-        )
-    } else {
-        conn.query_row(
-            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
-             FROM pages p
-             JOIN collections c ON c.id = p.collection_id
-             WHERE p.collection_id = ?1 AND p.slug = ?2
-             LIMIT 1",
-            rusqlite::params![resolved.0, &resolved.2],
-            |row| {
-                Ok(SearchResult {
-                    slug: row.get(0)?,
-                    title: row.get(1)?,
-                    summary: row.get(2)?,
-                    score: 1.0,
-                    wing: row.get(3)?,
-                })
-            },
-        )
-    };
+    let result = query_exact_slug_canonical(&resolved.2, wing, resolved.0, namespace_filter, conn);
 
     match result {
         Ok(result) => Ok(Some(result)),
@@ -236,10 +326,21 @@ fn exact_slug_result_canonical(
     }
 }
 
+#[cfg(test)]
 fn exact_slug_result_canonical_for_collection(
     slug: &str,
     wing: Option<&str>,
     collection_id: i64,
+    conn: &Connection,
+) -> Result<Option<SearchResult>, SearchError> {
+    exact_slug_result_canonical_for_collection_with_namespace(slug, wing, collection_id, None, conn)
+}
+
+fn exact_slug_result_canonical_for_collection_with_namespace(
+    slug: &str,
+    wing: Option<&str>,
+    collection_id: i64,
+    namespace_filter: Option<&str>,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
     let stripped_slug = if let Some((collection_name, relative_slug)) = slug.split_once("::") {
@@ -253,49 +354,67 @@ fn exact_slug_result_canonical_for_collection(
         slug.to_owned()
     };
 
-    let result = if let Some(wing) = wing {
-        conn.query_row(
-            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
-             FROM pages p
-             JOIN collections c ON c.id = p.collection_id
-             WHERE p.collection_id = ?1 AND p.slug = ?2 AND p.wing = ?3
-             LIMIT 1",
-            rusqlite::params![collection_id, &stripped_slug, wing],
-            |row| {
-                Ok(SearchResult {
-                    slug: row.get(0)?,
-                    title: row.get(1)?,
-                    summary: row.get(2)?,
-                    score: 1.0,
-                    wing: row.get(3)?,
-                })
-            },
-        )
-    } else {
-        conn.query_row(
-            "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
-             FROM pages p
-             JOIN collections c ON c.id = p.collection_id
-             WHERE p.collection_id = ?1 AND p.slug = ?2
-             LIMIT 1",
-            rusqlite::params![collection_id, &stripped_slug],
-            |row| {
-                Ok(SearchResult {
-                    slug: row.get(0)?,
-                    title: row.get(1)?,
-                    summary: row.get(2)?,
-                    score: 1.0,
-                    wing: row.get(3)?,
-                })
-            },
-        )
-    };
+    let result =
+        query_exact_slug_canonical(&stripped_slug, wing, collection_id, namespace_filter, conn);
 
     match result {
         Ok(result) => Ok(Some(result)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(err) => Err(SearchError::from(err)),
     }
+}
+
+fn query_exact_slug_canonical(
+    slug: &str,
+    wing: Option<&str>,
+    collection_id: i64,
+    namespace_filter: Option<&str>,
+    conn: &Connection,
+) -> Result<SearchResult, rusqlite::Error> {
+    let mut query = String::from(
+        "SELECT c.name || '::' || p.slug, p.title, p.summary, p.wing
+         FROM pages p
+         JOIN collections c ON c.id = p.collection_id
+         WHERE p.collection_id = ?1 AND p.slug = ?2",
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(collection_id), Box::new(slug.to_owned())];
+
+    if let Some(wing) = wing {
+        query.push_str(" AND p.wing = ?");
+        query.push_str(&(params.len() + 1).to_string());
+        params.push(Box::new(wing.to_owned()));
+    }
+    if let Some(namespace) = namespace_filter {
+        if namespace.is_empty() {
+            query.push_str(" AND p.namespace = ?");
+            query.push_str(&(params.len() + 1).to_string());
+            params.push(Box::new(String::new()));
+        } else {
+            query.push_str(" AND (p.namespace = ?");
+            query.push_str(&(params.len() + 1).to_string());
+            query.push_str(" OR p.namespace = '')");
+            params.push(Box::new(namespace.to_owned()));
+        }
+    }
+    if let Some(namespace) = namespace_filter.filter(|namespace| !namespace.is_empty()) {
+        query.push_str(" ORDER BY CASE WHEN p.namespace = ?");
+        query.push_str(&(params.len() + 1).to_string());
+        query.push_str(" THEN 0 ELSE 1 END");
+        params.push(Box::new(namespace.to_owned()));
+    }
+    query.push_str(" LIMIT 1");
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    conn.query_row(&query, param_refs.as_slice(), |row| {
+        Ok(SearchResult {
+            slug: row.get(0)?,
+            title: row.get(1)?,
+            summary: row.get(2)?,
+            score: 1.0,
+            wing: row.get(3)?,
+        })
+    })
 }
 
 fn merge_set_union(
@@ -718,6 +837,47 @@ mod tests {
 
         assert!(!results.is_empty());
         assert!(results.iter().all(|result| result.wing == "people"));
+    }
+
+    #[test]
+    fn hybrid_search_namespace_filter_includes_global_and_excludes_other_namespaces() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "notes/global",
+            "Global",
+            "Global",
+            "sharedtoken",
+            "notes",
+        );
+        conn.execute(
+            "INSERT INTO pages
+                 (namespace, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES ('test-ns', 'notes/private', ?1, 'concept', 'Private', 'Private', 'privatetoken', '', '{}', 'notes', '', 1)",
+            [uuid::Uuid::now_v7().to_string()],
+        )
+        .expect("insert namespaced page");
+
+        let namespaced = hybrid_search_canonical_with_namespace(
+            "sharedtoken privatetoken",
+            None,
+            None,
+            Some("test-ns"),
+            &conn,
+            10,
+        )
+        .expect("namespaced query");
+        let global_only =
+            hybrid_search_canonical_with_namespace("privatetoken", None, None, Some(""), &conn, 10)
+                .expect("global query");
+
+        assert!(namespaced
+            .iter()
+            .any(|result| result.slug == "default::notes/global"));
+        assert!(namespaced
+            .iter()
+            .any(|result| result.slug == "default::notes/private"));
+        assert!(global_only.is_empty());
     }
 
     #[test]

@@ -1,25 +1,46 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::core::fts::{sanitize_fts_query, search_fts_canonical, search_fts_canonical_tiered};
+use crate::core::fts::{
+    sanitize_fts_query, search_fts_canonical_tiered_with_namespace,
+    search_fts_canonical_with_namespace,
+};
 
 pub fn run(
     db: &Connection,
     query: &str,
     wing: Option<String>,
+    namespace: Option<&str>,
     limit: u32,
     json: bool,
     raw: bool,
 ) -> Result<()> {
+    crate::core::namespace::validate_optional_namespace(namespace)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
     let effective_query = if raw {
         query.to_owned()
     } else {
         sanitize_fts_query(query)
     };
     let results = if raw {
-        search_fts_canonical(&effective_query, wing.as_deref(), None, db, limit as usize)
+        search_fts_canonical_with_namespace(
+            &effective_query,
+            wing.as_deref(),
+            None,
+            namespace,
+            db,
+            limit as usize,
+        )
     } else {
-        search_fts_canonical_tiered(&effective_query, wing.as_deref(), None, db, limit as usize)
+        search_fts_canonical_tiered_with_namespace(
+            &effective_query,
+            wing.as_deref(),
+            None,
+            namespace,
+            db,
+            limit as usize,
+        )
     };
 
     let results = match results {
@@ -65,7 +86,7 @@ mod tests {
     #[test]
     fn run_sanitized_question_mark_query_returns_ok() {
         let (_dir, conn) = open_test_db();
-        let result = run(&conn, "what is CLARITY?", None, 10, false, false);
+        let result = run(&conn, "what is CLARITY?", None, None, 10, false, false);
         assert!(
             result.is_ok(),
             "sanitized '?' query must not error: {result:?}"
@@ -76,7 +97,7 @@ mod tests {
     #[test]
     fn run_sanitized_apostrophe_query_returns_ok() {
         let (_dir, conn) = open_test_db();
-        let result = run(&conn, "it's a stablecoin", None, 10, false, false);
+        let result = run(&conn, "it's a stablecoin", None, None, 10, false, false);
         assert!(
             result.is_ok(),
             "sanitized apostrophe query must not error: {result:?}"
@@ -87,7 +108,7 @@ mod tests {
     #[test]
     fn run_sanitized_hyphen_dot_query_returns_ok() {
         let (_dir, conn) = open_test_db();
-        let result = run(&conn, "gpt-5.4 codex model", None, 10, false, false);
+        let result = run(&conn, "gpt-5.4 codex model", None, None, 10, false, false);
         assert!(
             result.is_ok(),
             "sanitized hyphen/dot query must not error: {result:?}"
@@ -99,7 +120,7 @@ mod tests {
     fn run_json_mode_with_percent_query_returns_ok() {
         let (_dir, conn) = open_test_db();
         // '50% fee reduction' contains '%' — sanitized to '50 fee reduction'
-        let result = run(&conn, "50% fee reduction", None, 10, true, false);
+        let result = run(&conn, "50% fee reduction", None, None, 10, true, false);
         assert!(
             result.is_ok(),
             "--json sanitized query must return Ok: {result:?}"
@@ -111,7 +132,7 @@ mod tests {
     fn run_raw_json_mode_with_invalid_fts5_returns_ok_not_panic() {
         let (_dir, conn) = open_test_db();
         // '?invalid' is invalid FTS5 with --raw; the error is printed as JSON, not propagated.
-        let result = run(&conn, "?invalid", None, 10, true, true);
+        let result = run(&conn, "?invalid", None, None, 10, true, true);
         assert!(
             result.is_ok(),
             "--raw --json with bad FTS5 must return Ok (error JSON on stdout): {result:?}"

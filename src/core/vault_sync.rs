@@ -4,7 +4,9 @@ use std::io;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, BufWriter, Write};
 #[cfg(unix)]
-use std::mem::{size_of, zeroed};
+use std::mem::size_of;
+#[cfg(target_os = "linux")]
+use std::mem::zeroed;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -3720,7 +3722,7 @@ fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
     }
     #[cfg(target_os = "macos")]
     {
-        return dirs::home_dir()
+        dirs::home_dir()
             .map(|home| {
                 let runtime_root = home
                     .join("Library")
@@ -3734,7 +3736,7 @@ fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
             })
             .ok_or_else(|| VaultSyncError::InvariantViolation {
                 message: "unable to resolve HOME for IPC directory".to_owned(),
-            });
+            })
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -3940,10 +3942,10 @@ pub(crate) fn peer_credentials_for_stream(
         if rc != 0 {
             return Err(io::Error::last_os_error().into());
         }
-        return Ok(IpcPeerCredentials {
+        Ok(IpcPeerCredentials {
             pid,
             uid: uid as u32,
-        });
+        })
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {

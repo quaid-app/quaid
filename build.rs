@@ -136,6 +136,11 @@ fn candidate_model_dirs() -> Vec<PathBuf> {
 
     if let Some(home) = home_dir() {
         dirs.push(home.join(".quaid").join("models").join("bge-small-en-v1.5"));
+        dirs.push(
+            home.join(".quaid")
+                .join("models")
+                .join("BAAI--bge-small-en-v1.5"),
+        );
 
         let snapshots = home
             .join(".cache")

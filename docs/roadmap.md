@@ -164,7 +164,7 @@ These are known design choices that are _not_ oversights:
 | `v0.11.0` | Batch 2 embedding worker: background queue drain, retry/resume handling, `embedding_queue_depth` in `memory_collections`, and `failing_jobs` in `quaid collection info` |
 | `v0.12.0` | Batch 3 UUID identity hardening: opt-in `--write-quaid-id`, offline `quaid collection migrate-uuids [--dry-run]`, UUID-migration preflight before restore/remap, and `memory_put` preserving `quaid_id` |
 | `v0.13.0` | Batch 4 full rename-before-commit hardening: CLI write routing (`quaid put` refuses while serve owns the collection), `DuplicateWriteDedupError` on concurrent dedup collision, and complete test coverage for all 13-step rename-before-commit failure modes |
-| `v0.14.0` | Batch 5 live-serve single-file write proxying: same-root `quaid put` now authenticates and proxies through the serve-owned per-session IPC socket, while bulk rewrite flows remain offline-only |
+| `v0.15.0` | Batch 5 live-serve single-file write proxying: same-root `quaid put` now authenticates and proxies through the serve-owned per-session IPC socket, while bulk rewrite flows remain offline-only |
 
 ---
 

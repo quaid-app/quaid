@@ -228,14 +228,137 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     // Set busy timeout *before* schema DDL so concurrent opens don't race on the
     // write lock required by the initial PRAGMA + CREATE TABLE IF NOT EXISTS batch.
     conn.busy_timeout(Duration::from_secs(5))?;
+    ensure_namespace_schema(&conn)?;
     conn.execute_batch(include_str!("../schema.sql"))?;
     ensure_pages_update_trigger_handles_quarantine(&conn)?;
+    ensure_namespace_schema(&conn)?;
     ensure_collection_owner_columns(&conn)?;
     ensure_serve_session_columns(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+fn ensure_namespace_schema(conn: &Connection) -> Result<(), DbError> {
+    if !table_exists(conn, "pages")? {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare("PRAGMA table_info(pages)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    if !existing_columns.contains("namespace") {
+        conn.execute_batch("ALTER TABLE pages ADD COLUMN namespace TEXT NOT NULL DEFAULT '';")?;
+    }
+
+    if pages_needs_namespace_unique_rebuild(conn)? {
+        rebuild_pages_with_namespace_unique(conn)?;
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS namespaces (
+             id         TEXT PRIMARY KEY,
+             ttl_hours  REAL DEFAULT NULL,
+             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+         ) STRICT;
+         CREATE INDEX IF NOT EXISTS idx_pages_namespace ON pages(namespace);
+         DROP INDEX IF EXISTS idx_pages_collection_namespace_slug;",
+    )?;
+
+    Ok(())
+}
+
+fn pages_needs_namespace_unique_rebuild(conn: &Connection) -> Result<bool, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT name, origin
+         FROM pragma_index_list('pages')
+         WHERE \"unique\" = 1",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut has_namespace_table_constraint = false;
+    let mut has_legacy_slug_constraint = false;
+    for row in rows {
+        let (name, origin) = row?;
+        let columns = index_columns(conn, &name)?;
+        if columns == ["collection_id", "namespace", "slug"] && origin == "u" {
+            has_namespace_table_constraint = true;
+        }
+        if columns == ["collection_id", "slug"] {
+            has_legacy_slug_constraint = true;
+        }
+    }
+
+    Ok(has_legacy_slug_constraint || !has_namespace_table_constraint)
+}
+
+fn index_columns(conn: &Connection, index_name: &str) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
+    let columns = stmt
+        .query_map([index_name], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns)
+}
+
+fn rebuild_pages_with_namespace_unique(conn: &Connection) -> Result<(), DbError> {
+    let foreign_keys_enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN;
+         DROP TRIGGER IF EXISTS pages_ai;
+         DROP TRIGGER IF EXISTS pages_ad;
+         DROP TRIGGER IF EXISTS pages_au;
+         CREATE TABLE pages_new (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             collection_id   INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,
+             namespace       TEXT    NOT NULL DEFAULT '',
+             slug            TEXT    NOT NULL,
+             uuid            TEXT    DEFAULT NULL,
+             type            TEXT    NOT NULL,
+             title           TEXT    NOT NULL,
+             summary         TEXT    NOT NULL DEFAULT '',
+             compiled_truth  TEXT    NOT NULL DEFAULT '',
+             timeline        TEXT    NOT NULL DEFAULT '',
+             frontmatter     TEXT    NOT NULL DEFAULT '{}',
+             wing            TEXT    NOT NULL DEFAULT '',
+             room            TEXT    NOT NULL DEFAULT '',
+             version         INTEGER NOT NULL DEFAULT 1,
+             quarantined_at  TEXT    DEFAULT NULL,
+             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             truth_updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             UNIQUE(collection_id, namespace, slug)
+         );
+         INSERT INTO pages_new (
+             id, collection_id, namespace, slug, uuid, type, title, summary,
+             compiled_truth, timeline, frontmatter, wing, room, version,
+             quarantined_at, created_at, updated_at, truth_updated_at,
+             timeline_updated_at
+         )
+         SELECT
+             id, collection_id, namespace, slug, uuid, type, title, summary,
+             compiled_truth, timeline, frontmatter, wing, room, version,
+             quarantined_at, created_at, updated_at, truth_updated_at,
+             timeline_updated_at
+         FROM pages;
+         DROP TABLE pages;
+         ALTER TABLE pages_new RENAME TO pages;
+         COMMIT;",
+    )?;
+
+    if foreign_keys_enabled != 0 {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    }
+    conn.execute_batch("PRAGMA foreign_key_check;")?;
+
+    Ok(())
 }
 
 fn ensure_pages_update_trigger_handles_quarantine(conn: &Connection) -> Result<(), DbError> {
@@ -798,6 +921,7 @@ mod tests {
             "ingest_log",
             "knowledge_gaps",
             "links",
+            "namespaces",
             "page_embeddings",
             "page_fts",
             "pages",
@@ -936,6 +1060,84 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn open_rebuilds_legacy_pages_unique_constraint_for_namespaces() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test_memory.db");
+        let path_str = db_path.to_str().unwrap();
+
+        let conn = open(path_str).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TRIGGER IF EXISTS pages_ai;
+             DROP TRIGGER IF EXISTS pages_ad;
+             DROP TRIGGER IF EXISTS pages_au;
+             DROP TABLE pages;
+             CREATE TABLE pages (
+                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                 collection_id   INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,
+                 slug            TEXT    NOT NULL,
+                 uuid            TEXT    DEFAULT NULL,
+                 type            TEXT    NOT NULL,
+                 title           TEXT    NOT NULL,
+                 summary         TEXT    NOT NULL DEFAULT '',
+                 compiled_truth  TEXT    NOT NULL DEFAULT '',
+                 timeline        TEXT    NOT NULL DEFAULT '',
+                 frontmatter     TEXT    NOT NULL DEFAULT '{}',
+                 wing            TEXT    NOT NULL DEFAULT '',
+                 room            TEXT    NOT NULL DEFAULT '',
+                 version         INTEGER NOT NULL DEFAULT 1,
+                 quarantined_at  TEXT    DEFAULT NULL,
+                 created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 truth_updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 UNIQUE(collection_id, slug)
+             );
+             INSERT INTO pages
+                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES
+                 (1, 'notes/same-slug', '018f0000-0000-7000-8000-000000000001', 'concept', 'Global', '', '', '', '{}', 'notes', '', 1);
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open(path_str).unwrap();
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, namespace, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES
+                 (1, 'session-a', 'notes/same-slug', ?1, 'concept', 'Namespaced', '', '', '', '{}', 'notes', '', 1)",
+            [uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE collection_id = 1 AND slug = 'notes/same-slug'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+        assert!(!pages_needs_namespace_unique_rebuild(&conn).unwrap());
+
+        let duplicate_index_exists = conn
+            .query_row(
+                "SELECT 1
+                 FROM sqlite_master
+                 WHERE type = 'index'
+                   AND name = 'idx_pages_collection_namespace_slug'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+        assert!(!duplicate_index_exists);
     }
 
     #[test]

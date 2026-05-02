@@ -16,10 +16,14 @@ pub fn run(
     db: &Connection,
     wing: Option<String>,
     page_type: Option<String>,
+    namespace: Option<&str>,
     limit: u32,
     json: bool,
 ) -> Result<()> {
-    let entries = list_pages(db, wing.as_deref(), page_type.as_deref(), limit)?;
+    crate::core::namespace::validate_optional_namespace(namespace)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let namespace = namespace.or(Some(""));
+    let entries = list_pages(db, wing.as_deref(), page_type.as_deref(), namespace, limit)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -41,6 +45,7 @@ fn list_pages(
     db: &Connection,
     wing: Option<&str>,
     page_type: Option<&str>,
+    namespace: Option<&str>,
     limit: u32,
 ) -> Result<Vec<ListEntry>> {
     let mut sql = String::from(
@@ -58,6 +63,15 @@ fn list_pages(
     if let Some(t) = page_type {
         sql.push_str(" AND p.type = ?");
         params.push(Box::new(t.to_owned()));
+    }
+    if let Some(ns) = namespace {
+        if ns.is_empty() {
+            sql.push_str(" AND p.namespace = ?");
+            params.push(Box::new(String::new()));
+        } else {
+            sql.push_str(" AND (p.namespace = ? OR p.namespace = '')");
+            params.push(Box::new(ns.to_owned()));
+        }
     }
 
     sql.push_str(" ORDER BY p.updated_at DESC LIMIT ?");
@@ -116,7 +130,7 @@ mod tests {
             "Acme summary",
         );
 
-        let entries = list_pages(&conn, None, None, 50).unwrap();
+        let entries = list_pages(&conn, None, None, None, 50).unwrap();
         assert_eq!(entries.len(), 2);
     }
 
@@ -132,7 +146,7 @@ mod tests {
             "Acme summary",
         );
 
-        let entries = list_pages(&conn, Some("people"), None, 50).unwrap();
+        let entries = list_pages(&conn, Some("people"), None, None, 50).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].slug, "default::people/alice");
     }
@@ -149,7 +163,7 @@ mod tests {
             "Rust summary",
         );
 
-        let entries = list_pages(&conn, None, Some("concept"), 50).unwrap();
+        let entries = list_pages(&conn, None, Some("concept"), None, 50).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].slug, "default::concepts/rust");
     }
@@ -167,7 +181,7 @@ mod tests {
             );
         }
 
-        let entries = list_pages(&conn, None, None, 3).unwrap();
+        let entries = list_pages(&conn, None, None, None, 3).unwrap();
         assert_eq!(entries.len(), 3);
     }
 
@@ -178,7 +192,7 @@ mod tests {
         insert_page(&conn, "people/meeting", "concept", "people", "Meeting");
         insert_page(&conn, "companies/acme", "company", "companies", "Acme");
 
-        let entries = list_pages(&conn, Some("people"), Some("person"), 50).unwrap();
+        let entries = list_pages(&conn, Some("people"), Some("person"), None, 50).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].slug, "default::people/alice");
     }
@@ -186,7 +200,7 @@ mod tests {
     #[test]
     fn list_returns_empty_vec_on_empty_database() {
         let conn = open_test_db();
-        let entries = list_pages(&conn, None, None, 50).unwrap();
+        let entries = list_pages(&conn, None, None, None, 50).unwrap();
         assert!(entries.is_empty());
     }
 
@@ -209,7 +223,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = list_pages(&conn, None, None, 50).unwrap();
+        let entries = list_pages(&conn, None, None, None, 50).unwrap();
         assert_eq!(entries[0].slug, "default::test/new");
         assert_eq!(entries[1].slug, "default::test/old");
     }

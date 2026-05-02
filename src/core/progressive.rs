@@ -17,11 +17,24 @@ const MAX_DEPTH: u32 = 3;
 ///
 /// `collection_filter` restricts expansion to pages belonging to the given
 /// collection ID. Pass `None` to allow cross-collection expansion (CLI path).
+#[allow(dead_code)]
 pub fn progressive_retrieve(
     initial: Vec<SearchResult>,
     budget: usize,
     depth: u32,
     collection_filter: Option<i64>,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
+    progressive_retrieve_with_namespace(initial, budget, depth, collection_filter, None, conn)
+}
+
+/// Namespace-aware variant of [`progressive_retrieve`].
+pub fn progressive_retrieve_with_namespace(
+    initial: Vec<SearchResult>,
+    budget: usize,
+    depth: u32,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
     if initial.is_empty() || depth == 0 {
@@ -56,7 +69,7 @@ pub fn progressive_retrieve(
         let mut next_frontier: Vec<String> = Vec::new();
 
         for slug in &frontier {
-            let neighbours = outbound_neighbours(slug, collection_filter, conn)?;
+            let neighbours = outbound_neighbours(slug, collection_filter, namespace_filter, conn)?;
             for neighbour in neighbours {
                 if !seen.insert(neighbour.slug.clone()) {
                     continue;
@@ -102,6 +115,7 @@ fn token_cost(slug: &str, conn: &Connection) -> usize {
 fn outbound_neighbours(
     slug: &str,
     collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, slug) else {
@@ -118,7 +132,7 @@ fn outbound_neighbours(
     } else {
         ""
     };
-    // `?3 IS NULL` short-circuits when no filter is active (CLI path).
+    // `?3 IS NULL` short-circuits when no collection filter is active (CLI path).
     let sql = format!(
         "SELECT {target_slug_expr}, p2.title, p2.summary, p2.wing \
          FROM links l \
@@ -127,13 +141,29 @@ fn outbound_neighbours(
          WHERE p1.collection_id = ?1 AND p1.slug = ?2 \
            AND (l.valid_from IS NULL OR l.valid_from <= date('now')) \
            AND (l.valid_until IS NULL OR l.valid_until >= date('now')) \
-           AND (?3 IS NULL OR p2.collection_id = ?3)"
+           AND (?3 IS NULL OR p2.collection_id = ?3) \
+           AND (?4 IS NULL \
+                OR (?4 = '' AND p1.namespace = '') \
+                OR (?4 != '' AND (p1.namespace = ?4 \
+                    OR (p1.namespace = '' AND NOT EXISTS ( \
+                        SELECT 1 FROM pages p1_ns \
+                        WHERE p1_ns.collection_id = p1.collection_id \
+                          AND p1_ns.slug = p1.slug \
+                          AND p1_ns.namespace = ?4))))) \
+           AND (?4 IS NULL \
+                OR (?4 = '' AND p2.namespace = '') \
+                OR (?4 != '' AND (p2.namespace = ?4 OR p2.namespace = '')))"
     );
     let mut stmt = conn.prepare_cached(&sql).map_err(SearchError::from)?;
 
     let rows = stmt
         .query_map(
-            rusqlite::params![collection_id, resolved_slug, collection_filter],
+            rusqlite::params![
+                collection_id,
+                resolved_slug,
+                collection_filter,
+                namespace_filter
+            ],
             |row| {
                 Ok(SearchResult {
                     slug: row.get(0)?,

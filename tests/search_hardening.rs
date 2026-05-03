@@ -14,11 +14,23 @@ fn open_test_db(path: &Path) -> Connection {
 }
 
 fn insert_page(conn: &Connection, slug: &str, page_type: &str, title: &str, summary: &str) {
+    insert_page_with_namespace(conn, "", slug, page_type, title, summary, "");
+}
+
+fn insert_page_with_namespace(
+    conn: &Connection,
+    namespace: &str,
+    slug: &str,
+    page_type: &str,
+    title: &str,
+    summary: &str,
+    compiled_truth: &str,
+) {
     conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+        "INSERT INTO pages (namespace, slug, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
-         VALUES (?1, ?2, ?3, ?4, '', '', '{}', '', '', 1)",
-        rusqlite::params![slug, page_type, title, summary],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', '{}', '', '', 1)",
+        rusqlite::params![namespace, slug, page_type, title, summary, compiled_truth],
     )
     .expect("insert page");
 }
@@ -109,6 +121,89 @@ fn search_raw_json_invalid_query_returns_error_object() {
         .and_then(Value::as_str)
         .expect("raw invalid query must emit an error string");
     assert!(!error.is_empty(), "error message must not be empty");
+}
+
+#[test]
+fn search_namespace_filter_returns_requested_namespace_plus_global_only() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "search-namespace-filter.db");
+    let conn = open_test_db(&db_path);
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "notes/global-bitcoin",
+        "concept",
+        "Global Bitcoin",
+        "Global namespace page",
+        "bitcoin evidence in global namespace",
+    );
+    insert_page_with_namespace(
+        &conn,
+        "workns",
+        "notes/work-bitcoin",
+        "concept",
+        "Work Bitcoin",
+        "Work namespace page",
+        "bitcoin evidence in work namespace",
+    );
+    insert_page_with_namespace(
+        &conn,
+        "otherns",
+        "notes/other-bitcoin",
+        "concept",
+        "Other Bitcoin",
+        "Other namespace page",
+        "bitcoin evidence in another namespace",
+    );
+    drop(conn);
+
+    let namespaced_output = run_quaid(
+        &db_path,
+        &["--json", "search", "--namespace", "workns", "bitcoin"],
+    );
+    assert!(
+        namespaced_output.status.success(),
+        "namespaced search should exit cleanly: {namespaced_output:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&namespaced_output.stderr)
+            .trim()
+            .is_empty(),
+        "namespaced search should not write errors to stderr: {:?}",
+        namespaced_output.stderr
+    );
+
+    let parsed = parse_stdout_json(&namespaced_output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert_eq!(
+        result_slugs(results),
+        BTreeSet::from([
+            "default::notes/global-bitcoin".to_owned(),
+            "default::notes/work-bitcoin".to_owned(),
+        ]),
+        "--namespace workns must return only workns plus global matches"
+    );
+
+    let global_output = run_quaid(&db_path, &["--json", "search", "bitcoin"]);
+    assert!(
+        global_output.status.success(),
+        "global search should exit cleanly: {global_output:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&global_output.stderr)
+            .trim()
+            .is_empty(),
+        "global search should not write errors to stderr: {:?}",
+        global_output.stderr
+    );
+
+    let parsed = parse_stdout_json(&global_output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert_eq!(
+        result_slugs(results),
+        BTreeSet::from(["default::notes/global-bitcoin".to_owned()]),
+        "omitted --namespace must default to global-only search"
+    );
 }
 
 #[test]

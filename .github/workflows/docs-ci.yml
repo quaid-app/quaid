@@ -1,6 +1,6 @@
 name: Docs CI
 
-# Runs only when website/ changes (no Rust code touched).
+# Runs only when website/ or openspec/ changes (no Rust code touched).
 # Reports the same required-check names ("Check" and "Test") so branch
 # protection is satisfied without running the full Rust CI suite.
 
@@ -9,10 +9,12 @@ on:
     branches: ["main"]
     paths:
       - "website/**"
+      - "openspec/**"
   pull_request:
     branches: ["main"]
     paths:
       - "website/**"
+      - "openspec/**"
 
 jobs:
   check:

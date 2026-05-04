@@ -37,6 +37,15 @@ Key elements:
 - Add a `> **Scope note**` annotation with author + datetime for audit trail
 - Do NOT delete or rephrase the future-batch tasks (e.g., 12.6c–g) — they are the authoritative spec for that batch
 
+### 2d. Add/add conflicts against main resolve to shipped truth
+
+If main and your branch both add the same OpenSpec change files, do not treat the merge as a coin flip.
+
+- Compare both versions against the shipped code and the current completed-task state.
+- Keep the variant whose proposal/design/specs/tasks describe the landed baseline and any truthful scope notes.
+- Reject older draft wording that still talks about future schema bumps, unchecked tasks, or broader surfaces that never shipped.
+
+When the branch copy is the truthful one, resolve the conflict to that content and continue the merge. The goal is a mergeable PR with artifacts that remain auditable after landing, not a textual blend of two incompatible histories.
 ### 3. Update stale completion counts
 
 If `implementation_plan.md` has a stale "current completion state" section, update the counts to match what `openspec instructions apply` reports. This prevents confusion about remaining work.
@@ -81,3 +90,4 @@ In these cases: the stub is the correct Batch N scope. The full implementation i
 - Mismatch: `tasks.md 12.6a` said "Proxy mode over IPC" but `implementation_plan.md` Batch 4 said "refuse-when-live stub"
 - Fix: Rewrote `tasks.md 12.6a` to refuse-when-live shape; added scope note pointing to Batch 5 for IPC proxy upgrade
 - IPC tasks `12.6c–g` in `tasks.md` left untouched — they are Batch 5's authoritative spec
+

@@ -75,3 +75,4 @@
 - Decisions consolidated: inbox merged → decisions.md (8 files)
 - Archive: 5698 lines archived to decisions-archive.md
 - Status: All agents' work reflected in team memory
+- 2026-05-04T07:22:12.881+08:00 — **OpenSpec add/add merge rule:** When main and a feature branch both add the same change artifacts, resolve the conflict to the version that matches the shipped code and completed task truth. Do not preserve stale schema-bump or unchecked-task wording just because it landed on main; the merge artifact must describe the already-landed baseline exactly or the PR stays unmergeable for the wrong reasons.

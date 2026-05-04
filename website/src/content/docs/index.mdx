@@ -28,7 +28,7 @@ import GuideMetricCard from "../../components/docs/GuideMetricCard.astro";
 Then build your first memory and connect it to Claude Code:
 
 <Code code={`quaid init ~/memory.db
-quaid import ~/notes --db ~/memory.db
+quaid collection add notes ~/notes --db ~/memory.db
 QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
 **Three commands. No API keys. No cloud.** [Full install options →](/tutorials/install/)
@@ -54,7 +54,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
     href="/agents/quickstart/"
     linkText="Open the agent quickstart"
   >
-    <p>Seventeen <code>memory_*</code> tools over stdio JSON-RPC. Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
+    <p>Nineteen <code>memory_*</code> tools in the latest public release, with 22 on the <code>v0.18.0</code> branch. Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
   </AudienceCard>
 </div>
 
@@ -83,7 +83,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
 <div class="gb-guide-grid gb-guide-grid--three">
   <GuideMetricCard value="27" label="CLI commands" note="Read, write, graph, intelligence, collections, system." />
-  <GuideMetricCard value="17" label="MCP tools" note="Same surface, exposed to any MCP-compatible client." />
+  <GuideMetricCard value="19" label="Public MCP tools" note="The `v0.18.0` branch carries 22, including conversation capture." />
   <GuideMetricCard value="8" label="Embedded skills" note="Ingest, query, maintain, enrich, briefing, alerts, research, upgrade." />
   <GuideMetricCard value="1" label="Static binary" note="No daemon, no port, no Docker, no Python." />
   <GuideMetricCard value="0" label="API keys required" note="The model runs on your CPU. Nothing transits your network." />

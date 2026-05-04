@@ -90,7 +90,7 @@ QUAID_DB=~/.quaid/memory.db quaid serve
 
 ## MCP tools
 
-Quaid exposes 17 MCP tools via `quaid serve`. All tool names use the `memory_*` prefix.
+The latest public release exposes 19 MCP tools via `quaid serve`; this branch carries 22. All tool names use the `memory_*` prefix.
 
 ### `memory_query` vs `memory_search`
 
@@ -171,7 +171,7 @@ Live results: [benchmark.quaid.app](https://benchmark.quaid.app)
 
 ## Migration from GigaBrain / pre-v0.9.9
 
-Existing databases (schema v5) are incompatible with v0.9.9 (schema v6). See [MIGRATION.md](MIGRATION.md) for the full migration guide.
+Existing databases (schema v5) are incompatible with v0.9.9 (schema v6). See [MIGRATION.md](../MIGRATION.md) for the full migration guide.
 
 Quick summary:
 

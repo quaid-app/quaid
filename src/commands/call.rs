@@ -31,6 +31,13 @@ pub fn dispatch_tool(server: &QuaidServer, tool: &str, params: Value) -> Result<
                 .memory_close_session(input)
                 .map_err(|e| e.message.to_string())
         }
+        "memory_close_action" => {
+            let input: MemoryCloseActionInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_close_action(input)
+                .map_err(|e| e.message.to_string())
+        }
         "memory_query" => {
             let input: MemoryQueryInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
@@ -376,6 +383,28 @@ mod tests {
         .expect("memory_close_session should succeed");
         assert_eq!(close["extraction_triggered"], json!(true));
         assert!(close["queue_position"].as_i64().unwrap_or_default() >= 1);
+
+        dispatch_tool(
+            &server,
+            "memory_put",
+            json!({
+                "slug": "action_item/dispatch-action",
+                "content": "---\ntype: action_item\ntitle: Dispatch Action\nstatus: open\n---\n\nShip the docs before lunch."
+            }),
+        )
+        .expect("memory_put action_item should succeed");
+
+        let closed = dispatch_tool(
+            &server,
+            "memory_close_action",
+            json!({
+                "slug": "action_item/dispatch-action",
+                "status": "done",
+                "note": "Closed from dispatch_tool test."
+            }),
+        )
+        .expect("memory_close_action should succeed");
+        assert_eq!(closed["status"], json!("done"));
     }
 
     #[test]

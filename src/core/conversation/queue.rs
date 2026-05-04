@@ -14,6 +14,9 @@ pub enum ExtractionQueueError {
 
     #[error("config error: {message}")]
     Config { message: String },
+
+    #[error("stale extraction lease for job {job_id} attempt {attempts}")]
+    StaleLease { job_id: i64, attempts: i64 },
 }
 
 pub fn enqueue(
@@ -104,34 +107,45 @@ pub fn dequeue(conn: &Connection) -> Result<Option<ExtractionJob>, ExtractionQue
         .map_err(ExtractionQueueError::from)
 }
 
-pub fn mark_done(conn: &Connection, job_id: i64) -> Result<(), ExtractionQueueError> {
-    conn.execute(
+pub fn mark_done(
+    conn: &Connection,
+    job_id: i64,
+    attempts: i64,
+) -> Result<(), ExtractionQueueError> {
+    let updated = conn.execute(
         "UPDATE extraction_queue
          SET status = 'done',
-             last_error = NULL
-         WHERE id = ?1",
-        [job_id],
+              last_error = NULL
+         WHERE id = ?1 AND status = 'running' AND attempts = ?2",
+        params![job_id, attempts],
     )?;
+    if updated == 0 {
+        return Err(ExtractionQueueError::StaleLease { job_id, attempts });
+    }
     Ok(())
 }
 
 pub fn mark_failed(
     conn: &Connection,
     job_id: i64,
+    attempts: i64,
     error_message: &str,
 ) -> Result<(), ExtractionQueueError> {
     let max_retries = max_retries(conn)?;
-    conn.execute(
+    let updated = conn.execute(
         "UPDATE extraction_queue
          SET attempts = attempts + 1,
-             last_error = ?3,
-             status = CASE
-                 WHEN attempts + 1 >= ?2 THEN 'failed'
-                 ELSE 'pending'
-             END
-         WHERE id = ?1 AND status = 'running'",
-        params![job_id, max_retries, error_message],
+              last_error = ?3,
+              status = CASE
+                  WHEN attempts + 1 >= ?2 THEN 'failed'
+                  ELSE 'pending'
+              END
+         WHERE id = ?1 AND status = 'running' AND attempts = ?4",
+        params![job_id, max_retries, error_message, attempts],
     )?;
+    if updated == 0 {
+        return Err(ExtractionQueueError::StaleLease { job_id, attempts });
+    }
     Ok(())
 }
 
@@ -159,9 +173,10 @@ fn merged_pending_job(
     new_scheduled_for: &str,
 ) -> (ExtractionTriggerKind, String) {
     match (existing_trigger, new_trigger) {
-        (ExtractionTriggerKind::SessionClose, _) => {
-            (ExtractionTriggerKind::SessionClose, existing_scheduled_for.to_owned())
-        }
+        (ExtractionTriggerKind::SessionClose, _) => (
+            ExtractionTriggerKind::SessionClose,
+            existing_scheduled_for.to_owned(),
+        ),
         (_, ExtractionTriggerKind::SessionClose) => (
             ExtractionTriggerKind::SessionClose,
             std::cmp::min(existing_scheduled_for, new_scheduled_for).to_owned(),
@@ -170,9 +185,10 @@ fn merged_pending_job(
             ExtractionTriggerKind::Debounce,
             std::cmp::max(existing_scheduled_for, new_scheduled_for).to_owned(),
         ),
-        (ExtractionTriggerKind::Manual, ExtractionTriggerKind::Debounce) => {
-            (ExtractionTriggerKind::Manual, existing_scheduled_for.to_owned())
-        }
+        (ExtractionTriggerKind::Manual, ExtractionTriggerKind::Debounce) => (
+            ExtractionTriggerKind::Manual,
+            existing_scheduled_for.to_owned(),
+        ),
         (ExtractionTriggerKind::Debounce, ExtractionTriggerKind::Manual) => {
             (ExtractionTriggerKind::Manual, new_scheduled_for.to_owned())
         }

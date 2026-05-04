@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use quaid::core::conversation::format::{parse, parse_str, render};
 use quaid::core::conversation::turn_writer::append_turn;
@@ -23,6 +25,32 @@ fn open_turn_db(root: &Path) -> (tempfile::TempDir, PathBuf, Connection) {
     (db_dir, db_path, conn)
 }
 
+const APPEND_TURN_HELPER_ENV: &str = "QUAID_TEST_APPEND_TURN_HELPER";
+const APPEND_TURN_DB_PATH_ENV: &str = "QUAID_TEST_APPEND_TURN_DB_PATH";
+const APPEND_TURN_SESSION_ID_ENV: &str = "QUAID_TEST_APPEND_TURN_SESSION_ID";
+const APPEND_TURN_ROLE_ENV: &str = "QUAID_TEST_APPEND_TURN_ROLE";
+const APPEND_TURN_CONTENT_ENV: &str = "QUAID_TEST_APPEND_TURN_CONTENT";
+const APPEND_TURN_TIMESTAMP_ENV: &str = "QUAID_TEST_APPEND_TURN_TIMESTAMP";
+
+#[test]
+fn append_turn_cross_process_helper() {
+    if std::env::var_os(APPEND_TURN_HELPER_ENV).is_none() {
+        return;
+    }
+
+    let db_path = PathBuf::from(std::env::var(APPEND_TURN_DB_PATH_ENV).unwrap());
+    let session_id = std::env::var(APPEND_TURN_SESSION_ID_ENV).unwrap();
+    let role = std::env::var(APPEND_TURN_ROLE_ENV)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let content = std::env::var(APPEND_TURN_CONTENT_ENV).unwrap();
+    let timestamp = std::env::var(APPEND_TURN_TIMESTAMP_ENV).unwrap();
+    let conn = db::open(db_path.to_str().unwrap()).unwrap();
+
+    append_turn(&conn, &session_id, role, &content, &timestamp, None, None).unwrap();
+}
+
 #[test]
 fn parse_render_round_trip_preserves_turn_metadata_and_cursor() {
     let rendered = concat!(
@@ -37,7 +65,7 @@ fn parse_render_round_trip_preserves_turn_metadata_and_cursor() {
         "---\n\n",
         "## Turn 1 · user · 2026-05-03T09:14:22Z\n\n",
         "hello\n\n",
-        "```json\n",
+        "```json turn-metadata\n",
         "{\n",
         "  \"importance\": \"high\",\n",
         "  \"tool_name\": \"bash\"\n",
@@ -49,7 +77,10 @@ fn parse_render_round_trip_preserves_turn_metadata_and_cursor() {
 
     assert_eq!(render(&parsed), rendered);
     assert_eq!(parsed.frontmatter.last_extracted_turn, 0);
-    assert_eq!(parsed.turns[0].metadata.as_ref().unwrap()["tool_name"], "bash");
+    assert_eq!(
+        parsed.turns[0].metadata.as_ref().unwrap()["tool_name"],
+        "bash"
+    );
 }
 
 #[test]
@@ -98,7 +129,9 @@ fn append_turn_is_durable_before_return_and_continues_ordinals_across_days() {
     let parsed_second = parse(&second_path).unwrap();
     assert_eq!(parsed_second.frontmatter.last_extracted_turn, 0);
     assert_eq!(parsed_second.turns[0].ordinal, 2);
-    assert!(fs::read_to_string(&first_path).unwrap().contains("first day"));
+    assert!(fs::read_to_string(&first_path)
+        .unwrap()
+        .contains("first day"));
 }
 
 #[test]
@@ -140,9 +173,17 @@ fn append_turn_keeps_namespaces_isolated_for_same_session_id() {
         .join("2026-05-03")
         .join("main.md");
 
-    assert_eq!(alpha.conversation_path, "alpha/conversations/2026-05-03/main.md");
-    assert_eq!(beta.conversation_path, "beta/conversations/2026-05-03/main.md");
-    assert!(fs::read_to_string(alpha_path).unwrap().contains("alpha turn"));
+    assert_eq!(
+        alpha.conversation_path,
+        "alpha/conversations/2026-05-03/main.md"
+    );
+    assert_eq!(
+        beta.conversation_path,
+        "beta/conversations/2026-05-03/main.md"
+    );
+    assert!(fs::read_to_string(alpha_path)
+        .unwrap()
+        .contains("alpha turn"));
     assert!(!fs::read_to_string(beta_path.clone())
         .unwrap()
         .contains("alpha turn"));
@@ -179,7 +220,10 @@ fn dedicated_collection_mode_writes_conversations_outside_main_vault_root() {
         .unwrap();
     let dedicated_path = PathBuf::from(dedicated_root);
 
-    assert_eq!(result.conversation_path, "alpha/conversations/2026-05-03/session-1.md");
+    assert_eq!(
+        result.conversation_path,
+        "alpha/conversations/2026-05-03/session-1.md"
+    );
     assert!(dedicated_path
         .join("alpha")
         .join("conversations")
@@ -199,10 +243,7 @@ fn dedicated_collection_mode_writes_conversations_outside_main_vault_root() {
 fn append_turn_rejects_closed_day_file() {
     let vault_root = tempfile::TempDir::new().unwrap();
     let (_db_dir, _db_path, conn) = open_turn_db(vault_root.path());
-    let path = vault_root
-        .path()
-        .join("conversations")
-        .join("2026-05-03");
+    let path = vault_root.path().join("conversations").join("2026-05-03");
     fs::create_dir_all(&path).unwrap();
     fs::write(
         path.join("session-1.md"),
@@ -235,7 +276,10 @@ fn append_turn_rejects_closed_day_file() {
 
     assert!(error.to_string().contains("closed"));
     assert_eq!(
-        parse(&path.join("session-1.md")).unwrap().frontmatter.status,
+        parse(&path.join("session-1.md"))
+            .unwrap()
+            .frontmatter
+            .status,
         ConversationStatus::Closed
     );
 }
@@ -308,10 +352,7 @@ fn concurrent_appends_to_different_sessions_write_separate_files() {
 fn append_turn_rejects_closed_session_on_following_day() {
     let vault_root = tempfile::TempDir::new().unwrap();
     let (_db_dir, _db_path, conn) = open_turn_db(vault_root.path());
-    let path = vault_root
-        .path()
-        .join("conversations")
-        .join("2026-05-03");
+    let path = vault_root.path().join("conversations").join("2026-05-03");
     fs::create_dir_all(&path).unwrap();
     fs::write(
         path.join("session-1.md"),
@@ -349,4 +390,70 @@ fn append_turn_rejects_closed_session_on_following_day() {
         .join("2026-05-04")
         .join("session-1.md")
         .exists());
+}
+
+#[test]
+fn append_turn_serializes_same_session_writers_across_processes() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (db_dir, db_path, conn) = open_turn_db(vault_root.path());
+    drop(conn);
+
+    let current_exe = std::env::current_exe().unwrap();
+    let signal_path = db_dir.path().join("append-turn.locked");
+    let mut first = Command::new(&current_exe)
+        .args(["--exact", "append_turn_cross_process_helper", "--nocapture"])
+        .env(APPEND_TURN_HELPER_ENV, "1")
+        .env(APPEND_TURN_DB_PATH_ENV, db_path.as_os_str())
+        .env(APPEND_TURN_SESSION_ID_ENV, "shared-session")
+        .env(APPEND_TURN_ROLE_ENV, "user")
+        .env(APPEND_TURN_CONTENT_ENV, "first child")
+        .env(APPEND_TURN_TIMESTAMP_ENV, "2026-05-03T09:14:22Z")
+        .env("QUAID_TEST_APPEND_TURN_HOLD_MS", "600")
+        .env(
+            "QUAID_TEST_APPEND_TURN_LOCK_SIGNAL",
+            signal_path.as_os_str(),
+        )
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !signal_path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "first child never acquired the session lock"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut second = Command::new(&current_exe)
+        .args(["--exact", "append_turn_cross_process_helper", "--nocapture"])
+        .env(APPEND_TURN_HELPER_ENV, "1")
+        .env(APPEND_TURN_DB_PATH_ENV, db_path.as_os_str())
+        .env(APPEND_TURN_SESSION_ID_ENV, "shared-session")
+        .env(APPEND_TURN_ROLE_ENV, "assistant")
+        .env(APPEND_TURN_CONTENT_ENV, "second child")
+        .env(APPEND_TURN_TIMESTAMP_ENV, "2026-05-03T09:14:23Z")
+        .spawn()
+        .unwrap();
+
+    thread::sleep(Duration::from_millis(200));
+    assert!(second.try_wait().unwrap().is_none());
+
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+
+    let parsed = parse(
+        &vault_root
+            .path()
+            .join("conversations")
+            .join("2026-05-03")
+            .join("shared-session.md"),
+    )
+    .unwrap();
+
+    assert_eq!(parsed.turns.len(), 2);
+    assert_eq!(parsed.turns[0].ordinal, 1);
+    assert_eq!(parsed.turns[0].content, "first child");
+    assert_eq!(parsed.turns[1].ordinal, 2);
+    assert_eq!(parsed.turns[1].content, "second child");
 }

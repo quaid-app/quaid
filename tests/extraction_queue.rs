@@ -150,7 +150,7 @@ fn mark_failed_retries_then_marks_failed_at_cap() {
     .unwrap();
     let job = dequeue(&conn).unwrap().unwrap();
 
-    mark_failed(&conn, job.id, "first").unwrap();
+    mark_failed(&conn, job.id, job.attempts, "first").unwrap();
     let retried: (i64, String, String) = conn
         .query_row(
             "SELECT attempts, status, last_error FROM extraction_queue WHERE id = ?1",
@@ -163,9 +163,9 @@ fn mark_failed_retries_then_marks_failed_at_cap() {
     assert_eq!(retried.2, "first");
 
     let second_job = dequeue(&conn).unwrap().unwrap();
-    mark_failed(&conn, second_job.id, "second").unwrap();
+    mark_failed(&conn, second_job.id, second_job.attempts, "second").unwrap();
     let third_job = dequeue(&conn).unwrap().unwrap();
-    mark_failed(&conn, third_job.id, "third").unwrap();
+    mark_failed(&conn, third_job.id, third_job.attempts, "third").unwrap();
     let failed: (i64, String) = conn
         .query_row(
             "SELECT attempts, status FROM extraction_queue WHERE id = ?1",
@@ -223,13 +223,51 @@ fn queue_rows_survive_reopen_and_done_rows_stop_dequeueing() {
 
     let conn = open_queue_db(&db_path);
     let claimed = dequeue(&conn).unwrap().unwrap();
-    mark_done(&conn, claimed.id).unwrap();
+    mark_done(&conn, claimed.id, claimed.attempts).unwrap();
 
     assert_eq!(dequeue(&conn).unwrap(), None);
     let status: String = conn
         .query_row(
             "SELECT status FROM extraction_queue WHERE id = ?1",
             [claimed.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, ExtractionJobStatus::Done.as_str());
+}
+
+#[test]
+fn stale_worker_cannot_finish_released_job_after_lease_expiry() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_queue_db(&db_path);
+    conn.execute(
+        "INSERT INTO extraction_queue
+             (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+         VALUES
+             ('s1', 'conversations/2026-05-03/s1.md', 'debounce', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', 0, NULL, 'running')",
+        [],
+    )
+    .unwrap();
+
+    let recovered = dequeue(&conn).unwrap().unwrap();
+    let stale_done = mark_done(&conn, recovered.id, 0).unwrap_err();
+    let stale_failed = mark_failed(&conn, recovered.id, 0, "late failure").unwrap_err();
+
+    assert!(matches!(
+        stale_done,
+        quaid::core::conversation::queue::ExtractionQueueError::StaleLease { .. }
+    ));
+    assert!(matches!(
+        stale_failed,
+        quaid::core::conversation::queue::ExtractionQueueError::StaleLease { .. }
+    ));
+
+    mark_done(&conn, recovered.id, recovered.attempts).unwrap();
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM extraction_queue WHERE id = ?1",
+            [recovered.id],
             |row| row.get(0),
         )
         .unwrap();

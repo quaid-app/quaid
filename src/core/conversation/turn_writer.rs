@@ -3,6 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use rusqlite::{params, Connection};
 use serde_json::Value as JsonValue;
@@ -70,6 +71,9 @@ pub fn append_turn(
     let _guard = lock.lock().map_err(|_| TurnWriteError::Config {
         message: "session lock poisoned".to_owned(),
     })?;
+    let _file_lock =
+        SessionFileLock::acquire(&session_lock_path(&root.root_path, namespace, session_id))?;
+    maybe_hold_session_lock_for_tests()?;
 
     let path_info = format::conversation_path_for(namespace, session_id, timestamp)?;
     let full_path = root.root_path.join(&path_info.relative_path);
@@ -148,11 +152,11 @@ fn ensure_dedicated_collection(
     write_target: &Collection,
 ) -> Result<Collection, TurnWriteError> {
     let dedicated_name = format!("{}{}", write_target.name, DEDICATED_COLLECTION_SUFFIX);
-    if let Some(existing) = collections::get_by_name(conn, &dedicated_name).map_err(|error| {
-        TurnWriteError::Config {
+    if let Some(existing) =
+        collections::get_by_name(conn, &dedicated_name).map_err(|error| TurnWriteError::Config {
             message: error.to_string(),
-        }
-    })? {
+        })?
+    {
         if !existing.writable || existing.root_path.trim().is_empty() {
             return Err(TurnWriteError::Config {
                 message: format!(
@@ -310,9 +314,153 @@ fn session_lock(
         .clone())
 }
 
+fn session_lock_path(root_path: &Path, namespace: Option<&str>, session_id: &str) -> PathBuf {
+    let mut path = root_path.to_path_buf();
+    if let Some(namespace) = namespace.filter(|value| !value.is_empty()) {
+        path.push(namespace);
+    }
+    path.push("conversations");
+    path.push(".locks");
+    for segment in session_id.split('/') {
+        path.push(segment);
+    }
+    path.set_extension("lock");
+    path
+}
+
+struct SessionFileLock {
+    file: File,
+}
+
+impl SessionFileLock {
+    fn acquire(path: &Path) -> Result<Self, TurnWriteError> {
+        let parent = path.parent().ok_or_else(|| TurnWriteError::Config {
+            message: format!("session lock path has no parent: {}", path.display()),
+        })?;
+        fs::create_dir_all(parent)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
+        lock_file(&file)?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for SessionFileLock {
+    fn drop(&mut self) {
+        let _ = unlock_file(&self.file);
+    }
+}
+
+fn maybe_hold_session_lock_for_tests() -> Result<(), TurnWriteError> {
+    if let Some(signal_path) = std::env::var_os("QUAID_TEST_APPEND_TURN_LOCK_SIGNAL") {
+        fs::write(signal_path, b"locked")?;
+    }
+    if let Some(raw_ms) = std::env::var_os("QUAID_TEST_APPEND_TURN_HOLD_MS") {
+        let hold_ms =
+            raw_ms
+                .to_string_lossy()
+                .parse::<u64>()
+                .map_err(|_| TurnWriteError::Config {
+                    message: format!(
+                        "invalid QUAID_TEST_APPEND_TURN_HOLD_MS value: {}",
+                        raw_ms.to_string_lossy()
+                    ),
+                })?;
+        std::thread::sleep(Duration::from_millis(hold_ms));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn lock_file(file: &File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn unlock_file(file: &File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn lock_file(file: &File) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LockFile(
+            h_file: *mut std::ffi::c_void,
+            offset_low: u32,
+            offset_high: u32,
+            bytes_low: u32,
+            bytes_high: u32,
+        ) -> i32;
+    }
+
+    loop {
+        let locked = unsafe { LockFile(file.as_raw_handle(), 0, 0, 1, 0) };
+        if locked != 0 {
+            return Ok(());
+        }
+
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(ERROR_LOCK_VIOLATION | ERROR_SHARING_VIOLATION) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn unlock_file(file: &File) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn UnlockFile(
+            h_file: *mut std::ffi::c_void,
+            offset_low: u32,
+            offset_high: u32,
+            bytes_low: u32,
+            bytes_high: u32,
+        ) -> i32;
+    }
+
+    let unlocked = unsafe { UnlockFile(file.as_raw_handle(), 0, 0, 1, 0) };
+    if unlocked != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 fn validate_session_id(session_id: &str) -> Result<(), TurnWriteError> {
-    collections::validate_relative_path(session_id).map_err(|error| TurnWriteError::InvalidSessionId {
-        message: error.to_string(),
+    collections::validate_relative_path(session_id).map_err(|error| {
+        TurnWriteError::InvalidSessionId {
+            message: error.to_string(),
+        }
     })
 }
 

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: `memory_add_turn` MCP tool appends turns to a per-session vault file
-The system SHALL expose an MCP tool `memory_add_turn` that accepts `{session_id: string, role: "user"|"assistant"|"system"|"tool", content: string, timestamp?: ISO-8601, metadata?: object}` and SHALL append the turn to a vault-resident markdown file at `<vault>/conversations/<YYYY-MM-DD>/<session-id>.md`, where `<YYYY-MM-DD>` is derived from the turn's timestamp (server `now` when the timestamp is omitted). The append SHALL be durable: the file SHALL exist on disk with the new turn block before the call returns. The tool SHALL return synchronously with `{turn_id, conversation_path, extraction_scheduled_at}`. The implementation SHALL NOT invoke any SLM on the request path.
+The system SHALL expose an MCP tool `memory_add_turn` that accepts `{session_id: string, role: "user"|"assistant"|"system"|"tool", content: string, timestamp?: ISO-8601, metadata?: object}` and SHALL append the turn to a vault-resident markdown file at `<vault>/conversations/<YYYY-MM-DD>/<session-id>.md`, where `<YYYY-MM-DD>` is derived from the turn's timestamp (server `now` when the timestamp is omitted). The append SHALL be durable: the file SHALL exist on disk with the new turn block before the call returns. Concurrent appends for the same session SHALL serialize across processes so ordinals remain unique and ordered. The tool SHALL return synchronously with `{turn_id, conversation_path, extraction_scheduled_at}`. The implementation SHALL NOT invoke any SLM on the request path.
 
 #### Scenario: First turn for a session creates the conversation file
 - **WHEN** `memory_add_turn` is called with `session_id="s1"`, `role="user"`, `content="hi"`, `timestamp="2026-05-03T09:14:22Z"` and no file exists yet
@@ -15,12 +15,16 @@ The system SHALL expose an MCP tool `memory_add_turn` that accepts `{session_id:
 - **WHEN** `memory_add_turn` returns successfully
 - **THEN** the appended turn content is observable on disk by an independent file read
 
+#### Scenario: Same-session concurrent appends serialize across processes
+- **WHEN** two processes append turns concurrently for the same `session_id`
+- **THEN** exactly one append holds the session lock at a time, and the resulting file contains both turns with distinct ordinals in append order
+
 #### Scenario: Caller-supplied metadata is preserved verbatim in the turn block
 - **WHEN** `memory_add_turn` is called with `metadata={"tool_name": "bash", "importance": "high"}`
 - **THEN** the rendered turn block in the conversation file preserves the metadata fields and they survive a parse-then-render round-trip
 
 ### Requirement: Conversation file format uses frontmatter and ordered turn blocks
-The system SHALL render conversation files with YAML frontmatter containing `type: conversation`, `session_id`, `date`, `started_at`, `status` (`open` or `closed`), `last_extracted_at`, and `last_extracted_turn` (integer cursor, default `0`). The body SHALL consist of turn blocks separated by horizontal rules (`---`). Each turn block SHALL begin with a heading `## Turn <N> · <role> · <timestamp>` and contain the turn's `content` followed by an optional metadata code fence. The cursor `last_extracted_turn` SHALL track the highest turn ordinal that has been processed by extraction and SHALL be updated only by extraction (proposal #2), not by `memory_add_turn`.
+The system SHALL render conversation files with YAML frontmatter containing `type: conversation`, `session_id`, `date`, `started_at`, `status` (`open` or `closed`), `last_extracted_at`, and `last_extracted_turn` (integer cursor, default `0`). The body SHALL consist of turn blocks separated by horizontal rules (`---`). Each turn block SHALL begin with a heading `## Turn <N> · <role> · <timestamp>` and contain the turn's `content` followed by an optional metadata code fence using the canonical info string ````json turn-metadata```` so ordinary trailing JSON code fences remain content. The cursor `last_extracted_turn` SHALL track the highest turn ordinal that has been processed by extraction and SHALL be updated only by extraction (proposal #2), not by `memory_add_turn`.
 
 #### Scenario: Conversation file frontmatter contains required keys at creation
 - **WHEN** a new conversation file is created by the first `memory_add_turn` call

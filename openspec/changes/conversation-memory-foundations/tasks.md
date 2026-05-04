@@ -37,9 +37,11 @@
 
 ## 4. Conversation file format
 
+> **Truth note (Mom, 2026-05-04T07:22:12.881+08:00):** Wave 1 revision closed three real seams without widening scope: canonical metadata fences now render as ````json turn-metadata```` so trailing user JSON fences stay content, same-session `append_turn` serializes across processes with a per-session file lock, and queue completion/failure now require the claimant's current attempt so stale post-expiry workers cannot close a re-leased row by `job_id` alone. Deterministic tests cover each seam.
+
 - [x] 4.1 Add `Turn`, `ConversationFile` types to `src/core/types.rs` (frontmatter struct + ordered turn blocks)
 - [x] 4.2 Implement `src/core/conversation/format.rs` with `parse(path) -> ConversationFile`, `render(file) -> String`, and a turn-block round-trip helper
-- [x] 4.3 Define the canonical render shape: frontmatter (`type`, `session_id`, `date`, `started_at`, `status`, `last_extracted_at`, `last_extracted_turn`) + turn blocks (`## Turn N · role · timestamp` with optional metadata fence)
+- [x] 4.3 Define the canonical render shape: frontmatter (`type`, `session_id`, `date`, `started_at`, `status`, `last_extracted_at`, `last_extracted_turn`) + turn blocks (`## Turn N · role · timestamp` with optional ` ```json turn-metadata` fence)
 - [x] 4.4 Implement multi-day continuation: given a `session_id` and a new turn timestamp, locate the most recent prior day-file (if any) and compute the next ordinal as `MAX(ordinal across all day-files) + 1`
 - [x] 4.5 Namespace-aware path resolution: `<vault>/<namespace>/conversations/<YYYY-MM-DD>/<session-id>.md` when namespaces are in use
 - [x] 4.6 Unit tests: parse-render round-trip, frontmatter cursor preservation, ordinal continuation across day-files, namespace path nesting, malformed turn block produces actionable parse error
@@ -57,7 +59,7 @@
 - [x] 6.1 Implement `src/core/conversation/queue.rs::enqueue(session_id, conversation_path, trigger_kind, scheduled_for) -> Result<()>` with UPSERT-collapse semantics on `(session_id, status='pending')`
 - [x] 6.2 Encode the precedence rules: `session_close` overrides any later `debounce` (collapses to earlier `scheduled_for` and `trigger_kind = 'session_close'`); `debounce` extends `scheduled_for` forward but does not override `session_close`
 - [x] 6.3 Implement `dequeue() -> Option<Job>` that selects the earliest `pending` row with `scheduled_for <= now()`, atomically transitions to `running`, and returns the job — safe under concurrent dequeues
-- [x] 6.4 Implement `mark_done(job_id)`, `mark_failed(job_id, err)` with `attempts` accounting and the `extraction.max_retries` cap (default 3) before transitioning to `failed`
+- [x] 6.4 Implement claim-bound `mark_done(job_id, attempts)` / `mark_failed(job_id, attempts, err)` with `attempts` accounting and the `extraction.max_retries` cap (default 3) before transitioning to `failed`
 - [x] 6.5 Implement lease expiry: `running` rows whose `scheduled_for + lease_expiry_seconds` has passed (default 300s) become re-eligible for dequeue with `attempts += 1`
 - [x] 6.6 Tests: UPSERT-collapse under burst, `session_close` precedence, scheduled_for ordering on dequeue, concurrent-dequeue safety, retry/fail transitions, lease expiry recovery, persistence across simulated daemon restart
 

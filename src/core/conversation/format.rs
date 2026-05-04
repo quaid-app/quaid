@@ -9,6 +9,7 @@ use crate::core::types::{
 };
 
 const HEADING_SEPARATOR: &str = " · ";
+const METADATA_FENCE_OPEN: &str = "```json turn-metadata";
 
 #[derive(Debug, Error)]
 pub enum ConversationFormatError {
@@ -133,7 +134,8 @@ pub fn render_turn_block(turn: &Turn) -> String {
     }
     if let Some(metadata) = &turn.metadata {
         out.push('\n');
-        out.push_str("```json\n");
+        out.push_str(METADATA_FENCE_OPEN);
+        out.push('\n');
         out.push_str(&serde_json::to_string_pretty(metadata).expect("serialize metadata"));
         out.push_str("\n```\n");
     }
@@ -334,7 +336,11 @@ fn parse_turn_block(
     }
 
     let mut block_lines = lines[start + 1..end].to_vec();
-    while block_lines.first().map(|line| line.trim().is_empty()).unwrap_or(false) {
+    while block_lines
+        .first()
+        .map(|line| line.trim().is_empty())
+        .unwrap_or(false)
+    {
         block_lines.remove(0);
     }
 
@@ -365,7 +371,7 @@ fn split_content_and_metadata(
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(index, line)| (line.trim() == "```json").then_some(index))
+                .find_map(|(index, line)| (line.trim() == METADATA_FENCE_OPEN).then_some(index))
                 .map(|start| (start, end))
         });
 
@@ -383,7 +389,11 @@ fn split_content_and_metadata(
     };
 
     let mut content_lines = content_lines.to_vec();
-    while content_lines.last().map(|line| line.trim().is_empty()).unwrap_or(false) {
+    while content_lines
+        .last()
+        .map(|line| line.trim().is_empty())
+        .unwrap_or(false)
+    {
         content_lines.pop();
     }
 
@@ -456,12 +466,8 @@ mod tests {
 
     #[test]
     fn conversation_path_for_nests_namespace_when_present() {
-        let path = conversation_path_for(
-            Some("alpha"),
-            "session-1",
-            "2026-05-04T00:01:00Z",
-        )
-        .expect("path info");
+        let path = conversation_path_for(Some("alpha"), "session-1", "2026-05-04T00:01:00Z")
+            .expect("path info");
 
         assert_eq!(
             path.relative_path,
@@ -488,7 +494,9 @@ body\n";
 
         let error = parse_str(input).expect_err("malformed ordinal should fail");
         assert!(error.to_string().contains("line"));
-        assert!(error.to_string().contains("turn ordinal must be an integer"));
+        assert!(error
+            .to_string()
+            .contains("turn ordinal must be an integer"));
     }
 
     #[test]
@@ -547,13 +555,39 @@ last_extracted_turn: 0\n\
 ---\n\n\
 ## Turn 1 · user · 2026-05-03T09:14:22Z\n\n\
 hello\n\n\
-```json\n\
+```json turn-metadata\n\
 {oops}\n\
 ```\n";
 
         let error = parse_str(input).expect_err("invalid metadata should fail");
 
         assert!(error.to_string().contains("invalid turn metadata"));
+    }
+
+    #[test]
+    fn parse_keeps_trailing_json_code_fence_in_turn_content() {
+        let input = "---\n\
+type: conversation\n\
+session_id: session-1\n\
+date: 2026-05-03\n\
+started_at: 2026-05-03T09:14:22Z\n\
+status: open\n\
+last_extracted_at: null\n\
+last_extracted_turn: 0\n\
+---\n\n\
+## Turn 1 · user · 2026-05-03T09:14:22Z\n\n\
+Here is the payload.\n\n\
+```json\n\
+{\n\
+  \"importance\": \"high\"\n\
+}\n\
+```\n";
+
+        let parsed = parse_str(input).expect("parse trailing json content");
+
+        assert_eq!(parsed.turns[0].metadata, None);
+        assert!(parsed.turns[0].content.contains("```json"));
+        assert_eq!(render(&parsed), input);
     }
 
     #[test]

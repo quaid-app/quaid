@@ -21,6 +21,7 @@
 ## Learnings
 
 - [2026-05-04T07:22:12.881+08:00] On rename-before-commit write paths, typed semantic refusals need a preflight gate before sentinel/tempfile/rename, but the in-transaction check must still stay in place as the race backstop. Honest proof is blocked-state evidence: no new vault file, no new active raw bytes, no recovery escalation.
+- [2026-05-04T07:22:12.881+08:00] When a leased queue row can be re-claimed, `job_id` stops being an ownership proof. Bind `done`/`failed` transitions to the dequeue generation already carried by the row (here: `attempts`) or a stale worker can close a newer lease after expiry.
 
 ---
 

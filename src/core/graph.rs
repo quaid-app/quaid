@@ -426,6 +426,21 @@ mod tests {
         .unwrap();
     }
 
+    fn supersede_page(conn: &Connection, predecessor_slug: &str, successor_slug: &str) {
+        let successor_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [successor_slug],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE pages SET superseded_by = ?1 WHERE slug = ?2",
+            rusqlite::params![successor_id, predecessor_slug],
+        )
+        .unwrap();
+    }
+
     // ── Task 1.5: zero-hop returns root only ─────────────────
 
     #[test]
@@ -546,6 +561,46 @@ mod tests {
         assert_eq!(result.nodes.len(), 2);
         let slugs: HashSet<&str> = result.nodes.iter().map(|n| n.slug.as_str()).collect();
         assert!(slugs.contains("companies/acme"));
+    }
+
+    #[test]
+    fn canonical_graph_includes_supersede_edges_in_both_directions() {
+        let conn = open_test_db();
+        insert_page(&conn, "facts/a", "fact", "A");
+        insert_page(&conn, "facts/b", "fact", "B");
+        insert_page(&conn, "facts/c", "fact", "C");
+        supersede_page(&conn, "facts/a", "facts/b");
+        supersede_page(&conn, "facts/b", "facts/c");
+        let b_id: i64 = conn
+            .query_row("SELECT id FROM pages WHERE slug = 'facts/b'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let result =
+            neighborhood_graph_for_page(b_id, "default", "facts/b", 1, TemporalFilter::All, &conn)
+                .unwrap();
+
+        assert_eq!(
+            result
+                .nodes
+                .iter()
+                .map(|node| node.slug.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["default::facts/a", "default::facts/b", "default::facts/c"])
+        );
+        assert_eq!(
+            result
+                .edges
+                .iter()
+                .filter(|edge| edge.relationship == "superseded_by")
+                .map(|edge| (edge.from.as_str(), edge.to.as_str()))
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                ("default::facts/a", "default::facts/b"),
+                ("default::facts/b", "default::facts/c"),
+            ])
+        );
     }
 
     // ── Task 1.5: unknown slug returns PageNotFound ──────────

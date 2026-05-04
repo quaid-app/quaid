@@ -277,6 +277,21 @@ mod tests {
         .unwrap();
     }
 
+    fn supersede_page(conn: &Connection, predecessor_slug: &str, successor_slug: &str) {
+        let successor_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [successor_slug],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE pages SET superseded_by = ?1 WHERE slug = ?2",
+            rusqlite::params![successor_id, predecessor_slug],
+        )
+        .unwrap();
+    }
+
     fn make_result(slug: &str) -> SearchResult {
         SearchResult {
             slug: slug.to_owned(),
@@ -365,6 +380,36 @@ mod tests {
 
         let shared_count = result.iter().filter(|r| r.slug == "shared").count();
         assert_eq!(shared_count, 1, "shared page should appear exactly once");
+    }
+
+    #[test]
+    fn expansion_skips_superseded_neighbours_unless_requested() {
+        let conn = open_test_db();
+        insert_page(&conn, "a", &"x".repeat(40));
+        insert_page(&conn, "b-old", &"y".repeat(40));
+        insert_page(&conn, "b-new", &"z".repeat(40));
+        insert_link(&conn, "a", "b-old");
+        supersede_page(&conn, "b-old", "b-new");
+
+        let default_result =
+            progressive_retrieve(vec![make_result("a")], 100_000, 1, None, false, &conn).unwrap();
+        let historical_result =
+            progressive_retrieve(vec![make_result("a")], 100_000, 1, None, true, &conn).unwrap();
+
+        assert_eq!(
+            default_result
+                .iter()
+                .map(|result| result.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+        assert_eq!(
+            historical_result
+                .iter()
+                .map(|result| result.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b-old"]
+        );
     }
 
     // ── Additional: multi-hop expansion works ────────────────

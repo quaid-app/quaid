@@ -707,6 +707,21 @@ mod tests {
         .expect("insert page");
     }
 
+    fn supersede_page(conn: &Connection, predecessor_slug: &str, successor_slug: &str) {
+        let successor_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [successor_slug],
+                |row| row.get(0),
+            )
+            .expect("successor id");
+        conn.execute(
+            "UPDATE pages SET superseded_by = ?1 WHERE slug = ?2",
+            rusqlite::params![successor_id, predecessor_slug],
+        )
+        .expect("mark predecessor superseded");
+    }
+
     #[test]
     fn hybrid_search_returns_empty_for_blank_query() {
         let conn = open_test_db();
@@ -897,6 +912,39 @@ mod tests {
                 "default::concepts/neural".to_owned(),
             ]),
             "canonical hybrid results should keep the collection prefix on FTS fallback hits"
+        );
+    }
+
+    #[test]
+    fn exact_slug_result_canonical_hides_superseded_pages_by_default() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "facts/a",
+            "Fact A",
+            "Archived",
+            "Historical version",
+            "facts",
+        );
+        insert_page(
+            &conn,
+            "facts/b",
+            "Fact B",
+            "Current",
+            "Current version",
+            "facts",
+        );
+        supersede_page(&conn, "facts/a", "facts/b");
+
+        let default_result =
+            exact_slug_result_canonical("facts/a", None, None, false, &conn).expect("head-only");
+        let historical_result =
+            exact_slug_result_canonical("facts/a", None, None, true, &conn).expect("history");
+
+        assert!(default_result.is_none());
+        assert_eq!(
+            historical_result.expect("historical result").slug,
+            "default::facts/a"
         );
     }
 

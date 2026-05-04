@@ -1,4 +1,4 @@
--- memory.db schema — Quaid v8
+-- memory.db schema — Quaid v9
 -- Embedded in binary via include_str!("schema.sql") in src/core/db.rs
 -- Standalone copy for reference and tooling.
 
@@ -402,6 +402,23 @@ CREATE INDEX IF NOT EXISTS idx_extraction_queue_pending
     ON extraction_queue(status, scheduled_for) WHERE status = 'pending';
 
 -- ============================================================
+-- correction_sessions: bounded fact-correction dialogues
+-- ============================================================
+CREATE TABLE IF NOT EXISTS correction_sessions (
+    correction_id TEXT PRIMARY KEY,
+    fact_slug     TEXT    NOT NULL,
+    exchange_log  TEXT    NOT NULL CHECK(json_valid(exchange_log) AND json_type(exchange_log) = 'array'),
+    turns_used    INTEGER NOT NULL DEFAULT 0 CHECK(turns_used >= 0),
+    status        TEXT    NOT NULL DEFAULT 'open'
+                          CHECK(status IN ('open', 'committed', 'abandoned', 'expired')),
+    created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    expires_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+1 hour'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_correction_open
+    ON correction_sessions(status, expires_at) WHERE status = 'open';
+
+-- ============================================================
 -- config: mutable runtime defaults
 -- ============================================================
 CREATE TABLE IF NOT EXISTS config (
@@ -410,7 +427,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',               '8'),
+    ('version',               '9'),
     ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),
@@ -418,7 +435,15 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('default_token_budget',  '4000'),
     ('memory.location',       'vault-subdir'),
     ('corrections.history_on_disk', 'false'),
-    ('extraction.max_retries', '3');
+    ('extraction.max_retries', '3'),
+    ('extraction.enabled', 'false'),
+    ('extraction.model_alias', 'phi-3.5-mini'),
+    ('extraction.window_turns', '5'),
+    ('extraction.debounce_ms', '5000'),
+    ('extraction.idle_close_ms', '60000'),
+    ('extraction.retention_days', '30'),
+    ('fact_resolution.dedup_cosine_min', '0.92'),
+    ('fact_resolution.supersede_cosine_min', '0.4');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

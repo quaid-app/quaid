@@ -55,7 +55,9 @@ pub enum FileEditError {
     PageUuid(#[from] crate::core::page_uuid::PageUuidError),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("file-edit supersede requires head page `{slug}`; current successor is `{successor_slug}`")]
+    #[error(
+        "file-edit supersede requires head page `{slug}`; current successor is `{successor_slug}`"
+    )]
     NonHeadTarget {
         slug: String,
         successor_slug: String,
@@ -307,10 +309,8 @@ pub fn handle_extracted_edit(
 
 pub fn is_extracted_path(relative_path: &Path) -> bool {
     let parts = path_parts(relative_path);
-    matches!(
-        parts.as_slice(),
-        ["extracted", ..] | [_, "extracted", ..]
-    ) && !is_history_sidecar_path(relative_path)
+    matches!(parts.as_slice(), ["extracted", ..] | [_, "extracted", ..])
+        && !is_history_sidecar_path(relative_path)
 }
 
 pub fn is_history_sidecar_path(relative_path: &Path) -> bool {
@@ -377,9 +377,11 @@ fn current_predecessor(
 }
 
 fn page_namespace(conn: &Connection, page_id: i64) -> Result<String, FileEditError> {
-    conn.query_row("SELECT namespace FROM pages WHERE id = ?1", [page_id], |row| {
-        row.get(0)
-    })
+    conn.query_row(
+        "SELECT namespace FROM pages WHERE id = ?1",
+        [page_id],
+        |row| row.get(0),
+    )
     .map_err(FileEditError::from)
 }
 
@@ -391,12 +393,10 @@ fn current_timestamp(conn: &Connection) -> Result<String, FileEditError> {
 }
 
 fn history_on_disk_enabled(conn: &Connection) -> Result<bool, FileEditError> {
-    Ok(db::read_config_value_or(
-        conn,
-        "corrections.history_on_disk",
-        "false",
-    )?
-    .eq_ignore_ascii_case("true"))
+    Ok(
+        db::read_config_value_or(conn, "corrections.history_on_disk", "false")?
+            .eq_ignore_ascii_case("true"),
+    )
 }
 
 fn history_relative_path(relative_path: &Path, slug: &str, archived_suffix: &str) -> PathBuf {

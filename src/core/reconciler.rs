@@ -248,7 +248,12 @@ pub(crate) fn reconcile_with_native_events(
             })?;
         let walked = walk_collection(conn, &root_fd, collection)?;
         detect_duplicate_uuids_in_tree(Path::new(&collection.root_path), &walked.files)?;
-        let diff = stat_diff_from_walk(conn, collection.id, Path::new(&collection.root_path), walked.files)?;
+        let diff = stat_diff_from_walk(
+            conn,
+            collection.id,
+            Path::new(&collection.root_path),
+            walked.files,
+        )?;
         let rename_resolution = resolve_rename_resolution(
             conn,
             collection.id,
@@ -2649,7 +2654,7 @@ fn apply_reingest(
             &edited_page,
             &raw_bytes,
         )
-        .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))? 
+        .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?
         {
             HandleExtractedEditOutcome::Bypass => {}
             HandleExtractedEditOutcome::WhitespaceNoOp
@@ -2678,10 +2683,9 @@ fn apply_reingest(
     })?;
 
     let tx = conn.unchecked_transaction()?;
-    let now: String =
-        tx.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
-            row.get(0)
-        })?;
+    let now: String = tx.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
+        row.get(0)
+    })?;
 
     let (page_id, created) = if let Some((page_id, _)) = current_page {
         tx.execute(
@@ -3750,13 +3754,10 @@ mod tests {
             original.as_bytes(),
         )
         .unwrap();
-        let before_file_state = file_state::get_file_state(
-            &conn,
-            collection.id,
-            &path_to_string(&relative_path),
-        )
-        .unwrap()
-        .unwrap();
+        let before_file_state =
+            file_state::get_file_state(&conn, collection.id, &path_to_string(&relative_path))
+                .unwrap()
+                .unwrap();
 
         let whitespace_only =
             "---\nslug: preferences/noop\n title: Noop\ntype: preference\n---\nbody  \n\n";
@@ -3772,13 +3773,10 @@ mod tests {
         assert!(plan.unchanged[0].skip_metadata_refresh);
         apply_full_hash_metadata_self_heal(&conn, collection.id, &plan.unchanged).unwrap();
 
-        let after_file_state = file_state::get_file_state(
-            &conn,
-            collection.id,
-            &path_to_string(&relative_path),
-        )
-        .unwrap()
-        .unwrap();
+        let after_file_state =
+            file_state::get_file_state(&conn, collection.id, &path_to_string(&relative_path))
+                .unwrap()
+                .unwrap();
         assert_eq!(before_file_state.sha256, after_file_state.sha256);
         assert_eq!(before_file_state.mtime_ns, after_file_state.mtime_ns);
     }

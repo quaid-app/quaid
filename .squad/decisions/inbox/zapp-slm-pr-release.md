@@ -1,0 +1,6 @@
+# Zapp — SLM PR / release surface decision
+
+- **Date:** 2026-05-05
+- **Decision:** Do **not** reuse `feat/slm-conversation-mem` as the next draft-PR head. Its remote ref already backed merged PR #153, while the local head now diverges with a smaller, coherent `v0.18.0` release-truth slice. Publish that slice under a fresh head ref, and keep any future `v0.19.0` PR claims blocked until extraction/correction code actually lands.
+- **Why:** A truthful draft PR must describe only the pushed scope. The active branch currently contains manifest + release-doc truth work for the pending `v0.18.0` release lane, not the `slm-extraction-and-correction` implementation proposed for the next lane. Reusing the merged head name would blur those scopes and misstate what is actually ready for review.
+- **Consequences:** Open the draft PR now for the pushed `v0.18.0` release-prep slice only, with explicit non-claims for SLM extraction/correction. For `v0.19.0`, keep the pre-tag truth checklist ready: Cargo version parity, release workflow/tag gate, README + getting-started + install docs wording, roadmap status, MCP tool-count copy, and release asset contract all need a fresh truth pass once the implementation branch is real.

@@ -1130,9 +1130,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(correction_table_sql.contains(
-            "status IN ('open', 'committed', 'abandoned', 'expired')"
-        ));
+        assert!(correction_table_sql
+            .contains("status IN ('open', 'committed', 'abandoned', 'expired')"));
         assert!(correction_table_sql.contains("json_valid(exchange_log)"));
 
         let correction_index_sql: String = conn

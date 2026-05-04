@@ -1,14 +1,14 @@
 ---
 title: "Quaid Product Roadmap"
 source: quaid-app/quaid
-date: 2026-05-03
+date: 2026-05-04
 tags: [quaid, roadmap, product, planning, memory-systems]
 aliases: [quaid-roadmap]
 ---
 
 # Quaid Product Roadmap
 
-**Last updated:** May 3, 2026
+**Last updated:** May 4, 2026
 **Latest public release:** v0.17.0
 **Current release lane:** v0.18.0
 **Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
@@ -41,17 +41,16 @@ Temporal links, assertions, contradiction detection, progressive retrieval, 16 M
 ### Phase 3 - Skills, Benchmarks, CLI Polish (v0.9.2) ✅
 All 8 skills production-ready, BEIR regression gate, benchmark harnesses (LoCoMo, LongMemEval, BEAM adapters).
 
-### Phase 4 - Vault Sync Engine (v0.9.x → v0.18.0) 🔄 In Progress
-Multi-collection live filesystem sync. `quaid collection add/sync` replaces `quaid import`.
-Schema v6+, live watcher, write safety, namespace isolation shipped.
+### Phase 4 - Vault Sync Engine (v0.9.x → v0.17.0) ✅ Shipped core surface
+Multi-collection live filesystem sync, namespace isolation, collection health reporting, and the reviewed Unix same-root single-file live-write path are all in the latest public release. `quaid collection add/sync` replaced `quaid import`.
 
-**Remaining in Batch 7+:** Online restore handshake, Windows quarantine restore.
+**Still deferred:** Online restore handshake, Windows quarantine restore, and the remaining restore hardening follow-ons.
 
 ---
 
-## Phase 5 - Conversation Memory + SLM Extraction
+## Phase 5 - Conversation memory foundations + SLM extraction
 
-**Priority: NEXT — highest impact single feature**
+**Priority: current release lane — foundations landed, extractor follow-on next**
 **Target: >40% LoCoMo, >40% LongMemEval**
 **Issues: #137 (namespace, shipped), #105 (conversation memory), #135 (contradiction resolution)**
 
@@ -59,14 +58,28 @@ Schema v6+, live watcher, write safety, namespace isolation shipped.
 
 The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as documents. Fact extraction doesn't happen at write time. When asked "What degree did I graduate with?", Quaid can't answer from "Business Administration, spent 4 years at it" buried in casual conversation.
 
-### Core requirements
+### Landed on the `v0.18.0` branch
 
-**Namespace isolation** ✅ Shipped in v0.16.0 - multiple agents/sessions share one DB without bleed.
+**Namespace isolation** ✅ Shipped in `v0.16.0` — multiple agents and sessions share one DB without bleed.
 
-**Conversation ingestion** (`memory_add_turn` MCP tool)
-- Accept conversation turns: `{session_id, role, content, timestamp}`
-- Queue for background extraction
-- Non-blocking: ingest response is immediate
+**Conversation ingestion and session controls**
+- `memory_add_turn` accepts `{session_id, role, content, timestamp?, metadata?}`
+- `memory_close_session` forces the final queue flush for a session
+- `memory_close_action` updates `action_item` pages in place
+- Conversation turns are written to namespace-aware day files under `conversations/YYYY-MM-DD/<session-id>.md`
+- Request-path latency stays non-blocking; the request does file append + fsync + queue work only
+
+**Queue and retrieval foundations**
+- `extraction_queue` is landed with debounce and session-close triggers
+- ADD-only supersede chains are landed for page history
+- Head-only retrieval is now the default, with `--include-superseded` / `include_superseded` as the opt-in escape hatch
+- `memory_get` and `memory_graph` surface supersede relationships directly
+
+**Release truth**
+- The latest public binaries and `install.sh` still publish `v0.17.0`
+- The upcoming `v0.18.0` tag is the release that will publish the 3 new conversation-memory MCP tools
+
+### Still remaining after foundations
 
 **SLM-based fact extraction** (runs in background)
 - Local SLM: Phi-3.5 Mini (MIT, ~2GB) as default. Configurable to Gemma 3 1B/4B.
@@ -88,12 +101,11 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - Non-blocking - ingest latency unchanged
 - `quaid query "what did we decide about X last week"` returns relevant facts
 
-### Key design decisions for OpenSpec
-- Is SLM extraction synchronous or background queue?
-- What is the 3-5 turn context window boundary? (Session ID? Time window?)
-- How does contradiction resolution interact with ADD-only immutability?
+### Next design / delivery questions
+- What is the final 3-5 turn extraction boundary? (Strict session window, time window, or both?)
+- How does contradiction resolution interact with ADD-only immutability once extracted facts begin superseding each other automatically?
 - Model download: lazy (first use) or eager (at `extraction.enabled`)?
-- What structured format for extracted facts?
+- What structured format should extracted facts persist with, and what confidence metadata should survive review?
 
 ---
 
@@ -219,7 +231,7 @@ Both are right in different contexts. A future feature worth considering:
 
 `quaid eval --against-history` - run your N most recent queries against current binary, compare to stored baseline, report regressions. Each user gets their own personalized regression detector.
 
-Not on the current roadmap but worth an OpenSpec when Phase 5 is shipped.
+Not on the current roadmap but worth an OpenSpec after the `v0.18.0` foundations and the extraction follow-on are both shipped.
 
 ---
 
@@ -229,7 +241,7 @@ Not on the current roadmap but worth an OpenSpec when Phase 5 is shipped.
 |----------|-------|---------|-----------|
 | 1 | #137 ✅ | Namespace isolation | — |
 | 2 | #134 | Large corpus performance | — |
-| 3 | #105 | Conversation memory + SLM extraction | #137 |
+| 3 | #105 | Conversation memory foundations (`v0.18.0` lane) + SLM extraction follow-on | #137 |
 | 4 | #135 | Contradiction resolution | #105 |
 | 5 | #107 | Entity extraction | #105 (coordinate) |
 | 6 | #72 | Self-wiring knowledge graph | #107 |

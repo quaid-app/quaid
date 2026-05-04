@@ -118,10 +118,10 @@ Three commands. No API keys. No cloud.
 # Initialize a memory
 quaid init ~/memory.db
 
-# Import your notes (idempotent — safe to re-run)
-quaid import ~/notes --db ~/memory.db
+# Attach your notes as a live-sync collection
+quaid collection add notes ~/notes --db ~/memory.db
 
-# Expose 17 tools to any MCP client over stdio (Unix/macOS/Linux; v0.9.6)
+# Expose Quaid's MCP tools over stdio (19 in `v0.17.0`; 22 on the `v0.18.0` branch)
 QUAID_DB=~/memory.db quaid serve
 ```
 

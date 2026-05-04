@@ -95,7 +95,7 @@ quaid serve
 
 `quaid collection add` performs the initial vault scan, records the collection, and writes pages into the database. On Unix/macOS/Linux, `quaid serve` keeps that collection in sync continuously. For one-off files outside a collection, use `quaid ingest /path/to/file.md`.
 
-> On Unix, you can persist missing `quaid_id` frontmatter during attach (`quaid collection add <name> <path> --write-quaid-id`) or backfill it later with `quaid collection migrate-uuids <name> [--dry-run]`. Batch 5 additionally upgrades same-root single-file `quaid put` so the CLI authenticates the live `quaid serve` owner and proxies the write instead of refusing. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
+> On Unix, you can persist missing `quaid_id` frontmatter during attach (`quaid collection add <name> <path> --write-quaid-id`) or backfill it later with `quaid collection migrate-uuids <name> [--dry-run]`. Same-root single-file `quaid put` can also authenticate a live `quaid serve` owner and proxy the write instead of refusing. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
 
 ### 3. Search
 
@@ -189,6 +189,16 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 **Collections + namespaces (3):** `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`
 
 The latest public GitHub Release (`v0.17.0`) exposes the first 19 tools. This branch prepares `v0.18.0` by adding the 3 conversation-memory capture tools plus the queue and supersede plumbing behind them. See [spec.md](spec.md#mcp-server) for tool signatures.
+
+### Capture a conversation on this branch
+
+```bash
+quaid call memory_add_turn '{"session_id":"demo","role":"user","content":"I prefer weekly written updates."}'
+quaid call memory_add_turn '{"session_id":"demo","role":"assistant","content":"Got it. I will keep updates written and weekly."}'
+quaid call memory_close_session '{"session_id":"demo"}'
+```
+
+Those calls append turns to `conversations/YYYY-MM-DD/<session-id>.md` and queue extraction work. On this branch, the capture layer, queue, and supersede-aware retrieval are landed; the background SLM extractor that writes new fact pages is still follow-on work.
 
 ---
 
@@ -384,11 +394,12 @@ Exit 0 means clean; exit 1 means violations were found.
 
 ### Raw MCP tool invocation
 
-Call MCP tools directly from the CLI without starting the server. The dispatcher covers all 17 shipped MCP tools, including `memory_collections`.
+Call MCP tools directly from the CLI without starting the server. On this branch, the dispatcher covers all 22 MCP tools.
 
 ```bash
 quaid call memory_stats '{}'
 quaid call memory_get '{"slug": "people/alice"}'
+quaid call memory_add_turn '{"session_id":"demo","role":"user","content":"Ship the docs before lunch."}'
 quaid call memory_gap '{"query": "who founded acme corp"}'
 quaid call memory_collections '{}'
 ```

@@ -5,6 +5,7 @@
 ## Learnings
 
 - [2026-04-29T21:29:11.071+08:00] Pre-tag release truth for a new CLI write path is not just the feature name; docs also need the operating constraints (for example Unix-only, offline-only, or blocked while `serve` owns the collection) so branch-only behavior is described honestly.
+- [2026-05-04T07:22:12.881+08:00] When a release lane adds MCP tools, the docs need a published-vs-branch split for tool counts as well as version numbers; for this lane the truthful release story is public `v0.17.0` = 19 tools, branch `v0.18.0` = 22 tools.
 
 ## 2026-04-29 Release Checkpoint
 - Zapp: release prep COMPLETE (v0.12.0 validation green)

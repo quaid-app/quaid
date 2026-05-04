@@ -14,6 +14,8 @@
 ## 2. ADD-only supersede chain — page-level support
 
 > **Truth note (Mom, 2026-05-04T07:22:12.881+08:00):** Professor's slice-2 rejection is now repaired for `2.3` and `2.5`: Unix write-through preflights `supersedes` before sentinel/tempfile/rename work starts, and tests now prove a rejected non-head supersede leaves the vault and active raw source bytes unchanged while returning the typed supersede conflict.
+>
+> **Truth note (Bender, 2026-05-04T07:22:12.881+08:00):** The remaining concurrent-contender hole in `2.2`/`2.3` is now closed in `src/commands/put.rs`: different successor slugs must stage the successor row and claim the current head inside the same still-open write transaction before sentinel/tempfile/rename work begins, while the later transactional reconcile remains as a race backstop. The new deterministic concurrent proof blocks the winner mid-claim and verifies the loser returns `SupersedeConflictError` without creating vault bytes, activating raw-import ownership, or leaving recovery-sentinel residue.
 
 - [x] 2.1 Keep `superseded_by: Option<i64>` on `Page` (or equivalent) in `src/core/types.rs` as landed baseline plumbing for the remaining supersede work
 - [x] 2.2 Update page write/upsert paths so a write with frontmatter `supersedes: <slug>` resolves the prior slug to its page id, sets the new page's row, and updates the prior page's `superseded_by` atomically (single transaction)

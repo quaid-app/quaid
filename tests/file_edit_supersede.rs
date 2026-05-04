@@ -40,6 +40,7 @@ fn put_page(server: &QuaidServer, slug: &str, content: &str) {
 }
 
 fn set_default_root(conn: &Connection, root: &Path) {
+    fs::create_dir_all(root).unwrap();
     conn.execute(
         "UPDATE collections SET root_path = ?1, writable = 1 WHERE id = 1",
         [root.to_string_lossy().to_string()],

@@ -2803,14 +2803,18 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     #[test]
     fn cli_put_proxies_through_live_serve_socket() {
-        let _env_lock = env_mutation_lock().lock().unwrap();
+        let _env_lock = env_mutation_lock()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let runtime_root = secure_runtime_root();
         let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
         let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         let runtime = vault_sync::start_serve_runtime(db_path.clone()).unwrap();
+        let cli_conn = Connection::open(&db_path).unwrap();
+        cli_conn.busy_timeout(Duration::from_secs(2)).unwrap();
 
         put_from_cli_string(
-            &conn,
+            &cli_conn,
             "notes/live-owner",
             "---\ntitle: Live owner\ntype: note\n---\nProxied\n",
             None,
@@ -2849,7 +2853,9 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     #[test]
     fn cli_put_refuses_same_uid_socket_spoof_with_pid_mismatch() {
-        let _env_lock = env_mutation_lock().lock().unwrap();
+        let _env_lock = env_mutation_lock()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let runtime_root = secure_runtime_root();
         let socket_dir = runtime_root.path().join("quaid");
         let socket_path = socket_dir.join("serve-live.sock");

@@ -54,3 +54,4 @@
 - [x] 5.4 Manually verify:
   `quaid --db <temp.db> --json search --namespace workns bitcoin`.
 - [ ] 5.5 Close GitHub issue #145 after the fix lands.
+

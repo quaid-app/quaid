@@ -755,10 +755,7 @@ fn persist_with_vault_write(
         prepared.collection_id,
     );
     let sentinel_path = recovery_dir.join(&sentinel_name);
-    let dedup_key = format!(
-        "{}:{}:{}",
-        prepared.collection_id, relative_path, prepared.sha256
-    );
+    let dedup_key = write_dedup_key(&target_path, &prepared.sha256);
     vault_sync::check_update_expected_version(
         prepared.collection_id,
         relative_path,
@@ -1028,6 +1025,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+#[cfg(unix)]
+fn write_dedup_key(target_path: &Path, sha256: &str) -> String {
+    format!("{}:{sha256}", target_path.display())
 }
 
 #[cfg(unix)]
@@ -2381,10 +2383,9 @@ mod tests {
             .join("sentinel-failure.md")
             .exists());
         assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
-        assert!(!vault_sync::has_write_dedup(&format!(
-            "1:{}:{}",
-            "notes/sentinel-failure.md",
-            sha256_hex(b"---\ntitle: Sentinel Failure\ntype: note\n---\nBody\n")
+        assert!(!vault_sync::has_write_dedup(&write_dedup_key(
+            &vault_root.join("notes").join("sentinel-failure.md"),
+            &sha256_hex(b"---\ntitle: Sentinel Failure\ntype: note\n---\nBody\n"),
         ))
         .unwrap());
     }
@@ -2398,10 +2399,9 @@ mod tests {
             ..PutTestHooks::default()
         });
         let body = "---\ntitle: Pre Rename\ntype: note\n---\nBody\n";
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/pre-rename.md",
-            sha256_hex(body.as_bytes())
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("pre-rename.md"),
+            &sha256_hex(body.as_bytes()),
         );
 
         let error = put_from_string(&conn, "notes/pre-rename", body, None).unwrap_err();
@@ -2422,10 +2422,9 @@ mod tests {
             ..PutTestHooks::default()
         });
         let body = "---\ntitle: Rename Failure\ntype: note\n---\nBody\n";
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/rename-failure.md",
-            sha256_hex(body.as_bytes())
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("rename-failure.md"),
+            &sha256_hex(body.as_bytes()),
         );
 
         let error = put_from_string(&conn, "notes/rename-failure", body, None).unwrap_err();
@@ -2442,10 +2441,9 @@ mod tests {
     fn duplicate_dedup_entry_refuses_before_rename_without_mutating_disk_or_db() {
         let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         let body = "---\ntitle: Duplicate Dedup\ntype: note\n---\nBody\n";
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/duplicate-dedup.md",
-            sha256_hex(body.as_bytes())
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("duplicate-dedup.md"),
+            &sha256_hex(body.as_bytes()),
         );
         vault_sync::insert_write_dedup(&dedup_key).unwrap();
 
@@ -2457,6 +2455,21 @@ mod tests {
         assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
         assert!(vault_sync::has_write_dedup(&dedup_key).unwrap());
         vault_sync::remove_write_dedup(&dedup_key).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_dedup_keys_are_scoped_by_target_path() {
+        let key_a = write_dedup_key(Path::new("/tmp/quaid-a/notes/shared.md"), "same-hash");
+        let key_b = write_dedup_key(Path::new("/tmp/quaid-b/notes/shared.md"), "same-hash");
+
+        assert_ne!(key_a, key_b);
+        vault_sync::insert_write_dedup(&key_a).unwrap();
+        vault_sync::insert_write_dedup(&key_b).unwrap();
+        assert!(vault_sync::has_write_dedup(&key_a).unwrap());
+        assert!(vault_sync::has_write_dedup(&key_b).unwrap());
+        vault_sync::remove_write_dedup(&key_a).unwrap();
+        vault_sync::remove_write_dedup(&key_b).unwrap();
     }
 
     #[cfg(unix)]
@@ -2522,10 +2535,9 @@ mod tests {
         assert!(error.to_string().contains("PostRenameRecoveryPendingError"));
         assert!(error.to_string().contains("stage=fsync-parent"));
         assert_eq!(collection_needs_full_sync(&conn, 1), 1);
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/fsync-parent.md",
-            sha256_hex(b"---\ntitle: Parent Fsync\ntype: note\n---\nNew body\n")
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("fsync-parent.md"),
+            &sha256_hex(b"---\ntitle: Parent Fsync\ntype: note\n---\nNew body\n"),
         );
         assert_eq!(
             read_page(&conn, "notes/fsync-parent").unwrap().3,
@@ -2566,10 +2578,9 @@ mod tests {
         assert_eq!(collection_needs_full_sync(&conn, 1), 1);
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
         assert!(vault_root.join("notes").join("concurrent.md").exists());
-        assert!(!vault_sync::has_write_dedup(&format!(
-            "1:{}:{}",
-            "notes/concurrent.md",
-            sha256_hex(b"---\ntitle: Concurrent\ntype: note\n---\nLocal body\n")
+        assert!(!vault_sync::has_write_dedup(&write_dedup_key(
+            &vault_root.join("notes").join("concurrent.md"),
+            &sha256_hex(b"---\ntitle: Concurrent\ntype: note\n---\nLocal body\n"),
         ))
         .unwrap());
     }
@@ -2577,7 +2588,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commit_busy_retains_sentinel_until_startup_recovery_reconciles() {
-        let (_guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/busy",
@@ -2604,10 +2615,9 @@ mod tests {
         assert!(error.to_string().contains("PostRenameRecoveryPendingError"));
         assert!(error.to_string().contains("stage=commit"));
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
-        assert!(!vault_sync::has_write_dedup(&format!(
-            "1:{}:{}",
-            "notes/busy.md",
-            sha256_hex(b"---\ntitle: Busy\ntype: note\n---\nNew body on disk\n")
+        assert!(!vault_sync::has_write_dedup(&write_dedup_key(
+            &vault_root.join("notes").join("busy.md"),
+            &sha256_hex(b"---\ntitle: Busy\ntype: note\n---\nNew body on disk\n"),
         ))
         .unwrap());
         drop(blocker);

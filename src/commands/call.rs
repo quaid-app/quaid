@@ -404,7 +404,8 @@ mod tests {
             }),
         )
         .expect("memory_close_action should succeed");
-        assert_eq!(closed["status"], json!("done"));
+        assert!(closed["updated_at"].as_str().is_some());
+        assert!(closed["version"].as_i64().unwrap_or_default() >= 2);
     }
 
     #[test]

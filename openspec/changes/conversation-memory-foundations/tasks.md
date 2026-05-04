@@ -23,6 +23,8 @@
 
 ## 3. Head-only retrieval default + `include_superseded` opt-in
 
+> **Truth note (Bender, 2026-05-04T07:22:12.881+08:00):** The landed `3.5` `memory_get` seam preserves the stored page UUID in returned `frontmatter.quaid_id` even when a later update omits any frontmatter UUID, matching rendered page output instead of leaking the sparse stored frontmatter map.
+
 - [x] 3.1 Add `include_superseded: bool` (default `false`) to `hybrid_search` in `src/core/search.rs`; apply `superseded_by IS NULL` predicate when not set
 - [x] 3.2 Add the same parameter and predicate to `progressive_retrieve` in `src/core/progressive.rs`, applied before token-budget expansion
 - [x] 3.3 Plumb `include_superseded` through `memory_search` and `memory_query` MCP tools in `src/mcp/server.rs`

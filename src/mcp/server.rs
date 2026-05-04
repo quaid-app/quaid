@@ -145,6 +145,10 @@ fn canonicalize_page_for_mcp(
     resolved: &vault_sync::ResolvedSlug,
 ) -> crate::core::types::Page {
     let mut rendered = page.clone();
+    crate::core::page_uuid::canonicalize_frontmatter_uuid(
+        &mut rendered.frontmatter,
+        &rendered.uuid,
+    );
     rendered.slug = canonical_slug(&resolved.collection_name, &resolved.slug);
     rendered.frontmatter.insert(
         "slug".to_string(),

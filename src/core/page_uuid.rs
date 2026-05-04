@@ -68,13 +68,25 @@ pub fn resolve_page_uuid(
     }
 }
 
+pub fn canonicalize_frontmatter_uuid(frontmatter: &mut HashMap<String, String>, stored_uuid: &str) {
+    frontmatter.remove(LEGACY_MEMORY_ID_FRONTMATTER_KEY);
+    frontmatter.remove(QUAID_ID_FRONTMATTER_KEY);
+
+    if !stored_uuid.trim().is_empty() {
+        frontmatter.insert(
+            QUAID_ID_FRONTMATTER_KEY.to_string(),
+            stored_uuid.to_string(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::{
-        generate_uuid_v7, parse_frontmatter_uuid, resolve_page_uuid, PageUuidError,
-        LEGACY_MEMORY_ID_FRONTMATTER_KEY, QUAID_ID_FRONTMATTER_KEY,
+        canonicalize_frontmatter_uuid, generate_uuid_v7, parse_frontmatter_uuid, resolve_page_uuid,
+        PageUuidError, LEGACY_MEMORY_ID_FRONTMATTER_KEY, QUAID_ID_FRONTMATTER_KEY,
     };
 
     #[test]
@@ -146,5 +158,27 @@ mod tests {
             .expect_err("mismatched quaid_id should fail");
 
         assert!(matches!(err, PageUuidError::UuidMismatch { .. }));
+    }
+
+    #[test]
+    fn canonicalize_frontmatter_uuid_replaces_legacy_memory_id() {
+        let mut frontmatter = HashMap::from([
+            (
+                LEGACY_MEMORY_ID_FRONTMATTER_KEY.to_string(),
+                "01969f11-9448-7d79-8d3f-c68f54760000".to_string(),
+            ),
+            ("title".to_string(), "Alice".to_string()),
+        ]);
+
+        canonicalize_frontmatter_uuid(&mut frontmatter, "01969f11-9448-7d79-8d3f-c68f54761234");
+
+        assert_eq!(
+            frontmatter
+                .get(QUAID_ID_FRONTMATTER_KEY)
+                .map(String::as_str),
+            Some("01969f11-9448-7d79-8d3f-c68f54761234")
+        );
+        assert!(!frontmatter.contains_key(LEGACY_MEMORY_ID_FRONTMATTER_KEY));
+        assert_eq!(frontmatter.get("title").map(String::as_str), Some("Alice"));
     }
 }

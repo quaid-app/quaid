@@ -85,11 +85,11 @@
 
 ## 9. `memory_close_action` MCP tool
 
-- [ ] 9.1 Register `memory_close_action` with input `{slug, status, note?}` and output `{updated_at, version}`
-- [ ] 9.2 Validate the target page is `type: action_item`; otherwise return `KindError`
-- [ ] 9.3 Update the page's frontmatter `status` in place using the existing optimistic-concurrency machinery (read version, write with `expected_version`, return `ConflictError` on mismatch)
-- [ ] 9.4 If `note` is provided, append it to the page body
-- [ ] 9.5 Tests: open → done transition increments version, KindError on non-action_item, ConflictError on concurrent writer
+- [x] 9.1 Register `memory_close_action` with input `{slug, status, note?}` and output `{updated_at, version}`
+- [x] 9.2 Validate the target page is `type: action_item`; otherwise return `KindError`
+- [x] 9.3 Update the page's frontmatter `status` in place using the existing optimistic-concurrency machinery (read version, write with `expected_version`, return `ConflictError` on mismatch)
+- [x] 9.4 If `note` is provided, append it to the page body
+- [x] 9.5 Tests: open → done transition increments version, KindError on non-action_item, ConflictError on concurrent writer
 
 ## 10. File-edit-aware supersede handler
 

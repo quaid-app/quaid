@@ -7,7 +7,7 @@ use rmcp::{ServerHandler, ServiceExt};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{check, get, link};
+use crate::commands::{check, get, link, put};
 
 use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
 use crate::core::conversation::{queue as conversation_queue, turn_writer};
@@ -166,6 +166,68 @@ fn validate_content(content: &str) -> Result<(), rmcp::Error> {
         )));
     }
     Ok(())
+}
+
+fn validate_close_action_status(status: &str) -> Result<(), rmcp::Error> {
+    match status {
+        "done" | "cancelled" => Ok(()),
+        other => Err(invalid_params(format!(
+            "invalid status: expected 'done' or 'cancelled', got '{other}'"
+        ))),
+    }
+}
+
+fn append_note(body: &mut String, note: &str) {
+    if note.trim().is_empty() {
+        return;
+    }
+    if body.is_empty() {
+        body.push_str(note);
+        return;
+    }
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push('\n');
+    body.push_str(note);
+}
+
+fn resolved_page_version(
+    db: &Connection,
+    resolved: &vault_sync::ResolvedSlug,
+) -> Result<Option<i64>, rmcp::Error> {
+    db.query_row(
+        "SELECT version
+         FROM pages
+         WHERE collection_id = ?1 AND slug = ?2",
+        rusqlite::params![resolved.collection_id, &resolved.slug],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(map_db_error)
+}
+
+fn map_close_action_put_error(
+    db: &Connection,
+    resolved: &vault_sync::ResolvedSlug,
+    error: anyhow::Error,
+) -> rmcp::Error {
+    let message = error.to_string();
+    if message.contains("Conflict:") || message.contains("ConflictError") {
+        let current_version = resolved_page_version(db, resolved).ok().flatten();
+        let normalized = if message.contains("Conflict: ") {
+            message.replace("Conflict: ", "ConflictError: ")
+        } else {
+            message
+        };
+        rmcp::Error::new(
+            ErrorCode(-32009),
+            normalized,
+            Some(serde_json::json!({ "current_version": current_version })),
+        )
+    } else {
+        map_anyhow_error(error)
+    }
 }
 
 fn validate_token(
@@ -422,35 +484,33 @@ fn map_turn_write_error(e: turn_writer::TurnWriteError) -> rmcp::Error {
             format!("NotFoundError: session `{session_id}` not found"),
             None,
         ),
-        turn_writer::TurnWriteError::Config { message } => rmcp::Error::new(
-            ErrorCode(-32002),
-            format!("ConfigError: {message}"),
-            None,
-        ),
-        turn_writer::TurnWriteError::Io(error) => rmcp::Error::new(
-            ErrorCode(-32002),
-            format!("ConfigError: {error}"),
-            None,
-        ),
-        turn_writer::TurnWriteError::Sqlite(error) => map_db_error(error),
-        turn_writer::TurnWriteError::Format(error) => {
-            rmcp::Error::new(ErrorCode(-32003), format!("conversation error: {error}"), None)
+        turn_writer::TurnWriteError::Config { message } => {
+            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {message}"), None)
         }
+        turn_writer::TurnWriteError::Io(error) => {
+            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None)
+        }
+        turn_writer::TurnWriteError::Sqlite(error) => map_db_error(error),
+        turn_writer::TurnWriteError::Format(error) => rmcp::Error::new(
+            ErrorCode(-32003),
+            format!("conversation error: {error}"),
+            None,
+        ),
     }
 }
 
 fn map_extraction_queue_error(e: conversation_queue::ExtractionQueueError) -> rmcp::Error {
     match e {
         conversation_queue::ExtractionQueueError::Sqlite(error) => map_db_error(error),
-        conversation_queue::ExtractionQueueError::Config { message } => rmcp::Error::new(
-            ErrorCode(-32002),
-            format!("ConfigError: {message}"),
-            None,
-        ),
+        conversation_queue::ExtractionQueueError::Config { message } => {
+            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {message}"), None)
+        }
         conversation_queue::ExtractionQueueError::StaleLease { job_id, attempts } => {
             rmcp::Error::new(
                 ErrorCode(-32009),
-                format!("ConflictError: stale extraction lease for job {job_id} attempt {attempts}"),
+                format!(
+                    "ConflictError: stale extraction lease for job {job_id} attempt {attempts}"
+                ),
                 None,
             )
         }
@@ -468,8 +528,9 @@ fn validate_turn_timestamp(value: &str) -> Result<(), rmcp::Error> {
 }
 
 fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
-    let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false")
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None))?;
+    let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false").map_err(
+        |error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None),
+    )?;
     match raw.as_str() {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -482,8 +543,9 @@ fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
 }
 
 fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
-    let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000")
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None))?;
+    let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000").map_err(
+        |error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None),
+    )?;
     raw.parse::<i64>().map_err(|_| {
         rmcp::Error::new(
             ErrorCode(-32002),
@@ -550,6 +612,13 @@ pub struct MemoryAddTurnInput {
 pub struct MemoryCloseSessionInput {
     pub session_id: String,
     pub namespace: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryCloseActionInput {
+    pub slug: String,
+    pub status: String,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -754,16 +823,15 @@ impl QuaidServer {
         }
 
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let role = input
-            .role
-            .parse::<TurnRole>()
-            .map_err(invalid_params)?;
+        let role = input.role.parse::<TurnRole>().map_err(invalid_params)?;
         let timestamp = match input.timestamp.as_deref() {
             Some(timestamp) => {
                 validate_turn_timestamp(timestamp)?;
                 timestamp.to_owned()
             }
-            None => conversation_queue::current_timestamp(&db).map_err(map_extraction_queue_error)?,
+            None => {
+                conversation_queue::current_timestamp(&db).map_err(map_extraction_queue_error)?
+            }
         };
 
         let write_result = turn_writer::append_turn(
@@ -781,8 +849,10 @@ impl QuaidServer {
             let scheduled_for =
                 conversation_queue::scheduled_timestamp_after_ms(&db, extraction_debounce_ms(&db)?)
                     .map_err(map_extraction_queue_error)?;
-            let queue_session_id =
-                conversation_queue::session_queue_key(input.namespace.as_deref(), &input.session_id);
+            let queue_session_id = conversation_queue::session_queue_key(
+                input.namespace.as_deref(),
+                &input.session_id,
+            );
             conversation_queue::enqueue(
                 &db,
                 &queue_session_id,
@@ -845,6 +915,83 @@ impl QuaidServer {
             "closed_at": close_result.closed_at,
             "extraction_triggered": extraction_triggered,
             "queue_position": queue_position,
+        }))
+        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Close an action item in place")]
+    pub fn memory_close_action(
+        &self,
+        #[tool(aggr)] input: MemoryCloseActionInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        self.memory_close_action_impl(input, |_, _, _| Ok(()))
+    }
+
+    fn memory_close_action_impl<F>(
+        &self,
+        input: MemoryCloseActionInput,
+        before_write: F,
+    ) -> Result<CallToolResult, rmcp::Error>
+    where
+        F: FnOnce(
+            &Connection,
+            &vault_sync::ResolvedSlug,
+            &crate::core::types::Page,
+        ) -> Result<(), rmcp::Error>,
+    {
+        validate_slug(&input.slug)?;
+        validate_close_action_status(&input.status)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
+        vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
+            .map_err(map_vault_sync_error)?;
+        let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
+            .map_err(map_anyhow_error)?;
+        if page.page_type != "action_item" {
+            return Err(rmcp::Error::new(
+                ErrorCode(-32002),
+                format!(
+                    "KindError: page `{}` is `{}` not `action_item`",
+                    canonical_slug(&resolved.collection_name, &resolved.slug),
+                    page.page_type
+                ),
+                None,
+            ));
+        }
+
+        let mut updated_page = page.clone();
+        updated_page
+            .frontmatter
+            .insert("status".to_string(), input.status.clone());
+        if let Some(note) = input.note.as_deref() {
+            append_note(&mut updated_page.compiled_truth, note);
+        }
+
+        before_write(&db, &resolved, &updated_page)?;
+
+        let content = crate::core::markdown::render_page(&updated_page);
+        put::put_from_string_quiet(
+            &db,
+            &canonical_slug(&resolved.collection_name, &resolved.slug),
+            &content,
+            Some(page.version),
+        )
+        .map_err(|error| map_close_action_put_error(&db, &resolved, error))?;
+
+        let (updated_at, version): (String, i64) = db
+            .query_row(
+                "SELECT updated_at, version
+                 FROM pages
+                 WHERE collection_id = ?1 AND slug = ?2",
+                rusqlite::params![resolved.collection_id, &resolved.slug],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(map_db_error)?;
+
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "updated_at": updated_at,
+            "version": version,
         }))
         .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -1878,10 +2025,9 @@ mod tests {
             QuaidServer::memory_add_turn
                 as fn(&QuaidServer, MemoryAddTurnInput) -> Result<CallToolResult, rmcp::Error>,
             QuaidServer::memory_close_session
-                as fn(
-                    &QuaidServer,
-                    MemoryCloseSessionInput,
-                ) -> Result<CallToolResult, rmcp::Error>,
+                as fn(&QuaidServer, MemoryCloseSessionInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_close_action
+                as fn(&QuaidServer, MemoryCloseActionInput) -> Result<CallToolResult, rmcp::Error>,
             QuaidServer::memory_put
                 as fn(&QuaidServer, MemoryPutInput) -> Result<CallToolResult, rmcp::Error>,
             QuaidServer::memory_query
@@ -1928,7 +2074,9 @@ mod tests {
         assert!(payload["extraction_scheduled_at"].is_null());
         let db = server.db.lock().unwrap();
         let queue_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM extraction_queue", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM extraction_queue", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(queue_count, 0);
     }
@@ -1936,7 +2084,11 @@ mod tests {
     #[test]
     fn memory_add_turn_returns_conflict_error_for_closed_session() {
         let (dir, conn) = open_test_db();
-        let conversation_dir = dir.path().join("vault").join("conversations").join("2026-05-03");
+        let conversation_dir = dir
+            .path()
+            .join("vault")
+            .join("conversations")
+            .join("2026-05-03");
         fs::create_dir_all(&conversation_dir).unwrap();
         fs::write(
             conversation_dir.join("session-closed.md"),
@@ -2026,7 +2178,10 @@ mod tests {
         assert_eq!(parsed.turns.len(), 1);
         assert_eq!(parsed.turns[0].role, crate::core::types::TurnRole::Tool);
         assert!(parsed.turns[0].timestamp.ends_with('Z'));
-        assert_eq!(parsed.turns[0].metadata.as_ref().unwrap()["tool_name"], "bash");
+        assert_eq!(
+            parsed.turns[0].metadata.as_ref().unwrap()["tool_name"],
+            "bash"
+        );
     }
 
     #[test]
@@ -2067,6 +2222,169 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode(-32602));
         assert!(error.message.contains("invalid timestamp"));
+    }
+
+    #[test]
+    fn memory_close_action_updates_status_appends_note_and_bumps_version() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+        create_page(
+            &server,
+            "actions/ship-phase5",
+            concat!(
+                "---\n",
+                "title: Ship phase 5\n",
+                "type: action_item\n",
+                "status: open\n",
+                "---\n",
+                "# Action: Ship phase 5\n\n",
+                "> Team to ship phase 5.\n",
+            ),
+        );
+
+        let result = server
+            .memory_close_action(MemoryCloseActionInput {
+                slug: "actions/ship-phase5".to_string(),
+                status: "done".to_string(),
+                note: Some("Completed after final coverage pass.".to_string()),
+            })
+            .unwrap();
+
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(payload["version"], 2);
+        assert!(payload["updated_at"].as_str().unwrap().ends_with('Z'));
+
+        let db = server.db.lock().unwrap();
+        let page = get::get_page(&db, "actions/ship-phase5").unwrap();
+        assert_eq!(page.version, 2);
+        assert_eq!(
+            page.frontmatter.get("status").map(String::as_str),
+            Some("done")
+        );
+        assert!(page
+            .compiled_truth
+            .contains("Completed after final coverage pass."));
+    }
+
+    #[test]
+    fn memory_close_action_rejects_non_action_item_pages_with_kind_error() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+        create_page(
+            &server,
+            "preferences/editor",
+            concat!(
+                "---\n",
+                "title: Editor preference\n",
+                "type: preference\n",
+                "status: open\n",
+                "---\n",
+                "Prefer modal editing.\n",
+            ),
+        );
+
+        let error = server
+            .memory_close_action(MemoryCloseActionInput {
+                slug: "preferences/editor".to_string(),
+                status: "done".to_string(),
+                note: Some("should not land".to_string()),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("KindError"));
+
+        let db = server.db.lock().unwrap();
+        let page = get::get_page(&db, "preferences/editor").unwrap();
+        assert_eq!(page.version, 1);
+        assert_eq!(page.page_type, "preference");
+        assert!(!page.compiled_truth.contains("should not land"));
+    }
+
+    #[test]
+    fn memory_close_action_rejects_invalid_status_values() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+        create_page(
+            &server,
+            "actions/review-tests",
+            concat!(
+                "---\n",
+                "title: Review tests\n",
+                "type: action_item\n",
+                "status: open\n",
+                "---\n",
+                "Review the close-action coverage.\n",
+            ),
+        );
+
+        let error = server
+            .memory_close_action(MemoryCloseActionInput {
+                slug: "actions/review-tests".to_string(),
+                status: "blocked".to_string(),
+                note: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+        assert!(error.message.contains("invalid status"));
+    }
+
+    #[test]
+    fn memory_close_action_returns_conflict_error_when_page_changes_after_read() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+        create_page(
+            &server,
+            "actions/race-close",
+            concat!(
+                "---\n",
+                "title: Race close\n",
+                "type: action_item\n",
+                "status: open\n",
+                "---\n",
+                "Original action body.\n",
+            ),
+        );
+
+        let error = server
+            .memory_close_action_impl(
+                MemoryCloseActionInput {
+                    slug: "actions/race-close".to_string(),
+                    status: "done".to_string(),
+                    note: Some("close note".to_string()),
+                },
+                |db, resolved, page| {
+                    let mut concurrent_page = page.clone();
+                    concurrent_page.compiled_truth = "Concurrent writer landed first.".to_string();
+                    concurrent_page
+                        .frontmatter
+                        .insert("status".to_string(), "open".to_string());
+                    let content = crate::core::markdown::render_page(&concurrent_page);
+                    put::put_from_string_quiet(
+                        db,
+                        &canonical_slug(&resolved.collection_name, &resolved.slug),
+                        &content,
+                        Some(page.version),
+                    )
+                    .map_err(map_anyhow_error)
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32009));
+        assert!(error.message.contains("ConflictError"));
+        assert_eq!(error.data, Some(json!({ "current_version": 2 })));
+
+        let db = server.db.lock().unwrap();
+        let page = get::get_page(&db, "actions/race-close").unwrap();
+        assert_eq!(page.version, 2);
+        assert_eq!(
+            page.frontmatter.get("status").map(String::as_str),
+            Some("open")
+        );
+        assert_eq!(page.compiled_truth, "Concurrent writer landed first.");
+        assert!(!page.compiled_truth.contains("close note"));
     }
 
     #[test]

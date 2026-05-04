@@ -1,6 +1,6 @@
 ---
 name: draft-pr-truth-refresh
-version: 1.2
+version: 1.3
 author: zapp
 last_updated: 2026-05-04T07:22:12.881+08:00
 ---
@@ -30,6 +30,13 @@ Use this when a draft PR body lags behind newly pushed commits and GitHub report
 - Name the exact code paths, flags, tools, and tests that landed
 - Keep an explicit list of what is still not claimed
 - If branch ancestry makes the compare view broader than the landed slice, say so directly
+
+### 2a. Split the last wave when reviewer gates split it
+
+- If the remaining product wave no longer moves as one unit, do not keep talking about it as a single in-flight block
+- Name the actively landing seam separately (for example `memory_close_action`)
+- Keep any reviewer-pre-gated seam (for example watcher/file-edit/history work) in the explicit non-claims until that gate is cleared
+- This is especially important when the compare view still contains both slices in planning artifacts; otherwise readers will assume the blocked half is already shipping too
 
 ### 3. Triage `dirty` before advising anyone
 

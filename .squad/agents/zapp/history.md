@@ -14,6 +14,7 @@
 - [2026-05-04T07:22:12.881+08:00] GitHub `mergeable_state: dirty` is not just stale by default; confirm with a merge simulation. For conversation-memory work, the minimal coordinator action can be a narrow main refresh plus resolving spec-only add/add conflicts rather than any product rework.
 - [2026-05-04T07:22:12.881+08:00] When a draft PR blocker is cleared by a follow-up fix, refresh the body to say the slice is now approved, name the specific follow-up seam it closed, and keep the larger change pinned to the next unfinished task boundary.
 - [2026-05-04T07:22:12.881+08:00] When a draft PR crosses from an approved wave into the next in-flight wave, refresh three facts together: what is now approved/complete, what the next claimed surface is, and the freshly reproduced conflict list. Old conflict counts can drift even if the product scope claim does not.
+- [2026-05-04T07:22:12.881+08:00] If the last product wave splits between one actively landing tool seam and another still blocked behind a reviewer pre-gate, the draft PR should split them too: name only the active seam as in flight and keep the pre-gated slice in explicit non-claims until the gate clears.
 
 ## 20260429T173541Z — Team sync
 

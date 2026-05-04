@@ -1269,27 +1269,29 @@ struct SupersedeClaimBlockState {
 }
 
 #[cfg(all(test, unix))]
-fn write_lock_blockers() -> &'static std::sync::Mutex<
-    std::collections::HashMap<
-        String,
-        std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)>,
-    >,
-> {
-    static BLOCKERS: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                String,
-                std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)>,
-            >,
-        >,
-    > = std::sync::OnceLock::new();
+type WriteLockBlocker = std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)>;
+
+#[cfg(all(test, unix))]
+type WriteLockBlockerMap = std::sync::Mutex<std::collections::HashMap<String, WriteLockBlocker>>;
+
+#[cfg(all(test, unix))]
+type SupersedeClaimBlocker = std::sync::Arc<(
+    std::sync::Mutex<SupersedeClaimBlockState>,
+    std::sync::Condvar,
+)>;
+
+#[cfg(all(test, unix))]
+type SupersedeClaimBlockerMap =
+    std::sync::Mutex<std::collections::HashMap<String, SupersedeClaimBlocker>>;
+
+#[cfg(all(test, unix))]
+fn write_lock_blockers() -> &'static WriteLockBlockerMap {
+    static BLOCKERS: std::sync::OnceLock<WriteLockBlockerMap> = std::sync::OnceLock::new();
     BLOCKERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 #[cfg(all(test, unix))]
-fn write_lock_blocker_for_path(
-    db_path: &str,
-) -> std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)> {
+fn write_lock_blocker_for_path(db_path: &str) -> WriteLockBlocker {
     write_lock_blockers()
         .lock()
         .unwrap()
@@ -1304,36 +1306,13 @@ fn write_lock_blocker_for_path(
 }
 
 #[cfg(all(test, unix))]
-fn supersede_claim_blockers() -> &'static std::sync::Mutex<
-    std::collections::HashMap<
-        String,
-        std::sync::Arc<(
-            std::sync::Mutex<SupersedeClaimBlockState>,
-            std::sync::Condvar,
-        )>,
-    >,
-> {
-    static BLOCKERS: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                String,
-                std::sync::Arc<(
-                    std::sync::Mutex<SupersedeClaimBlockState>,
-                    std::sync::Condvar,
-                )>,
-            >,
-        >,
-    > = std::sync::OnceLock::new();
+fn supersede_claim_blockers() -> &'static SupersedeClaimBlockerMap {
+    static BLOCKERS: std::sync::OnceLock<SupersedeClaimBlockerMap> = std::sync::OnceLock::new();
     BLOCKERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 #[cfg(all(test, unix))]
-fn supersede_claim_blocker_for_path(
-    db_path: &str,
-) -> std::sync::Arc<(
-    std::sync::Mutex<SupersedeClaimBlockState>,
-    std::sync::Condvar,
-)> {
+fn supersede_claim_blocker_for_path(db_path: &str) -> SupersedeClaimBlocker {
     supersede_claim_blockers()
         .lock()
         .unwrap()

@@ -1,6 +1,6 @@
 ---
 name: draft-pr-truth-refresh
-version: 1.1
+version: 1.2
 author: zapp
 last_updated: 2026-05-04T07:22:12.881+08:00
 ---
@@ -35,6 +35,7 @@ Use this when a draft PR body lags behind newly pushed commits and GitHub report
 
 - Check GitHub's mergeability status
 - Run a merge simulation against current `main`
+- Recompute the exact conflict file list on each refresh; do not reuse yesterday's count, because spec-only add/add conflicts can grow or shrink while the truthful product scope stays the same
 - If conflicts reproduce, report the smallest next action as "refresh from main and resolve these files"
 - If conflicts do not reproduce, treat it as likely stale metadata and avoid overstating the problem
 

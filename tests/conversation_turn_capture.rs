@@ -507,7 +507,10 @@ fn memory_add_turn_full_flow_creates_file_collapses_queue_and_syncs_conversation
             })
             .unwrap();
         let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(payload["conversation_path"], "conversations/2026-05-03/session-e2e.md");
+        assert_eq!(
+            payload["conversation_path"],
+            "conversations/2026-05-03/session-e2e.md"
+        );
     }
 
     let conversation_path = vault_root
@@ -604,7 +607,10 @@ fn memory_close_session_marks_latest_day_closed_and_overrides_debounce_job() {
         .unwrap();
     let second_payload: serde_json::Value = serde_json::from_str(&extract_text(&second)).unwrap();
     assert_eq!(first_payload["closed_at"], second_payload["closed_at"]);
-    assert_eq!(fs::read_to_string(&conversation_path).unwrap(), closed_rendered);
+    assert_eq!(
+        fs::read_to_string(&conversation_path).unwrap(),
+        closed_rendered
+    );
 
     let db = db::open(db_path.to_str().unwrap()).unwrap();
     let queue_row: (String, String) = db

@@ -2441,7 +2441,8 @@ fn convert_reconcile_error(
 #[cfg(unix)]
 fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root_path).ok()?;
-    (is_markdown_file(relative) && !is_history_sidecar_path(relative)).then(|| relative.to_path_buf())
+    (is_markdown_file(relative) && !is_history_sidecar_path(relative))
+        .then(|| relative.to_path_buf())
 }
 
 #[cfg(unix)]

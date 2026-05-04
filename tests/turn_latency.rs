@@ -33,7 +33,7 @@ fn enable_extraction(db_path: &Path) -> Connection {
 }
 
 fn percentile(sorted: &[f64], pct: usize) -> f64 {
-    let index = ((pct * (sorted.len() - 1)) + 99) / 100;
+    let index = (pct * (sorted.len() - 1)).div_ceil(100);
     sorted[index]
 }
 

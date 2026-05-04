@@ -308,6 +308,7 @@ pub fn search_fts_canonical_tiered_with_namespace_filtered(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_fts_tiered_internal(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -350,6 +351,7 @@ fn search_fts_tiered_internal(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_fts_internal(
     query: &str,
     wing_filter: Option<&str>,

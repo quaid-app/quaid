@@ -48,13 +48,21 @@ fn set_default_root(conn: &Connection, root: &Path) {
 }
 
 fn page_id(conn: &Connection, slug: &str) -> i64 {
-    conn.query_row("SELECT id FROM pages WHERE collection_id = 1 AND slug = ?1", [slug], |row| {
-        row.get(0)
-    })
+    conn.query_row(
+        "SELECT id FROM pages WHERE collection_id = 1 AND slug = ?1",
+        [slug],
+        |row| row.get(0),
+    )
     .unwrap()
 }
 
-fn seed_tracked_file(conn: &Connection, root: &Path, relative_path: &str, page_id: i64, content: &str) {
+fn seed_tracked_file(
+    conn: &Connection,
+    root: &Path,
+    relative_path: &str,
+    page_id: i64,
+    content: &str,
+) {
     let absolute = root.join(relative_path);
     fs::create_dir_all(absolute.parent().unwrap()).unwrap();
     fs::write(&absolute, content).unwrap();
@@ -73,9 +81,7 @@ fn slugs(rows: &[Value]) -> Vec<String> {
 }
 
 fn preference_markdown(slug: &str, title: &str, body: &str, supersedes: Option<&str>) -> String {
-    let mut out = format!(
-        "---\nslug: {slug}\ntitle: {title}\ntype: preference\n"
-    );
+    let mut out = format!("---\nslug: {slug}\ntitle: {title}\ntype: preference\n");
     if let Some(supersedes) = supersedes {
         out.push_str(&format!("supersedes: {supersedes}\n"));
     }
@@ -94,7 +100,12 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
     let conn = open_test_db(&db_path);
     set_default_root(&conn, &root);
 
-    let seed = preference_markdown("preferences/foo-seed", "Foo seed", "shared marker seed", None);
+    let seed = preference_markdown(
+        "preferences/foo-seed",
+        "Foo seed",
+        "shared marker seed",
+        None,
+    );
     let head = preference_markdown(
         "preferences/foo",
         "Foo head",
@@ -184,7 +195,10 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
             .unwrap(),
     ))
     .unwrap();
-    assert_eq!(slugs(&search_default), vec!["default::preferences/foo".to_string()]);
+    assert_eq!(
+        slugs(&search_default),
+        vec!["default::preferences/foo".to_string()]
+    );
 
     let search_history: Vec<Value> = serde_json::from_str(&extract_text(
         &server
@@ -257,20 +271,33 @@ fn whitespace_only_edit_is_true_noop() {
     let original = preference_markdown("preferences/noop", "Noop", "body", None);
     put_page(&server, "preferences/noop", &original);
     let page_id = page_id(&conn, "preferences/noop");
-    seed_tracked_file(&conn, &root, "extracted/preferences/noop.md", page_id, &original);
+    seed_tracked_file(
+        &conn,
+        &root,
+        "extracted/preferences/noop.md",
+        page_id,
+        &original,
+    );
     let before_version: i64 = conn
-        .query_row("SELECT version FROM pages WHERE id = ?1", [page_id], |row| row.get(0))
+        .query_row(
+            "SELECT version FROM pages WHERE id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )
         .unwrap();
     let before_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1", [page_id], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )
         .unwrap();
     let before_file_state = file_state::get_file_state(&conn, 1, "extracted/preferences/noop.md")
         .unwrap()
         .unwrap();
 
-    let whitespace_only = "---\nslug: preferences/noop\n title: Noop\ntype: preference\n---\nbody  \n\n";
+    let whitespace_only =
+        "---\nslug: preferences/noop\n title: Noop\ntype: preference\n---\nbody  \n\n";
     let live_path = root.join("extracted").join("preferences").join("noop.md");
     fs::write(&live_path, whitespace_only).unwrap();
     let stat = file_state::stat_file(&live_path).unwrap();
@@ -292,12 +319,18 @@ fn whitespace_only_edit_is_true_noop() {
 
     assert_eq!(outcome, HandleExtractedEditOutcome::WhitespaceNoOp);
     let after_version: i64 = conn
-        .query_row("SELECT version FROM pages WHERE id = ?1", [page_id], |row| row.get(0))
+        .query_row(
+            "SELECT version FROM pages WHERE id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )
         .unwrap();
     let after_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1", [page_id], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )
         .unwrap();
     let after_file_state = file_state::get_file_state(&conn, 1, "extracted/preferences/noop.md")
         .unwrap()
@@ -364,7 +397,13 @@ fn history_on_disk_writes_sidecar_without_extra_live_page() {
     let original = preference_markdown("preferences/disk", "Disk", "disk marker original", None);
     put_page(&server, "preferences/disk", &original);
     let page_id = page_id(&conn, "preferences/disk");
-    seed_tracked_file(&conn, &root, "extracted/preferences/disk.md", page_id, &original);
+    seed_tracked_file(
+        &conn,
+        &root,
+        "extracted/preferences/disk.md",
+        page_id,
+        &original,
+    );
 
     let edited = preference_markdown("preferences/disk", "Disk", "disk marker edited", None);
     let live_path = root.join("extracted").join("preferences").join("disk.md");
@@ -397,9 +436,11 @@ fn history_on_disk_writes_sidecar_without_extra_live_page() {
     assert!(absolute_history_path.exists());
     assert!(is_history_sidecar_path(Path::new(&history_path)));
     let page_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM pages WHERE slug = 'preferences/disk'", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM pages WHERE slug = 'preferences/disk'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(page_count, 1);
 }
@@ -416,22 +457,26 @@ fn whitespace_helper_and_non_head_guard_cover_manual_edit_edges() {
     let original = preference_markdown("preferences/edge", "Edge", "body", None);
     put_page(&server, "preferences/edge", &original);
     let page_id = page_id(&conn, "preferences/edge");
-    seed_tracked_file(&conn, &root, "extracted/preferences/edge.md", page_id, &original);
+    seed_tracked_file(
+        &conn,
+        &root,
+        "extracted/preferences/edge.md",
+        page_id,
+        &original,
+    );
 
     let whitespace_only =
         "---\nslug: preferences/edge\ntitle: Edge\ntype: preference\n---\nbody  \n";
     let live_path = root.join("extracted").join("preferences").join("edge.md");
     fs::write(&live_path, whitespace_only).unwrap();
-    assert!(
-        is_extracted_whitespace_noop(
-            &conn,
-            1,
-            &root,
-            Path::new("extracted/preferences/edge.md"),
-            page_id,
-        )
-        .unwrap()
-    );
+    assert!(is_extracted_whitespace_noop(
+        &conn,
+        1,
+        &root,
+        Path::new("extracted/preferences/edge.md"),
+        page_id,
+    )
+    .unwrap());
 
     conn.execute(
         "INSERT INTO pages

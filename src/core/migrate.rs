@@ -115,14 +115,11 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
     for row in rows {
         let (page_id, mut page) = row?;
         if !page.frontmatter.contains_key("supersedes") {
-            if let Some(predecessor_slug) = db
-                .query_row(
-                    "SELECT slug FROM pages WHERE superseded_by = ?1 LIMIT 1",
-                    [page_id],
-                    |row| row.get(0),
-                )
-                .ok()
-            {
+            if let Ok(predecessor_slug) = db.query_row(
+                "SELECT slug FROM pages WHERE superseded_by = ?1 LIMIT 1",
+                [page_id],
+                |row| row.get(0),
+            ) {
                 page.frontmatter
                     .insert("supersedes".to_string(), predecessor_slug);
             }

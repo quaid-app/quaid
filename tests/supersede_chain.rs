@@ -166,7 +166,7 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
     assert!(superseded_a["supersedes"].is_null());
     assert_eq!(head_c["supersedes"], "default::facts/b");
     assert!(head_c["superseded_by"].is_null());
-    assert_eq!(a_id > 0, true);
+    assert!(a_id > 0);
 }
 
 #[test]

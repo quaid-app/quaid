@@ -1165,6 +1165,7 @@ pub fn search_vec_canonical_with_namespace_filtered(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_vec_internal(
     query: &str,
     k: usize,

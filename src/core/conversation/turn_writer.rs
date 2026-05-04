@@ -745,9 +745,15 @@ mod tests {
         let latest = format::parse(&latest_path).unwrap();
 
         assert!(first.newly_closed);
-        assert_eq!(first.conversation_path, "conversations/2026-05-04/session-close.md");
+        assert_eq!(
+            first.conversation_path,
+            "conversations/2026-05-04/session-close.md"
+        );
         assert_eq!(latest.frontmatter.status, ConversationStatus::Closed);
-        assert_eq!(latest.frontmatter.closed_at.as_deref(), Some(first.closed_at.as_str()));
+        assert_eq!(
+            latest.frontmatter.closed_at.as_deref(),
+            Some(first.closed_at.as_str())
+        );
         assert!(!second.newly_closed);
         assert_eq!(second.closed_at, first.closed_at);
     }
@@ -773,20 +779,18 @@ mod tests {
             closed.conversation_path,
             "alpha/conversations/2026-05-03/session-alpha.md"
         );
-        assert!(
-            format::parse(
-                &vault_root
-                    .path()
-                    .join("alpha")
-                    .join("conversations")
-                    .join("2026-05-03")
-                    .join("session-alpha.md"),
-            )
-            .unwrap()
-            .frontmatter
-            .closed_at
-            .is_some()
-        );
+        assert!(format::parse(
+            &vault_root
+                .path()
+                .join("alpha")
+                .join("conversations")
+                .join("2026-05-03")
+                .join("session-alpha.md"),
+        )
+        .unwrap()
+        .frontmatter
+        .closed_at
+        .is_some());
     }
 
     #[test]

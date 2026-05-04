@@ -102,6 +102,7 @@ pub fn hybrid_search_canonical_with_namespace(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hybrid_search_impl(
     query: &str,
     wing: Option<&str>,

@@ -6,6 +6,7 @@ use crate::core::fts::{
     search_fts_canonical_with_namespace_filtered,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     db: &Connection,
     query: &str,

@@ -44,11 +44,19 @@ const EXTRACTION_SYSTEM_PROMPT: &str = concat!(
 
 pub trait SlmClient {
     fn infer(&self, alias: &str, prompt: &str, max_tokens: usize) -> Result<String, SlmError>;
+
+    fn is_runtime_disabled(&self) -> bool {
+        false
+    }
 }
 
 impl SlmClient for LazySlmRunner {
     fn infer(&self, alias: &str, prompt: &str, max_tokens: usize) -> Result<String, SlmError> {
         LazySlmRunner::infer(self, alias, prompt, max_tokens)
+    }
+
+    fn is_runtime_disabled(&self) -> bool {
+        LazySlmRunner::is_runtime_disabled(self)
     }
 }
 
@@ -134,6 +142,9 @@ where
     }
 
     pub fn claim_next_job(&self) -> Result<Option<ExtractionJob>, WorkerError> {
+        if !extraction_enabled(self.db)? || self.slm.is_runtime_disabled() {
+            return Ok(None);
+        }
         queue::dequeue(self.db).map_err(WorkerError::from)
     }
 
@@ -457,6 +468,22 @@ fn parse_usize_config(db: &Connection, key: &str, default: usize) -> Result<usiz
     raw.parse::<usize>().map_err(|_| WorkerError::Config {
         message: format!("invalid {key} value: {raw}"),
     })
+}
+
+fn extraction_enabled(db: &Connection) -> Result<bool, WorkerError> {
+    let raw = db::read_config_value_or(db, "extraction.enabled", "false").map_err(|error| {
+        WorkerError::Config {
+            message: error.to_string(),
+        }
+    })?;
+
+    match raw.as_str() {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        other => Err(WorkerError::Config {
+            message: format!("invalid extraction.enabled value: {other}"),
+        }),
+    }
 }
 
 fn slash_path_to_platform(path: &str) -> PathBuf {

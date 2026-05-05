@@ -262,6 +262,11 @@ fn open_worker_db_at(path: &Path) -> Connection {
         [path.parent().unwrap().display().to_string()],
     )
     .unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('extraction.enabled', 'true')",
+        [],
+    )
+    .unwrap();
     conn
 }
 
@@ -335,10 +340,117 @@ fn slash_to_platform(path: &str) -> String {
     path.replace('/', std::path::MAIN_SEPARATOR_STR)
 }
 
+// ── spec item 9.3 — no partial cursor advance when a later window fails ────
+
+#[test]
+fn process_job_should_not_partially_advance_cursor_when_later_window_fails() {
+    // 10 turns with window_turns=5 → 2 windows: [1..5] then [6..10].
+    // Window 1 gets valid JSON; window 2 gets garbage. persist_cursor_update is
+    // only called after all windows succeed, so the cursor must stay at 0.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+    let conversation_path = seed_conversation_file(
+        dir.path(),
+        "s1",
+        conversation_with_cursor("s1", 0, 10),
+    );
+
+    queue::enqueue(
+        &conn,
+        "s1",
+        &conversation_path,
+        ExtractionTriggerKind::Manual,
+        "2000-01-01T00:00:00Z",
+    )
+    .unwrap();
+
+    let worker = worker_with_stub(
+        &conn,
+        StubSlm::with_results([Ok("{\"facts\":[]}"), Ok("not json — window 2 explodes")]),
+    );
+    let result = worker.process_next_job();
+    assert!(result.is_err(), "process_job must fail when a window parse errors");
+
+    let parsed = format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+    assert_eq!(
+        parsed.frontmatter.last_extracted_turn, 0,
+        "cursor must not partially advance — window-1 success does not count when window-2 fails"
+    );
+    assert_eq!(
+        parsed.frontmatter.last_extracted_at, None,
+        "last_extracted_at must remain unset when any window fails"
+    );
+}
+
+// ── spec item 5.2 gap — acceptance bar (currently unimplemented) ───────────
+
+#[test]
+fn claim_next_job_returns_none_when_extraction_is_disabled() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('extraction.enabled', '0')",
+        [],
+    )
+    .unwrap();
+
+    let conversation_path =
+        seed_conversation_file(dir.path(), "s1", conversation_with_cursor("s1", 0, 2));
+    queue::enqueue(
+        &conn,
+        "s1",
+        &conversation_path,
+        ExtractionTriggerKind::Manual,
+        "2000-01-01T00:00:00Z",
+    )
+    .unwrap();
+
+    let worker = worker_with_stub(&conn, StubSlm::empty());
+    let result = worker.claim_next_job().unwrap();
+
+    assert!(
+        result.is_none(),
+        "claim_next_job must return None when extraction.enabled=false — \
+          currently returns Some (guard not yet implemented in claim_next_job)"
+    );
+}
+
+#[test]
+fn claim_next_job_returns_none_when_runtime_is_disabled() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('extraction.enabled', 'true')",
+        [],
+    )
+    .unwrap();
+
+    let conversation_path =
+        seed_conversation_file(dir.path(), "s1", conversation_with_cursor("s1", 0, 2));
+    queue::enqueue(
+        &conn,
+        "s1",
+        &conversation_path,
+        ExtractionTriggerKind::Manual,
+        "2000-01-01T00:00:00Z",
+    )
+    .unwrap();
+
+    let worker = worker_with_stub(&conn, StubSlm::runtime_disabled());
+
+    assert_eq!(worker.claim_next_job().unwrap(), None);
+}
+
 #[derive(Debug, Clone)]
 struct StubSlm {
     results: Arc<Mutex<VecDeque<Result<String, SlmError>>>>,
     calls: Arc<Mutex<Vec<InferCall>>>,
+    runtime_disabled: bool,
 }
 
 impl StubSlm {
@@ -346,6 +458,7 @@ impl StubSlm {
         Self {
             results: Arc::new(Mutex::new(VecDeque::new())),
             calls: Arc::new(Mutex::new(Vec::new())),
+            runtime_disabled: false,
         }
     }
 
@@ -358,6 +471,14 @@ impl StubSlm {
                     .collect(),
             )),
             calls: Arc::new(Mutex::new(Vec::new())),
+            runtime_disabled: false,
+        }
+    }
+
+    fn runtime_disabled() -> Self {
+        Self {
+            runtime_disabled: true,
+            ..Self::empty()
         }
     }
 
@@ -378,6 +499,10 @@ impl SlmClient for StubSlm {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| Ok("{\"facts\":[]}".to_string()))
+    }
+
+    fn is_runtime_disabled(&self) -> bool {
+        self.runtime_disabled
     }
 }
 

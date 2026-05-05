@@ -41,6 +41,7 @@
 
 - [x] 5.1 Create `src/core/conversation/extractor.rs::Worker` struct with handles to the queue, SLM runner, and vault writer
 - [x] 5.2 Implement the worker loop: poll dequeue at a configurable cadence (default 1s), process one job at a time, sleep when no jobs are available
+  > **Closure note (Mom, 2026-05-05):** `claim_next_job` now idles without claiming queue rows when extraction is disabled, so the checked worker-loop claim matches the spec's enable/disable guard.
 - [x] 5.3 Window selection: read the conversation file, parse cursor `C` and `last`, compute `[C+1, last]` new turns, slice into windows of `extraction.window_turns`, with up to `window_turns - new_count` lookback turns when new turns are sparse
 - [x] 5.4 For `trigger_kind = 'session_close'` jobs with no new turns, run a single window over the most recent `window_turns` turns purely as context (cursor remains unchanged)
 - [x] 5.5 Build the SLM prompt per the `fact-extraction-schema` spec: system prompt + user prompt with new-turns and lookback-context delimited

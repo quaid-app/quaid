@@ -8,7 +8,7 @@ use quaid::commands::ingest;
 use quaid::core::conversation::{
     extractor::{FactWriter, PendingFactWriter, SlmClient, Worker, WorkerError},
     format, queue,
-    slm::SlmError,
+    slm::{parse_response, SlmError},
     supersede::ResolvingFactWriter,
 };
 use quaid::core::db;
@@ -350,6 +350,125 @@ fn session_close_reclaim_replays_same_turn_slice_without_duplicate_fact_files() 
         .contains("New turns to extract from (turns none):"));
     assert!(calls[1].prompt.contains("[turn 1, user"));
     assert!(calls[1].prompt.contains("[turn 2, assistant"));
+}
+
+// ── spec item 9.4 — pre-cursor-write crash: lease expiry + dedup backstop ────
+//
+// The *post*-cursor-write crash path is proven by
+// `session_close_reclaim_replays_same_turn_slice_without_duplicate_fact_files`
+// (cursor already at 2, replay uses session_close context-only window).
+// This test covers the complementary path: crash happens *before*
+// `persist_cursor_update`, so cursor stays at 0.  On replay the worker
+// recomputes the same ordinal window [1..2] and dedup must prevent a
+// duplicate fact file.
+//
+// Note: dedup correctness (cosine policy, multi-head disambiguation) is
+// deferred to 7.*.  This test proves only that (a) the stale running row is
+// re-eligibilised by lease expiry, (b) replay targets the same window, and
+// (c) the write path's dedup check prevents a second file from appearing on
+// disk.
+
+#[test]
+fn precursor_crash_replay_via_lease_expiry_contains_duplicate_via_dedup() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+    let conversation_path =
+        seed_conversation_file(dir.path(), "s1", conversation_with_cursor("s1", 0, 2));
+    let slm_output = r#"{"facts":[{"kind":"preference","about":"programming-language","strength":"high","summary":"Matt prefers Rust"}]}"#;
+
+    // ── step 1: enqueue and claim the job ────────────────────────────────────
+    queue::enqueue(
+        &conn,
+        "s1",
+        &conversation_path,
+        ExtractionTriggerKind::Manual,
+        "2000-01-01T00:00:00Z",
+    )
+    .unwrap();
+    let initial_claim = queue::dequeue(&conn).unwrap().unwrap();
+    assert_eq!(initial_claim.session_id, "s1");
+
+    // ── step 2: simulate partial execution ───────────────────────────────────
+    // Write the fact for window [1..2] but do NOT advance the cursor.
+    // In the real crash scenario, `persist_cursor_update` is called only
+    // after *all* windows succeed; a crash during write_window leaves
+    // cursor at 0 on disk.
+    let first_window = WindowedTurns {
+        new_turns: conversation_with_cursor("s1", 0, 2).turns,
+        lookback_turns: Vec::new(),
+        context_only: false,
+    };
+    let slm_response = parse_response(slm_output).unwrap();
+    ResolvingFactWriter
+        .write_window(&conn, &initial_claim, &first_window, &slm_response)
+        .unwrap();
+
+    for file in extracted_markdown_files(&dir.path().join("extracted")) {
+        ingest::run(&conn, file.to_str().unwrap(), false).unwrap();
+    }
+    assert_eq!(
+        extracted_markdown_files(&dir.path().join("extracted")).len(),
+        1,
+        "exactly one fact file after partial first run"
+    );
+
+    // ── step 3: simulate crash ───────────────────────────────────────────────
+    // The job row stays `running`.  Set scheduled_for to an ancient timestamp
+    // so the lease-expiry guard in `dequeue` considers it expired.
+    conn.execute(
+        "UPDATE extraction_queue
+         SET status = 'running', scheduled_for = '2000-01-01T00:00:00Z'
+         WHERE id = ?1",
+        [initial_claim.id],
+    )
+    .unwrap();
+
+    let parsed_before_replay =
+        format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+    assert_eq!(
+        parsed_before_replay.frontmatter.last_extracted_turn,
+        0,
+        "cursor must still be 0 — crash happened before persist_cursor_update"
+    );
+
+    // ── step 4: replay via lease expiry ──────────────────────────────────────
+    // process_next_job → claim_next_job → dequeue → recover_expired_leases
+    // resets the row to pending (attempts 0→1) → job is claimed and processed.
+    let slm = StubSlm::with_results([Ok(slm_output)]);
+    let probe = slm.clone();
+    let worker = worker_with_writer(&conn, slm, ResolvingFactWriter);
+    let replayed = worker.process_next_job().unwrap().unwrap();
+
+    // (a) Stale running job was re-eligibilised and completed.
+    assert_eq!(replayed.session_id, "s1");
+    assert_eq!(replayed.attempts, 1, "lease-expiry increments attempts");
+    assert_eq!(
+        job_status(&conn, replayed.id),
+        ExtractionJobStatus::Done.as_str()
+    );
+
+    // (b) Replay targeted the same ordinal window: cursor=0 → new turns [1..2].
+    let calls = probe.recorded_calls();
+    assert_eq!(calls.len(), 1, "exactly one SLM call on replay");
+    assert!(
+        calls[0].prompt.contains("New turns to extract from (turns 1..2):"),
+        "replay window must cover the same ordinal range as the original job \
+         (cursor unchanged at 0); prompt: {}",
+        calls[0].prompt
+    );
+
+    // (c) Dedup contained the duplicate: still exactly 1 fact file on disk.
+    assert_eq!(
+        extracted_markdown_files(&dir.path().join("extracted")).len(),
+        1,
+        "dedup must prevent a duplicate fact file on replay"
+    );
+
+    // (d) Cursor now advanced to 2 — replay completed successfully.
+    let parsed_after_replay =
+        format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+    assert_eq!(parsed_after_replay.frontmatter.last_extracted_turn, 2);
 }
 
 fn open_worker_db_at(path: &Path) -> Connection {

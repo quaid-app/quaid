@@ -85,8 +85,10 @@
 - [x] 9.1 After all windows for a job are processed successfully, update the conversation file's `last_extracted_turn` to the highest ordinal in the just-processed new-turns range and `last_extracted_at` to current time
 - [x] 9.2 Persist the cursor write before transitioning the queue job to `done` (deliberate ordering for crash safety)
 - [x] 9.3 On any window failure, do not advance the cursor; let the queue's retry logic re-claim the job on next dequeue
-- [x] 9.4 Tests: `tests/extraction_worker.rs` covers cursor advance on success, cursor unchanged on failure, and the narrow crash-recovery replay seam now proved for the shipped path
+- [x] 9.4 Tests: `tests/extraction_worker.rs` covers cursor advance on success, cursor unchanged on failure, and crash-recovery replay proved for both crash paths
   > **Scope note (Mom, 2026-05-05T17:17:29.932+08:00):** This closure is intentionally narrower than general `7.*` resolution correctness: a reclaimed `session_close` job that already persisted the cursor and wrote/ingested the first fact file can replay the same turn slice as a context-only window, and if the SLM emits the same fact again the current write/dedup path does not create a duplicate fact page.
+  >
+  > **Extension (Bender):** The above covers the *post*-cursor-advance crash path. `precursor_crash_replay_via_lease_expiry_contains_duplicate_via_dedup` completes the proof for the *pre*-cursor-write crash path: cursor stays 0, lease-expiry re-eligibilises the stale running row (attempts 0→1), replay recomputes the same ordinal window [1..2], and the dedup backstop in `ResolvingFactWriter` prevents a second fact file from appearing on disk. Full dedup correctness (cosine policy, multi-head disambiguation) remains deferred to 7.*.
 
 ## 10. Idle-timer auto-close
 

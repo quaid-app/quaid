@@ -114,12 +114,12 @@
 
 ## 13. CLI — `quaid extract <session>` and `--all`
 
-- [ ] 13.1 Create `src/commands/extract.rs` implementing `quaid extract <session-id> [--force]` and `quaid extract --all [--since <date>]`
-- [ ] 13.2 Bare `extract <session>`: enqueue an immediate `manual` job for the session
-- [ ] 13.3 `extract <session> --force`: reset `last_extracted_turn = 0` across all of the session's day-files, then enqueue
-- [ ] 13.4 `extract --all`: iterate sessions in the active namespace; with `--since`, restrict to sessions with at least one day-file dated on or after the cutoff
-- [ ] 13.5 Output: print enqueued session ids and a hint that progress is observable via `quaid extraction status`
-- [ ] 13.6 Tests: `tests/cli_extract.rs` covers all four flag combinations
+- [x] 13.1 Create `src/commands/extract.rs` implementing `quaid extract <session-id> [--force]` and `quaid extract --all [--since <date>]`
+- [x] 13.2 Bare `extract <session>`: enqueue an immediate `manual` job for the session
+- [x] 13.3 `extract <session> --force`: reset `last_extracted_turn = 0` across all of the session's day-files, then enqueue
+- [x] 13.4 `extract --all`: iterate sessions in the active namespace; with `--since`, restrict to sessions with at least one day-file dated on or after the cutoff
+- [x] 13.5 Output: print enqueued session ids and a hint that progress is observable via `quaid extraction status`
+- [x] 13.6 Tests: `tests/cli_extract.rs` covers all four flag combinations
 
 ## 14. DAB §8 Conversation Memory benchmark gate
 

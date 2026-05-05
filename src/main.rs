@@ -110,6 +110,8 @@ enum Commands {
         #[command(subcommand)]
         action: commands::extraction::ExtractionAction,
     },
+    /// Re-enqueue manual extraction for one or more sessions
+    Extract(commands::extract::ExtractArgs),
     /// Manage cached local models
     Model {
         #[command(subcommand)]
@@ -391,6 +393,7 @@ async fn main() -> Result<()> {
             import_id,
         } => commands::export::run(&db, &path, raw, import_id),
         Commands::Extraction { action } => commands::extraction::run(&db, action),
+        Commands::Extract(args) => commands::extract::run(&db, args),
         Commands::Embed { slug, all, stale } => commands::embed::run(&db, slug, all, stale),
         Commands::Link {
             from,

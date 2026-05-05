@@ -5,6 +5,7 @@ pub mod compact;
 pub mod config;
 pub mod embed;
 pub mod export;
+pub mod extract;
 pub mod extraction;
 pub mod gaps;
 pub mod get;

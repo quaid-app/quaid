@@ -515,6 +515,46 @@ body\n";
     }
 
     #[test]
+    fn parse_rejects_non_numeric_last_extracted_turn() {
+        let input = "---\n\
+type: conversation\n\
+session_id: session-1\n\
+date: 2026-05-03\n\
+started_at: 2026-05-03T09:14:22Z\n\
+status: open\n\
+last_extracted_at: null\n\
+last_extracted_turn: nope\n\
+---\n";
+
+        let error = parse_str(input).expect_err("non-numeric cursor should fail");
+
+        assert!(error
+            .to_string()
+            .contains("last_extracted_turn must be an integer"));
+    }
+
+    #[test]
+    fn parse_rejects_turn_heading_with_extra_fields() {
+        let input = "---\n\
+type: conversation\n\
+session_id: session-1\n\
+date: 2026-05-03\n\
+started_at: 2026-05-03T09:14:22Z\n\
+status: open\n\
+last_extracted_at: null\n\
+last_extracted_turn: 0\n\
+---\n\n\
+## Turn 1 · user · 2026-05-03T09:14:22Z · extra\n\n\
+body\n";
+
+        let error = parse_str(input).expect_err("extra heading fields should fail");
+
+        assert!(error
+            .to_string()
+            .contains("unexpected extra heading fields"));
+    }
+
+    #[test]
     fn render_outputs_null_for_missing_last_extracted_at() {
         let mut file = sample_file();
         file.frontmatter.last_extracted_at = None;

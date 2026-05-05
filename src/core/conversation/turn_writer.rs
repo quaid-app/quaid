@@ -689,6 +689,43 @@ mod tests {
     }
 
     #[test]
+    fn append_turn_returns_format_error_when_existing_file_is_malformed() {
+        let vault_root = tempfile::TempDir::new().unwrap();
+        let (_db_dir, conn) = configured_connection(vault_root.path());
+        let conversation_dir = vault_root.path().join("conversations").join("2026-05-03");
+        fs::create_dir_all(&conversation_dir).unwrap();
+        let conversation_path = conversation_dir.join("session-bad.md");
+        let original = concat!(
+            "---\n",
+            "type: conversation\n",
+            "session_id: session-bad\n",
+            "date: 2026-05-03\n",
+            "started_at: 2026-05-03T09:14:22Z\n",
+            "status: open\n",
+            "last_extracted_at: null\n",
+            "last_extracted_turn: 0\n",
+            "---\n\n",
+            "## Turn nope · user · 2026-05-03T09:14:22Z\n\n",
+            "broken\n"
+        );
+        fs::write(&conversation_path, original).unwrap();
+
+        let error = append_turn(
+            &conn,
+            "session-bad",
+            TurnRole::Assistant,
+            "should fail",
+            "2026-05-03T09:15:00Z",
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, TurnWriteError::Format(_)));
+        assert_eq!(fs::read_to_string(&conversation_path).unwrap(), original);
+    }
+
+    #[test]
     fn validate_session_id_rejects_path_traversal() {
         let error = validate_session_id("../bad").unwrap_err();
 

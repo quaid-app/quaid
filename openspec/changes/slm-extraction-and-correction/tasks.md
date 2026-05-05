@@ -32,10 +32,10 @@
 - [x] 4.1 Create `src/commands/extraction.rs` implementing `enable | disable | status`
 - [x] 4.2 `quaid extraction enable`: validate the configured model alias, run `download_model` with progress UI, on success update `quaid_config.extraction.enabled = true`; on failure leave the flag unchanged and print the actionable error
 - [x] 4.3 `quaid extraction disable`: update `quaid_config.extraction.enabled = false` (does not delete cached model files)
-- [ ] 4.4 `quaid extraction status`: query daemon (or local DB if daemon is not running) for model state, queue depth, active-session list, last-extraction-at per session, and recent failed jobs; format as the human-readable summary described in the spec
+- [x] 4.4 `quaid extraction status`: query daemon (or local DB if daemon is not running) for model state, queue depth, active-session list, last-extraction-at per session, and recent failed jobs; format as the human-readable summary described in the spec
 - [x] 4.5 Create `src/commands/model.rs` implementing `quaid model pull <alias>` that calls `download_model` without changing `extraction.enabled`
 - [x] 4.6 Wire the new subcommands into `src/main.rs` clap dispatch
-- [ ] 4.7 Tests: `tests/cli_extraction.rs` covers enable success / failure paths, `model pull` does not flip the flag, status output shape
+- [x] 4.7 Tests: `tests/cli_extraction.rs` covers enable success / failure paths, `model pull` does not flip the flag, status output shape
 
 ## 5. Extraction worker — window selection + SLM call
 

@@ -2,13 +2,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::core::conversation::{queue, turn_writer};
+use crate::core::conversation::{format, queue, turn_writer};
+use crate::core::{collections, markdown, namespace};
 use crate::core::db;
 use crate::core::inference::embed;
-use crate::core::types::{ExtractionJob, RawFact, Turn, WindowedTurns};
+use crate::core::types::{
+    frontmatter_insert_string, ExtractionJob, Frontmatter, Page, RawFact, Turn, WindowedTurns,
+};
 
 const DEFAULT_DEDUP_COSINE_MIN: f64 = 0.92;
 const DEFAULT_SUPERSEDE_COSINE_MIN: f64 = 0.4;
@@ -94,6 +98,10 @@ pub fn resolve_in_scope(
     collection_id: i64,
     namespace: &str,
 ) -> Result<Resolution, FactResolutionError> {
+    // NOTE: cosine_similarity calls the real embedding pipeline. If the embedding backend
+    // has fallen back to HashShim (e.g. model files missing), the returned cosines are
+    // pseudo-random hash distances, not semantic similarity. Callers that care about
+    // correctness SHOULD gate on embedding availability before invoking this function.
     resolve_in_scope_with_similarity(raw_fact, conn, collection_id, namespace, cosine_similarity)
 }
 
@@ -197,6 +205,15 @@ pub fn resolve_and_write_fact_in_context(
     conn: &Connection,
     context: &FactWriteContext,
 ) -> Result<FactWriteResult, FactResolutionError> {
+    // The IMMEDIATE transaction serialises the head-lookup and resolution decision so that
+    // two concurrent workers cannot both see the same head as the "current" state. However,
+    // SQLite ACID does not cover the filesystem: `write_fact_in_context` drops a vault file
+    // inside the transaction window, and that file may exist on disk before or after the
+    // DB commit. The Phase 4 vault watcher performs the eventual page-row insert; there is
+    // no cross-seam atomic guarantee between file creation and page ingestion.
+    //
+    // Callers must not assume the page row is visible in the DB immediately after this call
+    // returns. The watcher provides eventual consistency.
     with_immediate_transaction(conn, |conn| {
         let resolution = resolve_in_scope(raw_fact, conn, context.collection_id, &context.namespace)?;
         write_fact_in_context(&resolution, raw_fact, conn, context)
@@ -224,53 +241,21 @@ pub fn context_for_job_window(
                 message: error.to_string(),
             },
         )?;
+    let parsed_path = format::parse_relative_conversation_path(&job.conversation_path).map_err(|_| {
+        FactResolutionError::InvalidConversationPath {
+            path: job.conversation_path.clone(),
+        }
+    })?;
 
     Ok(FactWriteContext {
         collection_id: memory_root.collection_id,
         root_path: memory_root.root_path,
-        namespace: namespace_from_conversation_path(&job.conversation_path)?,
-        session_id: session_id_from_conversation_path(&job.conversation_path)?,
+        namespace: parsed_path.namespace.unwrap_or_default(),
+        session_id: parsed_path.session_id,
         source_turns: source_turn_refs(window),
         extracted_at,
         extracted_by,
     })
-}
-
-pub fn namespace_from_conversation_path(path: &str) -> Result<String, FactResolutionError> {
-    let mut components = Path::new(path).components();
-    let Some(first) = components.next() else {
-        return Err(FactResolutionError::InvalidConversationPath {
-            path: path.to_owned(),
-        });
-    };
-    let first = first.as_os_str().to_string_lossy().to_string();
-    if first == "conversations" {
-        return Ok(String::new());
-    }
-
-    let Some(second) = components.next() else {
-        return Err(FactResolutionError::InvalidConversationPath {
-            path: path.to_owned(),
-        });
-    };
-    if second.as_os_str() == "conversations" {
-        Ok(first)
-    } else {
-        Err(FactResolutionError::InvalidConversationPath {
-            path: path.to_owned(),
-        })
-    }
-}
-
-fn session_id_from_conversation_path(path: &str) -> Result<String, FactResolutionError> {
-    Path::new(path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| FactResolutionError::InvalidConversationPath {
-            path: path.to_owned(),
-        })
 }
 
 fn default_write_context(conn: &Connection) -> Result<FactWriteContext, FactResolutionError> {
@@ -533,6 +518,11 @@ fn slugify(raw: &str) -> String {
 }
 
 fn relative_fact_path(type_plural: &str, namespace: &str, slug: &str) -> PathBuf {
+    collections::validate_relative_path(type_plural).expect("type plural should be a safe path");
+    if !namespace.is_empty() {
+        namespace::validate_optional_namespace(Some(namespace))
+            .expect("fact namespace should already be validated");
+    }
     let mut relative = PathBuf::new();
     if !namespace.is_empty() {
         relative.push(namespace);
@@ -549,41 +539,42 @@ fn render_fact_markdown(
     slug: &str,
     supersedes: Option<&str>,
 ) -> Result<String, FactResolutionError> {
-    let mut lines: Vec<(&'static str, Option<String>)> = vec![
-        ("corrected_via", None),
-        ("extracted_at", Some(context.extracted_at.clone())),
-        ("extracted_by", Some(context.extracted_by.clone())),
-        ("kind", Some(raw_fact.kind_str().to_string())),
-        ("session_id", Some(context.session_id.clone())),
-        ("slug", Some(slug.to_string())),
-        (
-            "source_turns",
-            Some(serde_json::to_string(&qualified_source_turns(context))?),
-        ),
-        ("supersedes", supersedes.map(str::to_owned)),
-        ("title", Some(raw_fact.type_key().to_string())),
-        ("type", Some(raw_fact.kind_str().to_string())),
-    ];
+    let mut frontmatter = Frontmatter::new();
+    frontmatter.insert("corrected_via".to_string(), JsonValue::Null);
+    frontmatter_insert_string(&mut frontmatter, "extracted_at", context.extracted_at.clone());
+    frontmatter_insert_string(&mut frontmatter, "extracted_by", context.extracted_by.clone());
+    frontmatter_insert_string(&mut frontmatter, "kind", raw_fact.kind_str());
+    frontmatter_insert_string(&mut frontmatter, "session_id", context.session_id.clone());
+    frontmatter_insert_string(&mut frontmatter, "slug", slug.to_string());
+    frontmatter.insert("source_turns".to_string(), json!(qualified_source_turns(context)));
+    frontmatter.insert(
+        "supersedes".to_string(),
+        supersedes
+            .map(|value| JsonValue::String(value.to_string()))
+            .unwrap_or(JsonValue::Null),
+    );
+    frontmatter_insert_string(&mut frontmatter, "title", raw_fact.type_key().to_string());
+    frontmatter_insert_string(&mut frontmatter, "type", raw_fact.kind_str());
 
     match raw_fact {
         RawFact::Decision {
             chose, rationale, ..
         } => {
-            lines.push(("chose", Some(chose.clone())));
+            frontmatter_insert_string(&mut frontmatter, "chose", chose.clone());
             if let Some(rationale) = rationale.as_deref() {
-                lines.push(("rationale", Some(rationale.to_string())));
+                frontmatter_insert_string(&mut frontmatter, "rationale", rationale.to_string());
             }
         }
         RawFact::Preference {
             about, strength, ..
         } => {
-            lines.push(("about", Some(about.clone())));
+            frontmatter_insert_string(&mut frontmatter, "about", about.clone());
             if let Some(strength) = strength {
-                lines.push(("strength", Some(strength.as_str().to_string())));
+                frontmatter_insert_string(&mut frontmatter, "strength", strength.as_str());
             }
         }
         RawFact::Fact { about, .. } => {
-            lines.push(("about", Some(about.clone())));
+            frontmatter_insert_string(&mut frontmatter, "about", about.clone());
         }
         RawFact::ActionItem {
             who,
@@ -593,35 +584,34 @@ fn render_fact_markdown(
             ..
         } => {
             if let Some(who) = who.as_deref() {
-                lines.push(("who", Some(who.to_string())));
+                frontmatter_insert_string(&mut frontmatter, "who", who.to_string());
             }
-            lines.push(("what", Some(what.clone())));
-            lines.push(("status", Some(status.as_str().to_string())));
+            frontmatter_insert_string(&mut frontmatter, "what", what.clone());
+            frontmatter_insert_string(&mut frontmatter, "status", status.as_str());
             if let Some(due) = due.as_deref() {
-                lines.push(("due", Some(due.to_string())));
+                frontmatter_insert_string(&mut frontmatter, "due", due.to_string());
             }
         }
     }
 
-    lines.sort_by(|left, right| left.0.cmp(right.0));
-
-    let mut out = String::from("---\n");
-    for (key, value) in lines {
-        out.push_str(key);
-        out.push_str(": ");
-        match value {
-            Some(value) => out.push_str(&yaml_scalar(&value)),
-            None => out.push_str("null"),
-        }
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(raw_fact.summary());
-    if !raw_fact.summary().ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    Ok(out)
+    Ok(markdown::render_page(&Page {
+        slug: slug.to_string(),
+        uuid: String::new(),
+        page_type: raw_fact.kind_str().to_string(),
+        superseded_by: None,
+        title: raw_fact.type_key().to_string(),
+        summary: raw_fact.summary().to_string(),
+        compiled_truth: raw_fact.summary().to_string(),
+        timeline: String::new(),
+        frontmatter,
+        wing: String::new(),
+        room: String::new(),
+        version: 1,
+        created_at: String::new(),
+        updated_at: String::new(),
+        truth_updated_at: String::new(),
+        timeline_updated_at: String::new(),
+    }))
 }
 
 fn qualified_source_turns(context: &FactWriteContext) -> Vec<String> {
@@ -634,26 +624,6 @@ fn qualified_source_turns(context: &FactWriteContext) -> Vec<String> {
         .iter()
         .map(|turn| format!("{}:{turn}", context.session_id))
         .collect()
-}
-
-fn yaml_scalar(value: &str) -> String {
-    if value.is_empty()
-        || value == "null"
-        || value.starts_with(' ')
-        || value.ends_with(' ')
-        || value.contains(':')
-        || value.contains('#')
-        || value.contains('[')
-        || value.contains(']')
-        || value.contains('{')
-        || value.contains('}')
-        || value.contains('"')
-        || value.contains('\'')
-    {
-        format!("'{}'", value.replace('\'', "''"))
-    } else {
-        value.to_string()
-    }
 }
 
 fn write_markdown(

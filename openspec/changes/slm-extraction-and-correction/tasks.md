@@ -59,24 +59,26 @@
 
 ## 7. Per-fact resolution
 
-- [x] 7.1 Create `src/core/conversation/supersede.rs::resolve(raw_fact, conn) -> Result<Resolution>` returning one of `Drop`, `Supersede(prior_slug)`, `Coexist`
-- [x] 7.2 Head-only key-match query: select pages where `kind = ? AND superseded_by IS NULL AND json_extract(frontmatter, '$.<type_key>') = ?`
-- [x] 7.3 Compute prose-embedding cosine between the new fact's `summary` and each candidate head's body; reuse the existing embedding pipeline
-- [x] 7.4 Apply rules: cosine > `dedup_cosine_min` → Drop; cosine in `[supersede_cosine_min, dedup_cosine_min]` against best-match → Supersede; otherwise → Coexist
-- [x] 7.5 Multi-match: pick the head with highest cosine to the new fact; resolution evaluates only against that head; other matching heads remain unchanged
-- [x] 7.6 Wrap resolution + write step in a single transaction so head-lookup, decision, and write are consistent
-- [x] 7.7 Tests: `tests/fact_resolution.rs` covers all five rule branches plus multi-match disambiguation; ensures non-head pages are excluded from candidates
+> **Scope note (Mom, 2026-05-05T17:17:29.932+08:00):** Per Leela's rescope, all `7.*` resolution claims stay reopened. This revision closes only writer/schema honesty (`8.1–8.5` plus frontmatter-substrate repair), so cosine policy, same-key ambiguity, and watcher-spanning transaction guarantees remain deferred.
+
+- [ ] 7.1 Create `src/core/conversation/supersede.rs::resolve(raw_fact, conn) -> Result<Resolution>` returning one of `Drop`, `Supersede(prior_slug)`, `Coexist`
+- [ ] 7.2 Head-only key-match query: select pages where `kind = ? AND superseded_by IS NULL AND json_extract(frontmatter, '$.<type_key>') = ?`
+- [ ] 7.3 Compute prose-embedding cosine between the new fact's `summary` and each candidate head's body; reuse the existing embedding pipeline
+- [ ] 7.4 Apply rules: cosine > `dedup_cosine_min` → Drop; cosine in `[supersede_cosine_min, dedup_cosine_min]` against best-match → Supersede; otherwise → Coexist
+- [ ] 7.5 Multi-match: pick the head with highest cosine to the new fact; resolution evaluates only against that head; other matching heads remain unchanged
+- [ ] 7.6 Wrap resolution + write step in a single transaction so head-lookup, decision, and write are consistent
+- [ ] 7.7 Tests: `tests/fact_resolution.rs` covers all five rule branches plus multi-match disambiguation; ensures non-head pages are excluded from candidates
 
 ## 8. Fact-page write step
 
-- [x] 8.1 Implement `write_fact(resolution, raw_fact, conn) -> Result<FactWriteResult>`:
+- [x] 8.1 Implement the writer/schema honesty slice for `write_fact(resolution, raw_fact, conn) -> Result<FactWriteResult>`:
   - **Drop**: no file write; log structured event with `decision = drop` and the matched head's slug
-  - **Supersede**: derive new slug (`<key>-<4char-hash>` or similar); render markdown file with `supersedes: <prior_slug>`, `corrected_via: null`, source-turn references; write to `<vault>/extracted/<type-plural>/<slug>.md`
+  - **Supersede**: derive a new slug, render the fact through the shared frontmatter pipeline so `source_turns` stays a real list and `corrected_via` stays nullable, then write to `<vault>/extracted/<type-plural>/<slug>.md`
   - **Coexist**: render and write similarly with `supersedes: null`
-- [x] 8.2 Slug generator: derive from kind + type-key + 4-char SHA-256 hash; collision-avoidance via append-counter loop bounded to a few attempts
-- [x] 8.3 Namespace path nesting: when namespaces are in use, write under `<vault>/<namespace>/extracted/...`
-- [x] 8.4 No direct page-table writes from this path: the existing Phase 4 vault watcher ingests the file
-- [x] 8.5 Tests: `tests/fact_write.rs` covers each resolution branch produces the right file (or no file); slug collision; namespace path; supersede frontmatter triggers proposal-#1's atomic two-end update
+- [x] 8.2 Slug generator: derive from kind + type-key + 4-char SHA-256 hash; collision-avoidance via append-counter loop bounded to a few attempts. **Batch scope:** deterministic path allocation only; replay/concurrency correctness remains with deferred `7.*`.
+- [x] 8.3 Namespace path nesting: when namespaces are in use, derive namespace/session context from validated conversation-path metadata and write under `<vault>/<namespace>/extracted/...` using existing namespace/path guardrails.
+- [x] 8.4 No direct page-table writes from this path: the existing Phase 4 vault watcher ingests the file, so watcher-paused runs leave bytes on disk without inserting a page row.
+- [x] 8.5 Tests: `tests/fact_write.rs` covers each resolution branch's file behavior (or no file), real list/null frontmatter surviving ingest, bounded slug collision handling, malformed queue-path refusal, validated namespace routing, and watcher-separated supersede ingest via the already-landed add-only path.
 
 ## 9. Cursor advance + queue accounting
 

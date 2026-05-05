@@ -212,11 +212,13 @@ fn insert_page_with_raw_import(
     let (compiled_truth, timeline) = split_content(&body);
     let title = frontmatter
         .get("title")
-        .cloned()
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
         .unwrap_or_else(|| slug.to_string());
     let page_type = frontmatter
         .get("type")
-        .cloned()
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
         .unwrap_or_else(|| "concept".to_string());
     let summary = extract_summary(&compiled_truth);
     let frontmatter_json = serde_json::to_string(&frontmatter).expect("serialize frontmatter");

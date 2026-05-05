@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::commands::{check, get, link, put};
 
 use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
-use crate::core::conversation::{queue as conversation_queue, slm::LazySlmRunner, turn_writer};
+use crate::core::conversation::{
+    correction, extractor::SlmClient, queue as conversation_queue, slm::LazySlmRunner, turn_writer,
+};
 use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
@@ -22,6 +24,7 @@ use crate::core::types::{ExtractionTriggerKind, SearchError, TurnRole};
 use crate::core::vault_sync;
 
 type DbRef = Arc<Mutex<Connection>>;
+type SlmRef = Arc<dyn SlmClient + Send + Sync>;
 
 const MAX_SLUG_LEN: usize = 512;
 const MAX_CONTENT_LEN: usize = 1_048_576; // 1 MB
@@ -518,6 +521,30 @@ fn map_extraction_queue_error(e: conversation_queue::ExtractionQueueError) -> rm
     }
 }
 
+fn map_correction_error(e: correction::CorrectionError) -> rmcp::Error {
+    match e {
+        correction::CorrectionError::NotFound { .. } => {
+            rmcp::Error::new(ErrorCode(-32001), e.to_string(), None)
+        }
+        correction::CorrectionError::Kind { .. }
+        | correction::CorrectionError::InvalidRequest { .. }
+        | correction::CorrectionError::Config { .. } => {
+            rmcp::Error::new(ErrorCode(-32002), e.to_string(), None)
+        }
+        correction::CorrectionError::Conflict { message } => {
+            rmcp::Error::new(ErrorCode(-32009), message, None)
+        }
+        correction::CorrectionError::Sqlite(error) => map_db_error(error),
+        correction::CorrectionError::VaultSync(error) => map_vault_sync_error(error),
+        correction::CorrectionError::Json(_)
+        | correction::CorrectionError::Slm(_)
+        | correction::CorrectionError::FactResolution(_)
+        | correction::CorrectionError::Output { .. } => {
+            rmcp::Error::new(ErrorCode(-32003), e.to_string(), None)
+        }
+    }
+}
+
 fn validate_turn_timestamp(value: &str) -> Result<(), rmcp::Error> {
     if value.len() == 20 && is_valid_temporal_value(value) {
         Ok(())
@@ -571,15 +598,21 @@ fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp:
 #[derive(Clone)]
 pub struct QuaidServer {
     db: DbRef,
-    #[allow(dead_code)]
-    slm: Arc<LazySlmRunner>,
+    slm: SlmRef,
 }
 
 impl QuaidServer {
     pub fn new(conn: Connection) -> Self {
+        Self::new_with_slm(conn, Arc::new(LazySlmRunner::new()))
+    }
+
+    pub fn new_with_slm<S>(conn: Connection, slm: Arc<S>) -> Self
+    where
+        S: SlmClient + Send + Sync + 'static,
+    {
         Self {
             db: Arc::new(Mutex::new(conn)),
-            slm: Arc::new(LazySlmRunner::new()),
+            slm,
         }
     }
 }
@@ -623,6 +656,19 @@ pub struct MemoryCloseActionInput {
     pub slug: String,
     pub status: String,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryCorrectInput {
+    pub fact_slug: String,
+    pub correction: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryCorrectContinueInput {
+    pub correction_id: String,
+    pub response: Option<String>,
+    pub abandon: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1001,6 +1047,44 @@ impl QuaidServer {
             "version": version,
         }))
         .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Start a correction dialogue for an extracted fact")]
+    pub fn memory_correct(
+        &self,
+        #[tool(aggr)] input: MemoryCorrectInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.fact_slug)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let step = correction::start_correction(
+            &db,
+            self.slm.as_ref(),
+            &input.fact_slug,
+            &input.correction,
+        )
+        .map_err(map_correction_error)?;
+        let json = serde_json::to_string_pretty(&step)
+            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Continue or abandon an open fact correction dialogue")]
+    pub fn memory_correct_continue(
+        &self,
+        #[tool(aggr)] input: MemoryCorrectContinueInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let step = correction::continue_correction(
+            &db,
+            self.slm.as_ref(),
+            &input.correction_id,
+            input.response.as_deref(),
+            input.abandon.unwrap_or(false),
+        )
+        .map_err(map_correction_error)?;
+        let json = serde_json::to_string_pretty(&step)
+            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 

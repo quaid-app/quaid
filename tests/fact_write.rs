@@ -353,7 +353,7 @@ fn context_for_job_window_rejects_path_traversal_attempt() {
         "path traversal via `..` must be rejected before any write"
     );
     assert!(
-        !dir.path().join("..").exists() || true,
-        "no files written outside vault"
+        !dir.path().join("conversations").exists(),
+        "no conversation files should be created for an invalid traversal path"
     );
 }

@@ -1,18 +1,26 @@
+#[cfg(feature = "online-model")]
 use std::collections::BTreeSet;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(feature = "online-model")]
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+#[cfg(feature = "online-model")]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "online-model")]
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+#[cfg(feature = "online-model")]
 const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://huggingface.co";
 const MODEL_CACHE_ROOT_ENV: &str = "QUAID_MODEL_CACHE_DIR";
+#[cfg(feature = "online-model")]
 const HUGGINGFACE_BASE_URL_ENV: &str = "QUAID_HF_BASE_URL";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
+#[cfg(feature = "online-model")]
 const STALE_DOWNLOAD_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 const PHI_35_MINI_REVISION: &str = "2fe192450127e6a83f7441aef6e3ca586c338b77";
@@ -48,6 +56,7 @@ const TEST_CURATED_FILES: &[SourcePinnedFile] = &[
     },
 ];
 
+#[cfg(feature = "online-model")]
 const OPTIONAL_SUPPORT_FILES: &[&str] = &[
     "added_tokens.json",
     "chat_template.json",
@@ -129,18 +138,21 @@ pub struct CachedModelStatus {
     pub source_pinned: bool,
 }
 
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PinnedDigest {
     Sha256(&'static str),
     GitBlobSha1(&'static str),
 }
 
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SourcePinnedFile {
     path: &'static str,
     digest: PinnedDigest,
 }
 
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 const PHI_35_MINI_FILES: &[SourcePinnedFile] = &[
     SourcePinnedFile {
         path: "added_tokens.json",
@@ -190,6 +202,7 @@ const PHI_35_MINI_FILES: &[SourcePinnedFile] = &[
     },
 ];
 
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 const GEMMA_3_1B_FILES: &[SourcePinnedFile] = &[
     SourcePinnedFile {
         path: "added_tokens.json",
@@ -231,6 +244,7 @@ const GEMMA_3_1B_FILES: &[SourcePinnedFile] = &[
     },
 ];
 
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 const GEMMA_3_4B_FILES: &[SourcePinnedFile] = &[
     SourcePinnedFile {
         path: "added_tokens.json",
@@ -470,7 +484,7 @@ pub fn download_model(
 ) -> Result<PathBuf, ModelLifecycleError> {
     #[cfg(feature = "online-model")]
     {
-        return download_model_online(alias, progress);
+        download_model_online(alias, progress)
     }
 
     #[cfg(not(feature = "online-model"))]
@@ -560,7 +574,7 @@ fn download_model_online(
                     message: "download metadata was not fetched for an unpinned alias".to_owned(),
                 });
             };
-            let files = select_files_to_download(&metadata, &alias)?;
+            let files = select_files_to_download(metadata, &alias)?;
             install_model_into_dir(&client, &alias, &files, &temp_dir, progress)
         }
     };
@@ -889,6 +903,7 @@ fn fetch_model_metadata(
     })
 }
 
+#[cfg(feature = "online-model")]
 fn download_timestamp_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -896,6 +911,7 @@ fn download_timestamp_secs() -> u64 {
         .as_secs()
 }
 
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 fn source_pins_for_alias(alias: &ResolvedModelAlias) -> Option<&'static [SourcePinnedFile]> {
     match alias.requested_alias.to_ascii_lowercase().as_str() {
         "phi-3.5-mini" => Some(PHI_35_MINI_FILES),
@@ -907,6 +923,7 @@ fn source_pins_for_alias(alias: &ResolvedModelAlias) -> Option<&'static [SourceP
     }
 }
 
+#[cfg(feature = "online-model")]
 fn scavenge_stale_download_dirs(cache_root: &Path, cache_key: &str) {
     let Ok(entries) = fs::read_dir(cache_root) else {
         return;
@@ -932,6 +949,7 @@ fn scavenge_stale_download_dirs(cache_root: &Path, cache_key: &str) {
     }
 }
 
+#[cfg(feature = "online-model")]
 fn parse_download_timestamp(file_name: &str, cache_key: &str, path: &Path) -> Option<u64> {
     let prefix = format!(".{cache_key}-download-");
     let suffix = file_name.strip_prefix(&prefix)?;
@@ -995,6 +1013,7 @@ fn verify_source_pin(
     Ok(())
 }
 
+#[cfg(feature = "online-model")]
 fn git_blob_sha1_for_file(path: &Path, byte_len: u64) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let mut hasher = Sha1::new();
@@ -1242,6 +1261,7 @@ fn validated_manifest(
     Ok(manifest)
 }
 
+#[cfg(feature = "online-model")]
 fn write_manifest(
     cache_dir: &Path,
     manifest: &CacheManifest,

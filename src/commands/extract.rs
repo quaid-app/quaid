@@ -37,7 +37,7 @@ pub fn run(db: &Connection, args: ExtractArgs) -> Result<()> {
         sessions
             .into_values()
             .filter(|session| {
-                since.as_deref().map_or(true, |cutoff| {
+                since.as_deref().is_none_or(|cutoff| {
                     session
                         .day_files
                         .iter()

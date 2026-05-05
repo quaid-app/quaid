@@ -83,7 +83,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
 <div class="gb-guide-grid gb-guide-grid--three">
   <GuideMetricCard value="27" label="CLI commands" note="Read, write, graph, intelligence, collections, system." />
-  <GuideMetricCard value="22" label="Public MCP tools" note="The unreleased `v0.19.0` branch keeps that surface and adds extraction follow-on work." />
+  <GuideMetricCard value="22" label="Public MCP tools" note="The unreleased `v0.19.0` branch expands that surface to 24 tools with extraction + correction follow-on work." />
   <GuideMetricCard value="8" label="Embedded skills" note="Ingest, query, maintain, enrich, briefing, alerts, research, upgrade." />
   <GuideMetricCard value="1" label="Static binary" note="No daemon, no port, no Docker, no Python." />
   <GuideMetricCard value="0" label="API keys required" note="The model runs on your CPU. Nothing transits your network." />
@@ -121,7 +121,7 @@ quaid init ~/memory.db
 # Attach your notes as a live-sync collection
 quaid collection add notes ~/notes --db ~/memory.db
 
-# Expose Quaid's MCP tools over stdio (22 in `v0.18.0`; this branch adds the unreleased `v0.19.0` extraction follow-on)
+# Expose Quaid's MCP tools over stdio (22 in `v0.18.0`; this branch expands to 24 with the unreleased `v0.19.0` extraction + correction follow-on)
 QUAID_DB=~/memory.db quaid serve
 ```
 

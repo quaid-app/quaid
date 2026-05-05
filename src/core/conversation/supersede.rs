@@ -237,7 +237,7 @@ pub fn write_fact_in_context(
         Resolution::Supersede { prior_slug, .. } => {
             let (slug, relative_path) = allocate_output_path(raw_fact, conn, context)?;
             let markdown =
-                render_fact_markdown(raw_fact, context, &slug, Some(prior_slug.as_str()))?;
+                render_fact_markdown(raw_fact, context, &slug, Some(prior_slug.as_str()), None)?;
             write_markdown(&context.root_path, &relative_path, &markdown)?;
             Ok(FactWriteResult {
                 resolution: resolution.clone(),
@@ -247,7 +247,7 @@ pub fn write_fact_in_context(
         }
         Resolution::Coexist => {
             let (slug, relative_path) = allocate_output_path(raw_fact, conn, context)?;
-            let markdown = render_fact_markdown(raw_fact, context, &slug, None)?;
+            let markdown = render_fact_markdown(raw_fact, context, &slug, None, None)?;
             write_markdown(&context.root_path, &relative_path, &markdown)?;
             Ok(FactWriteResult {
                 resolution: resolution.clone(),
@@ -276,6 +276,34 @@ pub fn resolve_and_write_fact_in_context(
         let resolution =
             resolve_in_scope(raw_fact, conn, context.collection_id, &context.namespace)?;
         write_fact_in_context(&resolution, raw_fact, conn, context)
+    })
+}
+
+pub fn force_supersede_fact_in_context(
+    raw_fact: &RawFact,
+    prior_slug: &str,
+    conn: &Connection,
+    context: &FactWriteContext,
+    corrected_via: &str,
+) -> Result<FactWriteResult, FactResolutionError> {
+    with_immediate_transaction(conn, |conn| {
+        let (slug, relative_path) = allocate_output_path(raw_fact, conn, context)?;
+        let markdown = render_fact_markdown(
+            raw_fact,
+            context,
+            &slug,
+            Some(prior_slug),
+            Some(corrected_via),
+        )?;
+        write_markdown(&context.root_path, &relative_path, &markdown)?;
+        Ok(FactWriteResult {
+            resolution: Resolution::Supersede {
+                prior_slug: prior_slug.to_string(),
+                cosine: 1.0,
+            },
+            slug: Some(slug),
+            relative_path: Some(path_to_slash(&relative_path)),
+        })
     })
 }
 
@@ -612,9 +640,15 @@ fn render_fact_markdown(
     context: &FactWriteContext,
     slug: &str,
     supersedes: Option<&str>,
+    corrected_via: Option<&str>,
 ) -> Result<String, FactResolutionError> {
     let mut frontmatter = Frontmatter::new();
-    frontmatter.insert("corrected_via".to_string(), JsonValue::Null);
+    frontmatter.insert(
+        "corrected_via".to_string(),
+        corrected_via
+            .map(|value| JsonValue::String(value.to_string()))
+            .unwrap_or(JsonValue::Null),
+    );
     frontmatter_insert_string(
         &mut frontmatter,
         "extracted_at",

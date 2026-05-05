@@ -336,7 +336,7 @@ pub fn parse_response(raw: &str) -> Result<ExtractionResponse, SlmError> {
         let raw_kind = raw_fact_kind(&value);
         match serde_json::from_value::<RawFact>(value) {
             Ok(fact) => {
-                if let Some(message) = validate_fact(&fact) {
+                if let Some(message) = validate_raw_fact(&fact) {
                     validation_errors.push(ExtractionFactValidationError {
                         index,
                         kind: Some(
@@ -404,7 +404,7 @@ fn strip_json_fence(raw: &str) -> Option<&str> {
     Some(inner.trim())
 }
 
-fn validate_fact(fact: &RawFact) -> Option<String> {
+pub fn validate_raw_fact(fact: &RawFact) -> Option<String> {
     match fact {
         RawFact::Decision { chose, summary, .. } => validate_required_strings(
             "decision",

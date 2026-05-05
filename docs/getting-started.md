@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. The latest public release is `v0.18.0`; this branch prepares `v0.19.0` by keeping the 22-tool MCP surface and adding the conversation-memory extraction follow-on (worker, CLI surfaces, and benchmark/integration gates).
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. The latest public release is `v0.18.0`; this branch prepares `v0.19.0` by expanding the MCP surface from 22 to 24 tools and adding the conversation-memory extraction + correction follow-on (worker, CLI/tool surfaces, and benchmark/integration gates).
 
 ## What it does
 
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **The latest public release is `v0.18.0`, and this branch prepares `v0.19.0`.** The branch keeps the shipped 22-tool MCP surface in place and adds the conversation-memory extraction follow-on: the extraction worker, queue/status CLI, and benchmark/integration gates.
+> **The latest public release is `v0.18.0`, and this branch prepares `v0.19.0`.** The branch expands the shipped 22-tool MCP surface to 24 tools and adds the conversation-memory extraction + correction follow-on: the extraction worker, correction dialogue, queue/status CLI, and benchmark/integration gates.
 >
 > Published GitHub Release binaries and `install.sh` currently resolve to `v0.18.0`. Build from source if you need the unreleased `v0.19.0` extraction follow-on before the tag exists. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
 
@@ -180,7 +180,7 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Core read/write (5):** `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 
-**Conversation capture (3):** `memory_add_turn`, `memory_close_session`, `memory_close_action`
+**Conversation workflows (5):** `memory_add_turn`, `memory_close_session`, `memory_close_action`, `memory_correct`, `memory_correct_continue`
 
 **Knowledge + graph (7):** `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`
 
@@ -188,7 +188,7 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Collections + namespaces (3):** `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`
 
-The latest public GitHub Release (`v0.18.0`) exposes 22 tools. This branch keeps that MCP surface while adding the unreleased `v0.19.0` extraction worker, CLI, and benchmark follow-on. See [spec.md](spec.md#mcp-server) for tool signatures.
+The latest public GitHub Release (`v0.18.0`) exposes 22 tools. This branch expands that surface to 24 tools while adding the unreleased `v0.19.0` extraction worker, correction dialogue, CLI, and benchmark follow-on. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ### Capture a conversation on this branch
 
@@ -394,7 +394,7 @@ Exit 0 means clean; exit 1 means violations were found.
 
 ### Raw MCP tool invocation
 
-Call MCP tools directly from the CLI without starting the server. On this branch, the dispatcher covers all 22 MCP tools.
+Call MCP tools directly from the CLI without starting the server. On this branch, the dispatcher covers all 24 MCP tools.
 
 ```bash
 quaid call memory_stats '{}'

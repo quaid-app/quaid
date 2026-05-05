@@ -1,3 +1,4 @@
+pub mod correction;
 pub mod extractor;
 pub mod file_edit;
 pub mod format;

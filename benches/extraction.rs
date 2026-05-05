@@ -134,9 +134,7 @@ fn percentile(sorted: &[f64], pct: usize) -> f64 {
 }
 
 fn benchmark_windows(samples: usize) -> Vec<WindowedTurns> {
-    (0..samples)
-        .map(|index| representative_window(index))
-        .collect()
+    (0..samples).map(representative_window).collect()
 }
 
 fn representative_window(index: usize) -> WindowedTurns {

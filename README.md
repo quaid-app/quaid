@@ -23,7 +23,7 @@ Most agent memory systems require a cloud service, a running database, or an API
 
 - **Local-first** — single SQLite file, no cloud dependency, works offline
 - **PARA-native** — organizes memory as a knowledge base (Projects, Areas, Resources, Archives), not a flat list of facts
-- **22 MCP tools in the latest public release (`v0.18.0`)** — this branch keeps that MCP surface while adding the unreleased conversation-memory extraction follow-on for `v0.19.0`
+- **22 MCP tools in the latest public release (`v0.18.0`)** — this unreleased `v0.19.0` branch expands that surface to 24 tools with conversation-memory extraction and correction follow-on work
 - **Hybrid retrieval** — FTS5 full-text + local BGE vector embeddings, combined via RRF
 - **Verified by benchmarks** — [193/215 (90%) on DAB](https://quaid-app.github.io/quaid-evals), P@5 on MSMARCO ahead of BM25 baseline
 
@@ -69,7 +69,7 @@ Add to your `.mcp.json`:
 }
 ```
 
-Your agent now has the same 22 memory tools as the latest public release (`v0.18.0`). Build from source if you need the unreleased `v0.19.0` conversation-memory extraction lane before the tag exists.
+Your agent gets the 24-tool branch MCP surface when you build from source. The latest public release (`v0.18.0`) still exposes 22 tools until `v0.19.0` is tagged.
 
 ---
 
@@ -115,7 +115,7 @@ Two ideas borrowed from Andrej Karpathy's compiled knowledge model:
 
 **Timeline (below the line)** — append-only, never rewritten. What happened and when.
 
-Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 22 tools in the latest public release and on this branch — with no REST API and no network dependency.
+Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 22 tools in the latest public release, 24 on this branch — with no REST API and no network dependency.
 
 **Hybrid retrieval:** FTS5 keyword search for exact recall (names, slugs, tags) combined with local BGE vector embeddings for semantic search. Set-union merge, exact-match short-circuit.
 
@@ -169,12 +169,12 @@ quaid serve
 
 ## MCP tools
 
-The latest public release (`v0.18.0`) exposes 22 MCP tools. This branch keeps that 22-tool MCP surface while adding the unreleased `v0.19.0` conversation-memory extraction follow-on; published install commands should still use a real release tag until `v0.19.0` exists:
+The latest public release (`v0.18.0`) exposes 22 MCP tools. This unreleased `v0.19.0` branch expands that surface to 24 tools by adding correction dialogue on top of the conversation-memory extraction follow-on; published install commands should still use a real release tag until `v0.19.0` exists:
 
 | Category | Tools |
 |----------|-------|
 | **Core read/write** | `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list` |
-| **Conversation capture** | `memory_add_turn`, `memory_close_session`, `memory_close_action` |
+| **Conversation workflows** | `memory_add_turn`, `memory_close_session`, `memory_close_action`, `memory_correct`, `memory_correct_continue` |
 | **Intelligence** | `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags` |
 | **Gaps + stats** | `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw` |
 | **Collections + namespaces** | `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy` |

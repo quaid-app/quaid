@@ -8026,6 +8026,14 @@ mod tests {
             WatchEvent::DirtyPath(path) if path == &PathBuf::from("notes/to.md")
         ));
 
+        // Re-register immediately before this case: concurrent tests calling
+        // init_process_registries() can clear the global self_write_dedup registry
+        // between the earlier registration and here, especially under coverage
+        // instrumentation where each call is slower.  Case 1 above is immune to
+        // a missing entry (returns 3 events either way); Case 2 requires the
+        // entry to be present, so we refresh it right before the check to shrink
+        // the race window to a single function-call boundary.
+        remember_self_write_path_at(&target_path, &sha256_hex(bytes), Instant::now()).unwrap();
         let self_write_rename = NotifyEvent {
             kind: NotifyEventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)),
             paths: vec![temp_path, target_path],

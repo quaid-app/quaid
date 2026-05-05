@@ -37,8 +37,8 @@ The system SHALL write extracted-fact pages as markdown files in the user's vaul
 - **WHEN** the worker accepts a new fact and the vault watcher is paused
 - **THEN** the file exists on disk but no new page row exists in the database; the page row appears only after the watcher resumes and ingests the file
 
-### Requirement: SLM output contract is JSON-only with strict schema
-The system's extraction prompt SHALL constrain the SLM to emit a single JSON object of shape `{"facts": [<fact>, ...]}` where each `<fact>` matches the structured field requirements above plus a `summary` field (the prose body). The SLM SHALL NOT emit markdown fences, prose, or commentary outside the JSON object. Empty result SHALL be `{"facts": []}`. The system's parser SHALL: (a) defensively strip leading/trailing whitespace and accidental ```json fences, (b) `serde_json::from_str` into a typed response struct, (c) validate each fact against its kind-specific schema, (d) reject any unknown kinds. Parse or validation failure SHALL count toward `extraction.max_retries`; after the cap is exceeded the queue job SHALL be marked `failed`.
+### Requirement: SLM output contract is JSON-only with per-fact validation
+The system's extraction prompt SHALL constrain the SLM to emit a single JSON object of shape `{"facts": [<fact>, ...]}` where each `<fact>` matches the structured field requirements above plus a `summary` field (the prose body). The SLM SHALL NOT emit markdown fences, prose, or commentary outside the JSON object. Empty result SHALL be `{"facts": []}`. The system's parser SHALL: (a) defensively strip leading/trailing whitespace and accidental ```json fences, (b) `serde_json::from_str` into a typed response struct, (c) validate each fact against its kind-specific schema, (d) reject any unknown kinds at the per-fact level, recording validation errors while still returning the valid facts from the same response. Whole-response parse failure SHALL count toward `extraction.max_retries`; after the cap is exceeded the queue job SHALL be marked `failed`.
 
 #### Scenario: Bare JSON output parses cleanly
 - **WHEN** the SLM emits `{"facts": [{"kind": "preference", "about": "programming-language", "strength": "high", "summary": "Matt prefers Rust"}]}`
@@ -52,6 +52,10 @@ The system's extraction prompt SHALL constrain the SLM to emit a single JSON obj
 - **WHEN** the SLM emits non-JSON prose for the same window three times in succession
 - **THEN** the queue job is marked `failed` after the third attempt with `last_error` containing the truncated raw output, and a subsequent `quaid extract <session> --force` is required to re-run
 
-#### Scenario: Unknown kind is rejected
+#### Scenario: Unknown kind is rejected per fact while valid siblings survive
 - **WHEN** the SLM emits a fact with `kind: opinion` (not in the canonical four)
-- **THEN** the parser rejects that fact, the parse counts toward retries, and no `kind: opinion` page is written
+- **THEN** the parser records a validation error for that fact, no `kind: opinion` page is written, and any other valid facts in the same response remain available to proceed through resolution
+
+#### Scenario: Missing required field is rejected per fact while valid siblings survive
+- **WHEN** the SLM emits one fact missing its required type-specific field and another fact in the same response is valid
+- **THEN** the parser records a validation error for the malformed fact, omits it from the accepted fact list, and still returns the valid sibling fact

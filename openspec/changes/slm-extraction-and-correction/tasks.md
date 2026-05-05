@@ -51,9 +51,10 @@
 
 - [x] 6.1 Define `ExtractionResponse { facts: Vec<RawFact> }` and `RawFact` enum (one variant per kind) in `src/core/types.rs` with `serde(tag = "kind")`
 - [x] 6.2 Implement `parse_response(raw: &str) -> Result<ExtractionResponse>` that: strips leading/trailing whitespace, strips accidental ```json fences, then `serde_json::from_str`
-- [x] 6.3 Reject any `RawFact` whose required type-specific fields are missing; reject unknown kinds; record validation errors at the per-fact level so other facts in the same response can still proceed
-- [x] 6.4 Increment `extraction_queue.attempts` on parse failure; mark `failed` after `extraction.max_retries` (default 3) per the proposal-#1 contract
-- [x] 6.5 Tests: `tests/slm_prompt_parsing.rs` golden-file coverage of bare JSON, fenced JSON, JSON with leading commentary (rejected), unknown kind (rejected), missing required field (rejected), mixed-validity facts (partial accept)
+- [x] 6.3 Reject any `RawFact` whose required type-specific fields are missing; reject unknown kinds at the per-fact level; record validation errors while other facts in the same response can still proceed. **Batch scope:** parser-side partial accept only; queue retry/fail accounting for validation errors is deferred.
+  > **Scope note (Mom, 2026-05-05):** The previous wording mixed parser validation with worker retry accounting. The shipped seam here is narrower: invalid facts are collected as validation errors and dropped from the accepted fact list, while valid sibling facts still proceed.
+- [x] 6.4 Increment `extraction_queue.attempts` on whole-response parse failure; mark `failed` after `extraction.max_retries` (default 3) per the proposal-#1 contract. Validation errors returned alongside accepted facts do not increment queue attempts in this slice.
+- [x] 6.5 Tests: `tests/slm_prompt_parsing.rs` covers bare JSON, fenced JSON, JSON with leading commentary (rejected), unknown kind and missing required field as per-fact validation errors, and mixed-validity facts (partial accept)
 
 ## 7. Per-fact resolution
 

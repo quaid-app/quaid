@@ -2184,6 +2184,56 @@ mod tests {
     }
 
     #[test]
+    fn memory_add_turn_enqueues_namespaced_session_when_extraction_is_enabled() {
+        let (_dir, conn) = open_test_db();
+        conn.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'true')",
+            [],
+        )
+        .unwrap();
+        let server = QuaidServer::new(conn);
+
+        let result = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-enabled".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: None,
+                namespace: Some("alpha".to_string()),
+            })
+            .unwrap();
+
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(
+            payload["conversation_path"],
+            "alpha/conversations/2026-05-03/session-enabled.md"
+        );
+        assert!(payload["extraction_scheduled_at"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z'));
+
+        let db = server.db.lock().unwrap();
+        let queue_row: (String, String, String, String) = db
+            .query_row(
+                "SELECT session_id, trigger_kind, conversation_path, status
+                 FROM extraction_queue
+                 WHERE session_id = 'alpha::session-enabled'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(queue_row.0, "alpha::session-enabled");
+        assert_eq!(queue_row.1, "debounce");
+        assert_eq!(
+            queue_row.2,
+            "alpha/conversations/2026-05-03/session-enabled.md"
+        );
+        assert_eq!(queue_row.3, "pending");
+    }
+
+    #[test]
     fn memory_add_turn_rejects_non_object_metadata() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -2221,6 +2271,58 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode(-32602));
         assert!(error.message.contains("invalid timestamp"));
+    }
+
+    #[test]
+    fn memory_close_session_reports_queue_position_for_first_and_repeat_close() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+        server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-close".to_string(),
+                role: "user".to_string(),
+                content: "wrap up".to_string(),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap();
+
+        let first = server
+            .memory_close_session(MemoryCloseSessionInput {
+                session_id: "session-close".to_string(),
+                namespace: None,
+            })
+            .unwrap();
+        let second = server
+            .memory_close_session(MemoryCloseSessionInput {
+                session_id: "session-close".to_string(),
+                namespace: None,
+            })
+            .unwrap();
+
+        let first_payload: serde_json::Value = serde_json::from_str(&extract_text(&first)).unwrap();
+        let second_payload: serde_json::Value =
+            serde_json::from_str(&extract_text(&second)).unwrap();
+        assert_eq!(first_payload["extraction_triggered"], true);
+        assert_eq!(first_payload["queue_position"], 1);
+        assert_eq!(second_payload["extraction_triggered"], true);
+        assert_eq!(second_payload["queue_position"], 1);
+        assert_eq!(first_payload["closed_at"], second_payload["closed_at"]);
+
+        let db = server.db.lock().unwrap();
+        let queue_rows: (i64, String, String) = db
+            .query_row(
+                "SELECT COUNT(*), trigger_kind, status
+                 FROM extraction_queue
+                 WHERE session_id = 'session-close'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(queue_rows.0, 1);
+        assert_eq!(queue_rows.1, "session_close");
+        assert_eq!(queue_rows.2, "pending");
     }
 
     #[test]

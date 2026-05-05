@@ -1,10 +1,10 @@
 ---
 title: quaid
-description: Persistent memory for agents. SQLite + FTS5 + vector embeddings in one static binary.
+description: Deterministic memory that compounds. A Local Knowledge Runtime - markdown as truth, SQLite as storage, append-only history.
 template: splash
 hero:
-  title: "Persistent memory<br><span class='text-primary'>for agents</span>"
-  tagline: The memory layer for autonomous agents. It stores, connects, and evolves knowledge over time — so agents never reset. They remember, reason, and improve.
+  title: "Deterministic memory<br><span class='text-primary'>that compounds</span>"
+  tagline: A Local Knowledge Runtime. Markdown defines what's true, SQLite stores it, a local hybrid index makes it fast - and append-only history means an agent that gets smarter without ever rewriting what you knew.
   actions:
     - text: Get Started
       link: /tutorials/install/
@@ -54,7 +54,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
     href="/agents/quickstart/"
     linkText="Open the agent quickstart"
   >
-    <p>Seventeen <code>memory_*</code> tools over stdio JSON-RPC. Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
+    <p>Twenty-two <code>memory_*</code> tools over stdio JSON-RPC. Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
   </AudienceCard>
 </div>
 
@@ -63,17 +63,14 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 ## What makes Quaid different
 
 <div class="gb-guide-grid gb-guide-grid--two">
-  <GuideFeatureCard variant="line" icon="laptop" title="Local-first">
-    <p>Compute and storage on your machine. The embedding model ships in the binary on the airgapped channel; on the online channel it caches once after a one-time download. Nothing leaves the box.</p>
+  <GuideFeatureCard variant="line" icon="seti:db" title="Append-only by design">
+    <p>Memories accumulate. Nothing is rewritten. A head pointer resolves queries to current truth, but the full history is always accessible. You can ask what you believed before, trace how a view evolved, and audit the chain at any time.</p>
   </GuideFeatureCard>
-  <GuideFeatureCard variant="line" icon="puzzle" title="Agent-native">
-    <p>The MCP server predates any GUI. Same surface, same contracts, whether the caller is a person at the terminal or a model over JSON-RPC.</p>
+  <GuideFeatureCard variant="line" icon="open-book" title="Truth is human-readable">
+    <p>Markdown defines what's true. SQLite stores it deterministically. Embeddings only index it. The index is rebuildable; the truth is not. Every layer is inspectable, and you can read every page with a text editor.</p>
   </GuideFeatureCard>
-  <GuideFeatureCard variant="line" icon="seti:db" title="Single binary">
-    <p>No container, no Python runtime, no service mesh. Drop one statically-linked file on a laptop, a Pi, or an air-gapped workstation and it works the same.</p>
-  </GuideFeatureCard>
-  <GuideFeatureCard variant="line" icon="magnifier" title="Hybrid retrieval">
-    <p>FTS5 for precision and a local BGE vector index for semantic recall, fused with set-union and a short-match short-circuit. You don't pick keyword <em>or</em> semantic — both run.</p>
+  <GuideFeatureCard variant="line" icon="laptop" title="One binary, no cloud">
+    <p>Compute and storage on your machine. The embedding model ships in the binary on the airgapped channel. No container, no Python runtime, no service mesh, no API keys. Drop one statically-linked file on a laptop, a Pi, or an air-gapped workstation and it works the same.</p>
   </GuideFeatureCard>
 </div>
 
@@ -83,7 +80,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
 <div class="gb-guide-grid gb-guide-grid--three">
   <GuideMetricCard value="27" label="CLI commands" note="Read, write, graph, intelligence, collections, system." />
-  <GuideMetricCard value="17" label="MCP tools" note="Same surface, exposed to any MCP-compatible client." />
+  <GuideMetricCard value="22" label="MCP tools" note="Same surface, exposed to any MCP-compatible client." />
   <GuideMetricCard value="8" label="Embedded skills" note="Ingest, query, maintain, enrich, briefing, alerts, research, upgrade." />
   <GuideMetricCard value="1" label="Static binary" note="No daemon, no port, no Docker, no Python." />
   <GuideMetricCard value="0" label="API keys required" note="The model runs on your CPU. Nothing transits your network." />
@@ -91,22 +88,27 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
 ---
 
-## Architecture for privacy
+## Honest about today
 
-<CardGrid>
-  <Card title="SQLite Everything" icon="seti:db">
-    No complex setup. Your entire knowledge graph is stored in a highly optimized SQLite database on your local disk. Lightweight, portable, permanent.
-  </Card>
-  <Card title="Local Embeddings" icon="star">
-    Run state-of-the-art vector embeddings locally. Your private data never touches an API. Privacy-first AI that works completely offline.
-  </Card>
-  <Card title="Hybrid Search" icon="magnifier">
-    Combine the precision of keyword search with the context of semantic search. Find exactly what you need across millions of documents in milliseconds.
-  </Card>
-  <Card title="Live Vault Sync" icon="rocket">
-    Attach any Obsidian vault as a collection. Quaid watches for edits with a 1.5 s debounce and reconcile-backed flushes so the memory stays current as you write. <em>(Unix/macOS/Linux only — v0.9.6)</em>
-  </Card>
-</CardGrid>
+<Card title="The benchmark gap is real, and it's architectural" icon="information">
+  On LongMemEval, Quaid scores 0.0% today. Mem0 v3 scores 93.4%. On LoCoMo, Quaid scores 0.1%; Mem0 v3 scores 91.6%. The gap isn't a retrieval failure - Quaid stores conversation turns whole, and the benchmark expects extracted facts. Phase 5 ships the local SLM that closes it: Phi-3.5 Mini, fully airgapped, downloaded once. Target after implementation: LongMemEval > 40%, LoCoMo > 40%. [See the roadmap →](/contributing/roadmap/)
+</Card>
+
+---
+
+## Skills, in the binary
+
+<Card title="Workflows ship inside the binary, not in a prompt" icon="puzzle">
+  Most agent tooling ships workflow logic in the cloud or stuffed into a prompt. Quaid ships eight skills as Markdown files inside the static binary - ingest, query, maintain, enrich, briefing, alerts, research, upgrade. They extract to <code>~/.quaid/skills/</code> on first run, and any <code>SKILL.md</code> dropped in your working directory overrides the default. The agent reads what's on disk; you read what the agent reads.
+</Card>
+
+---
+
+## Live vault sync
+
+<Card title="Memory that follows your editor" icon="seti:db">
+  Attach any Obsidian vault as a collection. Quaid watches for edits with a 1.5 s debounce and reconcile-backed flushes, so the memory an agent reads is always the same memory you just updated. Hybrid search across FTS5 and a local BGE vector index runs on every write. <em>(Unix/macOS/Linux only - v0.9.6+)</em>
+</Card>
 
 ---
 
@@ -121,7 +123,7 @@ quaid init ~/memory.db
 # Attach your notes as a live-sync collection
 quaid collection add notes ~/notes --db ~/memory.db
 
-# Expose Quaid's MCP tools over stdio (19 in `v0.17.0`; 22 on the `v0.18.0` branch)
+# Expose Quaid's 22 MCP tools over stdio (v0.18.0)
 QUAID_DB=~/memory.db quaid serve
 ```
 

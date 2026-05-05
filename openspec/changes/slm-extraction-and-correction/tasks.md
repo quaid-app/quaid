@@ -4,8 +4,8 @@
 - [x] 1.2 Add partial index `idx_correction_open ON correction_sessions(status, expires_at) WHERE status = 'open'`
 - [x] 1.3 Seed config defaults in the existing `config` table: `extraction.enabled='false'`, `extraction.model_alias='phi-3.5-mini'`, `extraction.window_turns='5'`, `extraction.debounce_ms='5000'`, `extraction.idle_close_ms='60000'`, `extraction.retention_days='30'`, `fact_resolution.dedup_cosine_min='0.92'`, `fact_resolution.supersede_cosine_min='0.4'`
 - [x] 1.4 Bump `SCHEMA_VERSION`, `quaid_config.schema_version`, and schema-version tests to `9`
-- [x] 1.5 Verify no v8 → v9 migration or rollback path is added; existing v8 DBs continue to fail with the schema-mismatch/re-init message
-- [x] 1.6 Unit tests: fresh v9 schema accepts the new artefacts; v8 DB rejected at open; CHECK constraints on `correction_sessions.status` enforced
+- [x] 1.5 Verify no v8 → v9 migration or rollback path is added; schema-version mismatches continue to fail with the schema-mismatch/re-init message
+- [x] 1.6 Unit tests: fresh v9 schema accepts the new artefacts; v8 and future-schema DBs are rejected at open; CHECK constraints on `correction_sessions.status` enforced
 
 ## 2. SLM runtime — candle Phi-3.5 wrapper
 

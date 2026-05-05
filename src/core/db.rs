@@ -124,8 +124,8 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
 
     let effective_model = match read_quaid_config(&conn)? {
         Some(stored) => {
-            // Check schema version — refuse to open older schema versions
-            if stored.schema_version < SCHEMA_VERSION {
+            // Check schema version — refuse to open any mismatched schema version
+            if stored.schema_version != SCHEMA_VERSION {
                 return Err(DbError::Schema {
                     message: format_schema_reinit_message(stored.schema_version, path),
                 });
@@ -203,7 +203,7 @@ fn preflight_existing_schema(path: &str) -> Result<(), DbError> {
         return Ok(());
     };
 
-    if schema_version < SCHEMA_VERSION {
+    if schema_version != SCHEMA_VERSION {
         return Err(DbError::Schema {
             message: format_schema_reinit_message(schema_version, path),
         });
@@ -1567,6 +1567,54 @@ mod tests {
             )
             .unwrap();
         assert_eq!(config_version, "8");
+    }
+
+    #[test]
+    fn open_with_model_rejects_future_schema_database_before_creating_v9_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("future.db");
+        seed_existing_db(&db_path, 10);
+
+        let err = open_with_model(db_path.to_str().unwrap(), &default_model())
+            .expect_err("future schema database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("Found version 10, expected 9"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let stored_version: String = conn
+            .query_row(
+                "SELECT value FROM quaid_config WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_version, "10");
+    }
+
+    #[test]
+    fn init_rejects_future_schema_database_before_creating_v9_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("future.db");
+        seed_existing_db(&db_path, 10);
+
+        let err = init(db_path.to_str().unwrap(), &default_model())
+            .expect_err("future schema database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("Found version 10, expected 9"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "10");
     }
 
     #[test]

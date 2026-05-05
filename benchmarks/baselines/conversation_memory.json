@@ -1,0 +1,21 @@
+{
+  "description": "DAB §8 Conversation Memory regression anchor",
+  "created_at": "2026-05-05",
+  "regression_threshold_points": 3.0,
+  "representative_hardware_requirement": "Full gate runs must be recorded on representative Unix hardware with no --limit. Hosted-runner smoke runs are informational only.",
+  "baselines": {
+    "locomo": {
+      "metric": "token_F1",
+      "score_pct": null,
+      "status": "pending",
+      "note": "Pending first full LoCoMo conversation-memory run through benchmarks/dab_section8.py on representative hardware."
+    },
+    "longmemeval": {
+      "metric": "answer_hit_at_5",
+      "score_pct": null,
+      "status": "pending",
+      "note": "Pending first full LongMemEval conversation-memory proxy run. Fact-page slugs do not align with session evidence ids, so the in-repo metric is answer-hit@5."
+    }
+  },
+  "history": []
+}

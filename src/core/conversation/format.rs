@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::core::types::{
     ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole,
 };
+use crate::core::{collections, namespace};
 
 const HEADING_SEPARATOR: &str = " · ";
 const METADATA_FENCE_OPEN: &str = "```json turn-metadata";
@@ -51,6 +52,13 @@ impl MemoryLocation {
 pub struct ConversationPathInfo {
     pub relative_path: PathBuf,
     pub date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedConversationPath {
+    pub namespace: Option<String>,
+    pub date: String,
+    pub session_id: String,
 }
 
 pub fn parse(path: &Path) -> Result<ConversationFile, ConversationFormatError> {
@@ -167,6 +175,59 @@ pub fn conversation_path_for(
     })
 }
 
+pub fn parse_relative_conversation_path(
+    path: &str,
+) -> Result<ParsedConversationPath, ConversationFormatError> {
+    collections::validate_relative_path(path).map_err(|error| {
+        ConversationFormatError::InvalidFrontmatter {
+            message: error.to_string(),
+        }
+    })?;
+
+    let components = path.split('/').collect::<Vec<_>>();
+    let (namespace, conversations_idx) = match components.as_slice() {
+        ["conversations", _, _] => (None, 0),
+        [namespace, "conversations", _, _] => {
+            namespace::validate_optional_namespace(Some(namespace)).map_err(|error| {
+                ConversationFormatError::InvalidFrontmatter {
+                    message: error.to_string(),
+                }
+            })?;
+            (Some((*namespace).to_string()), 1)
+        }
+        _ => {
+            return Err(ConversationFormatError::InvalidFrontmatter {
+                message: format!(
+                    "conversation path must match [<namespace>/]conversations/<date>/<session>.md, found `{path}`"
+                ),
+            });
+        }
+    };
+
+    let date = components[conversations_idx + 1].to_string();
+    validate_date_segment(&date)?;
+
+    let file_name = components[conversations_idx + 2];
+    let session_id = file_name
+        .strip_suffix(".md")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ConversationFormatError::InvalidFrontmatter {
+            message: format!("conversation path must end with `<session>.md`, found `{path}`"),
+        })?
+        .to_string();
+    collections::validate_relative_path(&session_id).map_err(|error| {
+        ConversationFormatError::InvalidFrontmatter {
+            message: error.to_string(),
+        }
+    })?;
+
+    Ok(ParsedConversationPath {
+        namespace,
+        date,
+        session_id,
+    })
+}
+
 pub fn date_from_timestamp(timestamp: &str) -> Result<String, ConversationFormatError> {
     let bytes = timestamp.as_bytes();
     if timestamp.len() < 10
@@ -181,6 +242,22 @@ pub fn date_from_timestamp(timestamp: &str) -> Result<String, ConversationFormat
         });
     }
     Ok(timestamp[..10].to_owned())
+}
+
+fn validate_date_segment(date: &str) -> Result<(), ConversationFormatError> {
+    let bytes = date.as_bytes();
+    if date.len() != 10
+        || bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || !bytes[..4].iter().all(u8::is_ascii_digit)
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || !bytes[8..10].iter().all(u8::is_ascii_digit)
+    {
+        return Err(ConversationFormatError::InvalidFrontmatter {
+            message: format!("invalid conversation date segment: {date}"),
+        });
+    }
+    Ok(())
 }
 
 fn parse_frontmatter(
@@ -494,6 +571,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_relative_conversation_path_extracts_namespace_and_session() {
+        let parsed =
+            parse_relative_conversation_path("alpha/conversations/2026-05-04/session-1.md")
+                .expect("valid relative conversation path");
+
+        assert_eq!(parsed.namespace.as_deref(), Some("alpha"));
+        assert_eq!(parsed.date, "2026-05-04");
+        assert_eq!(parsed.session_id, "session-1");
+    }
+
+    #[test]
+    fn parse_relative_conversation_path_rejects_missing_date_segment() {
+        let error = parse_relative_conversation_path("alpha/conversations/session-1.md")
+            .expect_err("missing date must fail");
+
+        assert!(error.to_string().contains("conversation path must match"));
+    }
+
+    #[test]
     fn parse_reports_actionable_error_for_malformed_turn_block() {
         let input = "---\n\
 type: conversation\n\
@@ -512,6 +608,46 @@ body\n";
         assert!(error
             .to_string()
             .contains("turn ordinal must be an integer"));
+    }
+
+    #[test]
+    fn parse_rejects_non_numeric_last_extracted_turn() {
+        let input = "---\n\
+type: conversation\n\
+session_id: session-1\n\
+date: 2026-05-03\n\
+started_at: 2026-05-03T09:14:22Z\n\
+status: open\n\
+last_extracted_at: null\n\
+last_extracted_turn: nope\n\
+---\n";
+
+        let error = parse_str(input).expect_err("non-numeric cursor should fail");
+
+        assert!(error
+            .to_string()
+            .contains("last_extracted_turn must be an integer"));
+    }
+
+    #[test]
+    fn parse_rejects_turn_heading_with_extra_fields() {
+        let input = "---\n\
+type: conversation\n\
+session_id: session-1\n\
+date: 2026-05-03\n\
+started_at: 2026-05-03T09:14:22Z\n\
+status: open\n\
+last_extracted_at: null\n\
+last_extracted_turn: 0\n\
+---\n\n\
+## Turn 1 · user · 2026-05-03T09:14:22Z · extra\n\n\
+body\n";
+
+        let error = parse_str(input).expect_err("extra heading fields should fail");
+
+        assert!(error
+            .to_string()
+            .contains("unexpected extra heading fields"));
     }
 
     #[test]

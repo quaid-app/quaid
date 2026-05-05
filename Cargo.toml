@@ -1,6 +1,6 @@
 [package]
 name = "quaid"
-version = "0.18.0"
+version = "0.19.0"
 edition = "2021"
 description = "Local-first personal memory. SQLite + FTS5 + local vector embeddings. One static binary."
 license = "MIT"
@@ -56,6 +56,7 @@ thiserror = "1"
 
 # SHA-256 for content hashing (idempotency keys, chunk dedup)
 sha2 = "0.10"
+sha1 = "0.10"
 hex = "0.4"
 
 # UUID for import batch IDs
@@ -86,9 +87,15 @@ bundled = ["rusqlite/bundled"]
 embedded-model = []
 # online-model: online release channel; download BGE-small assets on first semantic use
 online-model = ["dep:reqwest"]
+# test-harness: enables in-library test fixtures (curated-alias stubs) for integration tests
+test-harness = []
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[[bench]]
+name = "extraction"
+harness = false

@@ -113,8 +113,6 @@ fn tokenize(content: &str) -> HashSet<String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::collections::HashMap;
-
     use super::*;
     use crate::core::db;
 
@@ -139,7 +137,7 @@ mod tests {
             summary: "Founder".to_owned(),
             compiled_truth: compiled_truth.to_owned(),
             timeline: String::new(),
-            frontmatter: HashMap::new(),
+            frontmatter: crate::core::types::Frontmatter::new(),
             wing: "people".to_owned(),
             room: String::new(),
             version: 1,

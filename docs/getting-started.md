@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.18.0`: it keeps the published `v0.17.0` vault-sync surface, raises the branch MCP surface from 19 tools to 22, and lands the conversation-memory foundations (`memory_add_turn`, `memory_close_session`, `memory_close_action`, conversation day-files, the extraction queue, and supersede-aware retrieval).
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. The latest public release is `v0.18.0`; this branch prepares `v0.19.0` by expanding the MCP surface from 22 to 24 tools and adding the conversation-memory extraction + correction follow-on (worker, CLI/tool surfaces, and benchmark/integration gates).
 
 ## What it does
 
@@ -15,9 +15,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **The latest public release is `v0.17.0`, and this branch prepares `v0.18.0`.** The branch keeps the shipped vault-sync work in place, adds the 3 conversation-memory capture tools, and lands the conversation file / queue / supersede plumbing that the follow-on extractor work will build on.
+> **The latest public release is `v0.18.0`, and this branch prepares `v0.19.0`.** The branch expands the shipped 22-tool MCP surface to 24 tools and adds the conversation-memory extraction + correction follow-on: the extraction worker, correction dialogue, queue/status CLI, and benchmark/integration gates.
 >
-> Published GitHub Release binaries and `install.sh` still resolve to `v0.17.0` until the `v0.18.0` tag exists. The background SLM extractor and correction flow are still follow-on work. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
+> Published GitHub Release binaries and `install.sh` currently resolve to `v0.18.0`. Build from source if you need the unreleased `v0.19.0` extraction follow-on before the tag exists. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
 
 ---
 
@@ -25,14 +25,14 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect the `v0.18.0` branch state, including conversation-memory foundations and the existing Unix live-write handling |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — the latest published tag is `v0.17.0`; it does not include the new conversation-memory tools yet |
+| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect the unreleased `v0.19.0` branch state, including the conversation-memory extraction follow-on |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — the latest published tag is `v0.18.0`; use source builds for the unreleased `v0.19.0` extraction lane |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
 > **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
 >
-> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.18.0` conversation-memory foundations before the tag exists.
+> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.19.0` conversation-memory extraction follow-on before the tag exists.
 
 ---
 
@@ -69,7 +69,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first memory store
 
-> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the branch-only conversation-memory foundations before `v0.18.0` is published; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the branch-only `v0.19.0` extraction follow-on before it is published; see [Status](#status) and [Install options](#install-options) above.
 
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
@@ -180,7 +180,7 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Core read/write (5):** `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 
-**Conversation capture (3):** `memory_add_turn`, `memory_close_session`, `memory_close_action`
+**Conversation workflows (5):** `memory_add_turn`, `memory_close_session`, `memory_close_action`, `memory_correct`, `memory_correct_continue`
 
 **Knowledge + graph (7):** `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`
 
@@ -188,7 +188,7 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Collections + namespaces (3):** `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`
 
-The latest public GitHub Release (`v0.17.0`) exposes the first 19 tools. This branch prepares `v0.18.0` by adding the 3 conversation-memory capture tools plus the queue and supersede plumbing behind them. See [spec.md](spec.md#mcp-server) for tool signatures.
+The latest public GitHub Release (`v0.18.0`) exposes 22 tools. This branch expands that surface to 24 tools while adding the unreleased `v0.19.0` extraction worker, correction dialogue, CLI, and benchmark follow-on. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ### Capture a conversation on this branch
 
@@ -198,7 +198,7 @@ quaid call memory_add_turn '{"session_id":"demo","role":"assistant","content":"G
 quaid call memory_close_session '{"session_id":"demo"}'
 ```
 
-Those calls append turns to `conversations/YYYY-MM-DD/<session-id>.md` and queue extraction work. On this branch, the capture layer, queue, and supersede-aware retrieval are landed; the background SLM extractor that writes new fact pages is still follow-on work.
+Those calls append turns to `conversations/YYYY-MM-DD/<session-id>.md` and queue extraction work. On this branch, the capture layer, extraction worker, fact-page write path, and benchmark/integration proofs are landed; the unreleased part is the `v0.19.0` tag, not the implementation.
 
 ---
 
@@ -394,7 +394,7 @@ Exit 0 means clean; exit 1 means violations were found.
 
 ### Raw MCP tool invocation
 
-Call MCP tools directly from the CLI without starting the server. On this branch, the dispatcher covers all 22 MCP tools.
+Call MCP tools directly from the CLI without starting the server. On this branch, the dispatcher covers all 24 MCP tools.
 
 ```bash
 quaid call memory_stats '{}'
@@ -424,7 +424,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands first shipped in `v0.9.6` and remain the published `v0.17.0` vault-sync surface. The `v0.18.0` lane keeps them in place — including same-root single-file `quaid put` proxying on Unix — while adding conversation-memory foundations elsewhere in this guide.
+> These commands first shipped in `v0.9.6` and remain part of the published `v0.18.0` vault-sync surface. The `v0.19.0` lane keeps them in place — including same-root single-file `quaid put` proxying on Unix — while adding the extraction follow-on elsewhere in this guide.
 
 ### Attach a vault
 

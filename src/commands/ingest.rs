@@ -3,7 +3,9 @@ use std::path::Path;
 
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
+use serde_json::Value as JsonValue;
 
+use crate::core::types::frontmatter_get_string;
 use crate::core::{markdown, novelty, page_uuid, palace, raw_imports, supersede, vault_sync};
 
 pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
@@ -13,7 +15,7 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let (frontmatter, body) = markdown::parse_frontmatter(&raw);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
-    let slug = frontmatter.get("slug").cloned().unwrap_or_else(|| {
+    let slug = frontmatter_get_string(&frontmatter, "slug").unwrap_or_else(|| {
         file.file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string())
@@ -46,19 +48,12 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             }
         }
 
-        let wing = frontmatter
-            .get("wing")
-            .cloned()
+        let wing = frontmatter_get_string(&frontmatter, "wing")
             .unwrap_or_else(|| palace::derive_wing(&slug));
         let room = palace::derive_room(&compiled_truth);
-        let title = frontmatter
-            .get("title")
-            .cloned()
-            .unwrap_or_else(|| slug.clone());
-        let page_type = frontmatter
-            .get("type")
-            .cloned()
-            .unwrap_or_else(|| "concept".to_string());
+        let title = frontmatter_get_string(&frontmatter, "title").unwrap_or_else(|| slug.clone());
+        let page_type =
+            frontmatter_get_string(&frontmatter, "type").unwrap_or_else(|| "concept".to_string());
         let existing_uuid: Option<String> = db
             .query_row(
                 "SELECT uuid
@@ -72,7 +67,10 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             .optional()?;
         let page_uuid = page_uuid::resolve_page_uuid(&frontmatter, existing_uuid.as_deref())?;
         let frontmatter_json = serde_json::to_string(&frontmatter)?;
-        let supersedes = frontmatter.get("supersedes").cloned();
+        let supersedes = frontmatter
+            .get("supersedes")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
 
         db.execute(
             "INSERT INTO pages \
@@ -588,12 +586,12 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let frontmatter: std::collections::HashMap<String, String> =
+        let frontmatter: crate::core::types::Frontmatter =
             serde_json::from_str(&frontmatter_json).unwrap();
 
         assert_eq!(
-            frontmatter.get("quaid_id").map(String::as_str),
-            Some("0195c7c0-2d06-7df0-bf59-acde48001122")
+            frontmatter.get("quaid_id"),
+            Some(&serde_json::json!("0195c7c0-2d06-7df0-bf59-acde48001122"))
         );
     }
 

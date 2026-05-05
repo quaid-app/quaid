@@ -1,14 +1,43 @@
 // Types defined ahead of consumers (db.rs, search.rs, etc.) — remove when wired.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use thiserror::Error;
 
 // ── Page ──────────────────────────────────────────────────────
+
+pub type Frontmatter = JsonMap<String, JsonValue>;
+
+pub fn frontmatter_get<'a>(frontmatter: &'a Frontmatter, key: &str) -> Option<&'a JsonValue> {
+    frontmatter.get(key)
+}
+
+pub fn frontmatter_get_str<'a>(frontmatter: &'a Frontmatter, key: &str) -> Option<&'a str> {
+    frontmatter_get(frontmatter, key)?.as_str()
+}
+
+pub fn frontmatter_get_string(frontmatter: &Frontmatter, key: &str) -> Option<String> {
+    frontmatter_get_str(frontmatter, key).map(str::to_owned)
+}
+
+pub fn frontmatter_insert_string(
+    frontmatter: &mut Frontmatter,
+    key: impl Into<String>,
+    value: impl Into<String>,
+) {
+    frontmatter.insert(key.into(), JsonValue::String(value.into()));
+}
+
+pub fn string_frontmatter(entries: impl IntoIterator<Item = (String, String)>) -> Frontmatter {
+    entries
+        .into_iter()
+        .map(|(key, value)| (key, JsonValue::String(value)))
+        .collect()
+}
 
 /// Core knowledge page — the unit of storage in a Quaid database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +51,7 @@ pub struct Page {
     pub summary: String,
     pub compiled_truth: String,
     pub timeline: String,
-    pub frontmatter: HashMap<String, String>,
+    pub frontmatter: Frontmatter,
     pub wing: String,
     pub room: String,
     pub version: i64,
@@ -280,6 +309,165 @@ pub struct ExtractionJob {
     pub status: ExtractionJobStatus,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ExtractionResponse {
+    pub facts: Vec<RawFact>,
+    #[serde(skip, default)]
+    pub validation_errors: Vec<ExtractionFactValidationError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractionFactValidationError {
+    pub index: usize,
+    pub kind: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreferenceStrength {
+    Low,
+    Medium,
+    High,
+}
+
+impl PreferenceStrength {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionItemState {
+    Open,
+    Done,
+    Cancelled,
+}
+
+impl ActionItemState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RawFact {
+    Decision {
+        chose: String,
+        rationale: Option<String>,
+        summary: String,
+    },
+    Preference {
+        about: String,
+        strength: Option<PreferenceStrength>,
+        summary: String,
+    },
+    Fact {
+        about: String,
+        summary: String,
+    },
+    ActionItem {
+        who: Option<String>,
+        what: String,
+        status: ActionItemState,
+        due: Option<String>,
+        summary: String,
+    },
+}
+
+impl RawFact {
+    /// Returns the kind tag as a static string.
+    ///
+    /// Used for page `type` field on write and for FTS head-lookup queries.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Decision { .. } => "decision",
+            Self::Preference { .. } => "preference",
+            Self::Fact { .. } => "fact",
+            Self::ActionItem { .. } => "action_item",
+        }
+    }
+
+    /// Returns the value of the structured type key for this fact.
+    ///
+    /// The type key is the resolution pivot:
+    /// - `decision`    → `chose`
+    /// - `preference`  → `about`
+    /// - `fact`        → `about`
+    /// - `action_item` → `what`
+    pub fn type_key(&self) -> &str {
+        match self {
+            Self::Decision { chose, .. } => chose.as_str(),
+            Self::Preference { about, .. } => about.as_str(),
+            Self::Fact { about, .. } => about.as_str(),
+            Self::ActionItem { what, .. } => what.as_str(),
+        }
+    }
+
+    /// Returns the name of the type-key field (not its value).
+    ///
+    /// Used for JSON extraction in head-lookup queries:
+    /// `json_extract(frontmatter, '$.<type_key_field>') = ?`
+    pub fn type_key_field(&self) -> &'static str {
+        match self {
+            Self::Decision { .. } => "chose",
+            Self::Preference { .. } => "about",
+            Self::Fact { .. } => "about",
+            Self::ActionItem { .. } => "what",
+        }
+    }
+
+    /// Returns the plural directory segment used in extracted-fact vault paths.
+    ///
+    /// Path scheme: `<vault>/extracted/<type_plural>/<slug>.md`  
+    /// (or `<vault>/<namespace>/extracted/<type_plural>/<slug>.md` with a namespace)
+    pub fn type_plural(&self) -> &'static str {
+        match self {
+            Self::Decision { .. } => "decisions",
+            Self::Preference { .. } => "preferences",
+            Self::Fact { .. } => "facts",
+            Self::ActionItem { .. } => "action-items",
+        }
+    }
+
+    /// Returns the prose summary written by the SLM.
+    pub fn summary(&self) -> &str {
+        match self {
+            Self::Decision { summary, .. } => summary.as_str(),
+            Self::Preference { summary, .. } => summary.as_str(),
+            Self::Fact { summary, .. } => summary.as_str(),
+            Self::ActionItem { summary, .. } => summary.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowedTurns {
+    pub new_turns: Vec<Turn>,
+    pub lookback_turns: Vec<Turn>,
+    pub context_only: bool,
+}
+
+impl WindowedTurns {
+    pub fn first_new_ordinal(&self) -> Option<i64> {
+        self.new_turns.first().map(|turn| turn.ordinal)
+    }
+
+    pub fn last_new_ordinal(&self) -> Option<i64> {
+        self.new_turns.last().map(|turn| turn.ordinal)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionTriggerKind {
@@ -414,10 +602,11 @@ pub enum DbError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
-        ExtractionJobStatus, ExtractionTriggerKind, Page, Turn, TurnRole,
+        string_frontmatter, ActionItemState, ConversationFile, ConversationFrontmatter,
+        ConversationStatus, ExtractionJob, ExtractionJobStatus, ExtractionResponse,
+        ExtractionTriggerKind, Page, PreferenceStrength, RawFact, Turn, TurnRole,
     };
-    use std::collections::HashMap;
+    use serde_json::json;
 
     #[test]
     fn page_serde_roundtrip_preserves_identifying_fields_and_tags_frontmatter() {
@@ -430,7 +619,7 @@ mod tests {
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
             timeline: "- **2024** | role — Joined Acme".to_string(),
-            frontmatter: HashMap::from([
+            frontmatter: string_frontmatter([
                 ("slug".to_string(), "people/alice".to_string()),
                 ("tags".to_string(), "operator, founder".to_string()),
                 ("title".to_string(), "Alice".to_string()),
@@ -462,7 +651,7 @@ mod tests {
                 "Alice".to_string(),
                 7,
                 Some(42),
-                Some("operator, founder".to_string()),
+                Some(json!("operator, founder")),
             )
         );
     }
@@ -478,7 +667,7 @@ mod tests {
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
             timeline: "- **2024** | role — Joined Acme".to_string(),
-            frontmatter: HashMap::from([
+            frontmatter: string_frontmatter([
                 (
                     "quaid_id".to_string(),
                     "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
@@ -498,8 +687,8 @@ mod tests {
         let round_trip: Page = serde_json::from_str(&json).unwrap();
 
         assert_eq!(
-            round_trip.frontmatter.get("quaid_id").map(String::as_str),
-            Some("0195c7c0-2d06-7df0-bf59-acde48001122")
+            round_trip.frontmatter.get("quaid_id"),
+            Some(&json!("0195c7c0-2d06-7df0-bf59-acde48001122"))
         );
     }
 
@@ -590,5 +779,147 @@ mod tests {
         assert_eq!(round_trip.trigger_kind, ExtractionTriggerKind::SessionClose);
         assert_eq!(round_trip.status, ExtractionJobStatus::Running);
         assert_eq!(round_trip.last_error.as_deref(), Some("timeout"));
+    }
+
+    #[test]
+    fn extraction_response_roundtrip_preserves_typed_facts() {
+        let response = ExtractionResponse {
+            facts: vec![
+                RawFact::Decision {
+                    chose: "rust".to_string(),
+                    rationale: Some("local-first runtime".to_string()),
+                    summary: "The team chose Rust for the runtime.".to_string(),
+                },
+                RawFact::Preference {
+                    about: "programming-language".to_string(),
+                    strength: Some(PreferenceStrength::High),
+                    summary: "Matt strongly prefers Rust.".to_string(),
+                },
+                RawFact::Fact {
+                    about: "timezone".to_string(),
+                    summary: "Matt works in UTC+8.".to_string(),
+                },
+                RawFact::ActionItem {
+                    who: Some("Fry".to_string()),
+                    what: "wire the runtime".to_string(),
+                    status: ActionItemState::Open,
+                    due: Some("2026-05-05".to_string()),
+                    summary: "Fry will wire the runtime next.".to_string(),
+                },
+            ],
+            validation_errors: vec![],
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let round_trip: ExtractionResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(round_trip, response);
+    }
+
+    #[test]
+    fn raw_fact_rejects_unknown_kind() {
+        let error = serde_json::from_str::<RawFact>(
+            r#"{"kind":"opinion","about":"rust","summary":"unsupported"}"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown variant"));
+    }
+
+    // ── RawFact resolution-pivot helpers ──────────────────────────────────
+
+    #[test]
+    fn raw_fact_type_key_returns_chose_value_for_decision() {
+        let fact = RawFact::Decision {
+            chose: "rust".to_string(),
+            rationale: None,
+            summary: "We chose Rust.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "rust");
+        assert_eq!(fact.type_key_field(), "chose");
+        assert_eq!(fact.kind_str(), "decision");
+        assert_eq!(fact.type_plural(), "decisions");
+    }
+
+    #[test]
+    fn raw_fact_type_key_returns_about_value_for_preference() {
+        let fact = RawFact::Preference {
+            about: "programming-language".to_string(),
+            strength: None,
+            summary: "Matt prefers Rust.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "programming-language");
+        assert_eq!(fact.type_key_field(), "about");
+        assert_eq!(fact.kind_str(), "preference");
+        assert_eq!(fact.type_plural(), "preferences");
+    }
+
+    #[test]
+    fn raw_fact_type_key_returns_about_value_for_fact() {
+        let fact = RawFact::Fact {
+            about: "timezone".to_string(),
+            summary: "Matt is in UTC+8.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "timezone");
+        assert_eq!(fact.type_key_field(), "about");
+        assert_eq!(fact.kind_str(), "fact");
+        assert_eq!(fact.type_plural(), "facts");
+    }
+
+    #[test]
+    fn raw_fact_type_key_returns_what_value_for_action_item() {
+        let fact = RawFact::ActionItem {
+            who: None,
+            what: "ship the parser".to_string(),
+            status: ActionItemState::Open,
+            due: None,
+            summary: "Fry will land the parser batch.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "ship the parser");
+        assert_eq!(fact.type_key_field(), "what");
+        assert_eq!(fact.kind_str(), "action_item");
+        assert_eq!(fact.type_plural(), "action-items");
+    }
+
+    #[test]
+    fn raw_fact_summary_returns_prose_body_for_each_kind() {
+        let cases: &[(&str, RawFact)] = &[
+            (
+                "We chose Rust.",
+                RawFact::Decision {
+                    chose: "rust".to_string(),
+                    rationale: None,
+                    summary: "We chose Rust.".to_string(),
+                },
+            ),
+            (
+                "Matt prefers Rust.",
+                RawFact::Preference {
+                    about: "programming-language".to_string(),
+                    strength: None,
+                    summary: "Matt prefers Rust.".to_string(),
+                },
+            ),
+            (
+                "Matt is in UTC+8.",
+                RawFact::Fact {
+                    about: "timezone".to_string(),
+                    summary: "Matt is in UTC+8.".to_string(),
+                },
+            ),
+            (
+                "Fry will land the parser batch.",
+                RawFact::ActionItem {
+                    who: None,
+                    what: "ship the parser".to_string(),
+                    status: ActionItemState::Open,
+                    due: None,
+                    summary: "Fry will land the parser batch.".to_string(),
+                },
+            ),
+        ];
+        for (expected, fact) in cases {
+            assert_eq!(fact.summary(), *expected, "kind: {}", fact.kind_str());
+        }
     }
 }

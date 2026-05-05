@@ -47,6 +47,8 @@ use crate::core::collections::{
 };
 #[cfg(unix)]
 use crate::core::conversation::file_edit::is_history_sidecar_path;
+use crate::core::conversation::idle_close;
+use crate::core::conversation::janitor;
 #[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
@@ -71,6 +73,8 @@ const HANDSHAKE_POLL_MS: u64 = 100;
 const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFERRED_RETRY_SECS: u64 = 1;
+const IDLE_CLOSE_SWEEP_INTERVAL_SECS: u64 = 10;
+const JANITOR_SWEEP_INTERVAL_SECS: u64 = 60 * 60;
 const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
 const REMAP_VERIFICATION_SAMPLE_LIMIT: usize = 5;
 const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
@@ -2333,7 +2337,7 @@ pub fn write_quaid_id_to_file(
         params![page_id, collection.id],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    let frontmatter: HashMap<String, String> =
+    let frontmatter: crate::core::types::Frontmatter =
         serde_json::from_str(&frontmatter_json).unwrap_or_default();
     if frontmatter.contains_key(page_uuid::QUAID_ID_FRONTMATTER_KEY) {
         return Ok(WriteBackOutcome::AlreadyHadUuid);
@@ -4241,6 +4245,10 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         #[cfg(unix)]
         let ipc_in_flight = ipc_in_flight;
         let mut last_heartbeat = Instant::now();
+        let mut last_idle_close_sweep =
+            Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
+        let mut last_janitor_sweep =
+            Instant::now() - Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS);
         let mut last_quarantine_sweep = Instant::now();
         let mut last_generations = initial_generations;
         #[cfg(unix)]
@@ -4262,11 +4270,32 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                     let _ = heartbeat_session(&conn, &session_id_for_thread);
                     last_heartbeat = Instant::now();
                 }
+                if last_idle_close_sweep.elapsed()
+                    >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
+                {
+                    if let Err(error) = idle_close::scan_due_sessions(&conn, &db_path) {
+                        eprintln!(
+                            "WARN: idle_close_sweep_failed session_id={} error={}",
+                            session_id_for_thread, error
+                        );
+                    }
+                    last_idle_close_sweep = Instant::now();
+                }
                 if last_quarantine_sweep.elapsed()
                     >= Duration::from_secs(QUARANTINE_SWEEP_INTERVAL_SECS)
                 {
                     let _ = quarantine::sweep_expired_quarantined_pages(&conn);
                     last_quarantine_sweep = Instant::now();
+                }
+                if last_janitor_sweep.elapsed() >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS)
+                {
+                    if let Err(error) = janitor::run_tick(&conn) {
+                        eprintln!(
+                            "WARN: janitor_sweep_failed session_id={} error={}",
+                            session_id_for_thread, error
+                        );
+                    }
+                    last_janitor_sweep = Instant::now();
                 }
                 #[cfg(unix)]
                 {
@@ -8028,12 +8057,25 @@ mod tests {
 
         let self_write_rename = NotifyEvent {
             kind: NotifyEventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)),
-            paths: vec![temp_path, target_path],
+            paths: vec![temp_path, target_path.clone()],
             attrs: Default::default(),
         };
-        assert!(classify_watch_event(root.path(), self_write_rename)
-            .unwrap()
-            .is_empty());
+        let suppressed = (0..8).any(|_| {
+            // Re-register immediately before each attempt: concurrent tests calling
+            // init_process_registries() can clear the global self_write_dedup registry
+            // between this test's setup steps, especially under coverage where each
+            // function call is slower. Retry a few times so the proof stays about
+            // rename classification rather than registry scheduling.
+            remember_self_write_path_at(&target_path, &sha256_hex(bytes), Instant::now()).unwrap();
+            let actions = classify_watch_event(root.path(), self_write_rename.clone()).unwrap();
+            if actions.is_empty() {
+                true
+            } else {
+                std::thread::yield_now();
+                false
+            }
+        });
+        assert!(suppressed, "self-write rename should eventually suppress");
     }
 
     #[cfg(unix)]
@@ -8264,9 +8306,11 @@ mod tests {
         assert!(
             snippet.contains("WARN: scheduled_full_hash_audit_failed")
                 && snippet.contains("if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread)")
+                && snippet.contains("WARN: janitor_sweep_failed")
+                && snippet.contains("if let Err(error) = janitor::run_tick(&conn)")
                 && snippet.contains("WARN: raw_import_ttl_sweep_failed")
                 && snippet.contains("if let Err(error) = sweep_raw_import_ttl(&conn)"),
-            "serve loop must log scheduled audit and TTL sweep failures instead of discarding them silently"
+            "serve loop must log janitor, scheduled audit, and TTL sweep failures instead of discarding them silently"
         );
     }
 

@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-
 use anyhow::{bail, Result};
 use rusqlite::Connection;
 
-use crate::core::types::Page;
+use crate::core::types::{frontmatter_insert_string, Frontmatter, Page};
 use crate::core::{markdown, page_uuid, vault_sync};
 
 /// Read a page by slug and print it to stdout.
@@ -91,8 +89,7 @@ pub fn get_page_by_key_with_namespace(
 
     let page = stmt.query_row(param_refs.as_slice(), |row| {
         let frontmatter_json: String = row.get(7)?;
-        let frontmatter: HashMap<String, String> =
-            serde_json::from_str(&frontmatter_json).unwrap_or_default();
+        let frontmatter: Frontmatter = serde_json::from_str(&frontmatter_json).unwrap_or_default();
 
         Ok(Page {
             slug: row.get(0)?,
@@ -133,8 +130,7 @@ fn canonicalize_page_for_output(page: Page, resolved: &vault_sync::ResolvedSlug)
     let mut page = page;
     page_uuid::canonicalize_frontmatter_uuid(&mut page.frontmatter, &page.uuid);
     page.slug = resolved.canonical_slug();
-    page.frontmatter
-        .insert("slug".to_string(), resolved.canonical_slug());
+    frontmatter_insert_string(&mut page.frontmatter, "slug", resolved.canonical_slug());
     page
 }
 
@@ -242,8 +238,14 @@ mod tests {
 
         let page = get_page(&conn, "people/carol").unwrap();
 
-        assert_eq!(page.frontmatter.get("title").unwrap(), "Carol");
-        assert_eq!(page.frontmatter.get("type").unwrap(), "person");
+        assert_eq!(
+            page.frontmatter.get("title"),
+            Some(&serde_json::json!("Carol"))
+        );
+        assert_eq!(
+            page.frontmatter.get("type"),
+            Some(&serde_json::json!("person"))
+        );
     }
 
     #[test]
@@ -257,7 +259,7 @@ mod tests {
             summary: "summary".to_string(),
             compiled_truth: "truth".to_string(),
             timeline: String::new(),
-            frontmatter: HashMap::from([
+            frontmatter: crate::core::types::string_frontmatter([
                 ("memory_id".to_string(), "legacy".to_string()),
                 ("title".to_string(), "Alice".to_string()),
             ]),
@@ -278,13 +280,13 @@ mod tests {
         let page = canonicalize_page_for_output(page, &resolved);
 
         assert_eq!(
-            page.frontmatter.get("quaid_id").map(String::as_str),
-            Some("01969f11-9448-7d79-8d3f-c68f54761234")
+            page.frontmatter.get("quaid_id"),
+            Some(&serde_json::json!("01969f11-9448-7d79-8d3f-c68f54761234"))
         );
         assert!(!page.frontmatter.contains_key("memory_id"));
         assert_eq!(
-            page.frontmatter.get("slug").map(String::as_str),
-            Some("default::people/alice")
+            page.frontmatter.get("slug"),
+            Some(&serde_json::json!("default::people/alice"))
         );
     }
 }

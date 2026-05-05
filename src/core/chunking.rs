@@ -133,8 +133,6 @@ fn content_hash(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     fn test_page(compiled_truth: &str, timeline: &str) -> Page {
@@ -147,7 +145,7 @@ mod tests {
             summary: "Founder".to_owned(),
             compiled_truth: compiled_truth.to_owned(),
             timeline: timeline.to_owned(),
-            frontmatter: HashMap::new(),
+            frontmatter: crate::core::types::Frontmatter::new(),
             wing: "people".to_owned(),
             room: String::new(),
             version: 1,

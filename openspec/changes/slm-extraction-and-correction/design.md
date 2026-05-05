@@ -20,7 +20,7 @@ Constraints shaping this change:
 - Make the model-download lifecycle explicit: `quaid extraction enable` triggers the fetch with progress UI; daemons never silently download.
 - Drain the `extraction_queue` with a single in-process worker that produces typed facts as markdown files in the vault.
 - Define the SLM extraction prompt and JSON-only output contract; build a defensive parser that tolerates accidental fences without inviting LLM jailbreaks.
-- Resolve each fact (dedup vs supersede vs coexist) using type-specific structured frontmatter keys plus prose-embedding cosine, falling back to the supersede chain delivered by proposal #1.
+- Resolve each fact with a fail-closed policy: `0` matching heads → coexist, `1` matching head + trustworthy semantic embeddings → thresholded dedup/supersede/coexist, `>1` matching heads or untrustworthy embedding evidence → typed refusal. The resulting accepted write still falls back to the supersede chain delivered by proposal #1.
 - Provide a bounded `memory_correct` MCP tool (max 3 SLM exchanges) so wrong facts can be repaired through dialogue.
 - Provide CLI surfaces for runtime control (`quaid extraction enable | disable | status`, `quaid model pull`, `quaid extract <session> [--force]`, `quaid extract --all`).
 - Hit ≥ 40% LoCoMo and ≥ 40% LongMemEval. Add a DAB §8 Conversation Memory regression gate alongside the existing §4 gate.
@@ -44,7 +44,9 @@ The brainstorm chose in-process candle integration over a sidecar daemon, on-dem
 
 ### Decision 2 — Eager model download via `quaid extraction enable`.
 
-The brainstorm chose B+D from Q9: eager fetch as the primary path, manual `quaid model pull <alias>` as a fallback for power users / CI / environments that need pre-staged caches. Why eager: airgap is the product promise, and a silent first-extraction download breaks that promise at the worst moment (when the user is waiting for their first fact). Eager fetch makes the network call visible at the moment the user opted in; failures surface fast with actionable errors. Why never silently download from the daemon: even with `extraction.enabled = true`, if the model file is missing at runtime we runtime-disable rather than auto-fetch. The user can always re-run `quaid extraction enable` to recover.
+The brainstorm chose B+D from Q9: eager fetch as the primary path, manual `quaid model pull <alias>` as a fallback for power users / CI / environments that need pre-staged caches. Why eager: airgap is the product promise, and a silent first-extraction download breaks that promise at the worst moment (when the user is waiting for their first fact). Eager fetch makes the network call visible at the moment the user opted in; failures surface fast with actionable errors. Why never silently download from the daemon: even with `extraction.enabled = true`, if the model file is missing at runtime we runtime-disable rather than auto-fetch. The lifecycle proof seam in this batch is a local cache loader that validates a verified cache and never calls download code; the full `slm.rs` runtime still remains deferred. The user can always re-run `quaid extraction enable` to recover.
+
+Curated aliases are stronger than raw repo ids: the shipped alias table pins source digests for every downloaded file (LFS weights via SHA-256, Git-tracked files via blob object ids), while raw repo ids remain manifest-verified only.
 
 ### Decision 3 — Single in-process worker, debounced + close-triggered + idle-timer.
 
@@ -58,11 +60,11 @@ The brainstorm chose B from Q6. Each fact kind has a small handful of required s
 
 Common frontmatter (`session_id`, `source_turns`, `extracted_at`, `extracted_by`, `supersedes`, `corrected_via`) is the same across all four kinds. The `corrected_via` field is set by the correction surfaces — `explicit` for `memory_correct`, `file_edit` for the file-edit-aware supersede handler from proposal #1.
 
-### Decision 5 — Resolution thresholds (0.92 / 0.4) are configurable from day one.
+### Decision 5 — Resolution thresholds (0.92 / 0.4) are configurable from day one for unique-head semantic comparisons.
 
 `fact_resolution.dedup_cosine_min` (default `0.92`) and `fact_resolution.supersede_cosine_min` (default `0.4`) are config keys, not constants. Reason: these thresholds depend on the embedding model and corpus characteristics. We pick reasonable initial values and allow benchmark-driven tuning without a release. The defaults match the brainstorm.
 
-The "key match + low cosine → coexist" path (cosine < 0.4 with same key) is a deliberate carve-out for the case where an extraction surfaces a different aspect under the same key (e.g. two preferences both about `programming-language`: one about Rust for systems, another about JavaScript for scripting). We preserve both rather than collapsing them into a misleading supersede chain.
+The "key match + low cosine → coexist" path (cosine < 0.4 with same key) is a deliberate carve-out only when there is exactly one matching head and the embedding evidence is trustworthy. Once same-key multi-head partitions already exist, the policy fails closed instead of picking the highest cosine head. Hash-shim pseudo-embeddings also fail closed rather than being treated as semantic proof.
 
 ### Decision 6 — Worker writes vault files; the watcher does the DB write.
 
@@ -86,6 +88,8 @@ When `--force` re-runs, existing facts that match the new outputs are de-duplica
 
 DAB §4 today is the existing semantic-search gate. Adding §8 (Conversation Memory) backed by the LoCoMo adapter makes regression in extraction quality visible the same way regression in semantic search is. The §8 gate lives in the existing benchmark harness; this proposal adds the section, the LoCoMo adapter wiring, and the CI integration.
 
+**Closure note (Fry, 2026-05-05):** The repo can honestly ship a manual representative-hardware gate plus a hosted-runner smoke workflow today. It does **not** yet claim an always-on representative-hardware CI gate because no matching runner is provisioned in-repo.
+
 ## Risks / Trade-offs
 
 | Risk | Mitigation |
@@ -94,7 +98,8 @@ DAB §4 today is the existing semantic-search gate. Adding §8 (Conversation Mem
 | First extraction's lazy-load adds 5–15 s latency. | Documented; the user sees `quaid extraction status` reporting "loading" during that window. Subsequent extractions are warm. |
 | 2 GB resident memory while the SLM is loaded. | Documented. `extraction.enabled = false` is the default, so docs-only users pay nothing. Gemma 3 1B (~600 MB) is the documented lower-resource alternative via `extraction.model_alias`. |
 | SLM panic crashes the daemon. | `catch_unwind` boundary marks the job retriable, runtime-disables extraction, leaves serve running. Recovery is a manual `quaid extraction enable`. |
-| Cosine thresholds (0.92 / 0.4) are wrong for the user's corpus. | Both values are config-tunable from day one; benchmark-driven tuning doesn't require a release. The "key match + low cosine → coexist" carve-out reduces the cost of a too-aggressive supersede threshold. |
+| Interrupted model downloads leak temp directories. | Atomic rename still prevents partial cache promotion, and later installs scavenge stale `.alias-download-*` directories while leaving fresh in-progress dirs alone. |
+| Cosine thresholds (0.92 / 0.4) are wrong for the user's corpus. | Both values are config-tunable from day one; benchmark-driven tuning doesn't require a release. Low-cosine coexist remains available for unique-head partitions, while ambiguous multi-head partitions and hash-shim/unavailable embeddings now fail closed instead of silently mutating history. |
 | Worker advances cursor before queue-done write; crash in between re-runs the window. | Deliberate ordering; deduplication via `fact-resolution` ensures re-run produces no duplicates. Tested in `tests/extraction_idempotency.rs`. |
 | `memory_correct` 3-turn cap forces abandon on hard corrections. | Cap chosen to keep dialogue bounded; users with hard corrections can either edit the file directly (handled by proposal #1's file-edit-aware supersede) or open a normal conversation that mentions the correction (caught by next extraction pass). |
 | Disk usage grows under high-volume usage. | Quantified in the design doc: ~250–400 MB DB after a year of 100 turns/day. Phase 8 / `#134` scale work is on the roadmap for higher volumes. |

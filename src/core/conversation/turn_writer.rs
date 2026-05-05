@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{params, Connection};
 use serde_json::Value as JsonValue;
@@ -13,6 +13,7 @@ use crate::core::collections::{self, Collection};
 use crate::core::conversation::format::{
     self, ConversationFormatError, ConversationPathInfo, MemoryLocation,
 };
+use crate::core::conversation::idle_close;
 use crate::core::db;
 use crate::core::namespace;
 use crate::core::types::{
@@ -108,6 +109,8 @@ pub fn append_turn(
         write_new_file(&full_path, &path_info, session_id, timestamp, &turn)?;
     }
 
+    idle_close::record_turn(&database_path(conn)?, namespace, session_id);
+
     Ok(TurnWriteResult {
         turn_id: format!("{session_id}:{ordinal}"),
         ordinal,
@@ -120,17 +123,47 @@ pub fn close_session(
     session_id: &str,
     namespace: Option<&str>,
 ) -> Result<CloseSessionResult, TurnWriteError> {
+    close_session_internal(conn, session_id, namespace, None)?.ok_or_else(|| {
+        TurnWriteError::Config {
+            message: "close_session unexpectedly skipped".to_owned(),
+        }
+    })
+}
+
+pub fn close_session_if_idle(
+    conn: &Connection,
+    session_id: &str,
+    namespace: Option<&str>,
+    idle_for: Duration,
+    now: Instant,
+) -> Result<Option<CloseSessionResult>, TurnWriteError> {
+    close_session_internal(conn, session_id, namespace, Some((idle_for, now)))
+}
+
+fn close_session_internal(
+    conn: &Connection,
+    session_id: &str,
+    namespace: Option<&str>,
+    idle_guard: Option<(Duration, Instant)>,
+) -> Result<Option<CloseSessionResult>, TurnWriteError> {
     namespace::validate_optional_namespace(namespace).map_err(|error| TurnWriteError::Config {
         message: error.to_string(),
     })?;
     validate_session_id(session_id)?;
     let root = resolve_memory_root(conn)?;
+    let db_path = database_path(conn)?;
     let lock = session_lock(&root, namespace, session_id)?;
     let _guard = lock.lock().map_err(|_| TurnWriteError::Config {
         message: "session lock poisoned".to_owned(),
     })?;
     let _file_lock =
         SessionFileLock::acquire(&session_lock_path(&root.root_path, namespace, session_id))?;
+
+    if let Some((idle_for, now)) = idle_guard {
+        if !idle_close::is_idle_at(&db_path, namespace, session_id, now, idle_for) {
+            return Ok(None);
+        }
+    }
 
     let Some((full_path, relative_path, mut conversation)) =
         latest_session_file(&root.root_path, namespace, session_id)?
@@ -141,28 +174,30 @@ pub fn close_session(
     };
 
     if conversation.frontmatter.status == ConversationStatus::Closed {
+        idle_close::clear_session(&db_path, namespace, session_id);
         let closed_at = conversation
             .frontmatter
             .closed_at
             .clone()
             .unwrap_or_else(|| conversation.frontmatter.started_at.clone());
-        return Ok(CloseSessionResult {
+        return Ok(Some(CloseSessionResult {
             closed_at,
             conversation_path: slash_path(&relative_path),
             newly_closed: false,
-        });
+        }));
     }
 
     let closed_at = current_timestamp(conn)?;
     conversation.frontmatter.status = ConversationStatus::Closed;
     conversation.frontmatter.closed_at = Some(closed_at.clone());
     write_conversation_file(&full_path, &conversation)?;
+    idle_close::clear_session(&db_path, namespace, session_id);
 
-    Ok(CloseSessionResult {
+    Ok(Some(CloseSessionResult {
         closed_at,
         conversation_path: slash_path(&relative_path),
         newly_closed: true,
-    })
+    }))
 }
 
 pub fn resolve_memory_root(conn: &Connection) -> Result<MemoryRoot, TurnWriteError> {
@@ -404,6 +439,15 @@ fn current_timestamp(conn: &Connection) -> Result<String, TurnWriteError> {
     conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
         row.get(0)
     })
+    .map_err(TurnWriteError::from)
+}
+
+fn database_path(conn: &Connection) -> Result<String, TurnWriteError> {
+    conn.query_row(
+        "SELECT file FROM pragma_database_list WHERE name = 'main'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
     .map_err(TurnWriteError::from)
 }
 
@@ -686,6 +730,43 @@ mod tests {
         assert!(rendered.contains("## Turn 1 · user · 2026-05-03T09:14:22Z"));
         assert!(rendered.contains("## Turn 2 · assistant · 2026-05-03T09:15:00Z"));
         assert!(rendered.contains("\"importance\": \"high\""));
+    }
+
+    #[test]
+    fn append_turn_returns_format_error_when_existing_file_is_malformed() {
+        let vault_root = tempfile::TempDir::new().unwrap();
+        let (_db_dir, conn) = configured_connection(vault_root.path());
+        let conversation_dir = vault_root.path().join("conversations").join("2026-05-03");
+        fs::create_dir_all(&conversation_dir).unwrap();
+        let conversation_path = conversation_dir.join("session-bad.md");
+        let original = concat!(
+            "---\n",
+            "type: conversation\n",
+            "session_id: session-bad\n",
+            "date: 2026-05-03\n",
+            "started_at: 2026-05-03T09:14:22Z\n",
+            "status: open\n",
+            "last_extracted_at: null\n",
+            "last_extracted_turn: 0\n",
+            "---\n\n",
+            "## Turn nope · user · 2026-05-03T09:14:22Z\n\n",
+            "broken\n"
+        );
+        fs::write(&conversation_path, original).unwrap();
+
+        let error = append_turn(
+            &conn,
+            "session-bad",
+            TurnRole::Assistant,
+            "should fail",
+            "2026-05-03T09:15:00Z",
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, TurnWriteError::Format(_)));
+        assert_eq!(fs::read_to_string(&conversation_path).unwrap(), original);
     }
 
     #[test]

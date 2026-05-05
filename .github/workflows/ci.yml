@@ -139,7 +139,7 @@ jobs:
         run: cargo test --verbose
 
       - name: Run tests (online channel)
-        run: cargo test --verbose --no-default-features --features bundled,online-model
+        run: cargo test --verbose --no-default-features --features bundled,online-model,test-harness
         env:
           QUAID_FORCE_HASH_SHIM: "1"
 

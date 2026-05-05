@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::commands::{check, get, link, put};
 
 use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
-use crate::core::conversation::{queue as conversation_queue, turn_writer};
+use crate::core::conversation::{
+    correction, extractor::SlmClient, queue as conversation_queue, slm::LazySlmRunner, turn_writer,
+};
 use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
@@ -22,6 +24,7 @@ use crate::core::types::{ExtractionTriggerKind, SearchError, TurnRole};
 use crate::core::vault_sync;
 
 type DbRef = Arc<Mutex<Connection>>;
+type SlmRef = Arc<dyn SlmClient + Send + Sync>;
 
 const MAX_SLUG_LEN: usize = 512;
 const MAX_CONTENT_LEN: usize = 1_048_576; // 1 MB
@@ -151,8 +154,9 @@ fn canonicalize_page_for_mcp(
         &rendered.uuid,
     );
     rendered.slug = canonical_slug(&resolved.collection_name, &resolved.slug);
-    rendered.frontmatter.insert(
-        "slug".to_string(),
+    crate::core::types::frontmatter_insert_string(
+        &mut rendered.frontmatter,
+        "slug",
         canonical_slug(&resolved.collection_name, &resolved.slug),
     );
     rendered
@@ -517,6 +521,30 @@ fn map_extraction_queue_error(e: conversation_queue::ExtractionQueueError) -> rm
     }
 }
 
+fn map_correction_error(e: correction::CorrectionError) -> rmcp::Error {
+    match e {
+        correction::CorrectionError::NotFound { .. } => {
+            rmcp::Error::new(ErrorCode(-32001), e.to_string(), None)
+        }
+        correction::CorrectionError::Kind { .. }
+        | correction::CorrectionError::InvalidRequest { .. }
+        | correction::CorrectionError::Config { .. } => {
+            rmcp::Error::new(ErrorCode(-32002), e.to_string(), None)
+        }
+        correction::CorrectionError::Conflict { message } => {
+            rmcp::Error::new(ErrorCode(-32009), message, None)
+        }
+        correction::CorrectionError::Sqlite(error) => map_db_error(error),
+        correction::CorrectionError::VaultSync(error) => map_vault_sync_error(error),
+        correction::CorrectionError::Json(_)
+        | correction::CorrectionError::Slm(_)
+        | correction::CorrectionError::FactResolution(_)
+        | correction::CorrectionError::Output { .. } => {
+            rmcp::Error::new(ErrorCode(-32003), e.to_string(), None)
+        }
+    }
+}
+
 fn validate_turn_timestamp(value: &str) -> Result<(), rmcp::Error> {
     if value.len() == 20 && is_valid_temporal_value(value) {
         Ok(())
@@ -570,12 +598,21 @@ fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp:
 #[derive(Clone)]
 pub struct QuaidServer {
     db: DbRef,
+    slm: SlmRef,
 }
 
 impl QuaidServer {
     pub fn new(conn: Connection) -> Self {
+        Self::new_with_slm(conn, Arc::new(LazySlmRunner::new()))
+    }
+
+    pub fn new_with_slm<S>(conn: Connection, slm: Arc<S>) -> Self
+    where
+        S: SlmClient + Send + Sync + 'static,
+    {
         Self {
             db: Arc::new(Mutex::new(conn)),
+            slm,
         }
     }
 }
@@ -619,6 +656,19 @@ pub struct MemoryCloseActionInput {
     pub slug: String,
     pub status: String,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryCorrectInput {
+    pub fact_slug: String,
+    pub correction: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryCorrectContinueInput {
+    pub correction_id: String,
+    pub response: Option<String>,
+    pub abandon: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -783,6 +833,7 @@ impl QuaidServer {
         let supersedes = canonical_page
             .frontmatter
             .get("supersedes")
+            .and_then(serde_json::Value::as_str)
             .map(|slug| canonical_slug(&resolved.collection_name, slug));
 
         let json = serde_json::to_string_pretty(&serde_json::json!({
@@ -961,9 +1012,11 @@ impl QuaidServer {
         }
 
         let mut updated_page = page.clone();
-        updated_page
-            .frontmatter
-            .insert("status".to_string(), input.status.clone());
+        crate::core::types::frontmatter_insert_string(
+            &mut updated_page.frontmatter,
+            "status",
+            input.status.clone(),
+        );
         if let Some(note) = input.note.as_deref() {
             append_note(&mut updated_page.compiled_truth, note);
         }
@@ -994,6 +1047,44 @@ impl QuaidServer {
             "version": version,
         }))
         .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Start a correction dialogue for an extracted fact")]
+    pub fn memory_correct(
+        &self,
+        #[tool(aggr)] input: MemoryCorrectInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.fact_slug)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let step = correction::start_correction(
+            &db,
+            self.slm.as_ref(),
+            &input.fact_slug,
+            &input.correction,
+        )
+        .map_err(map_correction_error)?;
+        let json = serde_json::to_string_pretty(&step)
+            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Continue or abandon an open fact correction dialogue")]
+    pub fn memory_correct_continue(
+        &self,
+        #[tool(aggr)] input: MemoryCorrectContinueInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let step = correction::continue_correction(
+            &db,
+            self.slm.as_ref(),
+            &input.correction_id,
+            input.response.as_deref(),
+            input.abandon.unwrap_or(false),
+        )
+        .map_err(map_correction_error)?;
+        let json = serde_json::to_string_pretty(&step)
+            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -2184,6 +2275,56 @@ mod tests {
     }
 
     #[test]
+    fn memory_add_turn_enqueues_namespaced_session_when_extraction_is_enabled() {
+        let (_dir, conn) = open_test_db();
+        conn.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'true')",
+            [],
+        )
+        .unwrap();
+        let server = QuaidServer::new(conn);
+
+        let result = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-enabled".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: None,
+                namespace: Some("alpha".to_string()),
+            })
+            .unwrap();
+
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(
+            payload["conversation_path"],
+            "alpha/conversations/2026-05-03/session-enabled.md"
+        );
+        assert!(payload["extraction_scheduled_at"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z'));
+
+        let db = server.db.lock().unwrap();
+        let queue_row: (String, String, String, String) = db
+            .query_row(
+                "SELECT session_id, trigger_kind, conversation_path, status
+                 FROM extraction_queue
+                 WHERE session_id = 'alpha::session-enabled'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(queue_row.0, "alpha::session-enabled");
+        assert_eq!(queue_row.1, "debounce");
+        assert_eq!(
+            queue_row.2,
+            "alpha/conversations/2026-05-03/session-enabled.md"
+        );
+        assert_eq!(queue_row.3, "pending");
+    }
+
+    #[test]
     fn memory_add_turn_rejects_non_object_metadata() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -2224,6 +2365,58 @@ mod tests {
     }
 
     #[test]
+    fn memory_close_session_reports_queue_position_for_first_and_repeat_close() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+        server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-close".to_string(),
+                role: "user".to_string(),
+                content: "wrap up".to_string(),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap();
+
+        let first = server
+            .memory_close_session(MemoryCloseSessionInput {
+                session_id: "session-close".to_string(),
+                namespace: None,
+            })
+            .unwrap();
+        let second = server
+            .memory_close_session(MemoryCloseSessionInput {
+                session_id: "session-close".to_string(),
+                namespace: None,
+            })
+            .unwrap();
+
+        let first_payload: serde_json::Value = serde_json::from_str(&extract_text(&first)).unwrap();
+        let second_payload: serde_json::Value =
+            serde_json::from_str(&extract_text(&second)).unwrap();
+        assert_eq!(first_payload["extraction_triggered"], true);
+        assert_eq!(first_payload["queue_position"], 1);
+        assert_eq!(second_payload["extraction_triggered"], true);
+        assert_eq!(second_payload["queue_position"], 1);
+        assert_eq!(first_payload["closed_at"], second_payload["closed_at"]);
+
+        let db = server.db.lock().unwrap();
+        let queue_rows: (i64, String, String) = db
+            .query_row(
+                "SELECT COUNT(*), trigger_kind, status
+                 FROM extraction_queue
+                 WHERE session_id = 'session-close'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(queue_rows.0, 1);
+        assert_eq!(queue_rows.1, "session_close");
+        assert_eq!(queue_rows.2, "pending");
+    }
+
+    #[test]
     fn memory_close_action_updates_status_appends_note_and_bumps_version() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -2257,8 +2450,8 @@ mod tests {
         let page = get::get_page(&db, "actions/ship-phase5").unwrap();
         assert_eq!(page.version, 2);
         assert_eq!(
-            page.frontmatter.get("status").map(String::as_str),
-            Some("done")
+            page.frontmatter.get("status"),
+            Some(&serde_json::json!("done"))
         );
         assert!(page
             .compiled_truth
@@ -2356,9 +2549,11 @@ mod tests {
                 |db, resolved, page| {
                     let mut concurrent_page = page.clone();
                     concurrent_page.compiled_truth = "Concurrent writer landed first.".to_string();
-                    concurrent_page
-                        .frontmatter
-                        .insert("status".to_string(), "open".to_string());
+                    crate::core::types::frontmatter_insert_string(
+                        &mut concurrent_page.frontmatter,
+                        "status",
+                        "open",
+                    );
                     let content = crate::core::markdown::render_page(&concurrent_page);
                     put::put_from_string_quiet(
                         db,
@@ -2379,8 +2574,8 @@ mod tests {
         let page = get::get_page(&db, "actions/race-close").unwrap();
         assert_eq!(page.version, 2);
         assert_eq!(
-            page.frontmatter.get("status").map(String::as_str),
-            Some("open")
+            page.frontmatter.get("status"),
+            Some(&serde_json::json!("open"))
         );
         assert_eq!(page.compiled_truth, "Concurrent writer landed first.");
         assert!(!page.compiled_truth.contains("close note"));

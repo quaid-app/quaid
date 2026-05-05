@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 #[cfg(unix)]
 use std::io::Write;
@@ -185,7 +184,7 @@ struct QuarantinedPageRecord {
     summary: String,
     compiled_truth: String,
     timeline: String,
-    frontmatter: HashMap<String, String>,
+    frontmatter: crate::core::types::Frontmatter,
     wing: String,
     room: String,
     version: i64,
@@ -690,8 +689,8 @@ fn load_quarantined_page(
         params![resolved.collection_id, resolved.slug],
         |row| {
             let frontmatter_raw: String = row.get(10)?;
-            let frontmatter =
-                serde_json::from_str(&frontmatter_raw).unwrap_or_else(|_| HashMap::new());
+            let frontmatter = serde_json::from_str(&frontmatter_raw)
+                .unwrap_or_else(|_| crate::core::types::Frontmatter::new());
             Ok(QuarantinedPageRecord {
                 page_id: row.get(0)?,
                 collection_name: row.get(2)?,
@@ -1078,23 +1077,18 @@ fn parse_restored_page(
     let (frontmatter, body) = markdown::parse_frontmatter(&raw);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
-    let slug = frontmatter
-        .get("slug")
-        .cloned()
+    let slug = crate::core::types::frontmatter_get_string(&frontmatter, "slug")
         .unwrap_or_else(|| derive_slug_from_path(absolute_target_path, root_path));
-    let title = frontmatter
-        .get("title")
-        .cloned()
+    let title = crate::core::types::frontmatter_get_string(&frontmatter, "title")
         .unwrap_or_else(|| slug.clone());
     let page_type = frontmatter
         .get("type")
-        .map(|value| value.trim())
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("null"))
         .map(str::to_owned)
         .unwrap_or_else(|| "concept".to_owned());
-    let wing = frontmatter
-        .get("wing")
-        .cloned()
+    let wing = crate::core::types::frontmatter_get_string(&frontmatter, "wing")
         .unwrap_or_else(|| palace::derive_wing(&slug));
     let room = palace::derive_room(&compiled_truth);
     let uuid = page_uuid::resolve_page_uuid(&frontmatter, Some(stored_uuid))?;

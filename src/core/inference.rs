@@ -59,6 +59,12 @@ pub struct ModelConfig {
     pub sha256_hashes: Option<ModelFileHashes>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingEvidenceKind {
+    Semantic,
+    HashShim,
+}
+
 impl ModelConfig {
     pub fn vec_table(&self) -> String {
         format!("page_embeddings_vec_{}", self.embedding_dim)
@@ -364,6 +370,13 @@ impl EmbeddingModel {
                 max_len,
             } => embed_candle_xlm_roberta(text, model, tokenizer, device, *max_len),
             EmbeddingBackend::HashShim => embed_hash_shim(text, self.config.embedding_dim),
+        }
+    }
+
+    fn evidence_kind(&self) -> EmbeddingEvidenceKind {
+        match self.backend {
+            EmbeddingBackend::HashShim => EmbeddingEvidenceKind::HashShim,
+            _ => EmbeddingEvidenceKind::Semantic,
         }
     }
 }
@@ -1061,6 +1074,18 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
         .embed(trimmed)
 }
 
+pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError> {
+    ensure_model();
+    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    Ok(runtime
+        .loaded
+        .as_ref()
+        .ok_or_else(|| InferenceError::Internal {
+            message: "embedding model is not loaded; call configure_runtime_model first".to_owned(),
+        })?
+        .evidence_kind())
+}
+
 #[allow(dead_code)]
 pub fn search_vec(
     query: &str,
@@ -1410,7 +1435,6 @@ mod tests {
     use super::*;
     use crate::core::db;
     use crate::core::types::Page;
-    use std::collections::HashMap;
     #[cfg(feature = "online-model")]
     use std::io::{Read, Write};
     #[cfg(feature = "online-model")]
@@ -1781,7 +1805,7 @@ mod tests {
             summary: String::new(),
             compiled_truth: "## State\nFresh truth\n".to_owned(),
             timeline: "- 2026-04-28: refreshed timeline entry".to_owned(),
-            frontmatter: HashMap::new(),
+            frontmatter: crate::core::types::Frontmatter::new(),
             wing: "notes".to_owned(),
             room: String::new(),
             version: 2,
@@ -1843,7 +1867,7 @@ mod tests {
             summary: String::new(),
             compiled_truth: "truth".to_owned(),
             timeline: String::new(),
-            frontmatter: HashMap::new(),
+            frontmatter: crate::core::types::Frontmatter::new(),
             wing: "notes".to_owned(),
             room: String::new(),
             version: 1,

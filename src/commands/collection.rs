@@ -471,7 +471,7 @@ fn run_uuid_write_back(
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         for frontmatter_json in frontmatters {
-            let frontmatter: std::collections::HashMap<String, String> =
+            let frontmatter: crate::core::types::Frontmatter =
                 serde_json::from_str(&frontmatter_json).unwrap_or_default();
             if frontmatter.contains_key(crate::core::page_uuid::QUAID_ID_FRONTMATTER_KEY) {
                 summary.already_had_uuid += 1;

@@ -16,6 +16,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 #[cfg(unix)]
 use rustix::{fd::AsFd, fs::fsync};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use uuid::Uuid;
@@ -23,6 +24,7 @@ use uuid::Uuid;
 #[cfg(unix)]
 use crate::core::fs_safety;
 use crate::core::supersede;
+use crate::core::types::frontmatter_get_string;
 use crate::core::{file_state, markdown, page_uuid, palace, raw_imports, vault_sync};
 
 #[derive(Debug, Clone)]
@@ -260,14 +262,9 @@ fn put_from_string_with_output(
     let wing = palace::derive_wing(slug);
     let room = palace::derive_room(&compiled_truth);
 
-    let title = frontmatter
-        .get("title")
-        .cloned()
-        .unwrap_or_else(|| slug.to_string());
-    let page_type = frontmatter
-        .get("type")
-        .cloned()
-        .unwrap_or_else(|| "concept".to_string());
+    let title = frontmatter_get_string(&frontmatter, "title").unwrap_or_else(|| slug.to_string());
+    let page_type =
+        frontmatter_get_string(&frontmatter, "type").unwrap_or_else(|| "concept".to_string());
 
     let relative_path = slug_to_relative_path(slug);
     let now = now_iso_from(db);
@@ -297,7 +294,10 @@ fn put_from_string_with_output(
                     .as_ref()
                     .and_then(|(_, _, uuid)| uuid.as_deref()),
             )?;
-            let supersedes = frontmatter.get("supersedes").cloned();
+            let supersedes = frontmatter
+                .get("supersedes")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned);
             supersede::validate_supersede_target(
                 db,
                 resolved.collection_id,
@@ -1384,7 +1384,6 @@ mod tests {
     use super::*;
     use crate::core::db;
     use crate::core::markdown;
-    use std::collections::HashMap;
     #[cfg(all(unix, target_os = "linux"))]
     use std::ffi::OsString;
     use std::fs as stdfs;
@@ -3220,10 +3219,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let fm: HashMap<String, String> = serde_json::from_str(&fm_json).unwrap();
-        assert_eq!(fm.get("source").unwrap(), "manual");
-        assert_eq!(fm.get("title").unwrap(), "Data");
-        assert_eq!(fm.get("type").unwrap(), "concept");
+        let fm: crate::core::types::Frontmatter = serde_json::from_str(&fm_json).unwrap();
+        assert_eq!(fm.get("source"), Some(&serde_json::json!("manual")));
+        assert_eq!(fm.get("title"), Some(&serde_json::json!("Data")));
+        assert_eq!(fm.get("type"), Some(&serde_json::json!("concept")));
     }
 
     // ── FTS5 trigger fires ────────────────────────────────────

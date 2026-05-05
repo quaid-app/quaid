@@ -356,6 +356,35 @@ mod tests {
     }
 
     #[test]
+    fn merged_pending_job_prefers_manual_over_debounce_and_keeps_earliest_manual() {
+        let (existing_manual_trigger, existing_manual_schedule) = merged_pending_job(
+            ExtractionTriggerKind::Manual,
+            "2026-05-03T10:00:01Z",
+            ExtractionTriggerKind::Debounce,
+            "2026-05-03T10:00:05Z",
+        );
+        let (upgraded_trigger, upgraded_schedule) = merged_pending_job(
+            ExtractionTriggerKind::Debounce,
+            "2026-05-03T10:00:05Z",
+            ExtractionTriggerKind::Manual,
+            "2026-05-03T10:00:02Z",
+        );
+        let (earliest_manual_trigger, earliest_manual_schedule) = merged_pending_job(
+            ExtractionTriggerKind::Manual,
+            "2026-05-03T10:00:05Z",
+            ExtractionTriggerKind::Manual,
+            "2026-05-03T10:00:02Z",
+        );
+
+        assert_eq!(existing_manual_trigger, ExtractionTriggerKind::Manual);
+        assert_eq!(existing_manual_schedule, "2026-05-03T10:00:01Z");
+        assert_eq!(upgraded_trigger, ExtractionTriggerKind::Manual);
+        assert_eq!(upgraded_schedule, "2026-05-03T10:00:02Z");
+        assert_eq!(earliest_manual_trigger, ExtractionTriggerKind::Manual);
+        assert_eq!(earliest_manual_schedule, "2026-05-03T10:00:02Z");
+    }
+
+    #[test]
     fn enqueue_does_not_collapse_with_running_rows() {
         let conn = configured_connection();
         conn.execute(
@@ -384,6 +413,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn enqueue_merge_resets_attempts_and_clears_last_error() {
+        let conn = configured_connection();
+        conn.execute(
+            "INSERT INTO extraction_queue
+                 (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+             VALUES
+                 ('s1', 'conversations/2026-05-03/original.md', 'debounce', '2026-05-03T10:00:00Z', '2026-05-03T10:00:00Z', 2, 'old failure', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        enqueue(
+            &conn,
+            "s1",
+            "conversations/2026-05-03/updated.md",
+            ExtractionTriggerKind::Manual,
+            "2026-05-03T10:00:02Z",
+        )
+        .unwrap();
+
+        let row: (String, String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT conversation_path, trigger_kind, attempts, last_error
+                 FROM extraction_queue
+                 WHERE session_id = 's1' AND status = 'pending'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "conversations/2026-05-03/updated.md");
+        assert_eq!(row.1, "manual");
+        assert_eq!(row.2, 0);
+        assert_eq!(row.3, None);
     }
 
     #[test]
@@ -455,5 +521,48 @@ mod tests {
 
         assert_eq!(scheduled.len(), 20);
         assert!(scheduled.ends_with('Z'));
+    }
+
+    #[test]
+    fn lease_recovery_preserves_existing_last_error_and_can_fail_at_retry_cap() {
+        let conn = configured_connection();
+        conn.execute(
+            "UPDATE config SET value = '2' WHERE key = 'extraction.max_retries'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO extraction_queue
+                 (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+             VALUES
+                 ('preserve', 'conversations/2026-05-03/preserve.md', 'debounce', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', 0, 'worker panic', 'running'),
+                 ('fail-now', 'conversations/2026-05-03/fail-now.md', 'debounce', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', 1, NULL, 'running')",
+            [],
+        )
+        .unwrap();
+
+        let recovered = dequeue(&conn).unwrap().unwrap();
+        let preserved_row: (i64, String, String) = conn
+            .query_row(
+                "SELECT attempts, status, last_error FROM extraction_queue WHERE session_id = 'preserve'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let failed_row: (i64, String, String) = conn
+            .query_row(
+                "SELECT attempts, status, last_error FROM extraction_queue WHERE session_id = 'fail-now'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(recovered.session_id, "preserve");
+        assert_eq!(preserved_row.0, 1);
+        assert_eq!(preserved_row.1, "running");
+        assert_eq!(preserved_row.2, "worker panic");
+        assert_eq!(failed_row.0, 2);
+        assert_eq!(failed_row.1, "failed");
+        assert_eq!(failed_row.2, "lease expired");
     }
 }

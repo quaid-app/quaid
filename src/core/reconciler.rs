@@ -950,7 +950,9 @@ fn fresh_collection_dirty_status(
     is_collection_dirty(&conn, collection_id, recovery_root)
 }
 
-fn load_frontmatter_map(frontmatter_json: &str) -> Result<HashMap<String, String>, ReconcileError> {
+fn load_frontmatter_map(
+    frontmatter_json: &str,
+) -> Result<crate::core::types::Frontmatter, ReconcileError> {
     serde_json::from_str(frontmatter_json).map_err(|err| {
         ReconcileError::Other(format!(
             "load_frontmatter_map: invalid stored frontmatter json: {err}"
@@ -1655,7 +1657,7 @@ struct ParsedVaultFile {
     summary: String,
     compiled_truth: String,
     timeline: String,
-    frontmatter: HashMap<String, String>,
+    frontmatter: crate::core::types::Frontmatter,
     wing: String,
     room: String,
     sha256: String,
@@ -2837,25 +2839,20 @@ fn parse_vault_file(
     let (frontmatter, body) = markdown::parse_frontmatter(&raw);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
-    let slug = frontmatter
-        .get("slug")
-        .cloned()
+    let slug = crate::core::types::frontmatter_get_string(&frontmatter, "slug")
         .unwrap_or_else(|| derive_slug_from_path(file_path, root_path));
-    let title = frontmatter
-        .get("title")
-        .cloned()
+    let title = crate::core::types::frontmatter_get_string(&frontmatter, "title")
         .unwrap_or_else(|| slug.clone());
     let frontmatter_type = frontmatter
         .get("type")
-        .map(|value| value.trim())
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("null"))
         .map(str::to_owned);
     let page_type = frontmatter_type
         .or_else(|| infer_type_from_path(file_path, root_path))
         .unwrap_or_else(|| "concept".to_string());
-    let wing = frontmatter
-        .get("wing")
-        .cloned()
+    let wing = crate::core::types::frontmatter_get_string(&frontmatter, "wing")
         .unwrap_or_else(|| palace::derive_wing(&slug));
     let room = palace::derive_room(&compiled_truth);
 

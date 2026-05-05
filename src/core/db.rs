@@ -12,7 +12,7 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
 const PAGES_AU_TRIGGER_SQL: &str =
     "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
@@ -124,8 +124,8 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
 
     let effective_model = match read_quaid_config(&conn)? {
         Some(stored) => {
-            // Check schema version — refuse to open older schema versions
-            if stored.schema_version < SCHEMA_VERSION {
+            // Check schema version — refuse to open any mismatched schema version
+            if stored.schema_version != SCHEMA_VERSION {
                 return Err(DbError::Schema {
                     message: format_schema_reinit_message(stored.schema_version, path),
                 });
@@ -203,7 +203,7 @@ fn preflight_existing_schema(path: &str) -> Result<(), DbError> {
         return Ok(());
     };
 
-    if schema_version < SCHEMA_VERSION {
+    if schema_version != SCHEMA_VERSION {
         return Err(DbError::Schema {
             message: format_schema_reinit_message(schema_version, path),
         });
@@ -1024,6 +1024,7 @@ mod tests {
             "collection_owners",
             "config",
             "contradictions",
+            "correction_sessions",
             "embedding_jobs",
             "embedding_models",
             "extraction_queue",
@@ -1051,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn open_sets_user_version_to_8() {
+    fn open_sets_user_version_to_9() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
@@ -1059,11 +1060,11 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     #[test]
-    fn fresh_v8_schema_includes_conversation_memory_artifacts_and_defaults() {
+    fn fresh_v9_schema_includes_conversation_memory_artifacts_and_defaults() {
         let conn = open(":memory:").unwrap();
 
         let page_columns: Vec<String> = conn
@@ -1122,10 +1123,43 @@ mod tests {
             .unwrap();
         assert!(pending_index_sql.contains("WHERE status = 'pending'"));
 
+        let correction_table_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'correction_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(correction_table_sql
+            .contains("status IN ('open', 'committed', 'abandoned', 'expired')"));
+        assert!(correction_table_sql.contains("json_valid(exchange_log)"));
+
+        let correction_index_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_correction_open'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(correction_index_sql.contains("WHERE status = 'open'"));
+
         let config_rows: Vec<(String, String)> = conn
             .prepare(
                 "SELECT key, value FROM config
-                 WHERE key IN ('version', 'memory.location', 'corrections.history_on_disk', 'extraction.max_retries')
+                 WHERE key IN (
+                     'version',
+                     'memory.location',
+                     'corrections.history_on_disk',
+                     'extraction.max_retries',
+                     'extraction.enabled',
+                     'extraction.model_alias',
+                     'extraction.window_turns',
+                     'extraction.debounce_ms',
+                     'extraction.idle_close_ms',
+                     'extraction.retention_days',
+                     'fact_resolution.dedup_cosine_min',
+                     'fact_resolution.supersede_cosine_min'
+                 )
                  ORDER BY key",
             )
             .unwrap()
@@ -1140,15 +1174,32 @@ mod tests {
                     "corrections.history_on_disk".to_string(),
                     "false".to_string()
                 ),
+                ("extraction.debounce_ms".to_string(), "5000".to_string()),
+                ("extraction.enabled".to_string(), "false".to_string()),
+                ("extraction.idle_close_ms".to_string(), "60000".to_string()),
                 ("extraction.max_retries".to_string(), "3".to_string()),
+                (
+                    "extraction.model_alias".to_string(),
+                    "phi-3.5-mini".to_string()
+                ),
+                ("extraction.retention_days".to_string(), "30".to_string()),
+                ("extraction.window_turns".to_string(), "5".to_string()),
+                (
+                    "fact_resolution.dedup_cosine_min".to_string(),
+                    "0.92".to_string()
+                ),
+                (
+                    "fact_resolution.supersede_cosine_min".to_string(),
+                    "0.4".to_string()
+                ),
                 ("memory.location".to_string(), "vault-subdir".to_string()),
-                ("version".to_string(), "8".to_string()),
+                ("version".to_string(), "9".to_string()),
             ]
         );
     }
 
     #[test]
-    fn fresh_v8_schema_enforces_superseded_by_foreign_key() {
+    fn fresh_v9_schema_enforces_superseded_by_foreign_key() {
         let conn = open(":memory:").unwrap();
 
         let err = conn
@@ -1164,7 +1215,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_v8_schema_rejects_invalid_extraction_queue_trigger_kind() {
+    fn fresh_v9_schema_rejects_invalid_extraction_queue_trigger_kind() {
         let conn = open(":memory:").unwrap();
 
         let err = conn
@@ -1180,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_v8_schema_rejects_invalid_extraction_queue_status() {
+    fn fresh_v9_schema_rejects_invalid_extraction_queue_status() {
         let conn = open(":memory:").unwrap();
 
         let err = conn
@@ -1191,6 +1242,22 @@ mod tests {
                 [],
             )
             .expect_err("invalid status should fail");
+
+        assert!(matches!(err, rusqlite::Error::SqliteFailure(_, _)));
+    }
+
+    #[test]
+    fn fresh_v9_schema_rejects_invalid_correction_session_status() {
+        let conn = open(":memory:").unwrap();
+
+        let err = conn
+            .execute(
+                "INSERT INTO correction_sessions
+                     (correction_id, fact_slug, exchange_log, turns_used, status, created_at, expires_at)
+                 VALUES (?1, 'facts/example', '[]', 0, 'paused', '2026-05-05T00:00:00Z', '2026-05-05T01:00:00Z')",
+                [uuid::Uuid::now_v7().to_string()],
+            )
+            .expect_err("invalid correction session status should fail");
 
         assert!(matches!(err, rusqlite::Error::SqliteFailure(_, _)));
     }
@@ -1234,7 +1301,7 @@ mod tests {
         let version: i64 = conn2
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     #[test]
@@ -1456,16 +1523,16 @@ mod tests {
     }
 
     #[test]
-    fn open_with_model_rejects_v7_database_before_creating_v8_tables() {
+    fn open_with_model_rejects_v8_database_before_creating_v9_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 7);
+        seed_existing_db(&db_path, 8);
 
         let err = open_with_model(db_path.to_str().unwrap(), &default_model())
             .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 7, expected 8"));
+        assert!(err.to_string().contains("Found version 8, expected 9"));
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
@@ -1476,14 +1543,14 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored_version, "7");
+        assert_eq!(stored_version, "8");
     }
 
     #[test]
-    fn init_rejects_v7_database_before_creating_v8_tables() {
+    fn init_rejects_v8_database_before_creating_v9_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 7);
+        seed_existing_db(&db_path, 8);
 
         let err = init(db_path.to_str().unwrap(), &default_model())
             .expect_err("legacy database should be refused");
@@ -1499,11 +1566,59 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(config_version, "7");
+        assert_eq!(config_version, "8");
     }
 
     #[test]
-    fn open_connection_seeds_config_version_to_8_for_partial_v8_databases() {
+    fn open_with_model_rejects_future_schema_database_before_creating_v9_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("future.db");
+        seed_existing_db(&db_path, 10);
+
+        let err = open_with_model(db_path.to_str().unwrap(), &default_model())
+            .expect_err("future schema database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("Found version 10, expected 9"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let stored_version: String = conn
+            .query_row(
+                "SELECT value FROM quaid_config WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_version, "10");
+    }
+
+    #[test]
+    fn init_rejects_future_schema_database_before_creating_v9_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("future.db");
+        seed_existing_db(&db_path, 10);
+
+        let err = init(db_path.to_str().unwrap(), &default_model())
+            .expect_err("future schema database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("Found version 10, expected 9"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "10");
+    }
+
+    #[test]
+    fn open_connection_seeds_config_version_to_9_for_partial_v9_databases() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("partial-v8.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
@@ -1514,17 +1629,17 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(config_version, "8");
+        assert_eq!(config_version, "9");
         drop(conn);
 
         assert!(
             preflight_existing_schema(db_path.to_str().unwrap()).is_ok(),
-            "freshly seeded v8 DDL should not be misclassified as legacy before quaid_config is written"
+            "freshly seeded v9 DDL should not be misclassified as legacy before quaid_config is written"
         );
     }
 
     #[test]
-    fn open_with_model_recovers_crash_partial_v8_bootstrap() {
+    fn open_with_model_recovers_crash_partial_v9_bootstrap() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("partial-v8.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
@@ -1535,12 +1650,12 @@ mod tests {
         let stored = read_quaid_config(&opened.conn).unwrap().unwrap();
 
         assert_eq!(stored.model_alias, "small");
-        assert_eq!(stored.schema_version, 8);
+        assert_eq!(stored.schema_version, 9);
     }
 
     #[cfg(feature = "online-model")]
     #[test]
-    fn open_with_model_recovers_crash_partial_v8_bootstrap_from_registry_model() {
+    fn open_with_model_recovers_crash_partial_v9_bootstrap_from_registry_model() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("partial-v8-registry.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
@@ -1558,7 +1673,7 @@ mod tests {
     }
 
     #[test]
-    fn init_recovers_crash_partial_v8_bootstrap() {
+    fn init_recovers_crash_partial_v9_bootstrap() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("partial-v8-init.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
@@ -1569,7 +1684,7 @@ mod tests {
         let stored = read_quaid_config(&conn).unwrap().unwrap();
 
         assert_eq!(stored.model_alias, "small");
-        assert_eq!(stored.schema_version, 8);
+        assert_eq!(stored.schema_version, 9);
     }
 
     #[test]
@@ -1730,7 +1845,7 @@ mod tests {
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 8);
+        assert_eq!(config.schema_version, 9);
     }
 
     #[test]
@@ -1746,7 +1861,7 @@ mod tests {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
-                schema_version: 8,
+                schema_version: 9,
             }
         );
     }

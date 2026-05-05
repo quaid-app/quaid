@@ -20,8 +20,8 @@ fn open_queue_db(path: &Path) -> Connection {
 }
 
 #[test]
-fn janitor_tick_purges_old_terminal_queue_rows_but_keeps_live_rows_and_expires_old_open_corrections()
-{
+fn janitor_tick_purges_old_terminal_queue_rows_but_keeps_live_rows_and_expires_old_open_corrections(
+) {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
     let conn = open_queue_db(&db_path);

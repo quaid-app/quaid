@@ -229,9 +229,12 @@ fn write_fact_coexist_writes_null_supersedes_without_page_insert() {
     )
     .unwrap();
 
-    let full_path = dir
-        .path()
-        .join(result.relative_path.unwrap().replace('/', std::path::MAIN_SEPARATOR_STR));
+    let full_path = dir.path().join(
+        result
+            .relative_path
+            .unwrap()
+            .replace('/', std::path::MAIN_SEPARATOR_STR),
+    );
     let markdown = fs::read_to_string(full_path).unwrap();
     let frontmatter = parse_frontmatter_yaml(&markdown);
     assert_eq!(
@@ -349,5 +352,8 @@ fn context_for_job_window_rejects_path_traversal_attempt() {
         ),
         "path traversal via `..` must be rejected before any write"
     );
-    assert!(!dir.path().join("..").exists() || true, "no files written outside vault");
+    assert!(
+        !dir.path().join("..").exists() || true,
+        "no files written outside vault"
+    );
 }

@@ -4287,8 +4287,7 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                     let _ = quarantine::sweep_expired_quarantined_pages(&conn);
                     last_quarantine_sweep = Instant::now();
                 }
-                if last_janitor_sweep.elapsed()
-                    >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS)
+                if last_janitor_sweep.elapsed() >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS)
                 {
                     if let Err(error) = janitor::run_tick(&conn) {
                         eprintln!(

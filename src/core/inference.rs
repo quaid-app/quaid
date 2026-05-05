@@ -1055,19 +1055,6 @@ pub fn ensure_model() {
     }
 }
 
-/// Returns `true` when the loaded embedding backend is a real semantic model (Candle-based),
-/// and `false` when it has fallen back to `HashShim`. Callers that perform semantic comparisons
-/// MUST check this before trusting cosine scores for mutating decisions.
-pub fn embedding_is_real_semantic() -> bool {
-    ensure_model();
-    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
-    runtime
-        .loaded
-        .as_ref()
-        .map(|loaded| !matches!(loaded.backend, EmbeddingBackend::HashShim))
-        .unwrap_or(false)
-}
-
 pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {

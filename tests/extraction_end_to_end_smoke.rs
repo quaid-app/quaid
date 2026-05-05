@@ -108,7 +108,10 @@ fn markdown_files(root: &Path) -> Vec<PathBuf> {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
         };
-        let mut entries = entries.flatten().map(|entry| entry.path()).collect::<Vec<_>>();
+        let mut entries = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
         entries.sort();
         for path in entries {
             if path.is_dir() {
@@ -129,7 +132,11 @@ fn turn_capture_close_extract_fact_and_search_smoke() {
     let harness = Harness::new(50);
 
     for ordinal in 0..50 {
-        let role = if ordinal % 2 == 0 { "user" } else { "assistant" };
+        let role = if ordinal % 2 == 0 {
+            "user"
+        } else {
+            "assistant"
+        };
         let content = if ordinal == 42 {
             "Project Cinder decision: keep the local-only extraction cache path."
         } else {
@@ -156,7 +163,8 @@ fn turn_capture_close_extract_fact_and_search_smoke() {
             namespace: None,
         })
         .unwrap();
-    let close_payload: serde_json::Value = serde_json::from_str(&extract_text(&close_result)).unwrap();
+    let close_payload: serde_json::Value =
+        serde_json::from_str(&extract_text(&close_result)).unwrap();
     assert_eq!(close_payload["extraction_triggered"], true);
 
     let slm = StubSlm::with_results([Ok(
@@ -166,7 +174,10 @@ fn turn_capture_close_extract_fact_and_search_smoke() {
         .unwrap()
         .with_limits(Duration::from_millis(1), 128);
 
-    let processed = worker.process_next_job().unwrap().expect("queued close job");
+    let processed = worker
+        .process_next_job()
+        .unwrap()
+        .expect("queued close job");
     assert_eq!(processed.session_id, "smoke-session");
 
     let extracted_dir = harness.vault_root.join("extracted");

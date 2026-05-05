@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::Connection;
-use serde_json::Value as JsonValue;
 #[cfg(unix)]
 use rustix::{fd::AsFd, fs::fsync};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use uuid::Uuid;

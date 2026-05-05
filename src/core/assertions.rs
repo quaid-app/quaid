@@ -385,8 +385,10 @@ fn extract_from_frontmatter(
     SUPPORTED_FRONTMATTER_PREDICATES
         .iter()
         .filter_map(|predicate| {
-            let object =
-                normalize_evidence(crate::core::types::frontmatter_get_str(frontmatter, predicate)?);
+            let object = normalize_evidence(crate::core::types::frontmatter_get_str(
+                frontmatter,
+                predicate,
+            )?);
             if !is_valid_object(&object) {
                 return None;
             }

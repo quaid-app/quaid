@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 
-use crate::core::{collections, namespace};
 use crate::core::types::{
     ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole,
 };
+use crate::core::{collections, namespace};
 
 const HEADING_SEPARATOR: &str = " · ";
 const METADATA_FENCE_OPEN: &str = "```json turn-metadata";

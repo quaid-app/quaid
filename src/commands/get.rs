@@ -238,8 +238,14 @@ mod tests {
 
         let page = get_page(&conn, "people/carol").unwrap();
 
-        assert_eq!(page.frontmatter.get("title"), Some(&serde_json::json!("Carol")));
-        assert_eq!(page.frontmatter.get("type"), Some(&serde_json::json!("person")));
+        assert_eq!(
+            page.frontmatter.get("title"),
+            Some(&serde_json::json!("Carol"))
+        );
+        assert_eq!(
+            page.frontmatter.get("type"),
+            Some(&serde_json::json!("person"))
+        );
     }
 
     #[test]

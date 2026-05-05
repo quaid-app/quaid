@@ -48,8 +48,8 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             }
         }
 
-        let wing =
-            frontmatter_get_string(&frontmatter, "wing").unwrap_or_else(|| palace::derive_wing(&slug));
+        let wing = frontmatter_get_string(&frontmatter, "wing")
+            .unwrap_or_else(|| palace::derive_wing(&slug));
         let room = palace::derive_room(&compiled_truth);
         let title = frontmatter_get_string(&frontmatter, "title").unwrap_or_else(|| slug.clone());
         let page_type =

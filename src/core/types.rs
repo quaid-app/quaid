@@ -602,9 +602,9 @@ pub enum DbError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActionItemState, ConversationFile, ConversationFrontmatter, ConversationStatus,
-        ExtractionJob, ExtractionJobStatus, ExtractionResponse, ExtractionTriggerKind, Page,
-        PreferenceStrength, RawFact, Turn, TurnRole, string_frontmatter,
+        string_frontmatter, ActionItemState, ConversationFile, ConversationFrontmatter,
+        ConversationStatus, ExtractionJob, ExtractionJobStatus, ExtractionResponse,
+        ExtractionTriggerKind, Page, PreferenceStrength, RawFact, Turn, TurnRole,
     };
     use serde_json::json;
 

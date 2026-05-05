@@ -427,8 +427,7 @@ fn precursor_crash_replay_via_lease_expiry_contains_duplicate_via_dedup() {
     let parsed_before_replay =
         format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
     assert_eq!(
-        parsed_before_replay.frontmatter.last_extracted_turn,
-        0,
+        parsed_before_replay.frontmatter.last_extracted_turn, 0,
         "cursor must still be 0 — crash happened before persist_cursor_update"
     );
 
@@ -452,7 +451,9 @@ fn precursor_crash_replay_via_lease_expiry_contains_duplicate_via_dedup() {
     let calls = probe.recorded_calls();
     assert_eq!(calls.len(), 1, "exactly one SLM call on replay");
     assert!(
-        calls[0].prompt.contains("New turns to extract from (turns 1..2):"),
+        calls[0]
+            .prompt
+            .contains("New turns to extract from (turns 1..2):"),
         "replay window must cover the same ordinal range as the original job \
          (cursor unchanged at 0); prompt: {}",
         calls[0].prompt

@@ -119,8 +119,10 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
                 [page_id],
                 |row| row.get(0),
             ) {
-                page.frontmatter
-                    .insert("supersedes".to_string(), serde_json::Value::String(predecessor_slug));
+                page.frontmatter.insert(
+                    "supersedes".to_string(),
+                    serde_json::Value::String(predecessor_slug),
+                );
             }
         }
         pages.push(page);

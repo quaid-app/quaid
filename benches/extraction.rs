@@ -142,23 +142,22 @@ fn benchmark_windows(samples: usize) -> Vec<WindowedTurns> {
 fn representative_window(index: usize) -> WindowedTurns {
     let topic = format!("project-cinder-{index}");
     let lookback_turns = (0..DEFAULT_LOOKBACK)
-        .map(|ordinal| turn(
-            ordinal as i64 + 1,
-            if ordinal % 2 == 0 {
-                TurnRole::User
-            } else {
-                TurnRole::Assistant
-            },
-            format!(
-                "2026-05-05T08:{:02}:00Z",
-                (index * 2 + ordinal) % 60
-            ),
-            match ordinal {
-                0 => format!("We are planning the rollout for {topic}."),
-                1 => format!("I will track the migration and release notes for {topic}."),
-                _ => format!("Keep the notes concise and local-first for {topic}."),
-            },
-        ))
+        .map(|ordinal| {
+            turn(
+                ordinal as i64 + 1,
+                if ordinal % 2 == 0 {
+                    TurnRole::User
+                } else {
+                    TurnRole::Assistant
+                },
+                format!("2026-05-05T08:{:02}:00Z", (index * 2 + ordinal) % 60),
+                match ordinal {
+                    0 => format!("We are planning the rollout for {topic}."),
+                    1 => format!("I will track the migration and release notes for {topic}."),
+                    _ => format!("Keep the notes concise and local-first for {topic}."),
+                },
+            )
+        })
         .collect();
 
     let new_turns = vec![

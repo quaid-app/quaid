@@ -245,7 +245,9 @@ fn write_response(stream: &mut TcpStream, status: &str, headers: &[(String, Stri
         response.push_str("\r\n");
     }
     response.push_str("Connection: close\r\n\r\n");
-    stream.write_all(response.as_bytes()).expect("write headers");
+    stream
+        .write_all(response.as_bytes())
+        .expect("write headers");
     if !body.is_empty() {
         stream.write_all(body).expect("write body");
     }
@@ -352,7 +354,10 @@ fn extraction_enable_followed_by_turn_capture_and_local_cache_extraction_stays_o
         String::from_utf8_lossy(&enable.stderr)
     );
     let requests_after_enable = server.request_count();
-    assert!(requests_after_enable > 0, "enable should have populated cache via HTTP");
+    assert!(
+        requests_after_enable > 0,
+        "enable should have populated cache via HTTP"
+    );
 
     let server_conn = db::open(db_path.to_str().unwrap()).unwrap();
     let inspect = db::open(db_path.to_str().unwrap()).unwrap();

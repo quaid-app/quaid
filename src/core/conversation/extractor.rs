@@ -90,7 +90,8 @@ impl FactWriter for ResolvingFactWriter {
         window: &WindowedTurns,
         response: &ExtractionResponse,
     ) -> Result<(), WorkerError> {
-        let context = crate::core::conversation::supersede::context_for_job_window(db, job, window)?;
+        let context =
+            crate::core::conversation::supersede::context_for_job_window(db, job, window)?;
         for fact in &response.facts {
             crate::core::conversation::supersede::resolve_and_write_fact_in_context(
                 fact, db, &context,

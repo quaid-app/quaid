@@ -6,9 +6,7 @@ use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::core::file_state::{self, FileStat};
-use crate::core::types::{
-    frontmatter_get_string, frontmatter_insert_string, Frontmatter, Page,
-};
+use crate::core::types::{frontmatter_get_string, frontmatter_insert_string, Frontmatter, Page};
 use crate::core::{db, markdown, page_uuid, palace, raw_imports};
 
 const ELIGIBLE_TYPES: [&str; 4] = ["decision", "preference", "fact", "action_item"];
@@ -74,8 +72,8 @@ pub fn parse_edited_page(
     let raw = String::from_utf8_lossy(raw_bytes).into_owned();
     let (frontmatter, body) = markdown::parse_frontmatter(&raw);
     let (compiled_truth, timeline) = markdown::split_content(&body);
-    let slug =
-        frontmatter_get_string(&frontmatter, "slug").unwrap_or_else(|| derive_slug_from_path(file_path, root_path));
+    let slug = frontmatter_get_string(&frontmatter, "slug")
+        .unwrap_or_else(|| derive_slug_from_path(file_path, root_path));
     let title = frontmatter_get_string(&frontmatter, "title").unwrap_or_else(|| slug.clone());
     let page_type = frontmatter
         .get("type")
@@ -144,9 +142,17 @@ pub fn handle_extracted_edit(
     let archived_suffix = slug_timestamp(&now);
     let archived_slug = format!("{}--archived-{archived_suffix}", prior_page.slug);
     let mut current_frontmatter = new_page.frontmatter.clone();
-    frontmatter_insert_string(&mut current_frontmatter, "supersedes", archived_slug.clone());
+    frontmatter_insert_string(
+        &mut current_frontmatter,
+        "supersedes",
+        archived_slug.clone(),
+    );
     frontmatter_insert_string(&mut current_frontmatter, "corrected_via", "file_edit");
-    frontmatter_insert_string(&mut current_frontmatter, "type", prior_page.page_type.clone());
+    frontmatter_insert_string(
+        &mut current_frontmatter,
+        "type",
+        prior_page.page_type.clone(),
+    );
     let current_uuid = page_uuid::resolve_page_uuid(&current_frontmatter, Some(&prior_page.uuid))?;
     let archived_uuid = page_uuid::generate_uuid_v7();
     let archived_frontmatter_json = serde_json::to_string(&prior_page.frontmatter)?;

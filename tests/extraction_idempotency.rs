@@ -113,7 +113,10 @@ fn markdown_files(root: &Path) -> Vec<PathBuf> {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
         };
-        let mut entries = entries.flatten().map(|entry| entry.path()).collect::<Vec<_>>();
+        let mut entries = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
         entries.sort();
         for path in entries {
             if path.is_dir() {
@@ -233,7 +236,11 @@ fn force_reextract_keeps_structurally_equivalent_head_set_and_chain_shape() {
 
     let extracted_root = harness.vault_root.join("extracted");
     let initial_files = markdown_files(&extracted_root);
-    assert_eq!(initial_files.len(), 2, "initial extraction should write two fact files");
+    assert_eq!(
+        initial_files.len(),
+        2,
+        "initial extraction should write two fact files"
+    );
     for file in &initial_files {
         ingest::run(&harness.inspect, file.to_str().unwrap(), false).unwrap();
     }

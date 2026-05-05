@@ -640,7 +640,6 @@ fn cli_extraction_enable_then_disable_updates_flag() {
     assert_eq!(enabled, "false");
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Curated-alias source-pinned path (Professor's defect #1 proof)
 // ─────────────────────────────────────────────────────────────────────────────

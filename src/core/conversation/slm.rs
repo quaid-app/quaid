@@ -8,13 +8,14 @@ use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::phi3::{Config as Phi3Config, Model as Phi3Model};
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use thiserror::Error;
 use tokenizers::Tokenizer;
 
 use crate::core::conversation::model_lifecycle::{
     load_model_from_local_cache, ModelLifecycleError,
 };
-use crate::core::types::ExtractionResponse;
+use crate::core::types::{ExtractionFactValidationError, ExtractionResponse, RawFact};
 
 const DEFAULT_SLM_SEED: u64 = 0;
 
@@ -87,6 +88,11 @@ pub enum SlmError {
 #[derive(Debug, Deserialize)]
 struct ModelConfigEnvelope {
     model_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawExtractionEnvelope {
+    facts: Vec<JsonValue>,
 }
 
 impl SlmRunner {
@@ -319,8 +325,46 @@ impl LazySlmRunner {
 pub fn parse_response(raw: &str) -> Result<ExtractionResponse, SlmError> {
     let trimmed = raw.trim();
     let json = strip_json_fence(trimmed).unwrap_or(trimmed);
-    serde_json::from_str(json).map_err(|error| SlmError::Parse {
-        message: error.to_string(),
+    let envelope: RawExtractionEnvelope =
+        serde_json::from_str(json).map_err(|error| SlmError::Parse {
+            message: error.to_string(),
+        })?;
+
+    let mut facts = Vec::new();
+    let mut validation_errors = Vec::new();
+    for (index, value) in envelope.facts.into_iter().enumerate() {
+        let raw_kind = raw_fact_kind(&value);
+        match serde_json::from_value::<RawFact>(value) {
+            Ok(fact) => {
+                if let Some(message) = validate_fact(&fact) {
+                    validation_errors.push(ExtractionFactValidationError {
+                        index,
+                        kind: Some(
+                            match &fact {
+                                RawFact::Decision { .. } => "decision",
+                                RawFact::Preference { .. } => "preference",
+                                RawFact::Fact { .. } => "fact",
+                                RawFact::ActionItem { .. } => "action_item",
+                            }
+                            .to_string(),
+                        ),
+                        message,
+                    });
+                } else {
+                    facts.push(fact);
+                }
+            }
+            Err(error) => validation_errors.push(ExtractionFactValidationError {
+                index,
+                kind: raw_kind,
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    Ok(ExtractionResponse {
+        facts,
+        validation_errors,
     })
 }
 
@@ -358,6 +402,44 @@ fn strip_json_fence(raw: &str) -> Option<&str> {
     let body = raw[first_newline + 1..].trim_end();
     let inner = body.strip_suffix("```")?;
     Some(inner.trim())
+}
+
+fn validate_fact(fact: &RawFact) -> Option<String> {
+    match fact {
+        RawFact::Decision { chose, summary, .. } => validate_required_strings(
+            "decision",
+            &[("chose", chose.as_str()), ("summary", summary.as_str())],
+        ),
+        RawFact::Preference { about, summary, .. } => validate_required_strings(
+            "preference",
+            &[("about", about.as_str()), ("summary", summary.as_str())],
+        ),
+        RawFact::Fact { about, summary } => validate_required_strings(
+            "fact",
+            &[("about", about.as_str()), ("summary", summary.as_str())],
+        ),
+        RawFact::ActionItem { what, summary, .. } => validate_required_strings(
+            "action_item",
+            &[("what", what.as_str()), ("summary", summary.as_str())],
+        ),
+    }
+}
+
+fn validate_required_strings(kind: &str, fields: &[(&str, &str)]) -> Option<String> {
+    fields.iter().find_map(|(field, value)| {
+        if value.trim().is_empty() {
+            Some(format!("{kind} facts require non-empty `{field}`"))
+        } else {
+            None
+        }
+    })
+}
+
+fn raw_fact_kind(value: &JsonValue) -> Option<String> {
+    value
+        .get("kind")
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned)
 }
 
 fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {

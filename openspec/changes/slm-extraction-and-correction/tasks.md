@@ -39,21 +39,21 @@
 
 ## 5. Extraction worker — window selection + SLM call
 
-- [ ] 5.1 Create `src/core/conversation/extractor.rs::Worker` struct with handles to the queue, SLM runner, and vault writer
+- [x] 5.1 Create `src/core/conversation/extractor.rs::Worker` struct with handles to the queue, SLM runner, and vault writer
 - [ ] 5.2 Implement the worker loop: poll dequeue at a configurable cadence (default 1s), process one job at a time, sleep when no jobs are available
-- [ ] 5.3 Window selection: read the conversation file, parse cursor `C` and `last`, compute `[C+1, last]` new turns, slice into windows of `extraction.window_turns`, with up to `window_turns - new_count` lookback turns when new turns are sparse
-- [ ] 5.4 For `trigger_kind = 'session_close'` jobs with no new turns, run a single window over the most recent `window_turns` turns purely as context (cursor remains unchanged)
-- [ ] 5.5 Build the SLM prompt per the `fact-extraction-schema` spec: system prompt + user prompt with new-turns and lookback-context delimited
-- [ ] 5.6 Invoke `SlmRunner::infer` with `max_tokens = 2048` (configurable later)
-- [ ] 5.7 Tests: `tests/extraction_window.rs` covers window slicing with sufficient new turns, with sparse new turns, and the session_close empty-window case
+- [x] 5.3 Window selection: read the conversation file, parse cursor `C` and `last`, compute `[C+1, last]` new turns, slice into windows of `extraction.window_turns`, with up to `window_turns - new_count` lookback turns when new turns are sparse
+- [x] 5.4 For `trigger_kind = 'session_close'` jobs with no new turns, run a single window over the most recent `window_turns` turns purely as context (cursor remains unchanged)
+- [x] 5.5 Build the SLM prompt per the `fact-extraction-schema` spec: system prompt + user prompt with new-turns and lookback-context delimited
+- [x] 5.6 Invoke `SlmRunner::infer` with `max_tokens = 2048` (configurable later)
+- [x] 5.7 Tests: `tests/extraction_window.rs` covers window slicing with sufficient new turns, with sparse new turns, and the session_close empty-window case
 
 ## 6. Output parsing — strict JSON contract
 
 - [x] 6.1 Define `ExtractionResponse { facts: Vec<RawFact> }` and `RawFact` enum (one variant per kind) in `src/core/types.rs` with `serde(tag = "kind")`
 - [x] 6.2 Implement `parse_response(raw: &str) -> Result<ExtractionResponse>` that: strips leading/trailing whitespace, strips accidental ```json fences, then `serde_json::from_str`
-- [ ] 6.3 Reject any `RawFact` whose required type-specific fields are missing; reject unknown kinds; record validation errors at the per-fact level so other facts in the same response can still proceed
-- [ ] 6.4 Increment `extraction_queue.attempts` on parse failure; mark `failed` after `extraction.max_retries` (default 3) per the proposal-#1 contract
-- [ ] 6.5 Tests: `tests/slm_prompt_parsing.rs` golden-file coverage of bare JSON, fenced JSON, JSON with leading commentary (rejected), unknown kind (rejected), missing required field (rejected), mixed-validity facts (partial accept)
+- [x] 6.3 Reject any `RawFact` whose required type-specific fields are missing; reject unknown kinds; record validation errors at the per-fact level so other facts in the same response can still proceed
+- [x] 6.4 Increment `extraction_queue.attempts` on parse failure; mark `failed` after `extraction.max_retries` (default 3) per the proposal-#1 contract
+- [x] 6.5 Tests: `tests/slm_prompt_parsing.rs` golden-file coverage of bare JSON, fenced JSON, JSON with leading commentary (rejected), unknown kind (rejected), missing required field (rejected), mixed-validity facts (partial accept)
 
 ## 7. Per-fact resolution
 

@@ -280,9 +280,18 @@ pub struct ExtractionJob {
     pub status: ExtractionJobStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ExtractionResponse {
     pub facts: Vec<RawFact>,
+    #[serde(skip, default)]
+    pub validation_errors: Vec<ExtractionFactValidationError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractionFactValidationError {
+    pub index: usize,
+    pub kind: Option<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,6 +334,23 @@ pub enum RawFact {
         due: Option<String>,
         summary: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowedTurns {
+    pub new_turns: Vec<Turn>,
+    pub lookback_turns: Vec<Turn>,
+    pub context_only: bool,
+}
+
+impl WindowedTurns {
+    pub fn first_new_ordinal(&self) -> Option<i64> {
+        self.new_turns.first().map(|turn| turn.ordinal)
+    }
+
+    pub fn last_new_ordinal(&self) -> Option<i64> {
+        self.new_turns.last().map(|turn| turn.ordinal)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -666,6 +692,7 @@ mod tests {
                     summary: "Fry will wire the runtime next.".to_string(),
                 },
             ],
+            validation_errors: vec![],
         };
 
         let json = serde_json::to_string(&response).unwrap();

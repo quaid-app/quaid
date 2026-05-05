@@ -1,3 +1,4 @@
+pub mod extractor;
 pub mod file_edit;
 pub mod format;
 pub mod model_lifecycle;

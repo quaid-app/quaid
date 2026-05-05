@@ -36,6 +36,7 @@ fn parse_response_strips_json_fence_and_preserves_fact_shape() {
             summary: "Rust is preferred".to_string(),
         }]
     );
+    assert!(parsed.validation_errors.is_empty());
 }
 
 #[test]
@@ -81,17 +82,44 @@ fn lazy_runner_runtime_disables_after_cache_load_failure() {
 }
 
 #[test]
-fn parse_response_rejects_unknown_kind_as_whole_response_error() {
-    let error = parse_response(r#"{"facts":[{"kind":"unknown_kind","foo":"bar"}]}"#)
-        .expect_err("unknown kind must fail");
-    assert!(matches!(error, SlmError::Parse { .. }));
+fn parse_response_records_unknown_kind_without_dropping_whole_response() {
+    let parsed = parse_response(
+        r#"{"facts":[{"kind":"unknown_kind","foo":"bar"},{"kind":"fact","about":"timezone","summary":"UTC+8"}]}"#,
+    )
+    .expect("unknown kind should become a validation error");
+
+    assert_eq!(
+        parsed.facts,
+        vec![RawFact::Fact {
+            about: "timezone".to_string(),
+            summary: "UTC+8".to_string(),
+        }]
+    );
+    assert_eq!(parsed.validation_errors.len(), 1);
+    assert!(parsed.validation_errors[0]
+        .message
+        .contains("unknown variant"));
 }
 
 #[test]
-fn parse_response_rejects_missing_required_field_as_whole_response_error() {
-    let error = parse_response(r#"{"facts":[{"kind":"decision","summary":"we chose Rust"}]}"#)
-        .expect_err("missing `chose` must fail");
-    assert!(matches!(error, SlmError::Parse { .. }));
+fn parse_response_records_missing_required_field_without_dropping_whole_response() {
+    let parsed = parse_response(
+        r#"{"facts":[{"kind":"decision","summary":"we chose Rust"},{"kind":"preference","about":"language","summary":"Rust is preferred"}]}"#,
+    )
+    .expect("missing required fields should become validation errors");
+
+    assert_eq!(
+        parsed.facts,
+        vec![RawFact::Preference {
+            about: "language".to_string(),
+            strength: None,
+            summary: "Rust is preferred".to_string(),
+        }]
+    );
+    assert_eq!(parsed.validation_errors.len(), 1);
+    assert!(parsed.validation_errors[0]
+        .message
+        .contains("missing field `chose`"));
 }
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

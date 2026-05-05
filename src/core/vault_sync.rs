@@ -48,6 +48,7 @@ use crate::core::collections::{
 #[cfg(unix)]
 use crate::core::conversation::file_edit::is_history_sidecar_path;
 use crate::core::conversation::idle_close;
+use crate::core::conversation::janitor;
 #[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
@@ -73,6 +74,7 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFERRED_RETRY_SECS: u64 = 1;
 const IDLE_CLOSE_SWEEP_INTERVAL_SECS: u64 = 10;
+const JANITOR_SWEEP_INTERVAL_SECS: u64 = 60 * 60;
 const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
 const REMAP_VERIFICATION_SAMPLE_LIMIT: usize = 5;
 const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
@@ -4245,6 +4247,8 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         let mut last_heartbeat = Instant::now();
         let mut last_idle_close_sweep =
             Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
+        let mut last_janitor_sweep =
+            Instant::now() - Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS);
         let mut last_quarantine_sweep = Instant::now();
         let mut last_generations = initial_generations;
         #[cfg(unix)]
@@ -4282,6 +4286,17 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                 {
                     let _ = quarantine::sweep_expired_quarantined_pages(&conn);
                     last_quarantine_sweep = Instant::now();
+                }
+                if last_janitor_sweep.elapsed()
+                    >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS)
+                {
+                    if let Err(error) = janitor::run_tick(&conn) {
+                        eprintln!(
+                            "WARN: janitor_sweep_failed session_id={} error={}",
+                            session_id_for_thread, error
+                        );
+                    }
+                    last_janitor_sweep = Instant::now();
                 }
                 #[cfg(unix)]
                 {
@@ -8287,9 +8302,11 @@ mod tests {
         assert!(
             snippet.contains("WARN: scheduled_full_hash_audit_failed")
                 && snippet.contains("if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread)")
+                && snippet.contains("WARN: janitor_sweep_failed")
+                && snippet.contains("if let Err(error) = janitor::run_tick(&conn)")
                 && snippet.contains("WARN: raw_import_ttl_sweep_failed")
                 && snippet.contains("if let Err(error) = sweep_raw_import_ttl(&conn)"),
-            "serve loop must log scheduled audit and TTL sweep failures instead of discarding them silently"
+            "serve loop must log janitor, scheduled audit, and TTL sweep failures instead of discarding them silently"
         );
     }
 

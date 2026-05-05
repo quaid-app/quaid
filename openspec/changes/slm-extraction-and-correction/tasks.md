@@ -99,10 +99,10 @@
 
 ## 11. Janitor — purge old queue rows + expire correction sessions
 
-- [ ] 11.1 Add an hourly janitor task to `quaid serve` that runs both purges in a single tick
-- [ ] 11.2 Purge: delete `extraction_queue` rows where `status IN ('done', 'failed') AND enqueued_at < (now - extraction.retention_days days)`
-- [ ] 11.3 Expire: update `correction_sessions` rows where `status = 'open' AND expires_at < now()` to `status = 'expired'`
-- [ ] 11.4 Tests: `tests/janitor.rs` covers both behaviours and verifies pending/running rows are never purged regardless of age
+- [x] 11.1 Add an hourly janitor task to `quaid serve` that runs both purges in a single tick
+- [x] 11.2 Purge: delete `extraction_queue` rows where `status IN ('done', 'failed') AND enqueued_at < (now - extraction.retention_days days)`
+- [x] 11.3 Expire: update `correction_sessions` rows where `status = 'open' AND expires_at < now()` to `status = 'expired'`
+- [x] 11.4 Tests: `tests/janitor.rs` covers both behaviours and verifies pending/running rows are never purged regardless of age
 
 ## 12. Correction dialogue — `memory_correct` MCP tool
 

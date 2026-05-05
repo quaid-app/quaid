@@ -5,6 +5,13 @@
 
 ## Learnings
 
+- 2026-05-06T07:33:07.816+08:00 — **conversation-memory-foundations already archived:** When directed to archive this change, it was found already at `openspec/changes/archive/2026-05-04-conversation-memory-foundations`. Stopped on that change and reported clearly rather than attempting a duplicate archive.
+- 2026-05-06T07:33:07.816+08:00 — **`openspec archive --yes` is the correct sync+archive command:** The CLI handles spec diffing, sync, and move in one step. Use `--skip-specs` for infra/ops changes with no delta specs (e.g. `protect-main-guardrails`). The CLI dates using UTC, so rename to local date (+08:00) when the session CURRENT_DATETIME specifies a date ahead of UTC.
+- 2026-05-06T07:33:07.816+08:00 — **Archive with incomplete artifacts/tasks:** `protect-main-guardrails` had design/specs artifacts in `ready` state and task 3.2 open. Archived with `--yes` per explicit user direction; warning recorded. Always document incomplete items in the session summary.
+- 2026-05-06T07:33:07.816+08:00 — **`openspec archive` UTC vs local date:** The CLI names archives using the UTC wall clock. When CURRENT_DATETIME is +08:00 (one day ahead of UTC in the early morning), rename the archive directory from `YYYY-MM-DD-old` to the local date immediately after archiving.
+
+
+
 - 2026-05-04T07:22:12.881+08:00 — **Release-lane reintegration rule:** When release-prep or doc-truth work lives on side branches but the parked checkout is dirty or stale, create a sibling worktree from the remote PR head, cherry-pick the release-lane commits there, validate, and push back to the PR branch. Do not integrate from the parked local branch, and once all OpenSpec tasks are done, refresh the PR copy so it describes only review/CI/release-lane work as remaining.
 - 2026-05-04T07:22:12.881+08:00 — **Artifact truth floor:** When a landed slice hardcodes an operational window or only routes one filesystem surface, checked OpenSpec text must name that exact constant/surface. Do not leave `configurable` or multi-root wording in place unless the config key/read path and proofs exist for every named surface.
 - 2026-05-04T07:22:12.881+08:00 — **Stateful feature wave rule:** When a change spans an on-disk format, synchronous write APIs, and watcher-driven mutation/history, batch it as (1) storage contract + path resolver, (2) request-path writer/queue/public tools, then (3) watcher or correction closure under an adversarial pre-gate. Freezing file layout first avoids path churn in user-facing surfaces and keeps the highest-regression seam isolated until end-to-end proofs exist.

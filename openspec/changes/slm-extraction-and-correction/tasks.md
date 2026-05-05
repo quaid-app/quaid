@@ -9,7 +9,8 @@
 
 ## 2. SLM runtime — candle Phi-3.5 wrapper
 
-- [ ] 2.1 Add `phi3` feature to the `candle-transformers` dependency in `Cargo.toml`
+- [x] 2.1 Keep the existing `candle-transformers` dependency and use its built-in Phi-3 model surface; `candle-transformers` 0.8.x does not expose a separate `phi3` Cargo feature to add.
+  > **Scope note (Mom, 2026-05-05):** The original wording required an impossible Cargo feature step. The shipped seam is the existing dependency baseline plus `candle_transformers::models::phi3`; no extra feature toggle exists to implement.
 - [x] 2.2 Create `src/core/conversation/slm.rs` with `SlmRunner` struct holding tokenizer, model, and inference config
 - [x] 2.3 Implement `SlmRunner::load(alias: &str) -> Result<SlmRunner>` that resolves the alias to a local model directory, loads tokenizer + safetensors, and constructs the candle Phi3 model
 - [x] 2.4 Implement `SlmRunner::infer(prompt: &str, max_tokens: usize) -> Result<String>` with deterministic sampling (temperature 0 or near-zero) for reproducibility

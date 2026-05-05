@@ -48,7 +48,7 @@ This is the second of two proposals splitting Phase 5 of `docs/roadmap_v3.md`. T
   - `src/core/types.rs`: `RawFact`, `ExtractionResponse`, `CorrectionSession`, `WindowedTurns` types.
   - `src/mcp/server.rs`: register `memory_correct`, `memory_correct_continue`.
   - `src/schema.sql`: embedded DDL updated to v9.
-  - `Cargo.toml`: enable Phi-3 features in `candle-transformers` (already in dep tree for BGE).
+  - `Cargo.toml`: keep the existing `candle-transformers` dependency baseline and use its built-in Phi-3 module surface; there is no separate Phi-3 Cargo feature to toggle on 0.8.x.
 - **Schema**: bump `SCHEMA_VERSION` / `quaid_config.schema_version` to v9. Add `correction_sessions` table per the design doc, plus partial index `idx_correction_open ON correction_sessions(status, expires_at) WHERE status = 'open'`. No migration path.
 - **Config**: New keys in the existing mutable `config` table — `extraction.enabled` (default `false`), `extraction.model_alias` (default `phi-3.5-mini`), `extraction.window_turns` (default `5`), `extraction.debounce_ms` (default `5000`), `extraction.idle_close_ms` (default `60000`).
 - **Migration**: None. Pre-release no-auto-migration policy.
@@ -60,6 +60,6 @@ This is the second of two proposals splitting Phase 5 of `docs/roadmap_v3.md`. T
   - `tests/airgap_extraction.rs`: zero network calls after `quaid extraction enable` succeeds (executed under network-namespace isolation).
   - `tests/extraction_idempotency.rs`: `quaid extract <session> --force` from cursor=0 produces the same supersede chain as initial extraction (modulo SLM nondeterminism, which the test allows for via fact-set equivalence rather than byte-equal comparison).
   - `benches/extraction.rs`: per-window p95 < 3s on M1/M2 Mac, < 8s on x86_64 Linux, on representative input.
-- **Dependencies**: No new runtime crates. `candle-transformers` is already in the dependency tree for BGE; we enable the Phi-3 feature flags. The model weights are downloaded at `quaid extraction enable` time, not bundled in the binary.
+- **Dependencies**: No new runtime crates. `candle-transformers` is already in the dependency tree for BGE, and Quaid uses that crate's built-in Phi-3 module surface without any extra Cargo feature gate. The model weights are downloaded at `quaid extraction enable` time, not bundled in the binary.
 - **Performance**: SLM inference is the dominant cost; budget per-window p95 is `< 3s` on M1/M2 Mac and `< 8s` on x86_64 Linux. Memory: ~2 GB resident while the SLM is loaded; with `extraction.enabled = false` (the default), zero extra memory cost.
 - **Benchmarks**: LoCoMo ≥ 40% (from 0.1% baseline). LongMemEval ≥ 40% (from 0.0% baseline). DAB §8 Conversation Memory section added as a regression gate alongside DAB §4.

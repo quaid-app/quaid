@@ -23,7 +23,7 @@ Most agent memory systems require a cloud service, a running database, or an API
 
 - **Local-first** — single SQLite file, no cloud dependency, works offline
 - **PARA-native** — organizes memory as a knowledge base (Projects, Areas, Resources, Archives), not a flat list of facts
-- **22 MCP tools on the `v0.18.0` branch** — the latest public release (`v0.17.0`) exposes 19; the branch adds conversation capture without changing the published install flow
+- **22 MCP tools in the latest public release (`v0.18.0`)** — this branch keeps that MCP surface while adding the unreleased conversation-memory extraction follow-on for `v0.19.0`
 - **Hybrid retrieval** — FTS5 full-text + local BGE vector embeddings, combined via RRF
 - **Verified by benchmarks** — [193/215 (90%) on DAB](https://quaid-app.github.io/quaid-evals), P@5 on MSMARCO ahead of BM25 baseline
 
@@ -69,7 +69,7 @@ Add to your `.mcp.json`:
 }
 ```
 
-Your agent now has 22 memory tools on this branch. The latest public release (`v0.17.0`) still exposes 19 until `v0.18.0` is tagged and published.
+Your agent now has the same 22 memory tools as the latest public release (`v0.18.0`). Build from source if you need the unreleased `v0.19.0` conversation-memory extraction lane before the tag exists.
 
 ---
 
@@ -86,13 +86,13 @@ Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the 
 ### Download a binary
 
 ```bash
-VERSION="<published-tag>"   # for example: the latest public tag until v0.18.0 is published
+VERSION="<published-tag>"   # for example: v0.18.0
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
 ```
 
-Use a published tag here. GitHub Releases currently publish `v0.17.0`; this branch prepares `v0.18.0` with conversation-memory foundations plus the existing Unix live-write handling, so build from source if you need that unreleased branch state before the tag exists.
+Use a published tag here. GitHub Releases currently publish `v0.18.0`; build from source if you need the unreleased `v0.19.0` conversation-memory extraction follow-on before the tag exists.
 
 ### Build from source
 
@@ -115,7 +115,7 @@ Two ideas borrowed from Andrej Karpathy's compiled knowledge model:
 
 **Timeline (below the line)** — append-only, never rewritten. What happened and when.
 
-Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 19 tools in the latest public release and 22 on the `v0.18.0` branch — with no REST API and no network dependency.
+Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 22 tools in the latest public release and on this branch — with no REST API and no network dependency.
 
 **Hybrid retrieval:** FTS5 keyword search for exact recall (names, slugs, tags) combined with local BGE vector embeddings for semantic search. Set-union merge, exact-match short-circuit.
 
@@ -169,7 +169,7 @@ quaid serve
 
 ## MCP tools
 
-The latest public release (`v0.17.0`) exposes 19 MCP tools. This branch prepares `v0.18.0` by keeping those 19 stable and adding 3 conversation-memory capture tools; published install commands should still use a real release tag until `v0.18.0` exists:
+The latest public release (`v0.18.0`) exposes 22 MCP tools. This branch keeps that 22-tool MCP surface while adding the unreleased `v0.19.0` conversation-memory extraction follow-on; published install commands should still use a real release tag until `v0.19.0` exists:
 
 | Category | Tools |
 |----------|-------|

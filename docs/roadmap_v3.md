@@ -8,9 +8,9 @@ aliases: [quaid-roadmap]
 
 # Quaid Product Roadmap
 
-**Last updated:** May 4, 2026
-**Latest public release:** v0.17.0
-**Current release lane:** v0.18.0
+**Last updated:** May 5, 2026
+**Latest public release:** v0.18.0
+**Current release lane:** v0.19.0
 **Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
 
 ---
@@ -50,7 +50,7 @@ Multi-collection live filesystem sync, namespace isolation, collection health re
 
 ## Phase 5 - Conversation memory foundations + SLM extraction
 
-**Priority: current release lane — foundations landed, extractor follow-on next**
+**Priority: current release lane — extractor follow-on landed on branch**
 **Target: >40% LoCoMo, >40% LongMemEval**
 **Issues: #137 (namespace, shipped), #105 (conversation memory), #135 (contradiction resolution)**
 
@@ -58,7 +58,7 @@ Multi-collection live filesystem sync, namespace isolation, collection health re
 
 The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as documents. Fact extraction doesn't happen at write time. When asked "What degree did I graduate with?", Quaid can't answer from "Business Administration, spent 4 years at it" buried in casual conversation.
 
-### Landed on the `v0.18.0` branch
+### Latest public release / branch truth
 
 **Namespace isolation** ✅ Shipped in `v0.16.0` — multiple agents and sessions share one DB without bleed.
 
@@ -76,23 +76,12 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - `memory_get` and `memory_graph` surface supersede relationships directly
 
 **Release truth**
-- The latest public binaries and `install.sh` still publish `v0.17.0`
-- The upcoming `v0.18.0` tag is the release that will publish the 3 new conversation-memory MCP tools
+- The latest public binaries and `install.sh` publish `v0.18.0`
+- This branch prepares `v0.19.0` with the extraction worker, `quaid extraction status`, `quaid extract`, DAB §8 benchmark wiring, and the new extraction/integration proof surfaces
 
-### Still remaining after foundations
+### Remaining release work after the landed branch implementation
 
-**SLM-based fact extraction** (runs in background)
-- Local SLM: Phi-3.5 Mini (MIT, ~2GB) as default. Configurable to Gemma 3 1B/4B.
-- Fully airgapped: download once at setup, zero network calls after
-- Context window: 3-5 turns (single turns are meaningless without context)
-- Extracts: decisions, preferences, facts, tasks
-- Stores as typed pages: `decision`, `preference`, `fact`, `action_item`
-- Config: `quaid config set extraction.enabled true`
-
-**Contradiction resolution** (#135)
-- Supersede stale facts: "I used to work at X, now Y"
-- `memory_put(content, supersedes=<prev_id>?)`
-- Version chains: temporal-latest query by default, historical on flag
+- Final release/ops work: refresh the draft PR onto a clean head, run/monitor CI and automated review, then tag and publish `v0.19.0`
 
 ### Success criteria
 - LoCoMo benchmark score > 40% (from 0.1% baseline)
@@ -234,7 +223,7 @@ Both are right in different contexts. A future feature worth considering:
 
 `quaid eval --against-history` - run your N most recent queries against current binary, compare to stored baseline, report regressions. Each user gets their own personalized regression detector.
 
-Not on the current roadmap but worth an OpenSpec after the `v0.18.0` foundations and the extraction follow-on are both shipped.
+Not on the current roadmap but worth an OpenSpec after the `v0.19.0` extraction follow-on is shipped.
 
 ---
 
@@ -244,7 +233,7 @@ Not on the current roadmap but worth an OpenSpec after the `v0.18.0` foundations
 |----------|-------|---------|-----------|
 | 1 | #137 ✅ | Namespace isolation | — |
 | 2 | #134 | Large corpus performance | — |
-| 3 | #105 | Conversation memory foundations (`v0.18.0` lane) + SLM extraction follow-on | #137 |
+| 3 | #105 | Conversation memory foundations (`v0.18.0`) + SLM extraction follow-on (`v0.19.0`) | #137 |
 | 4 | #135 | Contradiction resolution | #105 |
 | 5 | #107 | Entity extraction | #105 (coordinate) |
 | 6 | #72 | Self-wiring knowledge graph | #107 |

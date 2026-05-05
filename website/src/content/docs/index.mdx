@@ -54,7 +54,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
     href="/agents/quickstart/"
     linkText="Open the agent quickstart"
   >
-    <p>Nineteen <code>memory_*</code> tools in the latest public release, with 22 on the <code>v0.18.0</code> branch. Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
+    <p>Twenty-two <code>memory_*</code> tools in the latest public release, with this unreleased <code>v0.19.0</code> branch keeping that MCP surface while adding the local conversation-memory extraction follow-on. Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
   </AudienceCard>
 </div>
 
@@ -83,7 +83,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
 <div class="gb-guide-grid gb-guide-grid--three">
   <GuideMetricCard value="27" label="CLI commands" note="Read, write, graph, intelligence, collections, system." />
-  <GuideMetricCard value="19" label="Public MCP tools" note="The `v0.18.0` branch carries 22, including conversation capture." />
+  <GuideMetricCard value="22" label="Public MCP tools" note="The unreleased `v0.19.0` branch keeps that surface and adds extraction follow-on work." />
   <GuideMetricCard value="8" label="Embedded skills" note="Ingest, query, maintain, enrich, briefing, alerts, research, upgrade." />
   <GuideMetricCard value="1" label="Static binary" note="No daemon, no port, no Docker, no Python." />
   <GuideMetricCard value="0" label="API keys required" note="The model runs on your CPU. Nothing transits your network." />
@@ -121,7 +121,7 @@ quaid init ~/memory.db
 # Attach your notes as a live-sync collection
 quaid collection add notes ~/notes --db ~/memory.db
 
-# Expose Quaid's MCP tools over stdio (19 in `v0.17.0`; 22 on the `v0.18.0` branch)
+# Expose Quaid's MCP tools over stdio (22 in `v0.18.0`; this branch adds the unreleased `v0.19.0` extraction follow-on)
 QUAID_DB=~/memory.db quaid serve
 ```
 

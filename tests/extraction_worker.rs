@@ -9,7 +9,7 @@ use quaid::core::conversation::{
     extractor::{FactWriter, PendingFactWriter, SlmClient, Worker, WorkerError},
     format, queue,
     slm::{parse_response, SlmError},
-    supersede::ResolvingFactWriter,
+    supersede::{EmbeddingEvidenceFailure, FactResolutionError, ResolvingFactWriter},
 };
 use quaid::core::db;
 use quaid::core::types::{
@@ -17,6 +17,24 @@ use quaid::core::types::{
     ExtractionJobStatus, ExtractionResponse, ExtractionTriggerKind, Turn, TurnRole, WindowedTurns,
 };
 use rusqlite::Connection;
+
+fn hash_shim_forced() -> bool {
+    std::env::var("QUAID_FORCE_HASH_SHIM").as_deref() == Ok("1")
+}
+
+fn is_hash_shim_refusal(error: &WorkerError, key_value: &str) -> bool {
+    matches!(
+        error,
+        WorkerError::FactResolution(FactResolutionError::UntrustworthyEmbeddingEvidence {
+            kind,
+            key_field,
+            key_value: actual_key_value,
+            reason: EmbeddingEvidenceFailure::HashShimOnly,
+        }) if kind == "preference"
+            && key_field == "about"
+            && actual_key_value == key_value
+    )
+}
 
 #[test]
 fn process_next_job_should_drain_due_jobs_in_scheduled_order() {
@@ -314,7 +332,33 @@ fn session_close_reclaim_replays_same_turn_slice_without_duplicate_fact_files() 
     let reclaimed = worker.claim_next_job().unwrap().unwrap();
     assert_eq!(reclaimed.id, first.id);
     assert_eq!(reclaimed.attempts, 2);
-    worker.process_job(&reclaimed).unwrap();
+    let replay_result = worker.process_job(&reclaimed);
+    if hash_shim_forced() {
+        let error = replay_result.unwrap_err();
+        assert!(is_hash_shim_refusal(&error, "programming-language"));
+
+        let after_refusal =
+            format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+        assert_eq!(after_refusal.frontmatter.last_extracted_turn, 2);
+        assert!(after_refusal.frontmatter.last_extracted_at.is_some());
+        assert_eq!(
+            job_attempts_and_status(&conn, reclaimed.id),
+            (3, ExtractionJobStatus::Failed.as_str().to_string())
+        );
+
+        let extracted_files_after_refusal = extracted_markdown_files(&dir.path().join("extracted"));
+        assert_eq!(extracted_files_after_refusal.len(), 1);
+        let heads_after_refusal: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE type = 'preference' AND superseded_by IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(heads_after_refusal, 1);
+        return;
+    }
+    replay_result.unwrap();
 
     let after_replay =
         format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
@@ -437,7 +481,27 @@ fn precursor_crash_replay_via_lease_expiry_contains_duplicate_via_dedup() {
     let slm = StubSlm::with_results([Ok(slm_output)]);
     let probe = slm.clone();
     let worker = worker_with_writer(&conn, slm, ResolvingFactWriter);
-    let replayed = worker.process_next_job().unwrap().unwrap();
+    let replay_result = worker.process_next_job();
+    if hash_shim_forced() {
+        let error = replay_result.unwrap_err();
+        assert!(is_hash_shim_refusal(&error, "programming-language"));
+
+        assert_eq!(
+            job_attempts_and_status(&conn, initial_claim.id),
+            (2, ExtractionJobStatus::Pending.as_str().to_string())
+        );
+        assert_eq!(
+            extracted_markdown_files(&dir.path().join("extracted")).len(),
+            1,
+            "hash-shim refusal must still leave a single fact file on disk"
+        );
+
+        let parsed_after_refusal =
+            format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+        assert_eq!(parsed_after_refusal.frontmatter.last_extracted_turn, 0);
+        return;
+    }
+    let replayed = replay_result.unwrap().unwrap();
 
     // (a) Stale running job was re-eligibilised and completed.
     assert_eq!(replayed.session_id, "s1");

@@ -47,6 +47,7 @@ use crate::core::collections::{
 };
 #[cfg(unix)]
 use crate::core::conversation::file_edit::is_history_sidecar_path;
+use crate::core::conversation::idle_close;
 #[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
@@ -71,6 +72,7 @@ const HANDSHAKE_POLL_MS: u64 = 100;
 const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFERRED_RETRY_SECS: u64 = 1;
+const IDLE_CLOSE_SWEEP_INTERVAL_SECS: u64 = 10;
 const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
 const REMAP_VERIFICATION_SAMPLE_LIMIT: usize = 5;
 const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
@@ -4241,6 +4243,8 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         #[cfg(unix)]
         let ipc_in_flight = ipc_in_flight;
         let mut last_heartbeat = Instant::now();
+        let mut last_idle_close_sweep =
+            Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
         let mut last_quarantine_sweep = Instant::now();
         let mut last_generations = initial_generations;
         #[cfg(unix)]
@@ -4261,6 +4265,17 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                     let _ = sweep_stale_sessions(&conn);
                     let _ = heartbeat_session(&conn, &session_id_for_thread);
                     last_heartbeat = Instant::now();
+                }
+                if last_idle_close_sweep.elapsed()
+                    >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
+                {
+                    if let Err(error) = idle_close::scan_due_sessions(&conn, &db_path) {
+                        eprintln!(
+                            "WARN: idle_close_sweep_failed session_id={} error={}",
+                            session_id_for_thread, error
+                        );
+                    }
+                    last_idle_close_sweep = Instant::now();
                 }
                 if last_quarantine_sweep.elapsed()
                     >= Duration::from_secs(QUARANTINE_SWEEP_INTERVAL_SECS)

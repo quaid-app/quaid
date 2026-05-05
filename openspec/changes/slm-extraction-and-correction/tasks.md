@@ -92,10 +92,10 @@
 
 ## 10. Idle-timer auto-close
 
-- [ ] 10.1 Maintain in-memory `HashMap<(namespace, session_id), Instant>` of last-turn arrival times
-- [ ] 10.2 On `memory_add_turn`, update the map; on session_close, remove the entry
-- [ ] 10.3 Background task ticks every 10s, scans for entries older than `extraction.idle_close_ms`, and for each: enqueues a `session_close` job, updates the day-file's `status = closed`, removes the entry from the map
-- [ ] 10.4 Tests: `tests/idle_close.rs` simulates time passage, verifies enqueue + status update at the right moment, verifies activity resets the timer
+- [x] 10.1 Maintain in-memory `HashMap<(namespace, session_id), Instant>` of last-turn arrival times
+- [x] 10.2 On `memory_add_turn`, update the map; on session_close, remove the entry
+- [x] 10.3 Background task ticks every 10s, scans for entries older than `extraction.idle_close_ms`, and for each: enqueues a `session_close` job, updates the day-file's `status = closed`, removes the entry from the map
+- [x] 10.4 Tests: `tests/idle_close.rs` simulates time passage, verifies enqueue + status update at the right moment, verifies activity resets the timer
 
 ## 11. Janitor — purge old queue rows + expire correction sessions
 

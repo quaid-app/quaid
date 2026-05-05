@@ -1,14 +1,43 @@
 // Types defined ahead of consumers (db.rs, search.rs, etc.) — remove when wired.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use thiserror::Error;
 
 // ── Page ──────────────────────────────────────────────────────
+
+pub type Frontmatter = JsonMap<String, JsonValue>;
+
+pub fn frontmatter_get<'a>(frontmatter: &'a Frontmatter, key: &str) -> Option<&'a JsonValue> {
+    frontmatter.get(key)
+}
+
+pub fn frontmatter_get_str<'a>(frontmatter: &'a Frontmatter, key: &str) -> Option<&'a str> {
+    frontmatter_get(frontmatter, key)?.as_str()
+}
+
+pub fn frontmatter_get_string(frontmatter: &Frontmatter, key: &str) -> Option<String> {
+    frontmatter_get_str(frontmatter, key).map(str::to_owned)
+}
+
+pub fn frontmatter_insert_string(
+    frontmatter: &mut Frontmatter,
+    key: impl Into<String>,
+    value: impl Into<String>,
+) {
+    frontmatter.insert(key.into(), JsonValue::String(value.into()));
+}
+
+pub fn string_frontmatter(entries: impl IntoIterator<Item = (String, String)>) -> Frontmatter {
+    entries
+        .into_iter()
+        .map(|(key, value)| (key, JsonValue::String(value)))
+        .collect()
+}
 
 /// Core knowledge page — the unit of storage in a Quaid database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +51,7 @@ pub struct Page {
     pub summary: String,
     pub compiled_truth: String,
     pub timeline: String,
-    pub frontmatter: HashMap<String, String>,
+    pub frontmatter: Frontmatter,
     pub wing: String,
     pub room: String,
     pub version: i64,
@@ -575,9 +604,9 @@ mod tests {
     use super::{
         ActionItemState, ConversationFile, ConversationFrontmatter, ConversationStatus,
         ExtractionJob, ExtractionJobStatus, ExtractionResponse, ExtractionTriggerKind, Page,
-        PreferenceStrength, RawFact, Turn, TurnRole,
+        PreferenceStrength, RawFact, Turn, TurnRole, string_frontmatter,
     };
-    use std::collections::HashMap;
+    use serde_json::json;
 
     #[test]
     fn page_serde_roundtrip_preserves_identifying_fields_and_tags_frontmatter() {
@@ -590,7 +619,7 @@ mod tests {
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
             timeline: "- **2024** | role — Joined Acme".to_string(),
-            frontmatter: HashMap::from([
+            frontmatter: string_frontmatter([
                 ("slug".to_string(), "people/alice".to_string()),
                 ("tags".to_string(), "operator, founder".to_string()),
                 ("title".to_string(), "Alice".to_string()),
@@ -622,7 +651,7 @@ mod tests {
                 "Alice".to_string(),
                 7,
                 Some(42),
-                Some("operator, founder".to_string()),
+                Some(json!("operator, founder")),
             )
         );
     }
@@ -638,7 +667,7 @@ mod tests {
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
             timeline: "- **2024** | role — Joined Acme".to_string(),
-            frontmatter: HashMap::from([
+            frontmatter: string_frontmatter([
                 (
                     "quaid_id".to_string(),
                     "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
@@ -658,8 +687,8 @@ mod tests {
         let round_trip: Page = serde_json::from_str(&json).unwrap();
 
         assert_eq!(
-            round_trip.frontmatter.get("quaid_id").map(String::as_str),
-            Some("0195c7c0-2d06-7df0-bf59-acde48001122")
+            round_trip.frontmatter.get("quaid_id"),
+            Some(&json!("0195c7c0-2d06-7df0-bf59-acde48001122"))
         );
     }
 

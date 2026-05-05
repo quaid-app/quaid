@@ -65,9 +65,9 @@
 - [ ] 7.2 Head-only key-match query: select pages where `kind = ? AND superseded_by IS NULL AND json_extract(frontmatter, '$.<type_key>') = ?`
 - [ ] 7.3 Compute prose-embedding cosine between the new fact's `summary` and each candidate head's body; reuse the existing embedding pipeline
 - [ ] 7.4 Apply rules: cosine > `dedup_cosine_min` → Drop; cosine in `[supersede_cosine_min, dedup_cosine_min]` against best-match → Supersede; otherwise → Coexist
-- [ ] 7.5 Multi-match: pick the head with highest cosine to the new fact; resolution evaluates only against that head; other matching heads remain unchanged
-- [ ] 7.6 Wrap resolution + write step in a single transaction so head-lookup, decision, and write are consistent
-- [ ] 7.7 Tests: `tests/fact_resolution.rs` covers all five rule branches plus multi-match disambiguation; ensures non-head pages are excluded from candidates
+- [ ] 7.5 Reopen same-key multi-head handling around a truthful fail-closed contract; do not claim “highest cosine wins” until a reviewed ambiguity policy actually lands
+- [ ] 7.6 Narrow the contract to transaction-scoped resolution only unless a future design adds a real reservation across worker resolution and watcher ingest
+- [ ] 7.7 Tests: when the deferred resolution slice resumes, rewrite `tests/fact_resolution.rs` around the reopened contract instead of treating multi-match disambiguation as accepted shipped truth
 
 ## 8. Fact-page write step
 

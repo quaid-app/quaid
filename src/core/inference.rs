@@ -1410,7 +1410,6 @@ mod tests {
     use super::*;
     use crate::core::db;
     use crate::core::types::Page;
-    use std::collections::HashMap;
     #[cfg(feature = "online-model")]
     use std::io::{Read, Write};
     #[cfg(feature = "online-model")]
@@ -1781,7 +1780,7 @@ mod tests {
             summary: String::new(),
             compiled_truth: "## State\nFresh truth\n".to_owned(),
             timeline: "- 2026-04-28: refreshed timeline entry".to_owned(),
-            frontmatter: HashMap::new(),
+            frontmatter: crate::core::types::Frontmatter::new(),
             wing: "notes".to_owned(),
             room: String::new(),
             version: 2,
@@ -1843,7 +1842,7 @@ mod tests {
             summary: String::new(),
             compiled_truth: "truth".to_owned(),
             timeline: String::new(),
-            frontmatter: HashMap::new(),
+            frontmatter: crate::core::types::Frontmatter::new(),
             wing: "notes".to_owned(),
             room: String::new(),
             version: 1,

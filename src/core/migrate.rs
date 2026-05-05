@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -7,6 +6,7 @@ use rusqlite::Connection;
 
 use crate::core::markdown;
 use crate::core::page_uuid;
+use crate::core::types::Frontmatter;
 
 /// Export all pages as markdown files to the given output directory.
 pub fn export_dir(db: &Connection, output_path: &Path) -> Result<usize> {
@@ -79,8 +79,7 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
 
     let rows = stmt.query_map([], |row| {
         let frontmatter_json: String = row.get(7)?;
-        let frontmatter: HashMap<String, String> =
-            serde_json::from_str(&frontmatter_json).unwrap_or_default();
+        let frontmatter: Frontmatter = serde_json::from_str(&frontmatter_json).unwrap_or_default();
 
         Ok((
             row.get::<_, i64>(16)?,
@@ -121,7 +120,7 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
                 |row| row.get(0),
             ) {
                 page.frontmatter
-                    .insert("supersedes".to_string(), predecessor_slug);
+                    .insert("supersedes".to_string(), serde_json::Value::String(predecessor_slug));
             }
         }
         pages.push(page);

@@ -2333,7 +2333,7 @@ pub fn write_quaid_id_to_file(
         params![page_id, collection.id],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    let frontmatter: HashMap<String, String> =
+    let frontmatter: crate::core::types::Frontmatter =
         serde_json::from_str(&frontmatter_json).unwrap_or_default();
     if frontmatter.contains_key(page_uuid::QUAID_ID_FRONTMATTER_KEY) {
         return Ok(WriteBackOutcome::AlreadyHadUuid);

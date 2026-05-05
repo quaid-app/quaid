@@ -1,12 +1,14 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::core::file_state::{self, FileStat};
-use crate::core::types::Page;
+use crate::core::types::{
+    frontmatter_get_string, frontmatter_insert_string, Frontmatter, Page,
+};
 use crate::core::{db, markdown, page_uuid, palace, raw_imports};
 
 const ELIGIBLE_TYPES: [&str; 4] = ["decision", "preference", "fact", "action_item"];
@@ -19,7 +21,7 @@ pub struct EditedPage {
     pub summary: String,
     pub compiled_truth: String,
     pub timeline: String,
-    pub frontmatter: HashMap<String, String>,
+    pub frontmatter: Frontmatter,
     pub wing: String,
     pub room: String,
     pub sha256: String,
@@ -72,25 +74,19 @@ pub fn parse_edited_page(
     let raw = String::from_utf8_lossy(raw_bytes).into_owned();
     let (frontmatter, body) = markdown::parse_frontmatter(&raw);
     let (compiled_truth, timeline) = markdown::split_content(&body);
-    let slug = frontmatter
-        .get("slug")
-        .cloned()
-        .unwrap_or_else(|| derive_slug_from_path(file_path, root_path));
-    let title = frontmatter
-        .get("title")
-        .cloned()
-        .unwrap_or_else(|| slug.clone());
+    let slug =
+        frontmatter_get_string(&frontmatter, "slug").unwrap_or_else(|| derive_slug_from_path(file_path, root_path));
+    let title = frontmatter_get_string(&frontmatter, "title").unwrap_or_else(|| slug.clone());
     let page_type = frontmatter
         .get("type")
-        .map(|value| value.trim())
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("null"))
         .map(str::to_owned)
         .or_else(|| infer_type_from_path(file_path, root_path))
         .unwrap_or_else(|| "concept".to_string());
-    let wing = frontmatter
-        .get("wing")
-        .cloned()
-        .unwrap_or_else(|| palace::derive_wing(&slug));
+    let wing =
+        frontmatter_get_string(&frontmatter, "wing").unwrap_or_else(|| palace::derive_wing(&slug));
     Ok(EditedPage {
         summary: markdown::extract_summary(&compiled_truth),
         room: palace::derive_room(&compiled_truth),
@@ -148,9 +144,9 @@ pub fn handle_extracted_edit(
     let archived_suffix = slug_timestamp(&now);
     let archived_slug = format!("{}--archived-{archived_suffix}", prior_page.slug);
     let mut current_frontmatter = new_page.frontmatter.clone();
-    current_frontmatter.insert("supersedes".to_string(), archived_slug.clone());
-    current_frontmatter.insert("corrected_via".to_string(), "file_edit".to_string());
-    current_frontmatter.insert("type".to_string(), prior_page.page_type.clone());
+    frontmatter_insert_string(&mut current_frontmatter, "supersedes", archived_slug.clone());
+    frontmatter_insert_string(&mut current_frontmatter, "corrected_via", "file_edit");
+    frontmatter_insert_string(&mut current_frontmatter, "type", prior_page.page_type.clone());
     let current_uuid = page_uuid::resolve_page_uuid(&current_frontmatter, Some(&prior_page.uuid))?;
     let archived_uuid = page_uuid::generate_uuid_v7();
     let archived_frontmatter_json = serde_json::to_string(&prior_page.frontmatter)?;

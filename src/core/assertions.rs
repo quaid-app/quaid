@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -378,14 +378,15 @@ fn normalize_heading_text(line: &str) -> &str {
 
 fn extract_from_frontmatter(
     subject: &str,
-    frontmatter: &HashMap<String, String>,
+    frontmatter: &crate::core::types::Frontmatter,
 ) -> Vec<ExtractedAssertion> {
     let subject = normalize_evidence(subject);
 
     SUPPORTED_FRONTMATTER_PREDICATES
         .iter()
         .filter_map(|predicate| {
-            let object = normalize_evidence(frontmatter.get(*predicate)?);
+            let object =
+                normalize_evidence(crate::core::types::frontmatter_get_str(frontmatter, predicate)?);
             if !is_valid_object(&object) {
                 return None;
             }

@@ -151,8 +151,9 @@ fn canonicalize_page_for_mcp(
         &rendered.uuid,
     );
     rendered.slug = canonical_slug(&resolved.collection_name, &resolved.slug);
-    rendered.frontmatter.insert(
-        "slug".to_string(),
+    crate::core::types::frontmatter_insert_string(
+        &mut rendered.frontmatter,
+        "slug",
         canonical_slug(&resolved.collection_name, &resolved.slug),
     );
     rendered
@@ -786,6 +787,7 @@ impl QuaidServer {
         let supersedes = canonical_page
             .frontmatter
             .get("supersedes")
+            .and_then(serde_json::Value::as_str)
             .map(|slug| canonical_slug(&resolved.collection_name, slug));
 
         let json = serde_json::to_string_pretty(&serde_json::json!({
@@ -964,9 +966,11 @@ impl QuaidServer {
         }
 
         let mut updated_page = page.clone();
-        updated_page
-            .frontmatter
-            .insert("status".to_string(), input.status.clone());
+        crate::core::types::frontmatter_insert_string(
+            &mut updated_page.frontmatter,
+            "status",
+            input.status.clone(),
+        );
         if let Some(note) = input.note.as_deref() {
             append_note(&mut updated_page.compiled_truth, note);
         }
@@ -2362,8 +2366,8 @@ mod tests {
         let page = get::get_page(&db, "actions/ship-phase5").unwrap();
         assert_eq!(page.version, 2);
         assert_eq!(
-            page.frontmatter.get("status").map(String::as_str),
-            Some("done")
+            page.frontmatter.get("status"),
+            Some(&serde_json::json!("done"))
         );
         assert!(page
             .compiled_truth
@@ -2461,9 +2465,11 @@ mod tests {
                 |db, resolved, page| {
                     let mut concurrent_page = page.clone();
                     concurrent_page.compiled_truth = "Concurrent writer landed first.".to_string();
-                    concurrent_page
-                        .frontmatter
-                        .insert("status".to_string(), "open".to_string());
+                    crate::core::types::frontmatter_insert_string(
+                        &mut concurrent_page.frontmatter,
+                        "status",
+                        "open",
+                    );
                     let content = crate::core::markdown::render_page(&concurrent_page);
                     put::put_from_string_quiet(
                         db,
@@ -2484,8 +2490,8 @@ mod tests {
         let page = get::get_page(&db, "actions/race-close").unwrap();
         assert_eq!(page.version, 2);
         assert_eq!(
-            page.frontmatter.get("status").map(String::as_str),
-            Some("open")
+            page.frontmatter.get("status"),
+            Some(&serde_json::json!("open"))
         );
         assert_eq!(page.compiled_truth, "Concurrent writer landed first.");
         assert!(!page.compiled_truth.contains("close note"));

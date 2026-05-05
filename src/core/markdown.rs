@@ -1,19 +1,19 @@
 // Consumers (migrate.rs, commands/) not yet wired — remove when they are.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use serde_json::Value as JsonValue;
 
 use super::page_uuid::{LEGACY_MEMORY_ID_FRONTMATTER_KEY, QUAID_ID_FRONTMATTER_KEY};
-use super::types::Page;
+use super::types::{frontmatter_insert_string, Frontmatter, Page};
 
 /// Parse YAML frontmatter delimited by `---` lines at the start of a file.
 ///
 /// Returns `(frontmatter_map, body)`. If no valid frontmatter block is found,
 /// returns an empty map and the full input string as the body.
-pub fn parse_frontmatter(raw: &str) -> (HashMap<String, String>, String) {
+pub fn parse_frontmatter(raw: &str) -> (Frontmatter, String) {
     let (first_line, mut next_start) = next_line(raw, 0);
     if !is_bare_boundary(first_line) {
-        return (HashMap::new(), raw.to_string());
+        return (Frontmatter::new(), raw.to_string());
     }
 
     let frontmatter_start = next_start;
@@ -35,7 +35,7 @@ pub fn parse_frontmatter(raw: &str) -> (HashMap<String, String>, String) {
     }
 
     let Some(frontmatter_end) = frontmatter_end else {
-        return (HashMap::new(), raw.to_string());
+        return (Frontmatter::new(), raw.to_string());
     };
 
     let yaml_str = &raw[frontmatter_start..frontmatter_end];
@@ -146,7 +146,11 @@ pub fn render_page(page: &Page) -> String {
     rendered_frontmatter.remove(LEGACY_MEMORY_ID_FRONTMATTER_KEY);
     rendered_frontmatter.remove(QUAID_ID_FRONTMATTER_KEY);
     if !page.uuid.trim().is_empty() {
-        rendered_frontmatter.insert(QUAID_ID_FRONTMATTER_KEY.to_string(), page.uuid.clone());
+        frontmatter_insert_string(
+            &mut rendered_frontmatter,
+            QUAID_ID_FRONTMATTER_KEY,
+            page.uuid.clone(),
+        );
     }
 
     out.push_str("---\n");
@@ -156,9 +160,25 @@ pub fn render_page(page: &Page) -> String {
         for key in keys {
             if let Some(value) = rendered_frontmatter.get(key) {
                 out.push_str(key);
-                out.push_str(": ");
-                out.push_str(value);
-                out.push('\n');
+                match render_yaml_value(value) {
+                    Some(rendered) => {
+                        if rendered.contains('\n') {
+                            out.push_str(":\n");
+                            for line in rendered.lines() {
+                                out.push_str("  ");
+                                out.push_str(line);
+                                out.push('\n');
+                            }
+                        } else {
+                            out.push_str(": ");
+                            out.push_str(&rendered);
+                            out.push('\n');
+                        }
+                    }
+                    None => {
+                        out.push_str(": null\n");
+                    }
+                }
             }
         }
     }
@@ -192,32 +212,65 @@ fn next_line(s: &str, start: usize) -> (&str, usize) {
     }
 }
 
-/// Parse a YAML string into a flat `HashMap<String, String>`.
+/// Parse a YAML string into frontmatter values.
 ///
-/// Non-scalar values (sequences, mappings) are silently skipped.
-/// Returns an empty map on any parse failure.
-fn parse_yaml_to_map(yaml_str: &str) -> HashMap<String, String> {
+/// Non-string keys are silently skipped. Returns an empty map on any parse failure.
+fn parse_yaml_to_map(yaml_str: &str) -> Frontmatter {
     if yaml_str.trim().is_empty() {
-        return HashMap::new();
+        return Frontmatter::new();
     }
 
-    let Ok(map) = serde_yaml::from_str::<HashMap<String, serde_yaml::Value>>(yaml_str) else {
-        return HashMap::new();
+    let Ok(map) = serde_yaml::from_str::<serde_yaml::Mapping>(yaml_str) else {
+        return Frontmatter::new();
     };
 
     map.into_iter()
-        .filter_map(|(k, v)| yaml_value_to_string(&v).map(|val| (k, val)))
+        .filter_map(|(k, v)| {
+            let key = k.as_str()?.to_string();
+            let value = serde_json::to_value(v).ok()?;
+            Some((key, value))
+        })
         .collect()
 }
 
-/// Convert a scalar YAML value to its string representation.
-fn yaml_value_to_string(v: &serde_yaml::Value) -> Option<String> {
-    match v {
-        serde_yaml::Value::String(s) => Some(s.clone()),
-        serde_yaml::Value::Number(n) => Some(n.to_string()),
-        serde_yaml::Value::Bool(b) => Some(b.to_string()),
-        serde_yaml::Value::Null => Some(String::new()),
-        _ => None,
+fn render_yaml_value(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::Null => Some("null".to_string()),
+        JsonValue::Bool(value) => Some(value.to_string()),
+        JsonValue::Number(value) => Some(value.to_string()),
+        JsonValue::String(value) => Some(yaml_scalar(value)),
+        JsonValue::Array(_) | JsonValue::Object(_) => {
+            let rendered = serde_yaml::to_string(value).ok()?;
+            Some(strip_yaml_document(&rendered))
+        }
+    }
+}
+
+fn strip_yaml_document(rendered: &str) -> String {
+    rendered
+        .strip_prefix("---\n")
+        .unwrap_or(rendered)
+        .trim_end_matches('\n')
+        .to_string()
+}
+
+fn yaml_scalar(value: &str) -> String {
+    if value.is_empty()
+        || value == "null"
+        || value.starts_with(' ')
+        || value.ends_with(' ')
+        || value.contains(':')
+        || value.contains('#')
+        || value.contains('[')
+        || value.contains(']')
+        || value.contains('{')
+        || value.contains('}')
+        || value.contains('"')
+        || value.contains('\'')
+    {
+        format!("'{}'", value.replace('\'', "''"))
+    } else {
+        value.to_string()
     }
 }
 
@@ -236,14 +289,15 @@ mod tests {
 
     mod parse_frontmatter {
         use super::*;
+        use serde_json::json;
 
         #[test]
         fn parses_string_scalar_frontmatter_when_file_starts_with_bare_boundary() {
             let input = "---\ntitle: Alice\ntype: person\n---\n# Alice\n";
             let (map, body) = parse_frontmatter(input);
 
-            assert_eq!(map.get("title").unwrap(), "Alice");
-            assert_eq!(map.get("type").unwrap(), "person");
+            assert_eq!(map.get("title"), Some(&json!("Alice")));
+            assert_eq!(map.get("type"), Some(&json!("person")));
             assert_eq!(body, "# Alice\n");
         }
 
@@ -280,7 +334,7 @@ mod tests {
                 "---\ntitle: Boundary Case\n---\nIntro paragraph\n---\n2024-01-01: Event one";
             let (map, body) = parse_frontmatter(input);
 
-            assert_eq!(map.get("title").unwrap(), "Boundary Case");
+            assert_eq!(map.get("title"), Some(&json!("Boundary Case")));
             assert_eq!(body, "Intro paragraph\n---\n2024-01-01: Event one");
         }
 
@@ -306,10 +360,23 @@ mod tests {
             let (map, body) = parse_frontmatter(input);
 
             assert_eq!(
-                map.get("quaid_id").map(String::as_str),
-                Some("0195c7c0-2d06-7df0-bf59-acde48001122")
+                map.get("quaid_id"),
+                Some(&json!("0195c7c0-2d06-7df0-bf59-acde48001122"))
             );
             assert_eq!(body, "# Alice\n");
+        }
+
+        #[test]
+        fn preserves_sequence_and_null_frontmatter_values() {
+            let input = "---\ncorrected_via: null\nsource_turns:\n  - session-1:1\n  - session-1:2\n---\nBody";
+            let (map, body) = parse_frontmatter(input);
+
+            assert_eq!(map.get("corrected_via"), Some(&JsonValue::Null));
+            assert_eq!(
+                map.get("source_turns"),
+                Some(&json!(["session-1:1", "session-1:2"]))
+            );
+            assert_eq!(body, "Body");
         }
     }
 
@@ -434,8 +501,13 @@ mod tests {
 
     mod render_page {
         use super::*;
+        use serde_json::json;
 
-        fn make_page(frontmatter: Vec<(&str, &str)>, compiled_truth: &str, timeline: &str) -> Page {
+        fn make_page(
+            frontmatter: Vec<(&str, JsonValue)>,
+            compiled_truth: &str,
+            timeline: &str,
+        ) -> Page {
             Page {
                 slug: String::new(),
                 uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
@@ -447,7 +519,7 @@ mod tests {
                 timeline: timeline.to_string(),
                 frontmatter: frontmatter
                     .into_iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .map(|(k, v)| (k.to_string(), v))
                     .collect(),
                 wing: String::new(),
                 room: String::new(),
@@ -462,7 +534,11 @@ mod tests {
         #[test]
         fn renders_frontmatter_compiled_truth_and_timeline_in_canonical_order() {
             let page = make_page(
-                vec![("title", "Alice"), ("source", "manual"), ("type", "person")],
+                vec![
+                    ("title", json!("Alice")),
+                    ("source", json!("manual")),
+                    ("type", json!("person")),
+                ],
                 "# Alice\n\nAlice is an operator.",
                 "2024-01-01: Joined Acme.",
             );
@@ -499,7 +575,8 @@ mod tests {
             let mut page = make_page(vec![], &truth, &timeline);
             page.uuid = map
                 .get("quaid_id")
-                .cloned()
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
                 .expect("quaid_id should remain available");
             page.frontmatter = map;
 
@@ -511,8 +588,8 @@ mod tests {
         fn preserves_page_uuid_when_frontmatter_memory_id_is_stale() {
             let page = make_page(
                 vec![
-                    ("memory_id", "01969f11-9448-7d79-8d3f-c68f54760000"),
-                    ("title", "Alice"),
+                    ("memory_id", json!("01969f11-9448-7d79-8d3f-c68f54760000")),
+                    ("title", json!("Alice")),
                 ],
                 "# Alice\n",
                 "",
@@ -526,7 +603,7 @@ mod tests {
 
         #[test]
         fn renders_persisted_uuid_even_when_frontmatter_map_lacks_quaid_id() {
-            let page = make_page(vec![("title", "Alice")], "# Alice\n", "");
+            let page = make_page(vec![("title", json!("Alice"))], "# Alice\n", "");
 
             let rendered = render_page(&page);
 
@@ -538,7 +615,7 @@ mod tests {
 
         #[test]
         fn renders_empty_timeline_without_losing_boundary_contract() {
-            let page = make_page(vec![("title", "Solo")], "Just truth.", "");
+            let page = make_page(vec![("title", json!("Solo"))], "Just truth.", "");
             let rendered = render_page(&page);
 
             assert_eq!(
@@ -565,13 +642,14 @@ mod tests {
 
             assert_eq!(
                 frontmatter.get("quaid_id"),
-                Some(&"01969f11-9448-7d79-8d3f-c68f54761234".to_string())
+                Some(&json!("01969f11-9448-7d79-8d3f-c68f54761234"))
             );
 
             let mut page = make_page(vec![], &body, "");
             page.uuid = frontmatter
                 .get("quaid_id")
-                .cloned()
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
                 .expect("quaid_id should remain available");
             let rendered = render_page(&Page {
                 frontmatter,
@@ -579,6 +657,27 @@ mod tests {
             });
 
             assert!(rendered.contains("quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
+        }
+
+        #[test]
+        fn renders_structured_frontmatter_lists_and_nulls() {
+            let page = make_page(
+                vec![
+                    ("corrected_via", JsonValue::Null),
+                    ("source_turns", json!(["session-1:1", "session-1:2"])),
+                ],
+                "Summary",
+                "",
+            );
+
+            let rendered = render_page(&page);
+
+            assert!(rendered.contains("corrected_via: null"));
+            let (frontmatter, _) = parse_frontmatter(&rendered);
+            assert_eq!(
+                frontmatter.get("source_turns"),
+                Some(&json!(["session-1:1", "session-1:2"]))
+            );
         }
     }
 }

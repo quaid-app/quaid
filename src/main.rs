@@ -105,6 +105,16 @@ enum Commands {
         #[arg(long)]
         import_id: Option<String>,
     },
+    /// Control conversation extraction runtime state
+    Extraction {
+        #[command(subcommand)]
+        action: commands::extraction::ExtractionAction,
+    },
+    /// Manage cached local models
+    Model {
+        #[command(subcommand)]
+        action: commands::model::ModelAction,
+    },
     /// Generate or refresh embeddings
     Embed {
         /// Embed a single page by slug
@@ -259,6 +269,7 @@ enum Commands {
 enum EarlyCommand {
     None,
     Init(String),
+    Model(commands::model::ModelAction),
     Version,
 }
 
@@ -270,6 +281,7 @@ fn early_command(cli: &Cli) -> EarlyCommand {
             let db_path = cli.db.as_deref().unwrap_or(default_path.as_str());
             EarlyCommand::Init(path.clone().unwrap_or_else(|| db_path.to_owned()))
         }
+        Commands::Model { action } => EarlyCommand::Model(action.clone()),
         _ => EarlyCommand::None,
     }
 }
@@ -301,6 +313,7 @@ async fn main() -> Result<()> {
     match early_command(&cli) {
         EarlyCommand::Version => return commands::version::run(),
         EarlyCommand::Init(path) => return commands::init::run(&path, &requested_model),
+        EarlyCommand::Model(action) => return commands::model::run(action),
         EarlyCommand::None => {}
     }
 
@@ -310,7 +323,7 @@ async fn main() -> Result<()> {
     let db = opened.conn;
 
     match cli.command {
-        Commands::Init { .. } | Commands::Version => unreachable!(),
+        Commands::Init { .. } | Commands::Model { .. } | Commands::Version => unreachable!(),
         Commands::Get { slug, namespace } => {
             commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)
         }
@@ -377,6 +390,7 @@ async fn main() -> Result<()> {
             raw,
             import_id,
         } => commands::export::run(&db, &path, raw, import_id),
+        Commands::Extraction { action } => commands::extraction::run(&db, action),
         Commands::Embed { slug, all, stale } => commands::embed::run(&db, slug, all, stale),
         Commands::Link {
             from,
@@ -475,6 +489,19 @@ mod tests {
         let cli = Cli::try_parse_from(["quaid", "config", "list"]).expect("parse config list");
 
         assert_eq!(early_command(&cli), EarlyCommand::None);
+    }
+
+    #[test]
+    fn early_command_treats_model_pull_as_database_free() {
+        let cli = Cli::try_parse_from(["quaid", "model", "pull", "phi-3.5-mini"])
+            .expect("parse model pull");
+
+        match early_command(&cli) {
+            EarlyCommand::Model(commands::model::ModelAction::Pull { alias }) => {
+                assert_eq!(alias, "phi-3.5-mini");
+            }
+            other => panic!("expected early model command, got {other:?}"),
+        }
     }
 
     #[test]

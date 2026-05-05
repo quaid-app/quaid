@@ -19,21 +19,21 @@
 
 ## 3. Model lifecycle — download + cache + verification
 
-- [ ] 3.1 Create `src/core/conversation/model_lifecycle.rs` with the local model cache layout (`~/.quaid/models/<alias>/{tokenizer.json,model.safetensors,...}`)
-- [ ] 3.2 Implement `download_model(alias: &str, progress: impl ProgressReporter) -> Result<PathBuf>` that resolves alias to a Hugging Face repo, downloads files into the cache, and runs SHA-256 integrity checks
-- [ ] 3.3 Resolve aliases: `phi-3.5-mini` → `microsoft/Phi-3.5-mini-instruct` (with the appropriate quantised variant), `gemma-3-1b`, `gemma-3-4b`, plus any non-alias passes through as a raw repo id
-- [ ] 3.4 Atomic install: download into a temp directory, verify, then rename into the final cache location to avoid partial-cache states
-- [ ] 3.5 On integrity-check failure, remove the partial download and return an actionable error
-- [ ] 3.6 Tests: `tests/model_lifecycle.rs` covers alias resolution, atomic install, partial-download recovery, and integrity verification (using a mock HTTP server / fixture model)
+- [x] 3.1 Create `src/core/conversation/model_lifecycle.rs` with the local model cache layout (`~/.quaid/models/<alias>/{tokenizer.json,model.safetensors,...}`)
+- [x] 3.2 Implement `download_model(alias: &str, progress: impl ProgressReporter) -> Result<PathBuf>` that resolves alias to a Hugging Face repo, downloads files into the cache, and runs SHA-256 integrity checks
+- [x] 3.3 Resolve aliases: `phi-3.5-mini` → `microsoft/Phi-3.5-mini-instruct` (with the appropriate quantised variant), `gemma-3-1b`, `gemma-3-4b`, plus any non-alias passes through as a raw repo id
+- [x] 3.4 Atomic install: download into a temp directory, verify, then rename into the final cache location to avoid partial-cache states
+- [x] 3.5 On integrity-check failure, remove the partial download and return an actionable error
+- [x] 3.6 Tests: `tests/model_lifecycle.rs` covers alias resolution, atomic install, partial-download recovery, and integrity verification (using a mock HTTP server / fixture model)
 
 ## 4. CLI — `quaid extraction` and `quaid model` subcommands
 
-- [ ] 4.1 Create `src/commands/extraction.rs` implementing `enable | disable | status`
-- [ ] 4.2 `quaid extraction enable`: validate the configured model alias, run `download_model` with progress UI, on success update `quaid_config.extraction.enabled = true`; on failure leave the flag unchanged and print the actionable error
-- [ ] 4.3 `quaid extraction disable`: update `quaid_config.extraction.enabled = false` (does not delete cached model files)
+- [x] 4.1 Create `src/commands/extraction.rs` implementing `enable | disable | status`
+- [x] 4.2 `quaid extraction enable`: validate the configured model alias, run `download_model` with progress UI, on success update `quaid_config.extraction.enabled = true`; on failure leave the flag unchanged and print the actionable error
+- [x] 4.3 `quaid extraction disable`: update `quaid_config.extraction.enabled = false` (does not delete cached model files)
 - [ ] 4.4 `quaid extraction status`: query daemon (or local DB if daemon is not running) for model state, queue depth, active-session list, last-extraction-at per session, and recent failed jobs; format as the human-readable summary described in the spec
-- [ ] 4.5 Create `src/commands/model.rs` implementing `quaid model pull <alias>` that calls `download_model` without changing `extraction.enabled`
-- [ ] 4.6 Wire the new subcommands into `src/main.rs` clap dispatch
+- [x] 4.5 Create `src/commands/model.rs` implementing `quaid model pull <alias>` that calls `download_model` without changing `extraction.enabled`
+- [x] 4.6 Wire the new subcommands into `src/main.rs` clap dispatch
 - [ ] 4.7 Tests: `tests/cli_extraction.rs` covers enable success / failure paths, `model pull` does not flip the flag, status output shape
 
 ## 5. Extraction worker — window selection + SLM call

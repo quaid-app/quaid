@@ -123,6 +123,19 @@ fn extract_single_session_enqueues_manual_job() {
             "pending".to_string()
         )]
     );
+
+    // Bare extract must not touch the day-file cursor.
+    let day_file = format::parse(
+        &vault_root
+            .join("conversations")
+            .join("2026-05-05")
+            .join("s1.md"),
+    )
+    .unwrap();
+    assert_eq!(
+        day_file.frontmatter.last_extracted_turn, 3,
+        "bare extract must not reset last_extracted_turn"
+    );
 }
 
 #[test]
@@ -157,7 +170,9 @@ fn extract_single_session_force_resets_all_day_file_cursors_before_enqueue() {
     )
     .unwrap();
     assert_eq!(older.frontmatter.last_extracted_turn, 0);
+    assert_eq!(older.frontmatter.last_extracted_at, None);
     assert_eq!(newer.frontmatter.last_extracted_turn, 0);
+    assert_eq!(newer.frontmatter.last_extracted_at, None);
 
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
     assert_eq!(
@@ -249,5 +264,26 @@ fn extract_all_since_filters_to_sessions_with_matching_day_files() {
                 "pending".to_string()
             ),
         ]
+    );
+}
+
+#[test]
+fn extract_force_requires_session_id() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_test_db(&db_path);
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["extract", "--force"]);
+    assert!(
+        !output.status.success(),
+        "--force without session_id should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("session_id")
+            || stderr.contains("SESSION_ID")
+            || stderr.contains("required"),
+        "expected clap error about missing session_id, got: {stderr}"
     );
 }

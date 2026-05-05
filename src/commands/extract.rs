@@ -153,6 +153,7 @@ fn reset_cursors(root: &Path, session: &SessionTarget) -> Result<()> {
         let absolute = root.join(slash_path_to_platform(&day_file.relative_path));
         let mut conversation = format::parse(&absolute)?;
         conversation.frontmatter.last_extracted_turn = 0;
+        conversation.frontmatter.last_extracted_at = None;
         fs::write(&absolute, format::render(&conversation))?;
     }
     Ok(())

@@ -1,14 +1,17 @@
 ---
 title: Why Quaid
-description: "A local-first memory that scales past thousands of markdown files — no cloud, no API keys, no compromise."
+description: "Memory that thinks like you, and you can prove it. A Local Knowledge Runtime built on append-only architecture, markdown as truth, and a single static binary."
 guide:
   eyebrow: Positioning
   accentBar: true
 ---
 
 import GuideActionBanner from "../../components/docs/GuideActionBanner.astro";
-import GuideFeatureCard from "../../components/docs/GuideFeatureCard.astro";
 import GuideVisualPanel from "../../components/docs/GuideVisualPanel.astro";
+
+<blockquote class="gb-guide-quote">
+  Memory that thinks like you, and you can prove it.
+</blockquote>
 
 ## Darn, this thinks like me.
 
@@ -62,41 +65,6 @@ import GuideVisualPanel from "../../components/docs/GuideVisualPanel.astro";
   Memories accumulate. Nothing is rewritten. You can always see the chain.
 </blockquote>
 
-## Principles
-
-<div class="gb-guide-grid gb-guide-grid--two">
-  <GuideFeatureCard
-    icon={"laptop"}
-    title={"Zero cloud, zero keys"}
-    variant={"line"}
-  >
-    <p>No subscription gate, no inference API, no dependency on a service staying alive somewhere else. Intelligence runs where the data lives.</p>
-  </GuideFeatureCard>
-  <GuideFeatureCard
-    icon={"approve-check-circle"}
-    title={"Radical privacy"}
-    variant={"line"}
-  >
-    <p>Your notes are never transmitted, trained on, or indexed by a third party. The machine doing the work is the machine you already own.</p>
-  </GuideFeatureCard>
-  <GuideFeatureCard
-    icon={"magnifier"}
-    title={"Instant retrieval"}
-    variant={"line"}
-  >
-    <p>Hybrid local search keeps latency low enough to stay in the flow of thought instead of waiting on a remote pipeline to wake up.</p>
-  </GuideFeatureCard>
-  <GuideFeatureCard icon={"open-book"} title={"Future proof"} variant={"line"}>
-    <p>Markdown and SQLite are durable formats. Your knowledge stays readable and queryable long after proprietary products come and go.</p>
-  </GuideFeatureCard>
-</div>
-
-<GuideVisualPanel
-  variant={"studio"}
-  label={"The Digital Atelier"}
-  note={"Built like a quiet studio for thought: warm materials, stable foundations, and zero dependence on the cloud."}
-/>
-
 ## The information sovereign
 
 <p class="gb-guide-section-intro">
@@ -104,7 +72,7 @@ import GuideVisualPanel from "../../components/docs/GuideVisualPanel.astro";
 </p>
 
 <p>
-  <strong>Quaid</strong> flips that arrangement. It is an architectural approach to software — built with the same philosophy as a physical library: heavy, stable, inspectable, and entirely yours.
+  <strong>Quaid</strong> flips that arrangement. It is an architectural approach to software - built with the same philosophy as a physical library: heavy, stable, inspectable, and entirely yours.
 </p>
 
 <blockquote class="gb-guide-quote">
@@ -113,18 +81,23 @@ import GuideVisualPanel from "../../components/docs/GuideVisualPanel.astro";
 
 ## What makes Quaid different
 
-Quaid holds four positions that, together, no other knowledge tool occupies:
+Three positions, taken together, that no other memory tool holds:
 
-- **Local-first.** Compute and storage both live on your machine. The model weights ship in the binary on the airgapped channel; on the online channel they're cached after a one-time download. Nothing leaves the box.
-- **Agent-native.** The MCP server is not an afterthought — it predates any GUI. The same surface that humans use through the CLI is exposed to Claude Code, Cursor, and any other MCP-compatible client over stdio.
-- **Single binary.** No container, no Python runtime, no service mesh. `quaid` is one statically linked file. Drop it on a laptop, a Pi, or an air-gapped workstation and it works the same.
-- **Hybrid retrieval.** FTS5 for precise keyword matches and a local BGE vector index for semantic recall, fused with set-union and a short-match short-circuit. You don't pick keyword *or* semantic — both run, both rank, and the merged answer is what you read.
+- **Append-only by design.** Memories accumulate. Nothing is rewritten. A head pointer resolves queries to current truth, but the full history is always accessible. You can ask what you believed before, trace how a view evolved, and audit the chain at any time. This is the trust property: an agent that personalises aggressively without quietly mirroring your biases.
+- **Truth is human-readable.** Markdown defines what's true. SQLite stores it deterministically. Embeddings only index it - and the index is rebuildable. Every layer is inspectable, every page readable in a text editor, every claim falsifiable. If you can't read it, you can't trust it.
+- **One binary, no cloud.** Compute and storage on your machine. The embedding model ships in the binary on the airgapped channel; on the online channel it's cached after a one-time download. No container, no Python runtime, no service mesh, no API keys. Hybrid retrieval - FTS5 plus a local BGE vector index - runs on the same CPU that holds your notes.
+
+The MCP server predates any GUI. The same surface humans use through the CLI is exposed to Claude Code, Cursor, and any other MCP-compatible client over stdio. The agent reads what you read.
+
+<blockquote class="gb-guide-quote">
+  Quaid separates truth from retrieval, and lets you keep both.
+</blockquote>
 
 ## Built for an agent-first world
 
 The same single-file memory answers full-text searches, semantic queries, graph exploration, contradiction checks, and MCP tool calls without handing custody of your data to anyone else.
 
-It also stays current. The v0.9.6 release added a live file watcher that follows your Obsidian vault as you edit — reconcile-backed, with a 1.5 s debounce and write-safety interlocks — so the memory that an AI agent reads is always the same memory you just updated. _(Unix/macOS/Linux only.)_
+It also stays current. The v0.9.6 release added a live file watcher that follows your Obsidian vault as you edit - reconcile-backed, with a 1.5 s debounce and write-safety interlocks - so the memory an agent reads is always the same memory you just updated. _(Unix/macOS/Linux only.)_
 
 <GuideActionBanner
   title={"Ready to own the stack end to end?"}

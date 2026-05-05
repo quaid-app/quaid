@@ -1,13 +1,15 @@
 use std::collections::VecDeque;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use quaid::commands::ingest;
 use quaid::core::conversation::{
     extractor::{FactWriter, PendingFactWriter, SlmClient, Worker, WorkerError},
     format, queue,
     slm::SlmError,
+    supersede::ResolvingFactWriter,
 };
 use quaid::core::db;
 use quaid::core::types::{
@@ -252,6 +254,104 @@ fn process_job_persists_cursor_before_done_transition() {
     assert_eq!(queue_row.1, ExtractionJobStatus::Running.as_str());
 }
 
+#[test]
+fn session_close_reclaim_replays_same_turn_slice_without_duplicate_fact_files() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+    let conversation_path =
+        seed_conversation_file(dir.path(), "s1", conversation_with_cursor("s1", 0, 2));
+
+    let slm_output = r#"{"facts":[{"kind":"preference","about":"programming-language","strength":"high","summary":"Matt prefers Rust"}]}"#;
+    let slm = StubSlm::with_results([Ok(slm_output), Ok(slm_output), Ok(slm_output)]);
+    let probe = slm.clone();
+    let worker = worker_with_writer(&conn, slm, FailFirstDoneAfterResolvingWrite::default());
+
+    queue::enqueue(
+        &conn,
+        "s1",
+        &conversation_path,
+        ExtractionTriggerKind::SessionClose,
+        "2000-01-01T00:00:00Z",
+    )
+    .unwrap();
+
+    let first = worker.claim_next_job().unwrap().unwrap();
+    let first_error = worker.process_job(&first).unwrap_err();
+    assert!(matches!(
+        first_error,
+        WorkerError::Queue(queue::ExtractionQueueError::StaleLease { .. })
+    ));
+
+    let after_first_run =
+        format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+    assert_eq!(after_first_run.frontmatter.last_extracted_turn, 2);
+    assert!(after_first_run.frontmatter.last_extracted_at.is_some());
+    assert_eq!(
+        job_attempts_and_status(&conn, first.id),
+        (1, "running".to_string())
+    );
+
+    let extracted_files = extracted_markdown_files(&dir.path().join("extracted"));
+    assert_eq!(extracted_files.len(), 1);
+    ingest::run(&conn, extracted_files[0].to_str().unwrap(), false).unwrap();
+
+    let heads_after_first_ingest: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pages WHERE type = 'preference' AND superseded_by IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(heads_after_first_ingest, 1);
+
+    conn.execute(
+        "UPDATE extraction_queue SET scheduled_for = '2000-01-01T00:00:00Z' WHERE id = ?1",
+        [first.id],
+    )
+    .unwrap();
+
+    let reclaimed = worker.claim_next_job().unwrap().unwrap();
+    assert_eq!(reclaimed.id, first.id);
+    assert_eq!(reclaimed.attempts, 2);
+    worker.process_job(&reclaimed).unwrap();
+
+    let after_replay =
+        format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+    assert_eq!(after_replay.frontmatter.last_extracted_turn, 2);
+    assert!(after_replay.frontmatter.last_extracted_at.is_some());
+    assert_eq!(
+        job_status(&conn, reclaimed.id),
+        ExtractionJobStatus::Done.as_str()
+    );
+
+    let extracted_files_after_replay = extracted_markdown_files(&dir.path().join("extracted"));
+    assert_eq!(extracted_files_after_replay.len(), 1);
+    let heads_after_replay: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pages WHERE type = 'preference' AND superseded_by IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(heads_after_replay, 1);
+
+    let calls = probe.recorded_calls();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0]
+        .prompt
+        .contains("New turns to extract from (turns 1..2):"));
+    // Keep the proof honest to the shipped worker: after the cursor is persisted, lease
+    // recovery replays the same conversational slice via the session_close context-only path,
+    // not as fresh new turns. The dedup claim here is only that this replay does not create
+    // an extra fact file after the first write has already been ingested.
+    assert!(calls[1]
+        .prompt
+        .contains("New turns to extract from (turns none):"));
+    assert!(calls[1].prompt.contains("[turn 1, user"));
+    assert!(calls[1].prompt.contains("[turn 2, assistant"));
+}
+
 fn open_worker_db_at(path: &Path) -> Connection {
     let conn = db::open(path.to_str().unwrap()).unwrap();
     conn.execute(
@@ -336,6 +436,38 @@ fn job_status(conn: &Connection, job_id: i64) -> String {
     .unwrap()
 }
 
+fn job_attempts_and_status(conn: &Connection, job_id: i64) -> (i64, String) {
+    conn.query_row(
+        "SELECT attempts, status FROM extraction_queue WHERE id = ?1",
+        [job_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .unwrap()
+}
+
+fn extracted_markdown_files(root: &Path) -> Vec<PathBuf> {
+    fn visit(dir: &Path, files: &mut Vec<PathBuf>) {
+        if !dir.exists() {
+            return;
+        }
+
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, files);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+                files.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    visit(root, &mut files);
+    files.sort();
+    files
+}
+
 fn slash_to_platform(path: &str) -> String {
     path.replace('/', std::path::MAIN_SEPARATOR_STR)
 }
@@ -350,11 +482,8 @@ fn process_job_should_not_partially_advance_cursor_when_later_window_fails() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
     let conn = open_worker_db_at(&db_path);
-    let conversation_path = seed_conversation_file(
-        dir.path(),
-        "s1",
-        conversation_with_cursor("s1", 0, 10),
-    );
+    let conversation_path =
+        seed_conversation_file(dir.path(), "s1", conversation_with_cursor("s1", 0, 10));
 
     queue::enqueue(
         &conn,
@@ -370,7 +499,10 @@ fn process_job_should_not_partially_advance_cursor_when_later_window_fails() {
         StubSlm::with_results([Ok("{\"facts\":[]}"), Ok("not json — window 2 explodes")]),
     );
     let result = worker.process_next_job();
-    assert!(result.is_err(), "process_job must fail when a window parse errors");
+    assert!(
+        result.is_err(),
+        "process_job must fail when a window parse errors"
+    );
 
     let parsed = format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
     assert_eq!(
@@ -533,6 +665,46 @@ impl FactWriter for StaleDoneWriter {
             [job.id],
         )
         .unwrap();
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct FailFirstDoneAfterResolvingWrite {
+    inner: ResolvingFactWriter,
+    fail_once: Mutex<bool>,
+}
+
+impl Default for FailFirstDoneAfterResolvingWrite {
+    fn default() -> Self {
+        Self {
+            inner: ResolvingFactWriter,
+            fail_once: Mutex::new(true),
+        }
+    }
+}
+
+impl FactWriter for FailFirstDoneAfterResolvingWrite {
+    fn write_window(
+        &self,
+        db: &Connection,
+        job: &ExtractionJob,
+        window: &WindowedTurns,
+        response: &ExtractionResponse,
+    ) -> Result<(), WorkerError> {
+        self.inner.write_window(db, job, window, response)
+    }
+
+    fn before_mark_done(&self, db: &Connection, job: &ExtractionJob) -> Result<(), WorkerError> {
+        let mut fail_once = self.fail_once.lock().unwrap();
+        if *fail_once {
+            db.execute(
+                "UPDATE extraction_queue SET attempts = attempts + 1 WHERE id = ?1",
+                [job.id],
+            )
+            .unwrap();
+            *fail_once = false;
+        }
         Ok(())
     }
 }

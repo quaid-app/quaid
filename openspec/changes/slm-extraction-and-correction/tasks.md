@@ -85,7 +85,8 @@
 - [x] 9.1 After all windows for a job are processed successfully, update the conversation file's `last_extracted_turn` to the highest ordinal in the just-processed new-turns range and `last_extracted_at` to current time
 - [x] 9.2 Persist the cursor write before transitioning the queue job to `done` (deliberate ordering for crash safety)
 - [x] 9.3 On any window failure, do not advance the cursor; let the queue's retry logic re-claim the job on next dequeue
-- [ ] 9.4 Tests: `tests/extraction_worker.rs` covers cursor advance on success, cursor unchanged on failure, crash-recovery via lease expiry re-runs the same window without producing duplicates (verified by fact-resolution dedup)
+- [x] 9.4 Tests: `tests/extraction_worker.rs` covers cursor advance on success, cursor unchanged on failure, and the narrow crash-recovery replay seam now proved for the shipped path
+  > **Scope note (Mom, 2026-05-05T17:17:29.932+08:00):** This closure is intentionally narrower than general `7.*` resolution correctness: a reclaimed `session_close` job that already persisted the cursor and wrote/ingested the first fact file can replay the same turn slice as a context-only window, and if the SLM emits the same fact again the current write/dedup path does not create a duplicate fact page.
 
 ## 10. Idle-timer auto-close
 

@@ -106,14 +106,14 @@
 
 ## 12. Correction dialogue — `memory_correct` MCP tool
 
-- [ ] 12.1 Create `src/core/conversation/correction.rs` with `Correction` struct holding session id, fact slug, exchange log, turn budget
-- [ ] 12.2 Implement `start_correction(fact_slug, correction_text) -> Result<CorrectionStep>`: validate the slug is a head fact-kind page; insert `correction_sessions` row with `status: open`, `expires_at: now + 1h`, `turns_used: 1`, `exchange_log: [{user: correction_text}]`; build correction-mode prompt; invoke SLM; return next step
-- [ ] 12.3 Implement `continue_correction(correction_id, response_or_abandon) -> Result<CorrectionStep>`: validate session is `open` and not expired; append exchange to log; on `abandon`, transition to `abandoned` and return without SLM; on `response`, increment `turns_used`, invoke SLM with full exchange context, return next step
-- [ ] 12.4 Hard cap: when `turns_used >= 3`, the next non-commit SLM output forces `status: abandoned` with `reason: turn_cap_reached`
-- [ ] 12.5 Correction-mode SLM prompt template: enforces commit / clarify / abandon outcomes only; output is JSON of shape `{"outcome": "commit"|"clarify"|"abandon", ...}`
-- [ ] 12.6 On commit: parse the corrected fact (same JSON contract as extraction); resolve via `supersede.rs` (forced supersede path — corrections always supersede the original); write the new fact with `corrected_via: explicit` in frontmatter
-- [ ] 12.7 Register `memory_correct` and `memory_correct_continue` MCP tools in `src/mcp/server.rs`
-- [ ] 12.8 Tests: `tests/memory_correct.rs` covers one-shot commit, clarify-then-commit, explicit abandon, turn-cap-abandon, expired-session continuation rejection, non-head fact rejection, non-fact-kind slug rejection
+- [x] 12.1 Create `src/core/conversation/correction.rs` with `Correction` struct holding session id, fact slug, exchange log, turn budget
+- [x] 12.2 Implement `start_correction(fact_slug, correction_text) -> Result<CorrectionStep>`: validate the slug is a head fact-kind page; insert `correction_sessions` row with `status: open`, `expires_at: now + 1h`, `turns_used: 1`, `exchange_log: [{user: correction_text}]`; build correction-mode prompt; invoke SLM; return next step
+- [x] 12.3 Implement `continue_correction(correction_id, response_or_abandon) -> Result<CorrectionStep>`: validate session is `open` and not expired; append exchange to log; on `abandon`, transition to `abandoned` and return without SLM; on `response`, increment `turns_used`, invoke SLM with full exchange context, return next step
+- [x] 12.4 Hard cap: when `turns_used >= 3`, the next non-commit SLM output forces `status: abandoned` with `reason: turn_cap_reached`
+- [x] 12.5 Correction-mode SLM prompt template: enforces commit / clarify / abandon outcomes only; output is JSON of shape `{"outcome": "commit"|"clarify"|"abandon", ...}`
+- [x] 12.6 On commit: parse the corrected fact (same JSON contract as extraction); resolve via `supersede.rs` (forced supersede path — corrections always supersede the original); write the new fact with `corrected_via: explicit` in frontmatter
+- [x] 12.7 Register `memory_correct` and `memory_correct_continue` MCP tools in `src/mcp/server.rs`
+- [x] 12.8 Tests: `tests/memory_correct.rs` covers one-shot commit, clarify-then-commit, explicit abandon, turn-cap-abandon, expired-session continuation rejection, non-head fact rejection, non-fact-kind slug rejection
 
 ## 13. CLI — `quaid extract <session>` and `--all`
 

@@ -13,7 +13,7 @@ use quaid::commands::ingest;
 use quaid::core::conversation::{
     extractor::{SlmClient, Worker},
     slm::SlmError,
-    supersede::ResolvingFactWriter,
+    supersede::{EmbeddingEvidenceFailure, FactResolutionError, ResolvingFactWriter},
 };
 use quaid::core::db;
 use quaid::mcp::server::{MemoryAddTurnInput, MemoryCloseSessionInput, QuaidServer};
@@ -188,6 +188,10 @@ fn head_partitions(conn: &Connection) -> BTreeSet<(String, String)> {
         .collect()
 }
 
+fn hash_shim_forced() -> bool {
+    std::env::var("QUAID_FORCE_HASH_SHIM").as_deref() == Ok("1")
+}
+
 #[test]
 fn force_reextract_keeps_structurally_equivalent_head_set_and_chain_shape() {
     let harness = Harness::new();
@@ -262,10 +266,36 @@ fn force_reextract_keeps_structurally_equivalent_head_set_and_chain_shape() {
     )
     .unwrap()
     .with_limits(Duration::from_millis(1), 128);
-    replay_worker
-        .process_next_job()
-        .unwrap()
-        .expect("forced replay job");
+    let replay_result = replay_worker.process_next_job();
+    if hash_shim_forced() {
+        assert!(matches!(
+            replay_result,
+            Err(quaid::core::conversation::extractor::WorkerError::FactResolution(
+                FactResolutionError::UntrustworthyEmbeddingEvidence {
+                    kind,
+                    key_field,
+                    key_value,
+                    reason: EmbeddingEvidenceFailure::HashShimOnly,
+                }
+            )) if kind == "preference"
+                && key_field == "about"
+                && key_value == "systems-language"
+        ));
+
+        let replay_files = markdown_files(&extracted_root);
+        assert_eq!(
+            replay_files, initial_files,
+            "hash-shim replay refusal should leave the extracted fact set unchanged"
+        );
+
+        let replay_structure = fact_structure(&harness.inspect);
+        let replay_heads = head_partitions(&harness.inspect);
+        assert_eq!(replay_heads, initial_heads);
+        assert_eq!(replay_structure, initial_structure);
+        return;
+    }
+
+    replay_result.unwrap().expect("forced replay job");
 
     let replay_files = markdown_files(&extracted_root);
     assert_eq!(

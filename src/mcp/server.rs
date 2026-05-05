@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::{check, get, link, put};
 
 use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
-use crate::core::conversation::{queue as conversation_queue, turn_writer};
+use crate::core::conversation::{queue as conversation_queue, slm::LazySlmRunner, turn_writer};
 use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
@@ -570,12 +570,15 @@ fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp:
 #[derive(Clone)]
 pub struct QuaidServer {
     db: DbRef,
+    #[allow(dead_code)]
+    slm: Arc<LazySlmRunner>,
 }
 
 impl QuaidServer {
     pub fn new(conn: Connection) -> Self {
         Self {
             db: Arc::new(Mutex::new(conn)),
+            slm: Arc::new(LazySlmRunner::new()),
         }
     }
 }

@@ -280,6 +280,53 @@ pub struct ExtractionJob {
     pub status: ExtractionJobStatus,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractionResponse {
+    pub facts: Vec<RawFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreferenceStrength {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionItemState {
+    Open,
+    Done,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RawFact {
+    Decision {
+        chose: String,
+        rationale: Option<String>,
+        summary: String,
+    },
+    Preference {
+        about: String,
+        strength: Option<PreferenceStrength>,
+        summary: String,
+    },
+    Fact {
+        about: String,
+        summary: String,
+    },
+    ActionItem {
+        who: Option<String>,
+        what: String,
+        status: ActionItemState,
+        due: Option<String>,
+        summary: String,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionTriggerKind {
@@ -414,8 +461,9 @@ pub enum DbError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
-        ExtractionJobStatus, ExtractionTriggerKind, Page, Turn, TurnRole,
+        ActionItemState, ConversationFile, ConversationFrontmatter, ConversationStatus,
+        ExtractionJob, ExtractionJobStatus, ExtractionResponse, ExtractionTriggerKind, Page,
+        PreferenceStrength, RawFact, Turn, TurnRole,
     };
     use std::collections::HashMap;
 
@@ -590,5 +638,49 @@ mod tests {
         assert_eq!(round_trip.trigger_kind, ExtractionTriggerKind::SessionClose);
         assert_eq!(round_trip.status, ExtractionJobStatus::Running);
         assert_eq!(round_trip.last_error.as_deref(), Some("timeout"));
+    }
+
+    #[test]
+    fn extraction_response_roundtrip_preserves_typed_facts() {
+        let response = ExtractionResponse {
+            facts: vec![
+                RawFact::Decision {
+                    chose: "rust".to_string(),
+                    rationale: Some("local-first runtime".to_string()),
+                    summary: "The team chose Rust for the runtime.".to_string(),
+                },
+                RawFact::Preference {
+                    about: "programming-language".to_string(),
+                    strength: Some(PreferenceStrength::High),
+                    summary: "Matt strongly prefers Rust.".to_string(),
+                },
+                RawFact::Fact {
+                    about: "timezone".to_string(),
+                    summary: "Matt works in UTC+8.".to_string(),
+                },
+                RawFact::ActionItem {
+                    who: Some("Fry".to_string()),
+                    what: "wire the runtime".to_string(),
+                    status: ActionItemState::Open,
+                    due: Some("2026-05-05".to_string()),
+                    summary: "Fry will wire the runtime next.".to_string(),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let round_trip: ExtractionResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(round_trip, response);
+    }
+
+    #[test]
+    fn raw_fact_rejects_unknown_kind() {
+        let error = serde_json::from_str::<RawFact>(
+            r#"{"kind":"opinion","about":"rust","summary":"unsupported"}"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown variant"));
     }
 }

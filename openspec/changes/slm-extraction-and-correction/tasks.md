@@ -10,12 +10,12 @@
 ## 2. SLM runtime — candle Phi-3.5 wrapper
 
 - [ ] 2.1 Add `phi3` feature to the `candle-transformers` dependency in `Cargo.toml`
-- [ ] 2.2 Create `src/core/conversation/slm.rs` with `SlmRunner` struct holding tokenizer, model, and inference config
-- [ ] 2.3 Implement `SlmRunner::load(alias: &str) -> Result<SlmRunner>` that resolves the alias to a local model directory, loads tokenizer + safetensors, and constructs the candle Phi3 model
-- [ ] 2.4 Implement `SlmRunner::infer(prompt: &str, max_tokens: usize) -> Result<String>` with deterministic sampling (temperature 0 or near-zero) for reproducibility
-- [ ] 2.5 Wrap `infer` in a `catch_unwind` boundary; on panic return a typed error rather than propagating
-- [ ] 2.6 Lazy-load gate: the daemon holds an `Option<SlmRunner>` initialized on first use, with an interior mutex; subsequent inferences reuse the loaded instance
-- [ ] 2.7 Tests: `tests/slm_runtime.rs` loads a tiny test model fixture, runs a deterministic prompt, asserts output
+- [x] 2.2 Create `src/core/conversation/slm.rs` with `SlmRunner` struct holding tokenizer, model, and inference config
+- [x] 2.3 Implement `SlmRunner::load(alias: &str) -> Result<SlmRunner>` that resolves the alias to a local model directory, loads tokenizer + safetensors, and constructs the candle Phi3 model
+- [x] 2.4 Implement `SlmRunner::infer(prompt: &str, max_tokens: usize) -> Result<String>` with deterministic sampling (temperature 0 or near-zero) for reproducibility
+- [x] 2.5 Wrap `infer` in a `catch_unwind` boundary; on panic return a typed error rather than propagating
+- [x] 2.6 Lazy-load gate: the daemon holds an `Option<SlmRunner>` initialized on first use, with an interior mutex; subsequent inferences reuse the loaded instance
+- [x] 2.7 Tests: `tests/slm_runtime.rs` loads a tiny test model fixture, runs a deterministic prompt, asserts output
 
 ## 3. Model lifecycle — download + cache + verification
 
@@ -48,8 +48,8 @@
 
 ## 6. Output parsing — strict JSON contract
 
-- [ ] 6.1 Define `ExtractionResponse { facts: Vec<RawFact> }` and `RawFact` enum (one variant per kind) in `src/core/types.rs` with `serde(tag = "kind")`
-- [ ] 6.2 Implement `parse_response(raw: &str) -> Result<ExtractionResponse>` that: strips leading/trailing whitespace, strips accidental ```json fences, then `serde_json::from_str`
+- [x] 6.1 Define `ExtractionResponse { facts: Vec<RawFact> }` and `RawFact` enum (one variant per kind) in `src/core/types.rs` with `serde(tag = "kind")`
+- [x] 6.2 Implement `parse_response(raw: &str) -> Result<ExtractionResponse>` that: strips leading/trailing whitespace, strips accidental ```json fences, then `serde_json::from_str`
 - [ ] 6.3 Reject any `RawFact` whose required type-specific fields are missing; reject unknown kinds; record validation errors at the per-fact level so other facts in the same response can still proceed
 - [ ] 6.4 Increment `extraction_queue.attempts` on parse failure; mark `failed` after `extraction.max_retries` (default 3) per the proposal-#1 contract
 - [ ] 6.5 Tests: `tests/slm_prompt_parsing.rs` golden-file coverage of bare JSON, fenced JSON, JSON with leading commentary (rejected), unknown kind (rejected), missing required field (rejected), mixed-validity facts (partial accept)

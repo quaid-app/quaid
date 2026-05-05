@@ -238,7 +238,7 @@ jobs:
             >
             > Install docs: https://github.com/quaid-app/quaid/blob/${{ github.ref_name }}/docs/getting-started.md
             >
-            > Pre-rename upgrade path: https://github.com/quaid-app/quaid/blob/${{ github.ref_name }}/MIGRATION.md
+            > Pre-rename upgrade path: https://github.com/quaid-app/quaid/blob/${{ github.ref_name }}/website/src/content/docs/how-to/upgrade.mdx
 
             ---
 

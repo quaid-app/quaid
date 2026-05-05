@@ -29,6 +29,7 @@ Environment:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -357,17 +358,19 @@ def main() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) if use_temp_db else open(os.devnull) as _f:
         db_path = tempfile.mktemp(suffix=".db") if use_temp_db else args.db
 
+    temp_workspace = None
+
     try:
         print("Loading LongMemEval sessions...", file=sys.stderr)
         sessions = load_longmemeval_sessions(args.split)
         print(f"Loaded {len(sessions)} sessions", file=sys.stderr)
 
         if args.mode == "conversation-memory":
-            workspace_root = (
-                Path(args.work_dir)
-                if args.work_dir
-                else Path(tempfile.mkdtemp(prefix="quaid-longmemeval-"))
-            )
+            if args.work_dir:
+                workspace_root = Path(args.work_dir)
+            else:
+                temp_workspace = tempfile.mkdtemp(prefix="quaid-longmemeval-")
+                workspace_root = Path(temp_workspace)
             print("Running LongMemEval DAB §8 conversation-memory evaluation...", file=sys.stderr)
             results = run_conversation_memory_evaluation(
                 sessions,
@@ -419,6 +422,8 @@ def main() -> None:
     finally:
         if use_temp_db and Path(db_path).exists():
             Path(db_path).unlink()
+        if temp_workspace:
+            shutil.rmtree(temp_workspace, ignore_errors=True)
 
 
 if __name__ == "__main__":

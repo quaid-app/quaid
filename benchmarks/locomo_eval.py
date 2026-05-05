@@ -28,6 +28,7 @@ Environment:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -351,17 +352,19 @@ def main() -> None:
     use_temp_db = args.db is None
     db_path = args.db or tempfile.mktemp(suffix=".db")
 
+    temp_workspace = None
+
     try:
         print("Loading LoCoMo conversations...", file=sys.stderr)
         sessions = load_locomo_data()
         print(f"Loaded {len(sessions)} conversations", file=sys.stderr)
 
         if args.mode == "conversation-memory":
-            workspace_root = (
-                Path(args.work_dir)
-                if args.work_dir
-                else Path(tempfile.mkdtemp(prefix="quaid-locomo-"))
-            )
+            if args.work_dir:
+                workspace_root = Path(args.work_dir)
+            else:
+                temp_workspace = tempfile.mkdtemp(prefix="quaid-locomo-")
+                workspace_root = Path(temp_workspace)
             print(
                 "Running LoCoMo DAB §8 conversation-memory evaluation...",
                 file=sys.stderr,
@@ -413,6 +416,8 @@ def main() -> None:
     finally:
         if use_temp_db and Path(db_path).exists():
             Path(db_path).unlink()
+        if temp_workspace:
+            shutil.rmtree(temp_workspace, ignore_errors=True)
 
 
 if __name__ == "__main__":

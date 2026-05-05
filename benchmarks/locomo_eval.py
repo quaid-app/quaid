@@ -35,8 +35,19 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from rouge_score import rouge_scorer
 from tqdm import tqdm
+
+from conversation_memory_common import (
+    ConversationBenchmarkError,
+    configure_workspace,
+    coerce_role,
+    fact_page_count,
+    ingest_turns,
+    max_f1,
+    ranked_fact_texts,
+    serve_runtime,
+    wait_for_extraction_completion,
+)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +57,7 @@ QUAID_BIN = os.environ.get("QUAID_BIN", str(REPO_ROOT / "target" / "release" / "
 LOCOMO_DIR = DATASETS_DIR / "locomo"
 
 TARGET_DELTA_F1 = 0.30  # +30% F1 over FTS5 baseline
+TARGET_CONVERSATION_MEMORY_F1 = 0.40
 
 # ── Dataset loader ────────────────────────────────────────────────────────────
 
@@ -161,29 +173,6 @@ def run_fts5_search(query: str, db_path: str, k: int = 5) -> list[str]:
         return []
 
 
-# ── Metrics: token-level F1 ───────────────────────────────────────────────────
-
-def token_f1(prediction: str, ground_truth: str) -> float:
-    """Token-level F1 between prediction and ground truth (LoCoMo standard metric)."""
-    pred_tokens = set(prediction.lower().split())
-    truth_tokens = set(ground_truth.lower().split())
-    if not pred_tokens or not truth_tokens:
-        return 0.0
-    common = pred_tokens & truth_tokens
-    precision = len(common) / len(pred_tokens)
-    recall = len(common) / len(truth_tokens)
-    if precision + recall == 0:
-        return 0.0
-    return 2 * precision * recall / (precision + recall)
-
-
-def max_f1(retrieved_texts: list[str], ground_truth: str) -> float:
-    """Max token-F1 across retrieved texts."""
-    if not retrieved_texts:
-        return 0.0
-    return max(token_f1(text, ground_truth) for text in retrieved_texts)
-
-
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
 def extract_qa_pairs(sessions: list[dict]) -> list[dict[str, str]]:
@@ -236,6 +225,7 @@ def run_evaluation(
 
     return {
         "benchmark": "LoCoMo",
+        "mode": "page_import",
         "metric": "token_F1",
         "fts5_baseline_f1": fts5_mean,
         "hybrid_f1": hybrid_mean if not baseline_only else None,
@@ -244,6 +234,84 @@ def run_evaluation(
         "passed": passed,
         "n_questions": len(qa_pairs),
         "baseline_only": baseline_only,
+    }
+
+
+def normalize_turns(session: dict[str, Any]) -> list[dict[str, str]]:
+    """Normalize LoCoMo turns onto Quaid's user/assistant conversation surface."""
+    normalized: list[dict[str, str]] = []
+    speaker_map: dict[str, str] = {}
+    for turn in session.get("conversation", session.get("utterances", [])):
+        speaker = turn.get("speaker", turn.get("role", "participant"))
+        content = str(turn.get("text", turn.get("content", ""))).strip()
+        if not content:
+            continue
+        normalized.append(
+            {
+                "role": coerce_role(str(speaker), speaker_map),
+                "content": content,
+                "timestamp": str(turn.get("timestamp", "")).strip(),
+            }
+        )
+    return normalized
+
+
+def run_conversation_memory_evaluation(
+    sessions: list[dict[str, Any]],
+    *,
+    db_path: str,
+    workspace_dir: Path,
+    limit: int | None = None,
+    model_alias: str | None = None,
+    raw_limit: int = 20,
+    wait_timeout: int = 900,
+) -> dict[str, Any]:
+    """Exercise the full conversation-memory path and score fact-page retrieval."""
+    configure_workspace(db_path, workspace_dir, model_alias=model_alias)
+    with serve_runtime(db_path):
+        for session_index, session in enumerate(sessions):
+            session_id = session.get("conversation_id", session.get("id", f"locomo-{session_index}"))
+            ingest_turns(
+                db_path,
+                str(session_id),
+                normalize_turns(session),
+                session_index=session_index,
+            )
+        queue_counts = wait_for_extraction_completion(db_path, timeout_s=wait_timeout)
+
+    qa_pairs = extract_qa_pairs(sessions)
+    if limit:
+        qa_pairs = qa_pairs[:limit]
+
+    hybrid_f1_scores = []
+    fts5_f1_scores = []
+
+    for qa in tqdm(qa_pairs, desc="LoCoMo §8 queries"):
+        question = qa["question"]
+        answer = qa["answer"]
+        fts5_results = ranked_fact_texts(db_path, question, mode="fts5", k=5, limit=raw_limit)
+        hybrid_results = ranked_fact_texts(db_path, question, mode="hybrid", k=5, limit=raw_limit)
+        fts5_f1_scores.append(max_f1(fts5_results, answer))
+        hybrid_f1_scores.append(max_f1(hybrid_results, answer))
+
+    fts5_mean = float(np.mean(fts5_f1_scores)) if fts5_f1_scores else 0.0
+    hybrid_mean = float(np.mean(hybrid_f1_scores)) if hybrid_f1_scores else 0.0
+    delta_pct = (hybrid_mean - fts5_mean) / max(fts5_mean, 1e-9) * 100
+
+    return {
+        "benchmark": "LoCoMo",
+        "mode": "conversation_memory",
+        "metric": "token_F1",
+        "fts5_baseline_f1": fts5_mean,
+        "hybrid_f1": hybrid_mean,
+        "score_pct": hybrid_mean * 100,
+        "delta_pct": delta_pct,
+        "target_score_pct": TARGET_CONVERSATION_MEMORY_F1 * 100,
+        "passed_target": hybrid_mean >= TARGET_CONVERSATION_MEMORY_F1,
+        "n_questions": len(qa_pairs),
+        "fact_page_count": fact_page_count(db_path),
+        "queue_counts": queue_counts,
+        "baseline_only": False,
     }
 
 
@@ -257,17 +325,30 @@ def _sanitize_slug(s: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LoCoMo evaluation for Quaid")
+    parser.add_argument(
+        "--mode",
+        choices=["page-import", "conversation-memory"],
+        default="page-import",
+        help="Evaluation surface: legacy page import or DAB §8 conversation-memory path",
+    )
     parser.add_argument("--db", default=None, help="Path to memory.db (default: temp file)")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of QA pairs")
     parser.add_argument("--baseline-only", action="store_true", help="Measure FTS5 baseline only")
     parser.add_argument("--no-import", action="store_true", help="Skip import (DB already populated)")
     parser.add_argument("--json", action="store_true", help="Output JSON results")
+    parser.add_argument("--work-dir", default=None, help="Scratch workspace for conversation-memory mode")
+    parser.add_argument("--model-alias", default=None, help="Override extraction.model_alias for benchmark setup")
+    parser.add_argument("--wait-timeout", type=int, default=900, help="Seconds to wait for extraction to finish")
+    parser.add_argument("--raw-limit", type=int, default=20, help="Initial retrieval depth before filtering to fact pages")
     args = parser.parse_args()
 
     if not Path(QUAID_BIN).exists():
         sys.exit(f"quaid binary not found at {QUAID_BIN}. Run: cargo build --release")
 
-    use_temp = args.db is None
+    if args.mode == "conversation-memory" and args.baseline_only:
+        sys.exit("--baseline-only is only supported in page-import mode.")
+
+    use_temp_db = args.db is None
     db_path = args.db or tempfile.mktemp(suffix=".db")
 
     try:
@@ -275,15 +356,35 @@ def main() -> None:
         sessions = load_locomo_data()
         print(f"Loaded {len(sessions)} conversations", file=sys.stderr)
 
-        if not args.no_import:
-            subprocess.run([QUAID_BIN, "--db", db_path, "init"], check=True, capture_output=True)
-            count = import_conversations(sessions, db_path)
-            print(f"Imported {count} conversations", file=sys.stderr)
+        if args.mode == "conversation-memory":
+            workspace_root = (
+                Path(args.work_dir)
+                if args.work_dir
+                else Path(tempfile.mkdtemp(prefix="quaid-locomo-"))
+            )
+            print(
+                "Running LoCoMo DAB §8 conversation-memory evaluation...",
+                file=sys.stderr,
+            )
+            results = run_conversation_memory_evaluation(
+                sessions,
+                db_path=db_path,
+                workspace_dir=workspace_root,
+                limit=args.limit,
+                model_alias=args.model_alias,
+                raw_limit=args.raw_limit,
+                wait_timeout=args.wait_timeout,
+            )
+        else:
+            if not args.no_import:
+                subprocess.run([QUAID_BIN, "--db", db_path, "init"], check=True, capture_output=True)
+                count = import_conversations(sessions, db_path)
+                print(f"Imported {count} conversations", file=sys.stderr)
 
-        print("Running LoCoMo evaluation...", file=sys.stderr)
-        results = run_evaluation(
-            sessions, db_path, limit=args.limit, baseline_only=args.baseline_only
-        )
+            print("Running LoCoMo evaluation...", file=sys.stderr)
+            results = run_evaluation(
+                sessions, db_path, limit=args.limit, baseline_only=args.baseline_only
+            )
 
         if args.json:
             print(json.dumps(results, indent=2))
@@ -291,17 +392,26 @@ def main() -> None:
             print("\n=== LoCoMo Results ===")
             print(f"Conversations: {results['n_questions']} QA pairs")
             print(f"FTS5 baseline F1: {results['fts5_baseline_f1']:.4f}")
-            if not args.baseline_only:
+            if results["mode"] == "conversation_memory":
+                print(f"Hybrid fact F1:   {results['hybrid_f1']:.4f}")
+                print(f"Fact pages:       {results['fact_page_count']}")
+                print(f"Queue counts:     {results['queue_counts']}")
+                print(f"Target:           ≥{TARGET_CONVERSATION_MEMORY_F1:.0%}")
+                status = "✓ PASS" if results["passed_target"] else "✗ FAIL"
+                print(f"Target status:    {status}")
+            elif not args.baseline_only:
                 print(f"Hybrid F1:        {results['hybrid_f1']:.4f}")
                 print(f"Delta:            +{results['delta_pct']:.1f}%  (target: +{TARGET_DELTA_F1:.0%})")
                 status = "✓ PASS" if results["passed"] else "✗ FAIL"
                 print(f"Status:           {status}")
 
-        if results["passed"] is False:
+        if results.get("passed") is False or results.get("passed_target") is False:
             sys.exit(1)
 
+    except ConversationBenchmarkError as exc:
+        sys.exit(str(exc))
     finally:
-        if use_temp and Path(db_path).exists():
+        if use_temp_db and Path(db_path).exists():
             Path(db_path).unlink()
 
 

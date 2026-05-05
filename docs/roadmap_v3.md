@@ -97,9 +97,12 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 ### Success criteria
 - LoCoMo benchmark score > 40% (from 0.1% baseline)
 - LongMemEval score > 40% (from 0.0% baseline)
+- DAB §8 Conversation Memory harness exists with LoCoMo + LongMemEval subsections and a documented no >3-point regression rule once representative-hardware baselines are recorded
 - Fully airgapped - no API calls after model download
 - Non-blocking - ingest latency unchanged
 - `quaid query "what did we decide about X last week"` returns relevant facts
+
+**Current truth boundary:** the repo now carries a manual/hosted-smoke DAB §8 hook, but the authoritative regression gate still requires a full representative Unix hardware run because the always-on CI fleet does not match that hardware profile yet.
 
 ### Next design / delivery questions
 - What is the final 3-5 turn extraction boundary? (Strict session window, time window, or both?)

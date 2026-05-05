@@ -88,6 +88,8 @@ When `--force` re-runs, existing facts that match the new outputs are de-duplica
 
 DAB §4 today is the existing semantic-search gate. Adding §8 (Conversation Memory) backed by the LoCoMo adapter makes regression in extraction quality visible the same way regression in semantic search is. The §8 gate lives in the existing benchmark harness; this proposal adds the section, the LoCoMo adapter wiring, and the CI integration.
 
+**Closure note (Fry, 2026-05-05):** The repo can honestly ship a manual representative-hardware gate plus a hosted-runner smoke workflow today. It does **not** yet claim an always-on representative-hardware CI gate because no matching runner is provisioned in-repo.
+
 ## Risks / Trade-offs
 
 | Risk | Mitigation |

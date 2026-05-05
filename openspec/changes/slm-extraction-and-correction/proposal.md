@@ -16,6 +16,7 @@ This is the second of two proposals splitting Phase 5 of `docs/roadmap_v3.md`. T
 - Add `quaid extraction status` CLI command that reports model state, queue depth, active sessions, last-extraction-at per session, and recent failed jobs.
 - Add a `correction_sessions` table to back the bounded-dialogue tool, plus an hourly janitor that purges expired open correction sessions and `done` extraction-queue rows older than N days.
 - DAB harness gains a §8 Conversation Memory section that scores multi-session recall against the LoCoMo adapter, landing alongside this proposal so we can track regression in the same way DAB §4 currently is.
+  > **Scope note (Fry, 2026-05-05):** The landed repo surface is a truthful manual gate plus hosted-runner smoke hook. A fully automated representative-hardware CI gate remains deferred until the repo has a matching runner.
 - **BREAKING (pre-release)**: schema bump from v8 to v9 — adds the `correction_sessions` table. No automatic migration per the existing pre-release no-auto-migration policy.
 
 ## Capabilities
@@ -57,9 +58,9 @@ This is the second of two proposals splitting Phase 5 of `docs/roadmap_v3.md`. T
   - `tests/slm_prompt_parsing.rs`: golden-file tests for prompt construction; defensive parsing of accidental ```json fences and whitespace.
   - `tests/fact_resolution.rs`: dedup at cosine > 0.92, supersede at cosine in [0.4, 0.92] with one matching head, coexist on key match + cosine < 0.4, coexist on no key match, typed refusal for same-key multi-head partitions, and typed refusal when embeddings are unavailable or hash-shim-only.
   - `tests/memory_correct.rs`: bounded dialogue commits in ≤ 3 turns; clarification path; abandon path; expiry after 1h.
-  - `tests/airgap_extraction.rs`: zero network calls after `quaid extraction enable` succeeds (executed under network-namespace isolation).
+  - `tests/airgap_extraction.rs`: zero outbound model-network calls after `quaid extraction enable` succeeds, proved through the repo's mock-HF/local-cache seam rather than OS-level namespace isolation.
   - `tests/extraction_idempotency.rs`: `quaid extract <session> --force` from cursor=0 produces the same supersede chain as initial extraction (modulo SLM nondeterminism, which the test allows for via fact-set equivalence rather than byte-equal comparison).
-  - `benches/extraction.rs`: per-window p95 < 3s on M1/M2 Mac, < 8s on x86_64 Linux, on representative input.
+  - `benches/extraction.rs`: manual representative-hardware benchmark that warms the staged local model cache and asserts per-window p95 < 3s on M1/M2 Mac, < 8s on x86_64 Linux; unsupported hosts skip unless explicitly forced.
 - **Dependencies**: No new runtime crates. `candle-transformers` is already in the dependency tree for BGE, and Quaid uses that crate's built-in Phi-3 module surface without any extra Cargo feature gate. The model weights are downloaded at `quaid extraction enable` time, not bundled in the binary.
 - **Performance**: SLM inference is the dominant cost; budget per-window p95 is `< 3s` on M1/M2 Mac and `< 8s` on x86_64 Linux. Memory: ~2 GB resident while the SLM is loaded; with `extraction.enabled = false` (the default), zero extra memory cost.
 - **Benchmarks**: LoCoMo ≥ 40% (from 0.1% baseline). LongMemEval ≥ 40% (from 0.0% baseline). DAB §8 Conversation Memory section added as a regression gate alongside DAB §4.

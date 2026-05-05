@@ -2575,11 +2575,17 @@ The smallest thing that proves the value proposition:
   - Dataset: `https://github.com/xiaowu0162/LongMemEval` — pin commit in `benchmarks/datasets.lock`
   - Harness: official `evaluate_qa.py` (requires `OPENAI_API_KEY` for LLM judge)
   - Metrics: R@5 (Recall at 5). Target: ≥ 85%
-  - Adapter: `benchmarks/longmemeval_adapter.py` converts quaid queries to LongMemEval format
+  - Adapter: `benchmarks/longmemeval_adapter.py` converts quaid queries to LongMemEval format; `--mode conversation-memory` switches to the real extractor path and uses answer-hit@5 as the truthful in-repo proxy for extracted fact pages
 - [ ] **LoCoMo** — Long conversational memory benchmark.
   - Dataset: `https://github.com/snap-research/locomo` — pin commit in `benchmarks/datasets.lock`
   - Harness: official evaluation scripts (API-dependent)
   - Metrics: F1 on single-iteration retrieval. Target: ≥ +30% over naive FTS5 baseline
+  - Adapter: `benchmarks/locomo_eval.py --mode conversation-memory` drives `memory_add_turn` / `memory_close_session` through the extractor and scores retrieved fact pages
+- [ ] **DAB §8 Conversation Memory** — Manual regression gate for the conversation-memory pipeline.
+  - Harness: `benchmarks/dab_section8.py`
+  - Subsections: LoCoMo token-F1 + LongMemEval answer-hit@5 proxy on extracted fact pages
+  - Gate: no subsection regression > 3.0 percentage points vs `benchmarks/baselines/conversation_memory.json`
+  - Truth boundary: full representative-hardware runs only; hosted-runner `--limit` runs are informational smoke hooks and do not apply the gate
 - [ ] **Ragas** — Answer and context quality metrics for progressive retrieval.
   - Framework: `https://docs.ragas.io/` — pin version in `benchmarks/requirements.txt`
   - Metrics: context_precision, context_recall, faithfulness
@@ -2612,7 +2618,7 @@ The smallest thing that proves the value proposition:
   - `ldd` / `file` / `otool` on every release artifact. Reject any binary with dynamic library dependencies.
   - Gate: `file quaid-linux-x86_64 | grep "statically linked"` must succeed.
 
-**Checkpoint:** All offline CI gates pass: BEIR nDCG regression, corpus-reality tests, concurrency stress tests, round-trip integrity (both semantic and raw), static binary verification. API-dependent benchmarks (LongMemEval R@5 ≥ 85%, LoCoMo F1, Ragas) run manually before major releases. A failing offline gate blocks the release; API-dependent benchmarks are advisory.
+**Checkpoint:** All offline CI gates pass: BEIR nDCG regression, corpus-reality tests, concurrency stress tests, round-trip integrity (both semantic and raw), static binary verification. Conversation-memory regression (`benchmarks/dab_section8.py`) runs manually on representative Unix hardware until a matching CI runner exists; hosted-runner smoke hooks remain advisory. API-dependent benchmarks (LongMemEval R@5 ≥ 85%, LoCoMo F1, Ragas) run manually before major releases. A failing offline gate blocks the release; hosted-runner and API-dependent runs are advisory.
 
 **Philosophy:** Corpus-reality beats benchmark theater. The leaderboard benchmarks validate architectural decisions; the corpus tests validate that the tool actually works for its intended user.
 

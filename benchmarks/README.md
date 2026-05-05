@@ -33,8 +33,8 @@ These run entirely locally with no API keys required. They are wired into CI to 
 
 ## Phase 1 Baseline — BEIR-style nDCG@10 Proxy
 
-**Established:** 2026-04-15  
-**Embedding Model:** SHA-256 hash-based shim (non-semantic, deterministic)  
+**Established:** 2026-04-15
+**Embedding Model:** SHA-256 hash-based shim (non-semantic, deterministic)
 **Note:** This baseline uses hash-based embeddings. Full semantic evaluation with BGE-small-en-v1.5 will be recorded after T14 completes.
 
 ### Methodology
@@ -154,6 +154,10 @@ cargo test --test beir_eval -- --ignored
 # Full regression gate: run manually on representative Unix hardware with local model cache
 ./benchmarks/prep_datasets.sh locomo longmemeval
 python benchmarks/dab_section8.py --json
+
+# Extraction per-window latency gate
+# Manual representative-hardware run; hosted Windows/macOS Intel environments skip
+cargo bench --bench extraction
 ```
 
 ### DAB §8 — Conversation Memory gate
@@ -186,6 +190,9 @@ python benchmarks/dab_section8.py --limit 25 --json
 # Run just one subsection
 python benchmarks/dab_section8.py --dataset locomo
 python benchmarks/dab_section8.py --dataset longmemeval
+
+# Manual extraction latency gate (requires staged local model cache)
+cargo bench --bench extraction
 ```
 
 ### Phase 3 — Advisory benchmarks (manual, before major releases)
@@ -225,7 +232,7 @@ python benchmarks/longmemeval_adapter.py --json > results/longmemeval.json
 python benchmarks/longmemeval_adapter.py --mode conversation-memory --limit 25 --json
 ```
 
-Expected runtime: ~5–20 minutes depending on corpus size and query limit.  
+Expected runtime: ~5–20 minutes depending on corpus size and query limit.
 No API key required for retrieval evaluation (only for answer grading).
 
 #### LoCoMo — Conversational memory (pre-extraction advisory: ≥ +30% F1 delta over FTS5; §8 gate: ≥ 40% absolute F1 on extraction-produced fact pages)
@@ -244,7 +251,7 @@ python benchmarks/locomo_eval.py --db ~/memory.db --limit 50 --json
 python benchmarks/locomo_eval.py --mode conversation-memory --limit 25 --json
 ```
 
-Expected runtime: ~2–10 minutes.  
+Expected runtime: ~2–10 minutes.
 No API key required — uses token-level F1, not LLM judge.
 
 #### Ragas — Answer quality metrics (advisory, no gate)
@@ -299,11 +306,11 @@ cargo test --test beir_eval -- --ignored
 # Edit benchmarks/baselines/beir.json with new nDCG@10 values
 ```
 
-Baseline anchor: `benchmarks/baselines/beir.json`  
+Baseline anchor: `benchmarks/baselines/beir.json`
 Regression threshold: 2% drop in nDCG@10 fails the gate.
 
 ## Conversation Memory Regression Gate
 
-Baseline anchor: `benchmarks/baselines/conversation_memory.json`  
-Regression threshold: 3.0 percentage-point drop in either §8 subsection fails the gate.  
+Baseline anchor: `benchmarks/baselines/conversation_memory.json`
+Regression threshold: 3.0 percentage-point drop in either §8 subsection fails the gate.
 Current status: baseline pending until the first full representative-hardware run is recorded.

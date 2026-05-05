@@ -40,7 +40,7 @@
 ## 5. Extraction worker — window selection + SLM call
 
 - [x] 5.1 Create `src/core/conversation/extractor.rs::Worker` struct with handles to the queue, SLM runner, and vault writer
-- [ ] 5.2 Implement the worker loop: poll dequeue at a configurable cadence (default 1s), process one job at a time, sleep when no jobs are available
+- [x] 5.2 Implement the worker loop: poll dequeue at a configurable cadence (default 1s), process one job at a time, sleep when no jobs are available
 - [x] 5.3 Window selection: read the conversation file, parse cursor `C` and `last`, compute `[C+1, last]` new turns, slice into windows of `extraction.window_turns`, with up to `window_turns - new_count` lookback turns when new turns are sparse
 - [x] 5.4 For `trigger_kind = 'session_close'` jobs with no new turns, run a single window over the most recent `window_turns` turns purely as context (cursor remains unchanged)
 - [x] 5.5 Build the SLM prompt per the `fact-extraction-schema` spec: system prompt + user prompt with new-turns and lookback-context delimited
@@ -79,9 +79,9 @@
 
 ## 9. Cursor advance + queue accounting
 
-- [ ] 9.1 After all windows for a job are processed successfully, update the conversation file's `last_extracted_turn` to the highest ordinal in the just-processed new-turns range and `last_extracted_at` to current time
-- [ ] 9.2 Persist the cursor write before transitioning the queue job to `done` (deliberate ordering for crash safety)
-- [ ] 9.3 On any window failure, do not advance the cursor; let the queue's retry logic re-claim the job on next dequeue
+- [x] 9.1 After all windows for a job are processed successfully, update the conversation file's `last_extracted_turn` to the highest ordinal in the just-processed new-turns range and `last_extracted_at` to current time
+- [x] 9.2 Persist the cursor write before transitioning the queue job to `done` (deliberate ordering for crash safety)
+- [x] 9.3 On any window failure, do not advance the cursor; let the queue's retry logic re-claim the job on next dequeue
 - [ ] 9.4 Tests: `tests/extraction_worker.rs` covers cursor advance on success, cursor unchanged on failure, crash-recovery via lease expiry re-runs the same window without producing duplicates (verified by fact-resolution dedup)
 
 ## 10. Idle-timer auto-close

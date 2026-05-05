@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -54,6 +55,24 @@ impl SlmClient for LazySlmRunner {
 #[derive(Debug, Default)]
 pub struct PendingFactWriter;
 
+pub trait FactWriter {
+    fn write_window(
+        &self,
+        _db: &Connection,
+        _job: &ExtractionJob,
+        _window: &WindowedTurns,
+        _response: &ExtractionResponse,
+    ) -> Result<(), WorkerError> {
+        Ok(())
+    }
+
+    fn before_mark_done(&self, _db: &Connection, _job: &ExtractionJob) -> Result<(), WorkerError> {
+        Ok(())
+    }
+}
+
+impl FactWriter for PendingFactWriter {}
+
 #[derive(Debug)]
 pub struct Worker<'db, S = LazySlmRunner, W = PendingFactWriter> {
     db: &'db Connection,
@@ -86,6 +105,7 @@ pub enum WorkerError {
 impl<'db, S, W> Worker<'db, S, W>
 where
     S: SlmClient,
+    W: FactWriter,
 {
     pub fn new(db: &'db Connection, slm: S, vault_writer: W) -> Result<Self, WorkerError> {
         let model_alias =
@@ -117,8 +137,34 @@ where
         queue::dequeue(self.db).map_err(WorkerError::from)
     }
 
+    pub fn poll_once(&self) -> Result<bool, WorkerError> {
+        Ok(self.process_next_job()?.is_some())
+    }
+
+    pub fn run_once(&self) -> Result<bool, WorkerError> {
+        let processed = self.poll_once()?;
+        if !processed {
+            self.sleep_until_next_poll();
+        }
+        Ok(processed)
+    }
+
+    pub fn run_forever(&self) -> Result<(), WorkerError> {
+        loop {
+            let _ = self.run_once()?;
+        }
+    }
+
     pub fn sleep_until_next_poll(&self) {
         thread::sleep(self.poll_interval);
+    }
+
+    pub fn process_next_job(&self) -> Result<Option<ExtractionJob>, WorkerError> {
+        let Some(job) = self.claim_next_job()? else {
+            return Ok(None);
+        };
+        self.process_job(&job)?;
+        Ok(Some(job))
     }
 
     pub fn plan_windows_for_job(
@@ -174,6 +220,44 @@ where
         }
     }
 
+    pub fn process_job(&self, job: &ExtractionJob) -> Result<(), WorkerError> {
+        let conversation_path = self.resolve_conversation_path(&job.conversation_path)?;
+        let mut conversation = format::parse(&conversation_path)?;
+        let windows = self.compute_windows(&conversation, job.trigger_kind);
+
+        for window in &windows {
+            let response = match self.infer_and_parse_window(job, window) {
+                Ok(response) => response,
+                Err(error) if is_parse_failure(&error) => return Err(error),
+                Err(error) => {
+                    self.record_job_failure(job, &error)?;
+                    return Err(error);
+                }
+            };
+
+            if let Err(error) = self
+                ._vault_writer
+                .write_window(self.db, job, window, &response)
+            {
+                self.record_job_failure(job, &error)?;
+                return Err(error);
+            }
+        }
+
+        if !windows.is_empty() {
+            let extracted_at = queue::current_timestamp(self.db)?;
+            persist_cursor_update(
+                &conversation_path,
+                &mut conversation,
+                &windows,
+                &extracted_at,
+            )?;
+        }
+
+        self._vault_writer.before_mark_done(self.db, job)?;
+        queue::mark_done(self.db, job.id, job.attempts).map_err(WorkerError::from)
+    }
+
     pub fn record_parse_failure(
         &self,
         job: &ExtractionJob,
@@ -186,6 +270,15 @@ where
             truncate_for_last_error(raw_output)
         );
         queue::mark_failed(self.db, job.id, job.attempts, &last_error).map_err(WorkerError::from)
+    }
+
+    fn record_job_failure(
+        &self,
+        job: &ExtractionJob,
+        error: &WorkerError,
+    ) -> Result<(), WorkerError> {
+        queue::mark_failed(self.db, job.id, job.attempts, &error.to_string())
+            .map_err(WorkerError::from)
     }
 
     fn resolve_conversation_path(&self, conversation_path: &str) -> Result<PathBuf, WorkerError> {
@@ -331,6 +424,28 @@ fn truncate_for_last_error(raw_output: &str) -> String {
         .take(MAX_RECORDED_PARSE_OUTPUT)
         .collect::<String>();
     format!("{truncated}…")
+}
+
+fn is_parse_failure(error: &WorkerError) -> bool {
+    matches!(error, WorkerError::Slm(SlmError::Parse { .. }))
+}
+
+fn persist_cursor_update(
+    path: &Path,
+    conversation: &mut ConversationFile,
+    windows: &[WindowedTurns],
+    extracted_at: &str,
+) -> Result<(), WorkerError> {
+    if let Some(last_new_ordinal) = windows
+        .iter()
+        .filter_map(WindowedTurns::last_new_ordinal)
+        .max()
+    {
+        conversation.frontmatter.last_extracted_turn = last_new_ordinal;
+    }
+    conversation.frontmatter.last_extracted_at = Some(extracted_at.to_owned());
+    fs::write(path, format::render(conversation))?;
+    Ok(())
 }
 
 fn parse_usize_config(db: &Connection, key: &str, default: usize) -> Result<usize, WorkerError> {

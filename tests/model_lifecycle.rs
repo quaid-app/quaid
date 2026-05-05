@@ -274,6 +274,18 @@ fn mock_files(with_bad_model_hash: bool) -> HashMap<String, MockFile> {
     files
 }
 
+/// Returns the same files as `mock_files(false)` but with `bad_file`'s content
+/// replaced by `bad_content`. Used to exercise pinned-digest rejection paths.
+fn mock_files_with_bad_file(bad_file: &str, bad_content: &[u8]) -> HashMap<String, MockFile> {
+    let mut files = mock_files(false);
+    if let Some(entry) = files.get_mut(bad_file) {
+        entry.content = bad_content.to_vec();
+        // ETag is ignored on the source-pinned download path; only the pinned digest matters.
+        entry.etag = format!("{:x}", Sha256::digest(bad_content));
+    }
+    files
+}
+
 fn seed_valid_cache(
     cache_dir: &Path,
     requested_alias: &str,
@@ -626,4 +638,129 @@ fn cli_extraction_enable_then_disable_updates_flag() {
     let enabled = quaid::core::db::read_config_value_or(&conn, "extraction.enabled", "false")
         .expect("read extraction flag");
     assert_eq!(enabled, "false");
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Curated-alias source-pinned path (Professor's defect #1 proof)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Curated aliases must download through the source-pinned path, which verifies
+/// each file against a pre-compiled digest (SHA-256 or git-blob-SHA1) rather
+/// than trusting server-supplied headers. A successful download must set
+/// `source_pinned = true` in `cached_model_status`.
+#[test]
+fn download_curated_alias_sets_source_pinned() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    // "test-pinned" resolves to test-org/test-pinned-model@test-revision-abc123
+    // with mixed SHA-256/git-blob-SHA1 pins matching the standard mock fixtures.
+    let repo_id = "test-org/test-pinned-model";
+    let revision = "test-revision-abc123";
+    let server = MockModelServer::start(repo_id, revision, mock_files(false));
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let _env = EnvGuard::set_all(&[
+        ("QUAID_HF_BASE_URL", server.base_url.clone()),
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+    ]);
+
+    let before_requests = server.request_count();
+    let mut reporter = NoopProgressReporter;
+    let cache_dir = download_model("test-pinned", &mut reporter).expect("curated download");
+
+    // All three files must be present.
+    assert!(cache_dir.join("config.json").is_file());
+    assert!(cache_dir.join("tokenizer.json").is_file());
+    assert!(cache_dir.join("model.safetensors").is_file());
+    assert!(cache_dir.join("manifest.json").is_file());
+
+    // The curated path must NOT call the metadata API — it uses source pins directly.
+    let after_requests = server.request_count();
+    let file_requests = after_requests - before_requests;
+    // Exactly 3 GET file requests (config.json, tokenizer.json, model.safetensors).
+    assert_eq!(
+        file_requests, 3,
+        "curated path should make exactly 3 file requests, got {file_requests}"
+    );
+
+    // The result must carry source_pinned = true.
+    let status = cached_model_status("test-pinned").expect("cache status");
+    assert!(status.is_cached, "cache should be present");
+    assert!(status.verified, "cache should pass manifest verification");
+    assert!(
+        status.source_pinned,
+        "curated alias must set source_pinned = true; got false"
+    );
+}
+
+/// Curated downloads must reject a tampered weight file whose SHA-256 does not
+/// match the source-pinned value, even when the server sets a matching ETag.
+#[test]
+fn download_curated_alias_rejects_tampered_sha256_file() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let repo_id = "test-org/test-pinned-model";
+    let revision = "test-revision-abc123";
+    // Serve wrong bytes for model.safetensors — SHA-256 will not match the pinned value.
+    let files = mock_files_with_bad_file("model.safetensors", b"attacker-injected-weights");
+    let server = MockModelServer::start(repo_id, revision, files);
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let _env = EnvGuard::set_all(&[
+        ("QUAID_HF_BASE_URL", server.base_url.clone()),
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+    ]);
+
+    let mut reporter = NoopProgressReporter;
+    let err = download_model("test-pinned", &mut reporter)
+        .expect_err("tampered SHA-256 file should be rejected");
+    assert!(
+        err.to_string().contains("integrity check failed"),
+        "expected 'integrity check failed' but got: {err}"
+    );
+
+    // Partial download must be cleaned up.
+    let cache_dir = cache_dir_for_alias("test-pinned").expect("cache dir");
+    assert!(
+        !cache_dir.exists(),
+        "cache dir must not survive a failed curated install"
+    );
+}
+
+/// Curated downloads must reject a tampered metadata file whose git-blob-SHA1
+/// does not match the source-pinned value.
+#[test]
+fn download_curated_alias_rejects_tampered_git_blob_file() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let repo_id = "test-org/test-pinned-model";
+    let revision = "test-revision-abc123";
+    // Serve wrong bytes for config.json — git-blob-SHA1 will not match the pinned value.
+    let files = mock_files_with_bad_file("config.json", b"attacker-injected-config");
+    let server = MockModelServer::start(repo_id, revision, files);
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let _env = EnvGuard::set_all(&[
+        ("QUAID_HF_BASE_URL", server.base_url.clone()),
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+    ]);
+
+    let mut reporter = NoopProgressReporter;
+    let err = download_model("test-pinned", &mut reporter)
+        .expect_err("tampered git-blob file should be rejected");
+    assert!(
+        err.to_string().contains("integrity check failed"),
+        "expected 'integrity check failed' but got: {err}"
+    );
+
+    // Partial download must be cleaned up.
+    let cache_dir = cache_dir_for_alias("test-pinned").expect("cache dir");
+    assert!(
+        !cache_dir.exists(),
+        "cache dir must not survive a failed curated install"
+    );
 }

@@ -19,6 +19,35 @@ const PHI_35_MINI_REVISION: &str = "2fe192450127e6a83f7441aef6e3ca586c338b77";
 const GEMMA_3_1B_REVISION: &str = "dcc83ea841ab6100d6b47a070329e1ba4cf78752";
 const GEMMA_3_4B_REVISION: &str = "093f9f388b31de276ce2de164bdc2081324b9767";
 
+// Test-only curated alias. Uses mixed SHA-256 / git-blob-SHA1 pins that match the
+// fixture content in `mock_files(false)` inside tests/model_lifecycle.rs.
+// This exercises the source-pinned download path (install_source_pinned_model_into_dir)
+// without network access to real HuggingFace repos.
+#[cfg(any(test, feature = "test-harness"))]
+const TEST_PINNED_ALIAS: &str = "test-pinned";
+#[cfg(any(test, feature = "test-harness"))]
+const TEST_PINNED_REVISION: &str = "test-revision-abc123";
+#[cfg(any(test, feature = "test-harness"))]
+const TEST_CURATED_FILES: &[SourcePinnedFile] = &[
+    // config.json: `{"model_type":"phi3"}` (21 bytes) — pin via git-blob-SHA1
+    SourcePinnedFile {
+        path: "config.json",
+        digest: PinnedDigest::GitBlobSha1("3156de0790e76b33247de6adc66765c4fc608b42"),
+    },
+    // model.safetensors: `tiny-test-weights` (17 bytes) — pin via SHA-256
+    SourcePinnedFile {
+        path: "model.safetensors",
+        digest: PinnedDigest::Sha256(
+            "7f5bb0fd7b2f570f5c9140e319c619275a0b4960f8c64facf1f59b39511e1d6f",
+        ),
+    },
+    // tokenizer.json: `{"version":"1.0"}` (17 bytes) — pin via git-blob-SHA1
+    SourcePinnedFile {
+        path: "tokenizer.json",
+        digest: PinnedDigest::GitBlobSha1("22ec89ab90889036bc14d5b1bb6109974ef95582"),
+    },
+];
+
 const OPTIONAL_SUPPORT_FILES: &[&str] = &[
     "added_tokens.json",
     "chat_template.json",
@@ -346,6 +375,11 @@ pub fn resolve_model_alias(alias: &str) -> Result<ResolvedModelAlias, ModelLifec
         "gemma-3-4b" => (
             "google/gemma-3-4b-it".to_owned(),
             Some(GEMMA_3_4B_REVISION.to_owned()),
+        ),
+        #[cfg(any(test, feature = "test-harness"))]
+        TEST_PINNED_ALIAS => (
+            "test-org/test-pinned-model".to_owned(),
+            Some(TEST_PINNED_REVISION.to_owned()),
         ),
         _ => {
             validate_repo_id(trimmed).map_err(|message| ModelLifecycleError::InvalidAlias {
@@ -867,6 +901,8 @@ fn source_pins_for_alias(alias: &ResolvedModelAlias) -> Option<&'static [SourceP
         "phi-3.5-mini" => Some(PHI_35_MINI_FILES),
         "gemma-3-1b" => Some(GEMMA_3_1B_FILES),
         "gemma-3-4b" => Some(GEMMA_3_4B_FILES),
+        #[cfg(any(test, feature = "test-harness"))]
+        TEST_PINNED_ALIAS => Some(TEST_CURATED_FILES),
         _ => None,
     }
 }
@@ -1334,5 +1370,95 @@ mod tests {
     fn sanitize_cache_key_normalizes_path_separators() {
         assert_eq!(sanitize_cache_key("org/model"), "org-model");
         assert_eq!(sanitize_cache_key("phi-3.5-mini"), "phi-3.5-mini");
+    }
+
+    // --- verify_source_pin unit tests (require online-model feature for the fn) ---
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn verify_source_pin_accepts_sha256_match() {
+        let content = b"tiny-test-weights";
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        std::fs::write(tmp.path(), content).expect("write");
+        let actual_sha256 = format!("{:x}", Sha256::digest(content));
+        let alias = resolve_model_alias(TEST_PINNED_ALIAS).expect("resolve");
+        verify_source_pin(
+            "model.safetensors",
+            content.len() as u64,
+            PinnedDigest::Sha256(
+                "7f5bb0fd7b2f570f5c9140e319c619275a0b4960f8c64facf1f59b39511e1d6f",
+            ),
+            &actual_sha256,
+            tmp.path(),
+            &alias,
+        )
+        .expect("SHA-256 pin should pass for matching content");
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn verify_source_pin_rejects_sha256_mismatch() {
+        let content = b"wrong-model-weights";
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        std::fs::write(tmp.path(), content).expect("write");
+        let actual_sha256 = format!("{:x}", Sha256::digest(content));
+        let alias = resolve_model_alias(TEST_PINNED_ALIAS).expect("resolve");
+        let err = verify_source_pin(
+            "model.safetensors",
+            content.len() as u64,
+            PinnedDigest::Sha256(
+                "7f5bb0fd7b2f570f5c9140e319c619275a0b4960f8c64facf1f59b39511e1d6f",
+            ),
+            &actual_sha256,
+            tmp.path(),
+            &alias,
+        )
+        .expect_err("SHA-256 pin should reject non-matching content");
+        assert!(
+            err.to_string().contains("integrity check failed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn verify_source_pin_accepts_git_blob_sha1_match() {
+        let content = br#"{"model_type":"phi3"}"#;
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        std::fs::write(tmp.path(), content).expect("write");
+        let actual_sha256 = format!("{:x}", Sha256::digest(content));
+        let alias = resolve_model_alias(TEST_PINNED_ALIAS).expect("resolve");
+        verify_source_pin(
+            "config.json",
+            content.len() as u64,
+            PinnedDigest::GitBlobSha1("3156de0790e76b33247de6adc66765c4fc608b42"),
+            &actual_sha256,
+            tmp.path(),
+            &alias,
+        )
+        .expect("git-blob-SHA1 pin should pass for matching content");
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn verify_source_pin_rejects_git_blob_sha1_mismatch() {
+        let content = b"wrong-config";
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        std::fs::write(tmp.path(), content).expect("write");
+        let actual_sha256 = format!("{:x}", Sha256::digest(content));
+        let alias = resolve_model_alias(TEST_PINNED_ALIAS).expect("resolve");
+        let err = verify_source_pin(
+            "config.json",
+            content.len() as u64,
+            PinnedDigest::GitBlobSha1("3156de0790e76b33247de6adc66765c4fc608b42"),
+            &actual_sha256,
+            tmp.path(),
+            &alias,
+        )
+        .expect_err("git-blob-SHA1 pin should reject non-matching content");
+        assert!(
+            err.to_string().contains("integrity check failed"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -87,6 +87,8 @@ bundled = ["rusqlite/bundled"]
 embedded-model = []
 # online-model: online release channel; download BGE-small assets on first semantic use
 online-model = ["dep:reqwest"]
+# test-harness: enables in-library test fixtures (curated-alias stubs) for integration tests
+test-harness = []
 
 [profile.release]
 opt-level = 3

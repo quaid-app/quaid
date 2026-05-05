@@ -8,7 +8,7 @@ Benchmarks are split into two categories:
 
 ### Offline CI Gates (mandatory — block release)
 
-These run entirely locally with no API keys required. They are wired into CI to run on every PR (CI wiring pending tasks 7.1–7.2 — run manually in the interim).
+These run entirely locally with no API keys required. They are wired into CI to run on every PR.
 
 | Benchmark | Metric | Gate |
 |-----------|--------|------|
@@ -20,12 +20,13 @@ These run entirely locally with no API keys required. They are wired into CI to 
 | Round-trip integrity (byte-exact) | Byte diff | Must be zero |
 | Static binary verification | `ldd` / `file` | Must be statically linked |
 
-### Advisory Benchmarks (run manually before major releases)
+### Manual / advisory benchmark gates
 
-| Benchmark | Metric | Target |
-|-----------|--------|--------|
-| LongMemEval | R@5 | ≥ 85% |
-| LoCoMo | F1 | ≥ +30% over FTS5 baseline |
+| Benchmark | Metric | Target / Gate |
+|-----------|--------|---------------|
+| DAB §8 Conversation Memory | LoCoMo token-F1 + LongMemEval answer-hit@5 | No subsection regression > 3.0 points vs baseline on full representative-hardware runs |
+| LongMemEval (raw-page path) | R@5 | ≥ 85% |
+| LoCoMo (raw-page path) | F1 delta vs FTS5 | ≥ +30% |
 | Ragas | context_precision, context_recall | Advisory |
 
 ---
@@ -95,7 +96,10 @@ benchmarks/
 ├── prep_datasets.sh            # Download and verify pinned datasets
 ├── requirements.txt            # Python deps for advisory benchmarks
 ├── baselines/
-│   └── beir.json               # Regression anchor: nDCG@10 baseline
+│   ├── beir.json               # Regression anchor: nDCG@10 baseline
+│   └── conversation_memory.json # DAB §8 regression anchor
+├── conversation_memory_common.py # Shared real-pipeline helpers for §8 runs
+├── dab_section8.py             # DAB §8 wrapper: LoCoMo + LongMemEval
 ├── beir_eval.rs  → tests/      # BEIR nDCG@10 harness (cargo test --test beir_eval)
 ├── longmemeval_adapter.py      # LongMemEval R@5 adapter
 ├── locomo_eval.py              # LoCoMo F1 vs FTS5 baseline
@@ -145,6 +149,43 @@ cargo test --test roundtrip_raw
 # BEIR regression (requires datasets — manual or release-branch CI)
 ./benchmarks/prep_datasets.sh nq fiqa
 cargo test --test beir_eval -- --ignored
+
+# DAB §8 Conversation Memory
+# Full regression gate: run manually on representative Unix hardware with local model cache
+./benchmarks/prep_datasets.sh locomo longmemeval
+python benchmarks/dab_section8.py --json
+```
+
+### DAB §8 — Conversation Memory gate
+
+This section is the conversation-memory benchmark surface for the SLM extractor.
+
+- **Harness:** `benchmarks/dab_section8.py`
+- **Subsections:** LoCoMo + LongMemEval
+- **Real path exercised:** `memory_add_turn` → `memory_close_session` → `quaid serve` worker → extracted fact pages → `quaid query` / `quaid search`
+- **Baseline anchor:** `benchmarks/baselines/conversation_memory.json`
+- **Regression rule:** once baselines are established, neither subsection may drop by more than **3.0 percentage points** version-over-version
+
+#### Truth boundary
+
+- The authoritative gate is a **full** run on **representative Unix hardware** with **no `--limit`**.
+- GitHub-hosted runners are not representative hardware for this path. The repo therefore ships a **manual smoke hook** (`.github/workflows/conversation-memory-benchmarks.yml`) instead of claiming an always-on CI gate.
+- Until a full representative-hardware baseline is recorded, the gate reports `pending-baseline` rather than pass/fail.
+- LongMemEval's dataset evidence ids point at session-level documents, not extracted fact slugs. The in-repo §8 subsection therefore uses a truthful proxy metric: **answer-hit@5** on retrieved fact pages (hit = top-5 max token-F1 ≥ 0.5 against the gold answer).
+
+#### Commands
+
+```bash
+# Full representative-hardware run (authoritative gate)
+./benchmarks/prep_datasets.sh locomo longmemeval
+python benchmarks/dab_section8.py --json
+
+# Hosted-runner / smoke run (informational only; skips regression comparison)
+python benchmarks/dab_section8.py --limit 25 --json
+
+# Run just one subsection
+python benchmarks/dab_section8.py --dataset locomo
+python benchmarks/dab_section8.py --dataset longmemeval
 ```
 
 ### Phase 3 — Advisory benchmarks (manual, before major releases)
@@ -179,12 +220,15 @@ python benchmarks/longmemeval_adapter.py --db ~/memory.db --limit 200
 
 # JSON output for logging
 python benchmarks/longmemeval_adapter.py --json > results/longmemeval.json
+
+# Exercise the real conversation-memory extractor instead of page import
+python benchmarks/longmemeval_adapter.py --mode conversation-memory --limit 25 --json
 ```
 
 Expected runtime: ~5–20 minutes depending on corpus size and query limit.  
 No API key required for retrieval evaluation (only for answer grading).
 
-#### LoCoMo — Conversational memory (F1 target: ≥ +30% over FTS5 baseline)
+#### LoCoMo — Conversational memory (pre-extraction advisory: ≥ +30% F1 delta over FTS5; §8 gate: ≥ 40% absolute F1 on extraction-produced fact pages)
 
 ```bash
 # Evaluate hybrid vs FTS5 baseline
@@ -195,6 +239,9 @@ python benchmarks/locomo_eval.py --baseline-only
 
 # Point at existing brain
 python benchmarks/locomo_eval.py --db ~/memory.db --limit 50 --json
+
+# Exercise the real conversation-memory extractor instead of page import
+python benchmarks/locomo_eval.py --mode conversation-memory --limit 25 --json
 ```
 
 Expected runtime: ~2–10 minutes.  
@@ -254,3 +301,9 @@ cargo test --test beir_eval -- --ignored
 
 Baseline anchor: `benchmarks/baselines/beir.json`  
 Regression threshold: 2% drop in nDCG@10 fails the gate.
+
+## Conversation Memory Regression Gate
+
+Baseline anchor: `benchmarks/baselines/conversation_memory.json`  
+Regression threshold: 3.0 percentage-point drop in either §8 subsection fails the gate.  
+Current status: baseline pending until the first full representative-hardware run is recorded.

@@ -1,0 +1,30 @@
+{
+  "description": "Quaid DAB §8 Conversation Memory baseline — extraction pipeline (LoCoMo + LongMemEval)",
+  "created_at": "2026-05-05",
+  "section": "§8 Conversation Memory",
+  "notes": [
+    "§8 drives the full extraction pipeline: memory_add_turn → session close → extraction worker → fact pages → query fact pages.",
+    "The pre-existing locomo_eval.py and longmemeval_adapter.py ingest raw conversation pages via `quaid import`.",
+    "Those adapters measure pre-extraction retrieval quality and are listed as Advisory Benchmarks in benchmarks/README.md.",
+    "A §8-compliant harness must ingest via memory_add_turn, close sessions, wait for the extraction worker, then query the produced fact pages.",
+    "CI gate requires Phi-3.5 Mini (~2 GB). Follow the BEIR #[ignore] pattern: run manually on release branches, not per-PR.",
+    "Regression threshold is 3 absolute F1 percentage points — NOT a relative delta vs FTS5 and NOT matching §4's 2% nDCG@10 tolerance.",
+    "Both baselines are null/pending until a §8-compliant harness is implemented and measured after the extraction pipeline lands."
+  ],
+  "regression_threshold_points": 3.0,
+  "baselines": {
+    "locomo_f1_absolute": {
+      "value": null,
+      "status": "pending",
+      "target": 0.40,
+      "note": "Absolute F1 >= 40% against LoCoMo QA pairs on extraction-produced fact pages. Baseline must be measured after a §8-compliant harness (not locomo_eval.py) is run with the extraction pipeline active. Pre-extraction advisory value via locomo_eval.py is informational only."
+    },
+    "longmemeval_r5": {
+      "value": null,
+      "status": "pending",
+      "target": 0.40,
+      "note": "R@5 >= 40% against LongMemEval QA pairs on extraction-produced fact pages. Same harness requirement as locomo_f1_absolute. longmemeval_adapter.py (raw-page import) does not satisfy §8."
+    }
+  },
+  "history": []
+}

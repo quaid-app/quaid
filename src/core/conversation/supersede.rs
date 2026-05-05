@@ -7,12 +7,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::core::conversation::{format, queue, turn_writer};
-use crate::core::{collections, markdown, namespace};
 use crate::core::db;
-use crate::core::inference::embed;
+use crate::core::inference::{embed, embedding_evidence_kind, EmbeddingEvidenceKind};
 use crate::core::types::{
     frontmatter_insert_string, ExtractionJob, Frontmatter, Page, RawFact, Turn, WindowedTurns,
 };
+use crate::core::{collections, markdown, namespace};
 
 const DEFAULT_DEDUP_COSINE_MIN: f64 = 0.92;
 const DEFAULT_SUPERSEDE_COSINE_MIN: f64 = 0.4;
@@ -64,11 +64,46 @@ pub enum FactResolutionError {
     #[error("embedding error: {message}")]
     Embed { message: String },
 
+    #[error(
+        "ambiguous same-key head partition for kind `{kind}` {key_field} `{key_value}`: {candidate_slugs:?}"
+    )]
+    AmbiguousMatchingHeads {
+        kind: String,
+        key_field: String,
+        key_value: String,
+        candidate_slugs: Vec<String>,
+    },
+
+    #[error(
+        "untrustworthy embedding evidence for kind `{kind}` {key_field} `{key_value}`: {reason}"
+    )]
+    UntrustworthyEmbeddingEvidence {
+        kind: String,
+        key_field: String,
+        key_value: String,
+        reason: EmbeddingEvidenceFailure,
+    },
+
     #[error("invalid conversation path: {path}")]
     InvalidConversationPath { path: String },
 
     #[error("unable to allocate a unique fact slug after {attempts} attempts: {base_slug}")]
     SlugCollisionExhausted { base_slug: String, attempts: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingEvidenceFailure {
+    HashShimOnly,
+    Unavailable { message: String },
+}
+
+impl std::fmt::Display for EmbeddingEvidenceFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HashShimOnly => write!(f, "hash-shim-only backend"),
+            Self::Unavailable { message } => write!(f, "{message}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,11 +119,10 @@ struct ResolutionThresholds {
 }
 
 pub fn resolve(raw_fact: &RawFact, conn: &Connection) -> Result<Resolution, FactResolutionError> {
-    let memory_root = turn_writer::resolve_memory_root(conn).map_err(|error| {
-        FactResolutionError::Config {
+    let memory_root =
+        turn_writer::resolve_memory_root(conn).map_err(|error| FactResolutionError::Config {
             message: error.to_string(),
-        }
-    })?;
+        })?;
     resolve_in_scope(raw_fact, conn, memory_root.collection_id, "")
 }
 
@@ -98,11 +132,8 @@ pub fn resolve_in_scope(
     collection_id: i64,
     namespace: &str,
 ) -> Result<Resolution, FactResolutionError> {
-    // NOTE: cosine_similarity calls the real embedding pipeline. If the embedding backend
-    // has fallen back to HashShim (e.g. model files missing), the returned cosines are
-    // pseudo-random hash distances, not semantic similarity. Callers that care about
-    // correctness SHOULD gate on embedding availability before invoking this function.
-    resolve_in_scope_with_similarity(raw_fact, conn, collection_id, namespace, cosine_similarity)
+    let candidates = head_candidates(conn, collection_id, namespace, raw_fact)?;
+    resolve_from_candidates(raw_fact, conn, candidates, cosine_similarity, true)
 }
 
 pub fn resolve_in_scope_with_similarity<F>(
@@ -116,31 +147,54 @@ where
     F: Fn(&str, &str) -> Result<f64, FactResolutionError>,
 {
     let candidates = head_candidates(conn, collection_id, namespace, raw_fact)?;
+    resolve_from_candidates(raw_fact, conn, candidates, similarity, false)
+}
+
+fn resolve_from_candidates<F>(
+    raw_fact: &RawFact,
+    conn: &Connection,
+    candidates: Vec<HeadCandidate>,
+    similarity: F,
+    require_trustworthy_embeddings: bool,
+) -> Result<Resolution, FactResolutionError>
+where
+    F: Fn(&str, &str) -> Result<f64, FactResolutionError>,
+{
     if candidates.is_empty() {
         return Ok(Resolution::Coexist);
     }
 
-    let thresholds = resolution_thresholds(conn)?;
-    let best = candidates
-        .into_iter()
-        .map(|candidate| {
-            let cosine = similarity(raw_fact.summary(), &candidate.body)?;
-            Ok((candidate, cosine))
-        })
-        .collect::<Result<Vec<_>, FactResolutionError>>()?
-        .into_iter()
-        .max_by(|left, right| left.1.total_cmp(&right.1))
-        .expect("candidates checked above");
+    if candidates.len() > 1 {
+        return Err(FactResolutionError::AmbiguousMatchingHeads {
+            kind: raw_fact.kind_str().to_string(),
+            key_field: raw_fact.type_key_field().to_string(),
+            key_value: raw_fact.type_key().to_string(),
+            candidate_slugs: candidates
+                .into_iter()
+                .map(|candidate| candidate.slug)
+                .collect(),
+        });
+    }
+    if require_trustworthy_embeddings {
+        ensure_trustworthy_embedding_evidence(raw_fact)?;
+    }
 
-    if best.1 > thresholds.dedup_cosine_min {
+    let thresholds = resolution_thresholds(conn)?;
+    let candidate = candidates
+        .into_iter()
+        .next()
+        .expect("candidate count checked above");
+    let cosine = similarity(raw_fact.summary(), &candidate.body)?;
+
+    if cosine > thresholds.dedup_cosine_min {
         Ok(Resolution::Drop {
-            matched_slug: best.0.slug,
-            cosine: best.1,
+            matched_slug: candidate.slug,
+            cosine,
         })
-    } else if best.1 >= thresholds.supersede_cosine_min {
+    } else if cosine >= thresholds.supersede_cosine_min {
         Ok(Resolution::Supersede {
-            prior_slug: best.0.slug,
-            cosine: best.1,
+            prior_slug: candidate.slug,
+            cosine,
         })
     } else {
         Ok(Resolution::Coexist)
@@ -163,7 +217,10 @@ pub fn write_fact_in_context(
     context: &FactWriteContext,
 ) -> Result<FactWriteResult, FactResolutionError> {
     match resolution {
-        Resolution::Drop { matched_slug, cosine } => {
+        Resolution::Drop {
+            matched_slug,
+            cosine,
+        } => {
             eprintln!(
                 "INFO: fact_resolution decision=drop matched_head={} kind={} key={} cosine={:.4}",
                 matched_slug,
@@ -179,7 +236,8 @@ pub fn write_fact_in_context(
         }
         Resolution::Supersede { prior_slug, .. } => {
             let (slug, relative_path) = allocate_output_path(raw_fact, conn, context)?;
-            let markdown = render_fact_markdown(raw_fact, context, &slug, Some(prior_slug.as_str()))?;
+            let markdown =
+                render_fact_markdown(raw_fact, context, &slug, Some(prior_slug.as_str()))?;
             write_markdown(&context.root_path, &relative_path, &markdown)?;
             Ok(FactWriteResult {
                 resolution: resolution.clone(),
@@ -215,7 +273,8 @@ pub fn resolve_and_write_fact_in_context(
     // Callers must not assume the page row is visible in the DB immediately after this call
     // returns. The watcher provides eventual consistency.
     with_immediate_transaction(conn, |conn| {
-        let resolution = resolve_in_scope(raw_fact, conn, context.collection_id, &context.namespace)?;
+        let resolution =
+            resolve_in_scope(raw_fact, conn, context.collection_id, &context.namespace)?;
         write_fact_in_context(&resolution, raw_fact, conn, context)
     })
 }
@@ -225,27 +284,26 @@ pub fn context_for_job_window(
     job: &ExtractionJob,
     window: &WindowedTurns,
 ) -> Result<FactWriteContext, FactResolutionError> {
-    let memory_root = turn_writer::resolve_memory_root(conn).map_err(|error| {
-        FactResolutionError::Config {
+    let memory_root =
+        turn_writer::resolve_memory_root(conn).map_err(|error| FactResolutionError::Config {
             message: error.to_string(),
-        }
-    })?;
-    let extracted_at = queue::current_timestamp(conn).map_err(|error| {
-        FactResolutionError::Config {
+        })?;
+    let extracted_at =
+        queue::current_timestamp(conn).map_err(|error| FactResolutionError::Config {
             message: error.to_string(),
-        }
-    })?;
+        })?;
     let extracted_by =
         db::read_config_value_or(conn, "extraction.model_alias", DEFAULT_MODEL_ALIAS).map_err(
             |error| FactResolutionError::Config {
                 message: error.to_string(),
             },
         )?;
-    let parsed_path = format::parse_relative_conversation_path(&job.conversation_path).map_err(|_| {
-        FactResolutionError::InvalidConversationPath {
-            path: job.conversation_path.clone(),
-        }
-    })?;
+    let parsed_path =
+        format::parse_relative_conversation_path(&job.conversation_path).map_err(|_| {
+            FactResolutionError::InvalidConversationPath {
+                path: job.conversation_path.clone(),
+            }
+        })?;
 
     Ok(FactWriteContext {
         collection_id: memory_root.collection_id,
@@ -259,16 +317,14 @@ pub fn context_for_job_window(
 }
 
 fn default_write_context(conn: &Connection) -> Result<FactWriteContext, FactResolutionError> {
-    let memory_root = turn_writer::resolve_memory_root(conn).map_err(|error| {
-        FactResolutionError::Config {
+    let memory_root =
+        turn_writer::resolve_memory_root(conn).map_err(|error| FactResolutionError::Config {
             message: error.to_string(),
-        }
-    })?;
-    let extracted_at = queue::current_timestamp(conn).map_err(|error| {
-        FactResolutionError::Config {
+        })?;
+    let extracted_at =
+        queue::current_timestamp(conn).map_err(|error| FactResolutionError::Config {
             message: error.to_string(),
-        }
-    })?;
+        })?;
     let extracted_by =
         db::read_config_value_or(conn, "extraction.model_alias", DEFAULT_MODEL_ALIAS).map_err(
             |error| FactResolutionError::Config {
@@ -352,11 +408,7 @@ fn resolution_thresholds(conn: &Connection) -> Result<ResolutionThresholds, Fact
     })
 }
 
-fn read_f64_config(
-    conn: &Connection,
-    key: &str,
-    default: f64,
-) -> Result<f64, FactResolutionError> {
+fn read_f64_config(conn: &Connection, key: &str, default: f64) -> Result<f64, FactResolutionError> {
     let raw = db::read_config_value_or(conn, key, &default.to_string()).map_err(|error| {
         FactResolutionError::Config {
             message: error.to_string(),
@@ -397,6 +449,28 @@ fn cosine_from_embeddings(left: &[f32], right: &[f32]) -> f64 {
         0.0
     } else {
         dot / (left_norm.sqrt() * right_norm.sqrt())
+    }
+}
+
+fn ensure_trustworthy_embedding_evidence(raw_fact: &RawFact) -> Result<(), FactResolutionError> {
+    match embedding_evidence_kind() {
+        Ok(EmbeddingEvidenceKind::Semantic) => Ok(()),
+        Ok(EmbeddingEvidenceKind::HashShim) => {
+            Err(FactResolutionError::UntrustworthyEmbeddingEvidence {
+                kind: raw_fact.kind_str().to_string(),
+                key_field: raw_fact.type_key_field().to_string(),
+                key_value: raw_fact.type_key().to_string(),
+                reason: EmbeddingEvidenceFailure::HashShimOnly,
+            })
+        }
+        Err(error) => Err(FactResolutionError::UntrustworthyEmbeddingEvidence {
+            kind: raw_fact.kind_str().to_string(),
+            key_field: raw_fact.type_key_field().to_string(),
+            key_value: raw_fact.type_key().to_string(),
+            reason: EmbeddingEvidenceFailure::Unavailable {
+                message: error.to_string(),
+            },
+        }),
     }
 }
 
@@ -541,12 +615,23 @@ fn render_fact_markdown(
 ) -> Result<String, FactResolutionError> {
     let mut frontmatter = Frontmatter::new();
     frontmatter.insert("corrected_via".to_string(), JsonValue::Null);
-    frontmatter_insert_string(&mut frontmatter, "extracted_at", context.extracted_at.clone());
-    frontmatter_insert_string(&mut frontmatter, "extracted_by", context.extracted_by.clone());
+    frontmatter_insert_string(
+        &mut frontmatter,
+        "extracted_at",
+        context.extracted_at.clone(),
+    );
+    frontmatter_insert_string(
+        &mut frontmatter,
+        "extracted_by",
+        context.extracted_by.clone(),
+    );
     frontmatter_insert_string(&mut frontmatter, "kind", raw_fact.kind_str());
     frontmatter_insert_string(&mut frontmatter, "session_id", context.session_id.clone());
     frontmatter_insert_string(&mut frontmatter, "slug", slug.to_string());
-    frontmatter.insert("source_turns".to_string(), json!(qualified_source_turns(context)));
+    frontmatter.insert(
+        "source_turns".to_string(),
+        json!(qualified_source_turns(context)),
+    );
     frontmatter.insert(
         "supersedes".to_string(),
         supersedes

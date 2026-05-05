@@ -1,7 +1,8 @@
-use std::collections::HashMap;
 use std::path::Path;
 
-use quaid::core::conversation::supersede::{resolve_in_scope_with_similarity, Resolution};
+use quaid::core::conversation::supersede::{
+    resolve_in_scope_with_similarity, EmbeddingEvidenceFailure, FactResolutionError, Resolution,
+};
 use quaid::core::db;
 use quaid::core::types::{PreferenceStrength, RawFact};
 use rusqlite::{params, Connection};
@@ -39,7 +40,14 @@ fn insert_page(
               frontmatter, wing, room, superseded_by, version)
          VALUES
              (1, '', ?1, ?2, ?3, ?1, ?4, ?4, '', ?5, '', '', ?6, 1)",
-        params![slug, format!("uuid-{slug}"), kind, body, frontmatter, superseded_by],
+        params![
+            slug,
+            format!("uuid-{slug}"),
+            kind,
+            body,
+            frontmatter,
+            superseded_by
+        ],
     )
     .unwrap();
     conn.last_insert_rowid()
@@ -53,8 +61,17 @@ fn preference_fact(summary: &str) -> RawFact {
     }
 }
 
+fn untrustworthy_embedding_error(reason: EmbeddingEvidenceFailure) -> FactResolutionError {
+    FactResolutionError::UntrustworthyEmbeddingEvidence {
+        kind: "preference".to_string(),
+        key_field: "about".to_string(),
+        key_value: "programming-language".to_string(),
+        reason,
+    }
+}
+
 #[test]
-fn resolve_drops_near_duplicate_fact() {
+fn resolve_drops_single_head_near_duplicate_fact() {
     let dir = tempfile::TempDir::new().unwrap();
     let conn = open_test_db(&dir.path().join("memory.db"));
     insert_page(
@@ -86,7 +103,7 @@ fn resolve_drops_near_duplicate_fact() {
 }
 
 #[test]
-fn resolve_supersedes_mid_similarity_head() {
+fn resolve_supersedes_single_head_mid_similarity_match() {
     let dir = tempfile::TempDir::new().unwrap();
     let conn = open_test_db(&dir.path().join("memory.db"));
     insert_page(
@@ -115,7 +132,7 @@ fn resolve_supersedes_mid_similarity_head() {
 }
 
 #[test]
-fn resolve_allows_low_similarity_key_match_to_coexist() {
+fn resolve_allows_single_head_low_similarity_match_to_coexist() {
     let dir = tempfile::TempDir::new().unwrap();
     let conn = open_test_db(&dir.path().join("memory.db"));
     insert_page(
@@ -159,7 +176,7 @@ fn resolve_coexists_when_no_head_matches_key() {
         &conn,
         1,
         "",
-        |_, _| Ok(0.99),
+        |_, _| panic!("similarity should not run when there are no matching heads"),
     )
     .unwrap();
 
@@ -167,10 +184,18 @@ fn resolve_coexists_when_no_head_matches_key() {
 }
 
 #[test]
-fn resolve_uses_highest_similarity_head_when_multiple_match() {
+fn resolve_refuses_same_key_multi_head_candidate_sets() {
     let dir = tempfile::TempDir::new().unwrap();
     let conn = open_test_db(&dir.path().join("memory.db"));
-    insert_page(&conn, "tokyo", "fact", "about", "location", "tokyo-body", None);
+    insert_page(
+        &conn,
+        "tokyo",
+        "fact",
+        "about",
+        "location",
+        "tokyo-body",
+        None,
+    );
     insert_page(
         &conn,
         "singapore",
@@ -180,14 +205,17 @@ fn resolve_uses_highest_similarity_head_when_multiple_match() {
         "singapore-body",
         None,
     );
-    insert_page(&conn, "sydney", "fact", "about", "location", "sydney-body", None);
-    let scores = HashMap::from([
-        ("tokyo-body".to_string(), 0.6),
-        ("singapore-body".to_string(), 0.4),
-        ("sydney-body".to_string(), 0.2),
-    ]);
+    insert_page(
+        &conn,
+        "sydney",
+        "fact",
+        "about",
+        "location",
+        "sydney-body",
+        None,
+    );
 
-    let resolution = resolve_in_scope_with_similarity(
+    let error = resolve_in_scope_with_similarity(
         &RawFact::Fact {
             about: "location".to_string(),
             summary: "Matt lives in Tokyo".to_string(),
@@ -195,18 +223,109 @@ fn resolve_uses_highest_similarity_head_when_multiple_match() {
         &conn,
         1,
         "",
-        |_, body| Ok(*scores.get(body).unwrap()),
+        |_, _| panic!("ambiguity refusal must happen before cosine comparison"),
     )
-    .unwrap();
+    .unwrap_err();
 
     assert!(matches!(
-        resolution,
-        Resolution::Supersede { prior_slug, .. } if prior_slug == "tokyo"
+        error,
+        FactResolutionError::AmbiguousMatchingHeads {
+            kind,
+            key_field,
+            key_value,
+            candidate_slugs
+        } if kind == "fact"
+            && key_field == "about"
+            && key_value == "location"
+            && candidate_slugs == vec!["tokyo", "singapore", "sydney"]
     ));
 }
 
 #[test]
-fn resolve_ignores_non_head_pages_when_historical_rows_would_otherwise_win() {
+fn resolve_fails_closed_when_embeddings_are_hash_shim_only_with_matching_heads() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let conn = open_test_db(&dir.path().join("memory.db"));
+    insert_page(
+        &conn,
+        "existing-rust",
+        "preference",
+        "about",
+        "programming-language",
+        "Matt prefers Rust",
+        None,
+    );
+
+    let error = resolve_in_scope_with_similarity(
+        &preference_fact("Matt switched to Zig"),
+        &conn,
+        1,
+        "",
+        |_, _| {
+            Err(untrustworthy_embedding_error(
+                EmbeddingEvidenceFailure::HashShimOnly,
+            ))
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        FactResolutionError::UntrustworthyEmbeddingEvidence {
+            kind,
+            key_field,
+            key_value,
+            reason: EmbeddingEvidenceFailure::HashShimOnly
+        } if kind == "preference"
+            && key_field == "about"
+            && key_value == "programming-language"
+    ));
+}
+
+#[test]
+fn resolve_fails_closed_when_embeddings_are_unavailable_with_matching_heads() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let conn = open_test_db(&dir.path().join("memory.db"));
+    insert_page(
+        &conn,
+        "existing-rust",
+        "preference",
+        "about",
+        "programming-language",
+        "Matt prefers Rust",
+        None,
+    );
+
+    let error = resolve_in_scope_with_similarity(
+        &preference_fact("Matt switched to Zig"),
+        &conn,
+        1,
+        "",
+        |_, _| {
+            Err(untrustworthy_embedding_error(
+                EmbeddingEvidenceFailure::Unavailable {
+                    message: "embedding model is not loaded".to_string(),
+                },
+            ))
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        FactResolutionError::UntrustworthyEmbeddingEvidence {
+            kind,
+            key_field,
+            key_value,
+            reason: EmbeddingEvidenceFailure::Unavailable { message }
+        } if kind == "preference"
+            && key_field == "about"
+            && key_value == "programming-language"
+            && message == "embedding model is not loaded"
+    ));
+}
+
+#[test]
+fn resolve_ignores_non_head_pages_when_historical_rows_would_otherwise_match() {
     let dir = tempfile::TempDir::new().unwrap();
     let conn = open_test_db(&dir.path().join("memory.db"));
     let current_head_id = insert_page(
@@ -239,10 +358,9 @@ fn resolve_ignores_non_head_pages_when_historical_rows_would_otherwise_win() {
         "",
         |_, body| {
             if body == "historical-body" {
-                Ok(0.99)
-            } else {
-                Ok(0.55)
+                panic!("historical rows must not be considered resolution candidates");
             }
+            Ok(0.55)
         },
     )
     .unwrap();

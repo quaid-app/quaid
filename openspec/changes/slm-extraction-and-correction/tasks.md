@@ -59,15 +59,15 @@
 
 ## 7. Per-fact resolution
 
-> **Scope note (Mom, 2026-05-05T17:17:29.932+08:00):** Per Leela's rescope, all `7.*` resolution claims stay reopened. This revision closes only writer/schema honesty (`8.1–8.5` plus frontmatter-substrate repair), so cosine policy, same-key ambiguity, and watcher-spanning transaction guarantees remain deferred.
+> **Closure note (Mom, 2026-05-05T17:17:29.932+08:00):** This narrowed `7.*` closure now proves head-only lookup, `0 candidates -> Coexist`, single-head dedup/supersede/coexist with trustworthy semantic embeddings, typed refusal for same-key ambiguity or untrustworthy embedding evidence, and a transaction-scoped-only resolution claim. Broader watcher-spanning atomicity remains deferred.
 
-- [ ] 7.1 Create `src/core/conversation/supersede.rs::resolve(raw_fact, conn) -> Result<Resolution>` returning one of `Drop`, `Supersede(prior_slug)`, `Coexist`
-- [ ] 7.2 Head-only key-match query: select pages where `kind = ? AND superseded_by IS NULL AND json_extract(frontmatter, '$.<type_key>') = ?`
-- [ ] 7.3 Compute prose-embedding cosine between the new fact's `summary` and each candidate head's body; reuse the existing embedding pipeline
-- [ ] 7.4 Apply rules: cosine > `dedup_cosine_min` → Drop; cosine in `[supersede_cosine_min, dedup_cosine_min]` against best-match → Supersede; otherwise → Coexist
-- [ ] 7.5 Reopen same-key multi-head handling around a truthful fail-closed contract; do not claim “highest cosine wins” until a reviewed ambiguity policy actually lands
-- [ ] 7.6 Narrow the contract to transaction-scoped resolution only unless a future design adds a real reservation across worker resolution and watcher ingest
-- [ ] 7.7 Tests: when the deferred resolution slice resumes, rewrite `tests/fact_resolution.rs` around the reopened contract instead of treating multi-match disambiguation as accepted shipped truth
+- [x] 7.1 Keep `src/core/conversation/supersede.rs::resolve(raw_fact, conn) -> Result<Resolution>` on the truthful surface: it returns `Drop`, `Supersede(prior_slug)`, or `Coexist` only when the candidate partition is unambiguous and embedding evidence is trustworthy
+- [x] 7.2 Head-only key-match query: select pages where `kind = ? AND superseded_by IS NULL AND json_extract(frontmatter, '$.<type_key>') = ?`
+- [x] 7.3 Compute prose-embedding cosine between the new fact's `summary` and the single candidate head's body only when the existing embedding pipeline yields trustworthy semantic evidence; refuse dedup/supersede decisions when embeddings are unavailable or hash-shim-only
+- [x] 7.4 Apply single-head rules: zero candidates → Coexist; one candidate with cosine > `dedup_cosine_min` → Drop; one candidate with cosine in `[supersede_cosine_min, dedup_cosine_min]` → Supersede; one candidate below `supersede_cosine_min` → Coexist
+- [x] 7.5 Same-key multi-head handling: fail closed — `>1` matching heads returns `FactResolutionError::AmbiguousMatchingHeads`; untrustworthy embedding evidence returns `FactResolutionError::UntrustworthyEmbeddingEvidence` for any non-zero candidate set; "highest cosine wins" heuristic is NOT shipped in this slice
+- [x] 7.6 Transaction contract: `resolve_and_write_fact_in_context` runs under `BEGIN IMMEDIATE` covering the head-lookup decision and file drop; the later watcher-driven page-row insert and `superseded_by` mutation are in a separate transaction and are not reserved — this is a stale-read reduction only, not an atomic end-to-end guarantee
+- [x] 7.7 Tests: `tests/fact_resolution.rs` proves zero-candidate coexist, single-head dedup/supersede/coexist, fail-closed same-key multi-head refusal (`AmbiguousMatchingHeads`), untrustworthy-embedding refusal (`UntrustworthyEmbeddingEvidence`), and historical non-head exclusion
 
 ## 8. Fact-page write step
 

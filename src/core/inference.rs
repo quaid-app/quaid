@@ -59,6 +59,12 @@ pub struct ModelConfig {
     pub sha256_hashes: Option<ModelFileHashes>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingEvidenceKind {
+    Semantic,
+    HashShim,
+}
+
 impl ModelConfig {
     pub fn vec_table(&self) -> String {
         format!("page_embeddings_vec_{}", self.embedding_dim)
@@ -364,6 +370,13 @@ impl EmbeddingModel {
                 max_len,
             } => embed_candle_xlm_roberta(text, model, tokenizer, device, *max_len),
             EmbeddingBackend::HashShim => embed_hash_shim(text, self.config.embedding_dim),
+        }
+    }
+
+    fn evidence_kind(&self) -> EmbeddingEvidenceKind {
+        match self.backend {
+            EmbeddingBackend::HashShim => EmbeddingEvidenceKind::HashShim,
+            _ => EmbeddingEvidenceKind::Semantic,
         }
     }
 }
@@ -1042,6 +1055,19 @@ pub fn ensure_model() {
     }
 }
 
+/// Returns `true` when the loaded embedding backend is a real semantic model (Candle-based),
+/// and `false` when it has fallen back to `HashShim`. Callers that perform semantic comparisons
+/// MUST check this before trusting cosine scores for mutating decisions.
+pub fn embedding_is_real_semantic() -> bool {
+    ensure_model();
+    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    runtime
+        .loaded
+        .as_ref()
+        .map(|loaded| !matches!(loaded.backend, EmbeddingBackend::HashShim))
+        .unwrap_or(false)
+}
+
 pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -1059,6 +1085,18 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
             message: "embedding model is not loaded; call configure_runtime_model first".to_owned(),
         })?
         .embed(trimmed)
+}
+
+pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError> {
+    ensure_model();
+    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    Ok(runtime
+        .loaded
+        .as_ref()
+        .ok_or_else(|| InferenceError::Internal {
+            message: "embedding model is not loaded; call configure_runtime_model first".to_owned(),
+        })?
+        .evidence_kind())
 }
 
 #[allow(dead_code)]

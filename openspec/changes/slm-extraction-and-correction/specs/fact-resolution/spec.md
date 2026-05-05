@@ -1,15 +1,16 @@
 ## ADDED Requirements
 
-### Requirement: Resolution applies dedup, supersede, or coexist per fact
-For each parsed fact `F` produced by the SLM, the system SHALL perform a resolution step before writing. Resolution SHALL: (1) look up existing **head** pages where `kind = F.kind AND <type_key> = F.<type_key>` (the type key is `about` for `preference`/`fact`, `chose` for `decision`, `what` for `action_item`); (2) compute the prose-embedding cosine between `F.summary` and each candidate head's body using the existing embedding pipeline; (3) apply the rules below in order:
+### Requirement: Resolution applies dedup, supersede, coexist, or refusal per fact
+For each parsed fact `F` produced by the SLM, the system SHALL perform a resolution step before writing. Resolution SHALL: (1) look up existing **head** pages where `kind = F.kind AND <type_key> = F.<type_key>` (the type key is `about` for `preference`/`fact`, `chose` for `decision`, `what` for `action_item`); (2) apply the candidate-count and embedding-evidence guardrails below; and (3) only when there is exactly one matching head and trustworthy semantic embedding evidence, compute the prose-embedding cosine between `F.summary` and that candidate head's body using the existing embedding pipeline.
 
-- **Dedup**: cosine > 0.92 against any head → drop F entirely; do not write a new page.
-- **Supersede**: same key, cosine in `[0.4, 0.92]` against an existing head H → write F as a new head with frontmatter `supersedes: <H.slug>`; the existing supersede chain machinery (delivered by `add-only-supersede-chain`) updates `H.superseded_by`.
-- **Coexist (key match, low similarity)**: same key match, cosine < 0.4 against all matching heads → write F as a fresh head; the shared key is incidental.
-- **Coexist (no match)**: no head shares the key → write F as a fresh head.
-- **Multi-match disambiguation**: if multiple heads share the key, pick the head with highest cosine to F and apply rules 1–3 against that head only; the other matching heads are unchanged.
+- **Coexist (no match)**: no head shares the key → write `F` as a fresh head.
+- **Typed ambiguity refusal**: if multiple heads share the key, resolution SHALL fail closed with an `AmbiguousMatchingHeads` error and write nothing. The "highest cosine wins" heuristic is NOT the policy in this slice. A future reviewed policy must explicitly land before multi-head disambiguation is permitted.
+- **Typed evidence refusal**: if exactly one head shares the key but semantic embeddings are unavailable or hash-shim-only, resolution SHALL fail closed with an `UntrustworthyEmbeddingEvidence` error for that non-zero candidate set. This prevents pseudo-cosines from producing bad history.
+- **Dedup**: with exactly one matching head and trustworthy semantic evidence, cosine > 0.92 → drop `F` entirely; do not write a new page.
+- **Supersede**: with exactly one matching head and trustworthy semantic evidence, cosine in `[0.4, 0.92]` against an existing head `H` → write `F` as a new head with frontmatter `supersedes: <H.slug>`; the existing supersede chain machinery (delivered by `add-only-supersede-chain`) updates `H.superseded_by`.
+- **Coexist (key match, low similarity)**: with exactly one matching head and trustworthy semantic evidence, cosine < 0.4 → write `F` as a fresh head; the shared key is incidental.
 
-The cosine thresholds SHALL be configurable via `fact_resolution.dedup_cosine_min` (default `0.92`) and `fact_resolution.supersede_cosine_min` (default `0.4`). Resolution SHALL be implemented in a single transaction that scopes the head lookup, the embedding comparison, and the write to a single consistent state.
+The cosine thresholds SHALL be configurable via `fact_resolution.dedup_cosine_min` (default `0.92`) and `fact_resolution.supersede_cosine_min` (default `0.4`). Resolution SHALL run inside a single immediate transaction for head lookup and resolution-time file-decision work only; the later watcher-driven ingest that inserts the page row and mutates `superseded_by` happens in a separate transaction and is not reserved by the resolution transaction.
 
 #### Scenario: Near-duplicate fact is dropped
 - **WHEN** F is `{kind: preference, about: programming-language, summary: "Matt prefers Rust"}` and an existing head has `summary: "User prefers Rust"` with cosine 0.95 to F
@@ -27,19 +28,23 @@ The cosine thresholds SHALL be configurable via `fact_resolution.dedup_cosine_mi
 - **WHEN** F is `{kind: preference, about: editor, summary: "Matt uses Helix"}` and no existing head has `kind=preference, about=editor`
 - **THEN** F is written as a fresh head with `superseded_by IS NULL` and `supersedes: null`
 
-#### Scenario: Multi-match resolves against the closest head
-- **WHEN** F is `{kind: fact, about: location, summary: "Matt lives in Tokyo"}` and three existing heads share `kind=fact, about=location` with cosines `0.6`, `0.4`, `0.2`
-- **THEN** F supersedes the head at cosine `0.6` (per the supersede rule) and the other two heads are unchanged
+#### Scenario: Multi-match same key is refused (ambiguous head set)
+- **WHEN** F is `{kind: fact, about: location, summary: "Matt lives in Tokyo"}` and three existing heads share `kind=fact, about=location`
+- **THEN** resolution returns an `AmbiguousMatchingHeads` error; no file is written; all three heads are unchanged
+
+#### Scenario: Resolution refused when embeddings are unavailable
+- **WHEN** F is `{kind: preference, about: programming-language, summary: "Matt uses Zig"}` and one existing head shares the key, but the embedding backend has fallen back to hash-shim
+- **THEN** resolution returns an `UntrustworthyEmbeddingEvidence` error; no file is written; the existing head is unchanged
 
 ### Requirement: Resolution uses head pages only; non-head pages are ignored
-The head-lookup query in resolution SHALL filter to `superseded_by IS NULL`. Non-head (historical) pages SHALL NOT be candidates for dedup, supersede, or multi-match disambiguation. This ensures that a fact correction does not erroneously chain through a long-superseded ancestor.
+The head-lookup query in resolution SHALL filter to `superseded_by IS NULL`. Non-head (historical) pages SHALL NOT be candidates for dedup, supersede, coexist, or ambiguity checks. This ensures that a fact correction does not erroneously chain through a long-superseded ancestor.
 
 #### Scenario: Historical pages are not candidates
 - **WHEN** F is `{kind: preference, about: language, summary: "Matt prefers Rust"}` and the page graph contains heads `[H_current]` plus a historical chain `[H_old1 → H_old2 → H_current]`
 - **THEN** resolution evaluates F against `H_current` only; `H_old1` and `H_old2` are ignored
 
 ### Requirement: Resolution writes via the vault, not directly to the database
-After resolution decides on dedup / supersede / coexist, the write step SHALL produce a markdown file at the canonical path (`<vault>/extracted/<type-plural>/<slug>.md`) and rely on the Phase 4 vault watcher to ingest it as a page row. The supersede frontmatter (`supersedes: <prior_slug>`) SHALL be set on the file's frontmatter; the existing page-write code path (delivered by `add-only-supersede-chain`) SHALL handle the atomic two-end update of `superseded_by` on the prior head.
+After resolution decides on dedup / supersede / coexist / refusal, the write step SHALL produce a markdown file at the canonical path (`<vault>/extracted/<type-plural>/<slug>.md`) only for the supersede/coexist cases and SHALL rely on the Phase 4 vault watcher to ingest it as a page row. The supersede frontmatter (`supersedes: <prior_slug>`) SHALL be set on the file's frontmatter; the existing page-write code path (delivered by `add-only-supersede-chain`) SHALL handle the atomic two-end update of `superseded_by` on the prior head during that later ingest step.
 
 #### Scenario: Supersede write produces a file with supersedes frontmatter
 - **WHEN** resolution decides F supersedes head H

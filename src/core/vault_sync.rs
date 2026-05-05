@@ -8057,7 +8057,7 @@ mod tests {
 
         let self_write_rename = NotifyEvent {
             kind: NotifyEventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)),
-            paths: vec![temp_path, target_path],
+            paths: vec![temp_path, target_path.clone()],
             attrs: Default::default(),
         };
         let suppressed = (0..8).any(|_| {

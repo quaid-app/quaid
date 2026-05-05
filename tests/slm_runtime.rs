@@ -1,9 +1,10 @@
-use quaid::core::conversation::slm::{parse_response, SlmRunner};
 use quaid::core::conversation::model_lifecycle::{cache_dir_for_alias, resolve_model_alias};
+use quaid::core::conversation::slm::{parse_response, LazySlmRunner, SlmError, SlmRunner};
 use quaid::core::types::RawFact;
 use safetensors::tensor::{serialize_to_file, Dtype, TensorView};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tokenizers::models::wordlevel::WordLevel;
 use tokenizers::pre_tokenizers::whitespace::Whitespace;
 use tokenizers::Tokenizer;
@@ -37,16 +38,86 @@ fn parse_response_strips_json_fence_and_preserves_fact_shape() {
     );
 }
 
+#[test]
+fn lazy_runner_loads_on_first_infer_and_reuses() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let _guard = EnvGuard::set("QUAID_MODEL_CACHE_DIR", temp.path().display().to_string());
+    seed_tiny_phi3_cache("phi-3.5-mini");
+
+    let runtime = LazySlmRunner::new();
+    assert!(!runtime.is_loaded(), "should start unloaded");
+
+    let first = runtime
+        .infer("phi-3.5-mini", "hello", 1)
+        .expect("first infer ok");
+    assert_eq!(first, "world");
+    assert!(runtime.is_loaded());
+    assert!(!runtime.is_runtime_disabled());
+
+    let second = runtime
+        .infer("phi-3.5-mini", "hello", 0)
+        .expect("second infer ok");
+    assert!(second.is_empty(), "zero max_tokens must yield empty output");
+    assert!(!runtime.is_runtime_disabled());
+}
+
+#[test]
+fn lazy_runner_runtime_disables_after_cache_load_failure() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let _guard = EnvGuard::set("QUAID_MODEL_CACHE_DIR", temp.path().display().to_string());
+
+    let runtime = LazySlmRunner::new();
+    let error = runtime
+        .infer("phi-3.5-mini", "hello", 1)
+        .expect_err("cache miss must fail closed");
+    assert!(matches!(error, SlmError::Cache(_)));
+    assert!(runtime.is_runtime_disabled());
+    assert!(!runtime.is_loaded());
+
+    let follow_up = runtime
+        .infer("phi-3.5-mini", "hello", 1)
+        .expect_err("runtime must stay fail-closed");
+    assert!(matches!(follow_up, SlmError::RuntimeDisabled { .. }));
+}
+
+#[test]
+fn parse_response_rejects_unknown_kind_as_whole_response_error() {
+    let error = parse_response(r#"{"facts":[{"kind":"unknown_kind","foo":"bar"}]}"#)
+        .expect_err("unknown kind must fail");
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_rejects_missing_required_field_as_whole_response_error() {
+    let error = parse_response(r#"{"facts":[{"kind":"decision","summary":"we chose Rust"}]}"#)
+        .expect_err("missing `chose` must fail");
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn env_lock() -> &'static Mutex<()> {
+    ENV_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 struct EnvGuard {
     key: &'static str,
     previous: Option<String>,
+    _lock: MutexGuard<'static, ()>,
 }
 
 impl EnvGuard {
     fn set(key: &'static str, value: String) -> Self {
+        let lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = std::env::var(key).ok();
         std::env::set_var(key, value);
-        Self { key, previous }
+        Self {
+            key,
+            previous,
+            _lock: lock,
+        }
     }
 }
 
@@ -100,15 +171,13 @@ fn seed_tiny_phi3_cache(alias: &str) {
             .unwrap(),
     );
     tokenizer.with_pre_tokenizer(Some(Whitespace));
-    tokenizer.save(cache_dir.join("tokenizer.json"), false).unwrap();
+    tokenizer
+        .save(cache_dir.join("tokenizer.json"), false)
+        .unwrap();
 
-    let embed = floats_to_bytes(&[
-        0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 0.0, 0.0,
-    ]);
+    let embed = floats_to_bytes(&[0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 0.0, 0.0]);
     let norm = floats_to_bytes(&[1.0, 1.0]);
-    let lm_head = floats_to_bytes(&[
-        0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
-    ]);
+    let lm_head = floats_to_bytes(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
 
     let embed_view = TensorView::new(Dtype::F32, vec![4, 2], &embed).unwrap();
     let norm_view = TensorView::new(Dtype::F32, vec![2], &norm).unwrap();

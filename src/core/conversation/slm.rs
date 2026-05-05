@@ -11,7 +11,9 @@ use serde::Deserialize;
 use thiserror::Error;
 use tokenizers::Tokenizer;
 
-use crate::core::conversation::model_lifecycle::{load_model_from_local_cache, ModelLifecycleError};
+use crate::core::conversation::model_lifecycle::{
+    load_model_from_local_cache, ModelLifecycleError,
+};
 use crate::core::types::ExtractionResponse;
 
 const DEFAULT_SLM_SEED: u64 = 0;
@@ -70,10 +72,7 @@ pub enum SlmError {
     Tokenizer { path: String, message: String },
 
     #[error("slm weights are unavailable in {cache_dir}: {message}")]
-    Weights {
-        cache_dir: String,
-        message: String,
-    },
+    Weights { cache_dir: String, message: String },
 
     #[error("slm inference failed: {message}")]
     Inference { message: String },
@@ -92,6 +91,15 @@ struct ModelConfigEnvelope {
 
 impl SlmRunner {
     pub fn load(alias: &str) -> Result<Self, SlmError> {
+        Self::catch_load(|| Self::load_inner(alias))
+    }
+
+    fn load_inner(alias: &str) -> Result<Self, SlmError> {
+        #[cfg(test)]
+        if alias == "__panic_during_load__" {
+            panic!("load panic for test");
+        }
+
         let model_dir = load_model_from_local_cache(alias)?;
         let config_path = model_dir.join("config.json");
         let config_text = fs::read_to_string(&config_path).map_err(|error| SlmError::Config {
@@ -125,10 +133,11 @@ impl SlmRunner {
             })?;
 
         let tokenizer_path = model_dir.join("tokenizer.json");
-        let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|error| SlmError::Tokenizer {
-            path: tokenizer_path.display().to_string(),
-            message: error.to_string(),
-        })?;
+        let tokenizer =
+            Tokenizer::from_file(&tokenizer_path).map_err(|error| SlmError::Tokenizer {
+                path: tokenizer_path.display().to_string(),
+                message: error.to_string(),
+            })?;
 
         let model_paths = safetensor_paths(&model_dir)?;
         let device = Device::Cpu;
@@ -151,6 +160,15 @@ impl SlmRunner {
         })
     }
 
+    fn catch_load<T>(operation: impl FnOnce() -> Result<T, SlmError>) -> Result<T, SlmError> {
+        match catch_unwind(AssertUnwindSafe(operation)) {
+            Ok(result) => result,
+            Err(payload) => Err(SlmError::Panic {
+                message: panic_payload_message(payload),
+            }),
+        }
+    }
+
     pub fn infer(&mut self, prompt: &str, max_tokens: usize) -> Result<String, SlmError> {
         self.catch_infer(|runner| runner.infer_inner(prompt, max_tokens))
     }
@@ -163,12 +181,12 @@ impl SlmRunner {
             return Ok(String::new());
         }
 
-        let encoding = self
-            .tokenizer
-            .encode(prompt, false)
-            .map_err(|error| SlmError::Inference {
-                message: format!("tokenizer encode: {error}"),
-            })?;
+        let encoding =
+            self.tokenizer
+                .encode(prompt, false)
+                .map_err(|error| SlmError::Inference {
+                    message: format!("tokenizer encode: {error}"),
+                })?;
         let mut all_tokens = encoding.get_ids().to_vec();
         if all_tokens.is_empty() {
             return Err(SlmError::EmptyPrompt);
@@ -233,13 +251,24 @@ impl SlmRunner {
     }
 }
 
+impl LazySlmState {
+    fn disable_runtime(&mut self, error: &SlmError) {
+        self.runner = None;
+        self.runtime_disabled = true;
+        self.last_error = Some(error.to_string());
+    }
+}
+
 impl LazySlmRunner {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn infer(&self, alias: &str, prompt: &str, max_tokens: usize) -> Result<String, SlmError> {
-        let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.runtime_disabled {
             return Err(SlmError::RuntimeDisabled {
                 message: state
@@ -249,7 +278,15 @@ impl LazySlmRunner {
             });
         }
         if state.runner.is_none() {
-            state.runner = Some(SlmRunner::load(alias)?);
+            match SlmRunner::load(alias) {
+                Ok(runner) => state.runner = Some(runner),
+                Err(error) => {
+                    if should_disable_runtime_after_load_failure(&error) {
+                        state.disable_runtime(&error);
+                    }
+                    return Err(error);
+                }
+            }
         }
 
         let result = state
@@ -257,15 +294,8 @@ impl LazySlmRunner {
             .as_mut()
             .expect("runner inserted above")
             .infer(prompt, max_tokens);
-        if let Err(SlmError::Panic { .. }) = &result {
-            state.runtime_disabled = true;
-            state.last_error = Some(
-                result
-                    .as_ref()
-                    .err()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "unknown panic".to_string()),
-            );
+        if let Err(error @ SlmError::Panic { .. }) = &result {
+            state.disable_runtime(error);
         }
         result
     }
@@ -340,6 +370,18 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+fn should_disable_runtime_after_load_failure(error: &SlmError) -> bool {
+    matches!(
+        error,
+        SlmError::Cache(_)
+            | SlmError::Config { .. }
+            | SlmError::Tokenizer { .. }
+            | SlmError::Weights { .. }
+            | SlmError::Inference { .. }
+            | SlmError::Panic { .. }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_response, LazySlmRunner, SlmError, SlmRunner};
@@ -370,7 +412,9 @@ mod tests {
         seed_tiny_phi3_cache("phi-3.5-mini");
 
         let mut runner = SlmRunner::load("phi-3.5-mini").unwrap();
-        let error = runner.catch_infer::<String>(|_| panic!("boom")).unwrap_err();
+        let error = runner
+            .catch_infer::<String>(|_| panic!("boom"))
+            .unwrap_err();
 
         assert!(matches!(error, SlmError::Panic { .. }));
         assert!(error.to_string().contains("boom"));
@@ -395,16 +439,63 @@ mod tests {
         assert!(!runtime.is_runtime_disabled());
     }
 
+    #[test]
+    fn lazy_runner_runtime_disables_after_cache_load_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::set("QUAID_MODEL_CACHE_DIR", temp.path().display().to_string());
+
+        let runtime = LazySlmRunner::new();
+        let error = runtime.infer("phi-3.5-mini", "hello", 1).unwrap_err();
+
+        assert!(matches!(error, SlmError::Cache(_)));
+        assert!(runtime.is_runtime_disabled());
+        assert!(!runtime.is_loaded());
+
+        let follow_up = runtime.infer("phi-3.5-mini", "hello", 1).unwrap_err();
+        assert!(matches!(follow_up, SlmError::RuntimeDisabled { .. }));
+    }
+
+    #[test]
+    fn lazy_runner_runtime_disables_after_load_panic() {
+        let runtime = LazySlmRunner::new();
+        let error = runtime
+            .infer("__panic_during_load__", "hello", 1)
+            .unwrap_err();
+
+        assert!(matches!(error, SlmError::Panic { .. }));
+        assert!(error.to_string().contains("load panic for test"));
+        assert!(runtime.is_runtime_disabled());
+        assert!(!runtime.is_loaded());
+
+        let follow_up = runtime.infer("phi-3.5-mini", "hello", 1).unwrap_err();
+        assert!(matches!(follow_up, SlmError::RuntimeDisabled { .. }));
+        assert!(follow_up.to_string().contains("load panic for test"));
+    }
+
+    // Serialize all tests that mutate QUAID_MODEL_CACHE_DIR. Without this lock the two
+    // env-var-touching tests race against each other: one test's seed writes to the
+    // directory chosen by the other test's guard, causing manifest-not-found failures.
+    static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
     struct EnvGuard {
         key: &'static str,
         previous: Option<String>,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl EnvGuard {
         fn set(key: &'static str, value: String) -> Self {
+            let lock = ENV_LOCK
+                .get_or_init(|| std::sync::Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let previous = std::env::var(key).ok();
             std::env::set_var(key, value);
-            Self { key, previous }
+            Self {
+                key,
+                previous,
+                _lock: lock,
+            }
         }
 
         fn replace(&mut self, value: String) {
@@ -419,6 +510,7 @@ mod tests {
             } else {
                 std::env::remove_var(self.key);
             }
+            // _lock drops here: env var is fully restored before the lock is released
         }
     }
 
@@ -462,7 +554,9 @@ mod tests {
                 .unwrap(),
         );
         tokenizer.with_pre_tokenizer(Some(Whitespace));
-        tokenizer.save(cache_dir.join("tokenizer.json"), false).unwrap();
+        tokenizer
+            .save(cache_dir.join("tokenizer.json"), false)
+            .unwrap();
 
         let embed = floats_to_bytes(&[
             0.0, 0.0, // <unk>

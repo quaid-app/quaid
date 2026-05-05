@@ -10,6 +10,7 @@ use crate::core::conversation::{
     format,
     queue::{self, ExtractionQueueError},
     slm::{parse_response, LazySlmRunner, SlmError},
+    supersede::{FactResolutionError, ResolvingFactWriter},
     turn_writer,
 };
 use crate::core::db;
@@ -81,8 +82,26 @@ pub trait FactWriter {
 
 impl FactWriter for PendingFactWriter {}
 
+impl FactWriter for ResolvingFactWriter {
+    fn write_window(
+        &self,
+        db: &Connection,
+        job: &ExtractionJob,
+        window: &WindowedTurns,
+        response: &ExtractionResponse,
+    ) -> Result<(), WorkerError> {
+        let context = crate::core::conversation::supersede::context_for_job_window(db, job, window)?;
+        for fact in &response.facts {
+            crate::core::conversation::supersede::resolve_and_write_fact_in_context(
+                fact, db, &context,
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
-pub struct Worker<'db, S = LazySlmRunner, W = PendingFactWriter> {
+pub struct Worker<'db, S = LazySlmRunner, W = ResolvingFactWriter> {
     db: &'db Connection,
     slm: S,
     _vault_writer: W,
@@ -108,6 +127,9 @@ pub enum WorkerError {
 
     #[error("worker config error: {message}")]
     Config { message: String },
+
+    #[error("fact resolution error: {0}")]
+    FactResolution(#[from] FactResolutionError),
 }
 
 impl<'db, S, W> Worker<'db, S, W>

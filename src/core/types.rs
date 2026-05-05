@@ -302,12 +302,32 @@ pub enum PreferenceStrength {
     High,
 }
 
+impl PreferenceStrength {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionItemState {
     Open,
     Done,
     Cancelled,
+}
+
+impl ActionItemState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,6 +354,72 @@ pub enum RawFact {
         due: Option<String>,
         summary: String,
     },
+}
+
+impl RawFact {
+    /// Returns the kind tag as a static string.
+    ///
+    /// Used for page `type` field on write and for FTS head-lookup queries.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Decision { .. } => "decision",
+            Self::Preference { .. } => "preference",
+            Self::Fact { .. } => "fact",
+            Self::ActionItem { .. } => "action_item",
+        }
+    }
+
+    /// Returns the value of the structured type key for this fact.
+    ///
+    /// The type key is the resolution pivot:
+    /// - `decision`    → `chose`
+    /// - `preference`  → `about`
+    /// - `fact`        → `about`
+    /// - `action_item` → `what`
+    pub fn type_key(&self) -> &str {
+        match self {
+            Self::Decision { chose, .. } => chose.as_str(),
+            Self::Preference { about, .. } => about.as_str(),
+            Self::Fact { about, .. } => about.as_str(),
+            Self::ActionItem { what, .. } => what.as_str(),
+        }
+    }
+
+    /// Returns the name of the type-key field (not its value).
+    ///
+    /// Used for JSON extraction in head-lookup queries:
+    /// `json_extract(frontmatter, '$.<type_key_field>') = ?`
+    pub fn type_key_field(&self) -> &'static str {
+        match self {
+            Self::Decision { .. } => "chose",
+            Self::Preference { .. } => "about",
+            Self::Fact { .. } => "about",
+            Self::ActionItem { .. } => "what",
+        }
+    }
+
+    /// Returns the plural directory segment used in extracted-fact vault paths.
+    ///
+    /// Path scheme: `<vault>/extracted/<type_plural>/<slug>.md`  
+    /// (or `<vault>/<namespace>/extracted/<type_plural>/<slug>.md` with a namespace)
+    pub fn type_plural(&self) -> &'static str {
+        match self {
+            Self::Decision { .. } => "decisions",
+            Self::Preference { .. } => "preferences",
+            Self::Fact { .. } => "facts",
+            Self::ActionItem { .. } => "action-items",
+        }
+    }
+
+    /// Returns the prose summary written by the SLM.
+    pub fn summary(&self) -> &str {
+        match self {
+            Self::Decision { summary, .. } => summary.as_str(),
+            Self::Preference { summary, .. } => summary.as_str(),
+            Self::Fact { summary, .. } => summary.as_str(),
+            Self::ActionItem { summary, .. } => summary.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -709,5 +795,102 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("unknown variant"));
+    }
+
+    // ── RawFact resolution-pivot helpers ──────────────────────────────────
+
+    #[test]
+    fn raw_fact_type_key_returns_chose_value_for_decision() {
+        let fact = RawFact::Decision {
+            chose: "rust".to_string(),
+            rationale: None,
+            summary: "We chose Rust.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "rust");
+        assert_eq!(fact.type_key_field(), "chose");
+        assert_eq!(fact.kind_str(), "decision");
+        assert_eq!(fact.type_plural(), "decisions");
+    }
+
+    #[test]
+    fn raw_fact_type_key_returns_about_value_for_preference() {
+        let fact = RawFact::Preference {
+            about: "programming-language".to_string(),
+            strength: None,
+            summary: "Matt prefers Rust.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "programming-language");
+        assert_eq!(fact.type_key_field(), "about");
+        assert_eq!(fact.kind_str(), "preference");
+        assert_eq!(fact.type_plural(), "preferences");
+    }
+
+    #[test]
+    fn raw_fact_type_key_returns_about_value_for_fact() {
+        let fact = RawFact::Fact {
+            about: "timezone".to_string(),
+            summary: "Matt is in UTC+8.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "timezone");
+        assert_eq!(fact.type_key_field(), "about");
+        assert_eq!(fact.kind_str(), "fact");
+        assert_eq!(fact.type_plural(), "facts");
+    }
+
+    #[test]
+    fn raw_fact_type_key_returns_what_value_for_action_item() {
+        let fact = RawFact::ActionItem {
+            who: None,
+            what: "ship the parser".to_string(),
+            status: ActionItemState::Open,
+            due: None,
+            summary: "Fry will land the parser batch.".to_string(),
+        };
+        assert_eq!(fact.type_key(), "ship the parser");
+        assert_eq!(fact.type_key_field(), "what");
+        assert_eq!(fact.kind_str(), "action_item");
+        assert_eq!(fact.type_plural(), "action-items");
+    }
+
+    #[test]
+    fn raw_fact_summary_returns_prose_body_for_each_kind() {
+        let cases: &[(&str, RawFact)] = &[
+            (
+                "We chose Rust.",
+                RawFact::Decision {
+                    chose: "rust".to_string(),
+                    rationale: None,
+                    summary: "We chose Rust.".to_string(),
+                },
+            ),
+            (
+                "Matt prefers Rust.",
+                RawFact::Preference {
+                    about: "programming-language".to_string(),
+                    strength: None,
+                    summary: "Matt prefers Rust.".to_string(),
+                },
+            ),
+            (
+                "Matt is in UTC+8.",
+                RawFact::Fact {
+                    about: "timezone".to_string(),
+                    summary: "Matt is in UTC+8.".to_string(),
+                },
+            ),
+            (
+                "Fry will land the parser batch.",
+                RawFact::ActionItem {
+                    who: None,
+                    what: "ship the parser".to_string(),
+                    status: ActionItemState::Open,
+                    due: None,
+                    summary: "Fry will land the parser batch.".to_string(),
+                },
+            ),
+        ];
+        for (expected, fact) in cases {
+            assert_eq!(fact.summary(), *expected, "kind: {}", fact.kind_str());
+        }
     }
 }

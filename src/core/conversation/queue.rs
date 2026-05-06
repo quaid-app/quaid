@@ -19,6 +19,9 @@ pub enum ExtractionQueueError {
     StaleLease { job_id: i64, attempts: i64 },
 }
 
+/// Enqueue a debounce / session_close / non-force manual job, collapsing
+/// pending rows per `session_id`. Force-reset enqueues use
+/// [`enqueue_force_path`] instead so each day-file gets its own pending row.
 pub fn enqueue(
     conn: &Connection,
     session_id: &str,
@@ -77,6 +80,56 @@ pub fn enqueue(
                      (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
                  VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?4, 0, NULL, 'pending')",
                 params![session_id, conversation_path, trigger_kind.as_str(), scheduled_for],
+            )?;
+        }
+
+        Ok(())
+    })
+}
+
+/// Enqueue a manual job for a specific `(session_id, conversation_path)` pair,
+/// idempotent within that pair so back-to-back force resets don't grow the
+/// queue. Unlike [`enqueue`], this does NOT collapse across day-files of the
+/// same session — `extract --force` against a multi-day session produces one
+/// pending row per day-file, all with `trigger_kind = 'manual'`. If a pending
+/// debounce row already exists for the same `(session_id, conversation_path)`,
+/// it is upgraded in place to `manual`.
+pub fn enqueue_force_path(
+    conn: &Connection,
+    session_id: &str,
+    conversation_path: &str,
+    scheduled_for: &str,
+) -> Result<(), ExtractionQueueError> {
+    with_immediate_transaction(conn, |conn| {
+        let existing = conn
+            .query_row(
+                "SELECT id
+                 FROM extraction_queue
+                 WHERE session_id = ?1 AND conversation_path = ?2 AND status = 'pending'
+                 ORDER BY id
+                 LIMIT 1",
+                params![session_id, conversation_path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+
+        if let Some(job_id) = existing {
+            conn.execute(
+                "UPDATE extraction_queue
+                 SET trigger_kind = 'manual',
+                     scheduled_for = ?2,
+                     attempts = 0,
+                     last_error = NULL,
+                     enqueued_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                 WHERE id = ?1",
+                params![job_id, scheduled_for],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO extraction_queue
+                     (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+                 VALUES (?1, ?2, 'manual', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, 0, NULL, 'pending')",
+                params![session_id, conversation_path, scheduled_for],
             )?;
         }
 
@@ -310,10 +363,16 @@ fn with_immediate_transaction<T>(
 ) -> Result<T, ExtractionQueueError> {
     conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
     match action(conn) {
-        Ok(value) => {
-            conn.execute_batch("COMMIT TRANSACTION")?;
-            Ok(value)
-        }
+        Ok(value) => match conn.execute_batch("COMMIT TRANSACTION") {
+            Ok(()) => Ok(value),
+            Err(commit_error) => {
+                // SQLITE_BUSY on COMMIT does not auto-rollback, so the transaction
+                // would otherwise stay open and wedge subsequent BEGIN IMMEDIATEs
+                // on this shared connection.
+                let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+                Err(ExtractionQueueError::from(commit_error))
+            }
+        },
         Err(error) => {
             let _ = conn.execute_batch("ROLLBACK TRANSACTION");
             Err(error)
@@ -521,6 +580,54 @@ mod tests {
 
         assert_eq!(scheduled.len(), 20);
         assert!(scheduled.ends_with('Z'));
+    }
+
+    #[test]
+    fn with_immediate_transaction_recovers_when_commit_is_aborted() {
+        // Force the next COMMIT to fail by registering a commit_hook that
+        // returns true (aborts the commit, surfacing as a SQLite error).
+        let conn = configured_connection();
+        conn.commit_hook(Some(|| true));
+
+        let aborted = enqueue(
+            &conn,
+            "s1",
+            "conversations/2026-05-03/s1.md",
+            ExtractionTriggerKind::Debounce,
+            "2026-05-03T10:00:00Z",
+        );
+        assert!(
+            aborted.is_err(),
+            "commit_hook abort must surface as ExtractionQueueError"
+        );
+
+        // Clear the hook so the recovery enqueue can commit normally. If the
+        // wrapper failed to roll back after the aborted commit, the next
+        // BEGIN IMMEDIATE will fail with "cannot start a transaction within a
+        // transaction" and this call will return Err.
+        conn.commit_hook::<fn() -> bool>(None);
+
+        enqueue(
+            &conn,
+            "s2",
+            "conversations/2026-05-03/s2.md",
+            ExtractionTriggerKind::Debounce,
+            "2026-05-03T10:00:00Z",
+        )
+        .expect(
+            "follow-up enqueue must succeed; connection must not be wedged inside a transaction \
+             after an aborted commit",
+        );
+
+        // The aborted enqueue must have left no row behind.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM extraction_queue WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "aborted commit must roll back its inserts");
     }
 
     #[test]

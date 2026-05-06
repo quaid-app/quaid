@@ -45,10 +45,13 @@ use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{
     self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
 };
+use crate::core::conversation::extractor::Worker;
 #[cfg(unix)]
 use crate::core::conversation::file_edit::is_history_sidecar_path;
 use crate::core::conversation::idle_close;
 use crate::core::conversation::janitor;
+use crate::core::conversation::slm::LazySlmRunner;
+use crate::core::conversation::supersede::ResolvingFactWriter;
 #[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
@@ -609,6 +612,7 @@ struct FsPreconditionInspection {
 pub struct ServeRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+    extractor_handle: Option<thread::JoinHandle<()>>,
     pub session_id: String,
 }
 
@@ -665,6 +669,9 @@ impl Drop for ServeRuntime {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.extractor_handle.take() {
             let _ = handle.join();
         }
     }
@@ -4237,6 +4244,9 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let stop = Arc::new(AtomicBool::new(false));
     let stop_signal = Arc::clone(&stop);
     let session_id_for_thread = session_id.clone();
+    let extractor_db_path = db_path.clone();
+    let extractor_stop = Arc::clone(&stop);
+    let extractor_session_id = session_id.clone();
     #[cfg(unix)]
     let ipc_in_flight = Arc::new(AtomicUsize::new(0));
     let handle = thread::spawn(move || {
@@ -4413,11 +4423,48 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         }
     });
 
+    let extractor_handle = thread::spawn(move || {
+        run_extraction_worker(extractor_db_path, extractor_stop, extractor_session_id);
+    });
+
     Ok(ServeRuntime {
         stop,
         handle: Some(handle),
+        extractor_handle: Some(extractor_handle),
         session_id,
     })
+}
+
+fn run_extraction_worker(db_path: String, stop: Arc<AtomicBool>, session_id: String) {
+    let conn = match Connection::open(&db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!(
+                "WARN: extraction_worker_db_open_failed session_id={} error={}",
+                session_id, error
+            );
+            return;
+        }
+    };
+    let worker = match Worker::new(&conn, LazySlmRunner::new(), ResolvingFactWriter) {
+        Ok(worker) => worker,
+        Err(error) => {
+            eprintln!(
+                "WARN: extraction_worker_init_failed session_id={} error={}",
+                session_id, error
+            );
+            return;
+        }
+    };
+    while !stop.load(Ordering::SeqCst) {
+        if let Err(error) = worker.run_once() {
+            eprintln!(
+                "WARN: extraction_worker_run_failed session_id={} error={}",
+                session_id, error
+            );
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -8311,6 +8358,77 @@ mod tests {
                 && snippet.contains("WARN: raw_import_ttl_sweep_failed")
                 && snippet.contains("if let Err(error) = sweep_raw_import_ttl(&conn)"),
             "serve loop must log janitor, scheduled audit, and TTL sweep failures instead of discarding them silently"
+        );
+    }
+
+    #[test]
+    fn start_serve_runtime_spawns_extraction_worker() {
+        let source = production_vault_sync_source();
+        let start = source.find("pub fn start_serve_runtime(").unwrap();
+        let end = source[start..]
+            .find("pub fn begin_restore(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("run_extraction_worker"),
+            "serve runtime must spawn the extraction worker so queued jobs are drained: {snippet}"
+        );
+        assert!(
+            snippet.contains("extractor_handle: Some("),
+            "serve runtime must store the extraction worker handle on ServeRuntime for shutdown: {snippet}"
+        );
+    }
+
+    #[test]
+    fn run_extraction_worker_logs_failures_and_honors_stop_signal() {
+        let source = production_vault_sync_source();
+        let start = source
+            .find("fn run_extraction_worker(")
+            .expect("run_extraction_worker function must exist for the worker thread");
+        let end = source[start..]
+            .find("\nfn ")
+            .or_else(|| source[start..].find("\npub fn "))
+            .map(|offset| start + offset)
+            .unwrap_or(source.len());
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("Worker::new(&conn, LazySlmRunner::new(), ResolvingFactWriter)"),
+            "worker thread must construct the production extractor::Worker: {snippet}"
+        );
+        assert!(
+            snippet.contains("worker.run_once()"),
+            "worker thread must drive the queue via run_once so the stop signal is honored between polls: {snippet}"
+        );
+        assert!(
+            snippet.contains("stop.load(Ordering::SeqCst)"),
+            "worker thread loop must honor the ServeRuntime stop signal: {snippet}"
+        );
+        assert!(
+            snippet.contains("WARN: extraction_worker_run_failed"),
+            "worker thread must log run failures instead of swallowing them: {snippet}"
+        );
+        assert!(
+            snippet.contains("WARN: extraction_worker_init_failed"),
+            "worker thread must log init failures instead of crashing the daemon: {snippet}"
+        );
+    }
+
+    #[test]
+    fn serve_runtime_drop_joins_extraction_worker_handle() {
+        let source = production_vault_sync_source();
+        let start = source.find("impl Drop for ServeRuntime").unwrap();
+        let end = source[start..]
+            .find("\n}\n")
+            .map(|offset| start + offset + 3)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("self.extractor_handle.take()"),
+            "ServeRuntime drop must join the extraction worker handle: {snippet}"
         );
     }
 

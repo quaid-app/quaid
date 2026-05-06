@@ -13,9 +13,9 @@ Quaid moves through three arcs. Each arc is a directional bet, not a feature lis
 
 ---
 
-## Arc 1 - Local memory that holds <Badge text="Mostly shipped" variant="success" />
+## Arc 1 - Local memory that holds <Badge text="Shipped" variant="success" />
 
-The foundation. Storage that doesn't lose data, retrieval that doesn't hallucinate, and a sync engine that follows your editor without dropping writes. Most of this arc is in users' hands today.
+The foundation. Storage that doesn't lose data, retrieval that doesn't hallucinate, and a sync engine that follows your editor without dropping writes. This arc is complete.
 
 <CardGrid>
   <Card title="Sprint 0 - Repository scaffold" icon="check-circle">
@@ -38,30 +38,29 @@ The foundation. Storage that doesn't lose data, retrieval that doesn't hallucina
 
     Outcome: workflow logic that ships in the binary, plus a regression gate that catches retrieval drift. All 8 skills production-ready, BEIR regression gate, benchmark harnesses (LoCoMo, LongMemEval, BEAM adapters). Released as `v0.9.2`.
   </Card>
-  <Card title="Phase 4 - vault-sync engine" icon="rocket">
-    <Badge text="In progress" variant="caution" />
+  <Card title="Phase 4 - vault-sync engine" icon="check-circle">
+    <Badge text="Complete" variant="success" />
 
     Outcome: memory that stays current as you edit in Obsidian or any editor, with write-safety interlocks under concurrent agents.
 
-    **Owner:** Fry · **Branch:** `spec/vault-sync-engine` · **Depends on:** Phase 3
+    **Landed:** Collections model (`quaid collection add/list/info/sync/remove`); `.quaidignore` with atomic validation and live reload; quarantine lifecycle (`list/export/discard`; Unix narrow restore with no-replace contract); Unix CAS write interlocks plus crash-safe sentinels; live file watcher with 1.5s debounce (macOS/Linux); UNIX-socket single-file write proxying; restore/remap two-phase safety pipeline; UUID lifecycle and opt-in write-back (`migrate-uuids`); `memory_collections` MCP tool; background embedding queue and worker.
 
-    **Landed so far:** Schema v5 (`collections`, `file_state`, `embedding_jobs`); collections model (`quaid collection add/list/info/sync`); `.quaidignore` with atomic validation; quarantine lifecycle for deleted pages; Unix CAS write interlocks plus crash-safe sentinels; live file watcher with 1.5s debounce (macOS/Linux); `memory_collections` MCP tool.
-
-    **Still to ship:** IPC proxy (v0.14.0+), online restore handshake, Windows quarantine restore.
+    **Deferred to future work:** Full IPC proxy for bulk rewrites; online restore handshake; Windows quarantine restore. See the Deferred section below.
   </Card>
 </CardGrid>
 
 ---
 
-## Arc 2 - Agents that compound <Badge text="Next" variant="note" />
+## Arc 2 - Agents that compound <Badge text="In progress" variant="caution" />
 
-The strategic bet. The runtime can store and retrieve, but it can't yet extract structured facts from conversation turns - and that's the gap the benchmarks measure. Arc 2 closes it with a local SLM and the entity layer that follows from it.
+Phase 5 ships conversation memory and a local Phi-3.5 Mini SLM that extracts structured facts from conversation turns ΓÇö airgapped, downloaded once, never calls home. Namespace isolation and supersede chains are live. Phase 6 adds the entity layer that turns extracted facts into a queryable knowledge graph.
 
 <Aside type="note" title="Honest about today">
-**LongMemEval:** Quaid 0.0% → Mem0 v3 93.4%
-**LoCoMo:** Quaid 0.1% → Mem0 v3 91.6%
+**Pre-implementation baselines (before Phase 5):**
+**LongMemEval:** Quaid 0.0% ΓåÆ Mem0 v3 93.4%
+**LoCoMo:** Quaid 0.1% ΓåÆ Mem0 v3 91.6%
 
-The gap is architectural, not a retrieval failure. Quaid stores whole conversation turns. The benchmarks ask specific factual questions. Without fact extraction at write time, retrieval cannot surface structured answers. Phase 5 ships the local SLM that closes it - airgapped, downloaded once, never calls home. **Targets after implementation: LongMemEval > 40%, LoCoMo > 40%.**
+Phase 5 (conversation turn ingestion, Phi-3.5 Mini SLM extraction, supersede chains, head-only retrieval by default) is now shipped. These benchmarks have not yet been re-run against the Phase 5 implementation. **Targets after Phase 5 + Phase 6 entity work: LongMemEval > 40%, LoCoMo > 40%.**
 </Aside>
 
 ### Phase 5 - Conversation memory + SLM extraction
@@ -69,35 +68,33 @@ The gap is architectural, not a retrieval failure. Quaid stores whole conversati
 Outcome: an agent that remembers the right things from a conversation turn, not just the turn itself.
 
 <CardGrid>
-  <Card title="Namespace isolation" icon="puzzle">
-    <Badge text="No dependencies" variant="success" />
+  <Card title="Namespace isolation" icon="check-circle">
+    <Badge text="Complete" variant="success" />
 
     Per-namespace memory isolation for multi-agent and multi-session contexts. Drops LongMemEval benchmark runtime from 3-6 hours to under 30 minutes.
 
-    [→ GitHub #137](https://github.com/quaid-app/quaid/issues/137)
+    [ΓåÆ GitHub #137](https://github.com/quaid-app/quaid/issues/137)
   </Card>
   <Card title="Large corpus performance" icon="rocket">
-    <Badge text="No dependencies" variant="success" />
+    <Badge text="Pending" variant="caution" />
 
     Optimize for 10K+ document stores. Current import: ~437s for 350 docs. Target: under 60s. Validate Quaid at the scale real users need (GBrain operates at 75K files).
 
-    [→ GitHub #134](https://github.com/quaid-app/quaid/issues/134)
+    [ΓåÆ GitHub #134](https://github.com/quaid-app/quaid/issues/134)
   </Card>
-  <Card title="Conversation ingestion + SLM extraction" icon="star">
-    <Badge text="Core feature" variant="tip" />
+  <Card title="Conversation ingestion + SLM extraction" icon="check-circle">
+    <Badge text="Complete" variant="success" />
 
-    Ingest conversation turns, extract structured facts using a local SLM, store as typed pages. Non-blocking background queue, fully airgapped.
+    Ingest conversation turns, extract structured facts using a local Phi-3.5 Mini SLM, store as typed pages. Non-blocking background queue, fully airgapped. Supersede chains, head-only retrieval by default, `memory_add_turn` / `memory_close_session` / `memory_close_action` MCP tools, correction-via-file-edit path.
 
-    **Recommended model:** Phi-3.5 Mini (MIT, ~2GB) as default. Configurable - swap to Gemma 3 1B/4B for quality.
-
-    [→ GitHub #105](https://github.com/quaid-app/quaid/issues/105)
+    [ΓåÆ GitHub #105](https://github.com/quaid-app/quaid/issues/105)
   </Card>
-  <Card title="Contradiction resolution" icon="warning">
-    <Badge text="Depends on #105" variant="caution" />
+  <Card title="Contradiction resolution" icon="check-circle">
+    <Badge text="Complete" variant="success" />
 
-    Supersede and version stale facts. "I used to work at X, now Y" resolves correctly rather than keeping both facts active. Version chains, temporal-latest query mode.
+    Supersede and version stale facts. "I used to work at X, now Y" resolves correctly rather than keeping both facts active. Version chains, temporal-latest query mode. Per-fact dedup/supersede/coexist resolution with embedding-backed scoring.
 
-    [→ GitHub #135](https://github.com/quaid-app/quaid/issues/135)
+    [ΓåÆ GitHub #135](https://github.com/quaid-app/quaid/issues/135)
   </Card>
 </CardGrid>
 
@@ -111,28 +108,28 @@ Outcome: query by entity, not just text. Once Phase 5 extracts entities, the gra
 
     Extract people, companies, and concepts at ingest time using zero-LLM heuristics. Coordinates with #105 - shares the same SLM extraction pipeline.
 
-    [→ GitHub #107](https://github.com/quaid-app/quaid/issues/107)
+    [ΓåÆ GitHub #107](https://github.com/quaid-app/quaid/issues/107)
   </Card>
   <Card title="Self-wiring knowledge graph" icon="random">
     <Badge text="Depends on #107" variant="caution" />
 
     YAML frontmatter as first-class graph edges. Documents auto-link via wikilinks and tags. From GBrain data: +28% graph search performance, -53% noisy results.
 
-    [→ GitHub #72](https://github.com/quaid-app/quaid/issues/72)
+    [ΓåÆ GitHub #72](https://github.com/quaid-app/quaid/issues/72)
   </Card>
   <Card title="Graph traversal query API" icon="magnifier">
     <Badge text="Depends on #72, #107" variant="caution" />
 
     Query by entity: `memory_graph_query(entity, hops)`. Find all pages connected to X, find concepts that link two people, 2-hop traversal in under 500ms.
 
-    [→ GitHub #133](https://github.com/quaid-app/quaid/issues/133)
+    [ΓåÆ GitHub #133](https://github.com/quaid-app/quaid/issues/133)
   </Card>
   <Card title="Multi-hop graph traversal" icon="right-arrow">
     <Badge text="Depends on #133" variant="caution" />
 
     Configurable 1-3 hop traversal, edge type weighting, relationship scoring combined with semantic similarity.
 
-    [→ GitHub #74](https://github.com/quaid-app/quaid/issues/74)
+    [ΓåÆ GitHub #74](https://github.com/quaid-app/quaid/issues/74)
   </Card>
 </CardGrid>
 
@@ -152,17 +149,17 @@ Outcome: memory that updates itself when new content arrives, deduplicates noise
 
     When new content arrives, existing entity memories update proactively. GBrain v0.23.0's headline feature: "Your brain actually gets enriched from your conversations."
 
-    [→ GitHub #136](https://github.com/quaid-app/quaid/issues/136)
+    [ΓåÆ GitHub #136](https://github.com/quaid-app/quaid/issues/136)
   </Card>
   <Card title="Noise reduction + deduplication" icon="list-format">
     Result deduplication and relevance filtering. Implementable at any point but most valuable when the corpus is large.
 
-    [→ GitHub #75](https://github.com/quaid-app/quaid/issues/75)
+    [ΓåÆ GitHub #75](https://github.com/quaid-app/quaid/issues/75)
   </Card>
   <Card title="Context compression (REFRAG)" icon="compress">
     Compress retrieved chunks before sending to an LLM. Reduces tokens and cost while maintaining quality. High value at production scale.
 
-    [→ GitHub #76](https://github.com/quaid-app/quaid/issues/76)
+    [ΓåÆ GitHub #76](https://github.com/quaid-app/quaid/issues/76)
   </Card>
 </CardGrid>
 
@@ -170,20 +167,17 @@ Outcome: memory that updates itself when new content arrives, deduplicates noise
 
 ## Build order summary
 
-For contributors. The arcs above are the public roadmap; the table below is the implementation order.
+For contributors. The arcs above are the public roadmap; the table below is the remaining implementation order for incomplete work.
 
 | Priority | Issue | Feature | Depends on |
 |----------|-------|---------|-----------|
-| 1 | [#137](https://github.com/quaid-app/quaid/issues/137) | Namespace isolation | - |
-| 2 | [#134](https://github.com/quaid-app/quaid/issues/134) | Large corpus performance | - |
-| 3 | [#105](https://github.com/quaid-app/quaid/issues/105) | Conversation memory + SLM extraction | #137 recommended |
-| 4 | [#135](https://github.com/quaid-app/quaid/issues/135) | Contradiction resolution | #105 |
-| 5 | [#107](https://github.com/quaid-app/quaid/issues/107) | Entity extraction | #105 (coordinate) |
-| 6 | [#72](https://github.com/quaid-app/quaid/issues/72) | Self-wiring knowledge graph | #107 |
-| 7 | [#133](https://github.com/quaid-app/quaid/issues/133) | Graph traversal query API | #72, #107 |
-| 8 | [#74](https://github.com/quaid-app/quaid/issues/74) | Multi-hop traversal | #133 |
-| 9 | [#136](https://github.com/quaid-app/quaid/issues/136) | Active memory enrichment | #107, #133 |
-| 10 | [#75](https://github.com/quaid-app/quaid/issues/75), [#76](https://github.com/quaid-app/quaid/issues/76) | Noise reduction, context compression | Any |
+| 1 | [#134](https://github.com/quaid-app/quaid/issues/134) | Large corpus performance | - |
+| 2 | [#107](https://github.com/quaid-app/quaid/issues/107) | Entity extraction | #105 (coordinate) |
+| 3 | [#72](https://github.com/quaid-app/quaid/issues/72) | Self-wiring knowledge graph | #107 |
+| 4 | [#133](https://github.com/quaid-app/quaid/issues/133) | Graph traversal query API | #72, #107 |
+| 5 | [#74](https://github.com/quaid-app/quaid/issues/74) | Multi-hop traversal | #133 |
+| 6 | [#136](https://github.com/quaid-app/quaid/issues/136) | Active memory enrichment | #107, #133 |
+| 7 | [#75](https://github.com/quaid-app/quaid/issues/75), [#76](https://github.com/quaid-app/quaid/issues/76) | Noise reduction, context compression | Any |
 
 ---
 
@@ -198,3 +192,6 @@ These are known design choices, not oversights.
 | Collaborative / multi-user | Not planned | Single-writer by design. No auth, RBAC, or CRDTs. |
 | LLM-assisted contradiction detection | Deferred | Binary stays dumb. Cross-page reasoning lives in the `maintain` skill. |
 | Room-level palace filtering | Deferred | Wing-only until benchmarks prove room-level helps. |
+| vault-sync IPC proxy (bulk rewrites) | Deferred | Full multi-file write proxying to v0.14.0+; current surface is single-file UNIX socket only. |
+| Online restore handshake | Deferred | Requires live serve+CLI coordination with crash-durable guarantees; CLI narrow restore shipped for Unix offline use. |
+| Windows quarantine restore | Deferred | Unix narrow no-replace restore shipped; Windows path requires separate design work. |

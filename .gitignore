@@ -37,3 +37,9 @@ packages/quaid-npm/bin/quaid.download
 .pnpm-store/
 
 *.profraw
+build_output.txt
+cargo-test.log
+lcov.info
+
+# Git worktrees managed by Copilot agent
+.copilot-worktrees/

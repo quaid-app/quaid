@@ -451,6 +451,33 @@ fn database_path(conn: &Connection) -> Result<String, TurnWriteError> {
     .map_err(TurnWriteError::from)
 }
 
+/// Run `op` while holding the same in-process per-session mutex and on-disk
+/// `SessionFileLock` that [`append_turn`] holds, so admin paths (e.g.
+/// `extract --force` cursor reset) cannot race a concurrent turn append on
+/// the same session's day-files.
+pub fn with_session_locks<F, R, E>(
+    root: &MemoryRoot,
+    namespace: Option<&str>,
+    session_id: &str,
+    op: F,
+) -> Result<R, E>
+where
+    F: FnOnce() -> Result<R, E>,
+    E: From<TurnWriteError>,
+{
+    let lock = session_lock(root, namespace, session_id).map_err(E::from)?;
+    let _guard = lock
+        .lock()
+        .map_err(|_| TurnWriteError::Config {
+            message: "session lock poisoned".to_owned(),
+        })
+        .map_err(E::from)?;
+    let _file_lock =
+        SessionFileLock::acquire(&session_lock_path(&root.root_path, namespace, session_id))
+            .map_err(E::from)?;
+    op()
+}
+
 fn session_lock(
     root: &MemoryRoot,
     namespace: Option<&str>,

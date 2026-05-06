@@ -1,6 +1,6 @@
 [package]
 name = "quaid"
-version = "0.19.0"
+version = "0.20.0"
 edition = "2021"
 description = "Local-first personal memory. SQLite + FTS5 + local vector embeddings. One static binary."
 license = "MIT"
@@ -17,8 +17,10 @@ path = "src/main.rs"
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
-# Database — bundled = SQLite compiled into binary, no system dependency
-rusqlite = { version = "0.31", features = ["bundled"] }
+# Database — bundled = SQLite compiled into binary, no system dependency.
+# `hooks` unlocks deterministic commit-failure injection for the queue
+# transaction-recovery test in core::conversation::queue::tests.
+rusqlite = { version = "0.31", features = ["bundled", "hooks"] }
 
 # sqlite-vec — vector search as a SQLite extension, statically linked
 sqlite-vec = "0.1"

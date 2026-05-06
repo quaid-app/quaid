@@ -139,11 +139,12 @@ fn extract_single_session_enqueues_manual_job() {
 }
 
 #[test]
-fn extract_single_session_force_resets_all_day_file_cursors_before_enqueue() {
+fn extract_single_session_force_resets_all_day_file_cursors_and_enqueues_one_job_per_file() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
     let conn = open_test_db(&db_path);
     let vault_root = dir.path().join("vault");
+    write_conversation_file(&vault_root, "conversations/2026-05-03/s1.md", "s1", 7);
     write_conversation_file(&vault_root, "conversations/2026-05-04/s1.md", "s1", 4);
     write_conversation_file(&vault_root, "conversations/2026-05-05/s1.md", "s1", 2);
     drop(conn);
@@ -155,34 +156,71 @@ fn extract_single_session_force_resets_all_day_file_cursors_before_enqueue() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let older = format::parse(
-        &vault_root
-            .join("conversations")
-            .join("2026-05-04")
-            .join("s1.md"),
-    )
-    .unwrap();
-    let newer = format::parse(
-        &vault_root
-            .join("conversations")
-            .join("2026-05-05")
-            .join("s1.md"),
-    )
-    .unwrap();
-    assert_eq!(older.frontmatter.last_extracted_turn, 0);
-    assert_eq!(older.frontmatter.last_extracted_at, None);
-    assert_eq!(newer.frontmatter.last_extracted_turn, 0);
-    assert_eq!(newer.frontmatter.last_extracted_at, None);
+    for date in ["2026-05-03", "2026-05-04", "2026-05-05"] {
+        let parsed = format::parse(&vault_root.join("conversations").join(date).join("s1.md"))
+            .unwrap_or_else(|err| panic!("parse {date}: {err}"));
+        assert_eq!(
+            parsed.frontmatter.last_extracted_turn, 0,
+            "{date}: cursor must be reset to 0"
+        );
+        assert_eq!(
+            parsed.frontmatter.last_extracted_at, None,
+            "{date}: last_extracted_at must be cleared"
+        );
+    }
 
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
     assert_eq!(
         queue_rows(&conn),
-        vec![(
-            "s1".to_string(),
-            "conversations/2026-05-05/s1.md".to_string(),
-            "manual".to_string(),
-            "pending".to_string()
-        )]
+        vec![
+            (
+                "s1".to_string(),
+                "conversations/2026-05-03/s1.md".to_string(),
+                "manual".to_string(),
+                "pending".to_string(),
+            ),
+            (
+                "s1".to_string(),
+                "conversations/2026-05-04/s1.md".to_string(),
+                "manual".to_string(),
+                "pending".to_string(),
+            ),
+            (
+                "s1".to_string(),
+                "conversations/2026-05-05/s1.md".to_string(),
+                "manual".to_string(),
+                "pending".to_string(),
+            ),
+        ],
+        "force re-extract must enqueue one manual job per day-file (chronological)",
+    );
+}
+
+#[test]
+fn extract_force_is_idempotent_and_does_not_grow_the_queue() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_test_db(&db_path);
+    let vault_root = dir.path().join("vault");
+    write_conversation_file(&vault_root, "conversations/2026-05-04/s1.md", "s1", 4);
+    write_conversation_file(&vault_root, "conversations/2026-05-05/s1.md", "s1", 2);
+    drop(conn);
+
+    for _ in 0..3 {
+        let output = run_quaid(&db_path, &["extract", "s1", "--force"]);
+        assert!(
+            output.status.success(),
+            "extract --force failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    let rows = queue_rows(&conn);
+    assert_eq!(
+        rows.len(),
+        2,
+        "repeated --force must collapse per (session, path), got {rows:?}"
     );
 }
 
@@ -265,6 +303,80 @@ fn extract_all_since_filters_to_sessions_with_matching_day_files() {
             ),
         ]
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn extract_force_blocks_while_another_process_holds_the_session_file_lock() {
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_test_db(&db_path);
+    let vault_root = dir.path().join("vault");
+    write_conversation_file(&vault_root, "conversations/2026-05-05/s1.md", "s1", 0);
+    drop(conn);
+
+    // Acquire the on-disk SessionFileLock that turn_writer::append_turn (and the
+    // new with_session_locks helper) take before mutating any day-file. If the
+    // CLI's reset_cursors path does not contend on this lock, the assertion that
+    // it waited for ~hold_ms below will fail.
+    let lock_path = vault_root
+        .join("conversations")
+        .join(".locks")
+        .join("s1.lock");
+    fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    let rc = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
+    assert_eq!(rc, 0, "test failed to acquire LOCK_EX");
+
+    let mut command = Command::new(common::quaid_bin());
+    common_subprocess::configure_test_command(&mut command);
+    command
+        .arg("--db")
+        .arg(&db_path)
+        .args(["extract", "s1", "--force"]);
+    let mut child = command.spawn().expect("spawn quaid extract --force");
+
+    let hold_ms = 500u64;
+    std::thread::sleep(Duration::from_millis(hold_ms));
+    // Child must still be running while we hold the lock.
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "extract --force must block on the session lock while another writer holds it"
+    );
+
+    let started_release = Instant::now();
+    let rc = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) };
+    assert_eq!(rc, 0, "test failed to release LOCK_UN");
+    drop(lock_file);
+
+    let status = child.wait().expect("await quaid extract --force");
+    assert!(
+        status.success(),
+        "extract --force failed after lock released ({:?})",
+        status
+    );
+    assert!(
+        started_release.elapsed() < Duration::from_secs(10),
+        "extract --force took unreasonably long after lock released"
+    );
+
+    let parsed = format::parse(
+        &vault_root
+            .join("conversations")
+            .join("2026-05-05")
+            .join("s1.md"),
+    )
+    .unwrap();
+    assert_eq!(parsed.frontmatter.last_extracted_turn, 0);
 }
 
 #[test]

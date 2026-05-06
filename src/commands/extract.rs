@@ -6,6 +6,7 @@ use anyhow::{bail, Result};
 use clap::Args;
 use rusqlite::Connection;
 
+use crate::core::conversation::turn_writer::MemoryRoot;
 use crate::core::conversation::{format, queue, turn_writer};
 use crate::core::types::ExtractionTriggerKind;
 
@@ -68,15 +69,24 @@ pub fn run(db: &Connection, args: ExtractArgs) -> Result<()> {
     let mut enqueued = Vec::with_capacity(targets.len());
     for target in &targets {
         if args.force {
-            reset_cursors(&root.root_path, target)?;
+            reset_cursors(&root, target)?;
+            for day_file in &target.day_files {
+                queue::enqueue_force_path(
+                    db,
+                    &target.queue_session_id,
+                    &day_file.relative_path,
+                    &scheduled_for,
+                )?;
+            }
+        } else {
+            queue::enqueue(
+                db,
+                &target.queue_session_id,
+                &target.latest_relative_path,
+                ExtractionTriggerKind::Manual,
+                &scheduled_for,
+            )?;
         }
-        queue::enqueue(
-            db,
-            &target.queue_session_id,
-            &target.latest_relative_path,
-            ExtractionTriggerKind::Manual,
-            &scheduled_for,
-        )?;
         enqueued.push(target.display_id.clone());
     }
 
@@ -131,6 +141,7 @@ fn discover_sessions(root: &Path) -> Result<BTreeMap<String, SessionTarget>> {
                 queue_session_id: key,
                 display_id,
                 session_id: parsed.session_id.clone(),
+                namespace: parsed.namespace.clone(),
                 latest_relative_path,
                 day_files: Vec::new(),
             });
@@ -148,15 +159,27 @@ fn discover_sessions(root: &Path) -> Result<BTreeMap<String, SessionTarget>> {
     Ok(sessions)
 }
 
-fn reset_cursors(root: &Path, session: &SessionTarget) -> Result<()> {
-    for day_file in &session.day_files {
-        let absolute = root.join(slash_path_to_platform(&day_file.relative_path));
-        let mut conversation = format::parse(&absolute)?;
-        conversation.frontmatter.last_extracted_turn = 0;
-        conversation.frontmatter.last_extracted_at = None;
-        fs::write(&absolute, format::render(&conversation))?;
-    }
-    Ok(())
+fn reset_cursors(root: &MemoryRoot, session: &SessionTarget) -> Result<()> {
+    // Acquire the same per-session in-process mutex + on-disk SessionFileLock that
+    // turn_writer::append_turn holds, so a concurrent memory_add_turn cannot land
+    // its append between our parse and write.
+    turn_writer::with_session_locks(
+        root,
+        session.namespace.as_deref(),
+        &session.session_id,
+        || -> Result<()> {
+            for day_file in &session.day_files {
+                let absolute = root
+                    .root_path
+                    .join(slash_path_to_platform(&day_file.relative_path));
+                let mut conversation = format::parse(&absolute)?;
+                conversation.frontmatter.last_extracted_turn = 0;
+                conversation.frontmatter.last_extracted_at = None;
+                fs::write(&absolute, format::render(&conversation))?;
+            }
+            Ok(())
+        },
+    )
 }
 
 fn conversation_paths(root: &Path) -> Result<Vec<String>> {
@@ -254,6 +277,7 @@ struct SessionTarget {
     queue_session_id: String,
     display_id: String,
     session_id: String,
+    namespace: Option<String>,
     latest_relative_path: String,
     day_files: Vec<SessionDayFile>,
 }

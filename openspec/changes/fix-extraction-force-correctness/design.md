@@ -51,22 +51,38 @@ All three are in code touched by, or directly adjacent to, the wired-up worker, 
 - *Refuse `--force` for sessions with any open day-file.* Rejected as the primary mechanism: it papers over the bug by restricting the surface, but the underlying race (any concurrent writer) still applies. Kept as a *secondary* requirement (`Cursor reset is forbidden for sessions with an in-flight writer`) so the implementation MAY surface a clear error if it cannot acquire the lock within a bounded wait.
 - *Take only the file-system lock, skip the in-process mutex.* Rejected: same-process concurrent writers (e.g. `quaid serve` running in another thread) would still race. Both primitives are needed.
 
-### 3. Replace `with_immediate_transaction` with `rusqlite::Transaction`
+### 3. Add explicit rollback after a failed commit, keep `&Connection`
 
-**Decision:** Rewrite `with_immediate_transaction` to construct a `rusqlite::Transaction` with `TransactionBehavior::Immediate`, run the closure, then call `transaction.commit()`. RAII `Drop` automatically rolls back if the `Transaction` is dropped without committing — including on a `commit()` that fails after partial work. This collapses the transaction-handling logic to:
+**Decision (revised during implementation):** Patch `with_immediate_transaction` so the success branch attempts a `ROLLBACK TRANSACTION` if `COMMIT TRANSACTION` returns an error, then surfaces the commit error to the caller. Keep the `&Connection` signature, so no caller needs to thread a mutable borrow.
 
 ```rust
-let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-let value = action(&tx)?;
-tx.commit()?;
-Ok(value)
+match action(conn) {
+    Ok(value) => match conn.execute_batch("COMMIT TRANSACTION") {
+        Ok(()) => Ok(value),
+        Err(commit_error) => {
+            // SQLITE_BUSY on COMMIT does not auto-rollback.
+            let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+            Err(ExtractionQueueError::from(commit_error))
+        }
+    },
+    Err(error) => {
+        let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+        Err(error)
+    }
+}
 ```
 
-`rusqlite::Transaction` borrows `&mut Connection`, so callers that previously passed `&Connection` will need adjustment. The queue module already owns its `Connection` mut-references inside its public API, so this is a local refactor.
+**Why this rather than `rusqlite::Transaction`:**
+
+This change was originally specced as "use `rusqlite::Connection::transaction_with_behavior(TransactionBehavior::Immediate)` and let RAII handle rollback." That API requires `&mut Connection`. Auditing the call graph during implementation showed `enqueue` is reached through `&Connection` everywhere — `src/mcp/server.rs` holds `db` via a `Mutex<Connection>` and dereferences immutably; `src/core/conversation/idle_close.rs` and `src/commands/extract.rs` likewise pass `&Connection`. Switching to `&mut Connection` would cascade through those modules' public APIs and the MCP tool surface, which is out of scope for a correctness fix.
+
+The Codex finding itself called out both options as acceptable: "Replace the manual SQL transaction wrapper with `rusqlite`'s transaction API using `TransactionBehavior::Immediate`, **or** explicitly attempt `ROLLBACK` when `COMMIT` fails before returning the error." The explicit-rollback path produces the same observable behavior with a much smaller blast radius.
 
 **Alternatives considered:**
 
-- *Keep the manual `BEGIN/COMMIT/ROLLBACK` and add an explicit `let _ = conn.execute_batch("ROLLBACK TRANSACTION");` after a failed commit.* Works, but reproduces logic that `rusqlite::Transaction` already has. Rejected on hygiene grounds.
+- *Switch to `rusqlite::Transaction` (original plan).* Cleaner with RAII, but cascades `&mut Connection` through every queue caller. Rejected because the change scope is correctness-only; refactoring queue callers' borrows is follow-up work.
+
+**Test:** Deterministic commit-failure injection via SQLite's `commit_hook` (rusqlite `hooks` feature, enabled in `Cargo.toml`). The test registers a hook that aborts the next commit, runs `enqueue`, asserts it returns `Err`, clears the hook, then runs another `enqueue` and asserts it succeeds — proving the connection was not left wedged inside an open transaction. Without the rollback fix, the second enqueue's `BEGIN IMMEDIATE` errors with "cannot start a transaction within a transaction".
 
 ### 4. Test strategy
 

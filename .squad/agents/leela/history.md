@@ -1,5 +1,6 @@
 # leela history
 
+- [2026-05-06T00:05:41Z] COMPLETED: Archived `namespace-isolation`, `protect-main-guardrails` (with unchecked task 3.2 and ready artifacts per user direction), and `slm-extraction-and-correction` under `openspec/changes/archive/2026-05-06-*`. Specs synced before each archive. `conversation-memory-foundations` already archived at `openspec/changes/archive/2026-05-04-conversation-memory-foundations`.
 - [2026-04-30T13:53:46Z] COMPLETED: Merged PR #131 to main at commit 6d36f6f0cb6fd4afb2133f23ceaf018079b1a50e after fixing Linux CLI truth failures, resolving review threads, and revalidating fmt/clippy/tests
 - [2026-04-29T07-04-07Z] History summarized and archived
 

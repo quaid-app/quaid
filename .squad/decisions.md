@@ -1,4 +1,4 @@
-# Amy — conversation memory release docs
+# Amy ΓÇö conversation memory release docs
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **Context:** `v0.18.0` release-doc truth pass for `conversation-memory-foundations`
@@ -6,7 +6,7 @@
 - **Why:** The branch adds `memory_add_turn`, `memory_close_session`, and `memory_close_action`, but GitHub Releases and `install.sh` still resolve to the published `v0.17.0` tag until `v0.18.0` exists. Treating those as the same state makes install docs, release copy, and tool-count claims untruthful.
 
 
-# Bender — conversation memory coverage debug
+# Bender ΓÇö conversation memory coverage debug
 
 - **Date:** 2026-05-04T07:22:12.881+08:00
 - **Context:** Scruffy reported the conversation-memory branch as both test-red and honestly below the 90% coverage bar after commits `a348e7f`, `684931c`, and `9d1b20e`.
@@ -24,7 +24,7 @@
 - Trade-off: this keeps the SQLite writer transaction open across the Unix write-through seam. That wider single-writer window is accepted for this slice because it is the requested safe direction and it preserves the invariant that a rejected non-head supersede attempt does not mutate the vault.
 
 
-# Bender SLM Validation — Findings
+# Bender SLM Validation ΓÇö Findings
 
 **Author:** Bender (Tester)
 **Date:** 2026-05-05T06:49Z
@@ -35,37 +35,37 @@
 
 ## What I Verified
 
-### ✅ PASSED — Schema v9 foundations (proposal #1 carry-forward)
+### Γ£à PASSED ΓÇö Schema v9 foundations (proposal #1 carry-forward)
 
 | Check | Result |
 |---|---|
-| `correction_sessions` table present with correct `status` CHECK constraint | ✅ |
-| `correction_sessions.exchange_log` CHECK (`json_valid` + `json_type = 'array'`) | ✅ |
-| `idx_correction_open` partial index on `status = 'open'` | ✅ |
-| `extraction_queue` `trigger_kind` and `status` CHECK constraints | ✅ |
-| All 12 extraction/fact-resolution config keys seeded | ✅ |
-| `SCHEMA_VERSION = 9` in `db.rs` | ✅ |
-| `config.version = '9'` seeded | ✅ |
-| v8 DB rejected at open with re-init message | ✅ |
-| `tests/extraction_queue.rs` — 7 tests all green | ✅ |
-| `tests/supersede_chain.rs` — 2 tests green | ✅ |
-| `tests/conversation_turn_capture.rs` — 15 tests green | ✅ |
-| `memory_add_turn` enqueues when `extraction.enabled = true` | ✅ |
-| `memory_close_session` triggers `session_close` job | ✅ |
+| `correction_sessions` table present with correct `status` CHECK constraint | Γ£à |
+| `correction_sessions.exchange_log` CHECK (`json_valid` + `json_type = 'array'`) | Γ£à |
+| `idx_correction_open` partial index on `status = 'open'` | Γ£à |
+| `extraction_queue` `trigger_kind` and `status` CHECK constraints | Γ£à |
+| All 12 extraction/fact-resolution config keys seeded | Γ£à |
+| `SCHEMA_VERSION = 9` in `db.rs` | Γ£à |
+| `config.version = '9'` seeded | Γ£à |
+| v8 DB rejected at open with re-init message | Γ£à |
+| `tests/extraction_queue.rs` ΓÇö 7 tests all green | Γ£à |
+| `tests/supersede_chain.rs` ΓÇö 2 tests green | Γ£à |
+| `tests/conversation_turn_capture.rs` ΓÇö 15 tests green | Γ£à |
+| `memory_add_turn` enqueues when `extraction.enabled = true` | Γ£à |
+| `memory_close_session` triggers `session_close` job | Γ£à |
 
-### 🐛 BUG FIXED — `open_is_idempotent` stale assertion
+### ≡ƒÉ¢ BUG FIXED ΓÇö `open_is_idempotent` stale assertion
 
 `db::tests::open_is_idempotent` was asserting `PRAGMA user_version == 8` after the
 second `db::open()`. Because `set_version()` runs on every `open_connection()` call and
 sets `user_version = SCHEMA_VERSION`, the re-open correctly produces 9.
-The assertion was left at 8 from the v8→v9 bump.
+The assertion was left at 8 from the v8ΓåÆv9 bump.
 
-**Fix applied:** Changed `assert_eq!(version, 8)` → `assert_eq!(version, 9)`.
+**Fix applied:** Changed `assert_eq!(version, 8)` ΓåÆ `assert_eq!(version, 9)`.
 **Test now passes.**
 
 ---
 
-## ❌ NOT IMPLEMENTED — Implementation lane must clear these
+## Γ¥î NOT IMPLEMENTED ΓÇö Implementation lane must clear these
 
 Everything below is spec'd in tasks.md but absent from the repository.
 These represent 100% of proposal #2's deliverable surface.
@@ -133,16 +133,16 @@ These represent 100% of proposal #2's deliverable surface.
 - `src/commands/extract.rs` does not exist.
 - **Risk:** Manual re-extraction and `--force` reset are unavailable.
 
-### 14. DAB §8 benchmark gate (tasks 14.x)
-- No LoCoMo adapter, no LongMemEval sub-section, no §8 in the DAB harness.
+### 14. DAB ┬º8 benchmark gate (tasks 14.x)
+- No LoCoMo adapter, no LongMemEval sub-section, no ┬º8 in the DAB harness.
 - **Risk:** No regression gate for extraction quality; LoCoMo/LongMemEval remain
   at 0.1% / 0.0% and are not tracked.
 
 ### 15. Integration tests (tasks 15.x)
-- `tests/airgap_extraction.rs` — missing.
-- `tests/extraction_idempotency.rs` — missing.
-- `benches/extraction.rs` — missing.
-- End-to-end smoke test (15.4) — missing.
+- `tests/airgap_extraction.rs` ΓÇö missing.
+- `tests/extraction_idempotency.rs` ΓÇö missing.
+- `benches/extraction.rs` ΓÇö missing.
+- End-to-end smoke test (15.4) ΓÇö missing.
 
 ---
 
@@ -154,7 +154,7 @@ true* today:
   network calls are needed for semantic search.
 - **False for extraction:** `quaid extraction enable` (unimplemented) would trigger a
   model download. Until task 3.x lands with a working download gate and `enable` CLI,
-  users have no way to obtain or cache the Phi-3.5 model — meaning extraction is both
+  users have no way to obtain or cache the Phi-3.5 model ΓÇö meaning extraction is both
   gate-blocked and network-dependent at first use.
 - **The airgap claim for the extraction path cannot be validated without task 3.x.**
 
@@ -166,9 +166,9 @@ Proposal #1 (conversation-memory-foundations): **fully landed, all tests green p
 Proposal #2 (slm-extraction-and-correction): **0 of 14 task groups implemented.**
 
 The schema is v9 and the queue foundations are correct. Everything that rides on top of
-them — the SLM runtime, the worker, the fact writer, the correction dialogue, all CLI
-commands, and all benchmark gates — has not been written. The implementation lane must
-complete tasks 2–15 before this change can be marked honest.
+them ΓÇö the SLM runtime, the worker, the fact writer, the correction dialogue, all CLI
+commands, and all benchmark gates ΓÇö has not been written. The implementation lane must
+complete tasks 2ΓÇô15 before this change can be marked honest.
 
 ---
 
@@ -181,7 +181,7 @@ complete tasks 2–15 before this change can be marked honest.
   close.
 
 
-# bender: Unix coverage fix — self-write dedup race
+# bender: Unix coverage fix ΓÇö self-write dedup race
 
 **Date:** 2026-05-05T06:49:17+08:00  
 **Branch:** feat/slm-conversation-mem  
@@ -196,7 +196,7 @@ CI job), coverage instrumentation slows each test enough that the window between
 up-front `remember_self_write_path_at` call and the second `classify_watch_event` call
 (Case 2) is large enough for a concurrent test's `init_process_registries()` to clear the map.
 
-CI evidence: `src/core/vault_sync.rs:8034:9 — assertion failed: classify_watch_event(...).is_empty()`.
+CI evidence: `src/core/vault_sync.rs:8034:9 ΓÇö assertion failed: classify_watch_event(...).is_empty()`.
 The regular Test job passes (no instrumentation, narrower window).
 
 ## Decision
@@ -208,7 +208,7 @@ invocation. This shrinks the race window to a single function-call boundary (~mi
 
 **Why Case 1 is immune:** `should_suppress_self_write_rename` returns `false` whether or not
 the target registry entry is present, because the markdown source (`notes/from.md`) has no
-matching entry — the function falls through to `maybe_suppress_self_write_event(source_path)`
+matching entry ΓÇö the function falls through to `maybe_suppress_self_write_event(source_path)`
 which returns `false` for an unregistered path. The 3-event assertion holds either way.
 
 **Why Case 2 is not:** suppression requires the target entry to be present. Without it,
@@ -227,7 +227,7 @@ Rejected: adds a new dependency and touches ~15 test functions for a localised i
 - No production code changed; narrowest honest test-logic fix
 
 
-# Fry decision — conversation memory close action
+# Fry decision ΓÇö conversation memory close action
 
 - Timestamp: 2026-05-04T07:22:12.881+08:00
 - Change: conversation-memory-foundations
@@ -244,7 +244,7 @@ Keep `memory_close_action` on the narrow MCP contract `{slug, status, note?}` an
 - The pre-write seam gives a deterministic conflict proof without adding user-visible knobs.
 
 
-# Fry — conversation memory queue foundations
+# Fry ΓÇö conversation memory queue foundations
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **Decision:** For `memory.location = dedicated-collection`, auto-create a sibling collection named `<write-target>-memory` rooted at `<write-target-root>-quaid-memory` on first use.
@@ -298,7 +298,7 @@ Wave 2 session tooling should persist `closed_at` in conversation frontmatter an
 - Queue producers and future workers must treat `extraction_queue.session_id` as an internal routing key, not blindly as the public caller-facing session id.
 
 
-# Fry — SLM first batch boundary
+# Fry ΓÇö SLM first batch boundary
 
 - Date: 2026-05-05
 - Change: `slm-extraction-and-correction`
@@ -318,7 +318,7 @@ Land the first truthful batch as the v9 schema/config reset only: `correction_se
 - Next batch should start at runtime/model lifecycle wiring (`2.*` / `3.*`) or the thinnest CLI plumbing that consumes the new defaults without broadening into worker/correction orchestration prematurely.
 
 
-# Fry — SLM model lifecycle batch decision
+# Fry ΓÇö SLM model lifecycle batch decision
 
 - Date: 2026-05-05
 - Change: `slm-extraction-and-correction`
@@ -357,10 +357,10 @@ The `v0.18.0` release-bound commit should move the Cargo manifest surface to `0.
 # Consequence
 
 - Future release prep should audit workflow release-note links, README/install docs, and web upgrade docs alongside the version bump.
-- The branch can now truthfully stay in “preparing `v0.18.0` / latest public tag still older” mode until the actual tag and GitHub Release are cut.
+- The branch can now truthfully stay in ΓÇ£preparing `v0.18.0` / latest public tag still olderΓÇ¥ mode until the actual tag and GitHub Release are cut.
 
 
-# Leela — conversation-memory conflict resolution
+# Leela ΓÇö conversation-memory conflict resolution
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **PR:** #153 (`feat/slm-conversation-mem`)
@@ -372,7 +372,7 @@ Keep the conflict resolutions on the truth-repaired branch versions of the six `
 
 ## Why
 
-`main` carries earlier draft copies of the same change that still describe a v7→v8 schema bump, `pages.kind`, unchecked tasks, and broader future-slice claims. The branch copies were already updated to the shipped reality: schema v8 was the landed baseline before the remaining slices, all 70 tasks are complete, and the narrower conversation-routing / fixed lease-expiry truths are explicitly documented.
+`main` carries earlier draft copies of the same change that still describe a v7ΓåÆv8 schema bump, `pages.kind`, unchecked tasks, and broader future-slice claims. The branch copies were already updated to the shipped reality: schema v8 was the landed baseline before the remaining slices, all 70 tasks are complete, and the narrower conversation-routing / fixed lease-expiry truths are explicitly documented.
 
 ## Applied rule
 
@@ -381,7 +381,7 @@ Keep the conflict resolutions on the truth-repaired branch versions of the six `
 3. Treat the merge as documentation-truth repair only; no unrelated code or `.squad/` churn enters the commit.
 
 
-## Leela — conversation-memory-foundations next waves
+## Leela ΓÇö conversation-memory-foundations next waves
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -389,35 +389,35 @@ Keep the conflict resolutions on the truth-repaired branch versions of the six `
 
 ## Decision
 
-Batch the remaining `conversation-memory-foundations` scope (`4.1`–`12.5`) into three execution waves so the file contract freezes before public tool wiring, and the watcher/edit-history seam stays isolated until the capture path is green.
+Batch the remaining `conversation-memory-foundations` scope (`4.1`ΓÇô`12.5`) into three execution waves so the file contract freezes before public tool wiring, and the watcher/edit-history seam stays isolated until the capture path is green.
 
-### Wave 1 — conversation file contract + root resolution
+### Wave 1 ΓÇö conversation file contract + root resolution
 
-- **Tasks:** `4.1`–`4.6`, `11.1`–`11.2`
+- **Tasks:** `4.1`ΓÇô`4.6`, `11.1`ΓÇô`11.2`
 - **Goal:** Freeze `Turn` / `ConversationFile`, canonical render shape, malformed-parse contract, multi-day ordinal continuation, and the shared vault-root resolver before any writer, queue, or MCP surface depends on them.
-- **Dependencies:** Approved `2.2`–`2.5` and `3.1`–`3.7` only.
-- **Parallelism:** `4.1`–`4.3` can proceed alongside `11.1`–`11.2`; `4.4`–`4.6` wait for both seams to settle.
+- **Dependencies:** Approved `2.2`ΓÇô`2.5` and `3.1`ΓÇô`3.7` only.
+- **Parallelism:** `4.1`ΓÇô`4.3` can proceed alongside `11.1`ΓÇô`11.2`; `4.4`ΓÇô`4.6` wait for both seams to settle.
 - **Reviewer / pre-gate notes:**
   - **Professor** pre-gates any deviation from the current spec's frontmatter keys, heading shape, or path contract.
   - Do **not** widen into watcher/file-edit work in this wave.
 
-### Wave 2 — capture request path + queue-backed session tools
+### Wave 2 ΓÇö capture request path + queue-backed session tools
 
-- **Tasks:** `5.1`–`5.5`, `6.1`–`6.6`, `7.1`–`7.6`, `8.1`–`8.6`, `11.3`–`11.4`, `12.1`–`12.3`
+- **Tasks:** `5.1`ΓÇô`5.5`, `6.1`ΓÇô`6.6`, `7.1`ΓÇô`7.6`, `8.1`ΓÇô`8.6`, `11.3`ΓÇô`11.4`, `12.1`ΓÇô`12.3`
 - **Goal:** Land one coherent synchronous capture surface: append + fsync durability, queue collapse/lease semantics, `memory_add_turn`, `memory_close_session`, dedicated-collection first-use routing, and the first end-to-end conversation tests.
 - **Dependencies:** Wave 1 complete.
-- **Parallelism:** After `append_turn` and queue APIs settle, MCP wiring (`7.x`, `8.x`) can split from integration-test assembly (`12.1`–`12.3`), but `12.1`–`12.3` do not close until both tools and config-path behavior are green.
+- **Parallelism:** After `append_turn` and queue APIs settle, MCP wiring (`7.x`, `8.x`) can split from integration-test assembly (`12.1`ΓÇô`12.3`), but `12.1`ΓÇô`12.3` do not close until both tools and config-path behavior are green.
 - **Reviewer / pre-gate notes:**
   - **Scruffy** pre-gates the latency and concurrency harness before anyone claims `5.5`, `6.6`, or `7.5`.
   - **Professor** gates MCP contract shape, error mapping, and queue precedence/lease truth.
   - Keep proposal-2 runtime out of scope: no worker, no idle-close daemon, no SLM calls.
 
-### Wave 3 — extracted-fact mutation + history-preservation closure
+### Wave 3 ΓÇö extracted-fact mutation + history-preservation closure
 
-- **Tasks:** `9.1`–`9.5`, `10.1`–`10.7`, `12.4`–`12.5`
+- **Tasks:** `9.1`ΓÇô`9.5`, `10.1`ΓÇô`10.7`, `12.4`ΓÇô`12.5`
 - **Goal:** Finish the remaining mutator surface: `memory_close_action` as the lone in-place lifecycle update, plus file-edit-aware supersede/history preservation for extracted facts, then close with final supersede/file-edit integration proofs.
-- **Dependencies:** Wave 1 complete; Wave 2 green for shared path/config seams; `10.x` also depends on the approved supersede/retrieval behavior from `2.2`–`3.7`.
-- **Parallelism:** `9.x` and `10.x` may run in separate lanes only after reviewer gates are cleared; `12.4`–`12.5` stay last as the change-closure proofs.
+- **Dependencies:** Wave 1 complete; Wave 2 green for shared path/config seams; `10.x` also depends on the approved supersede/retrieval behavior from `2.2`ΓÇô`3.7`.
+- **Parallelism:** `9.x` and `10.x` may run in separate lanes only after reviewer gates are cleared; `12.4`ΓÇô`12.5` stay last as the change-closure proofs.
 - **Reviewer / pre-gate notes:**
   - **Nibbler** is the mandatory pre-gate reviewer before any `10.x` implementation starts because this widens the watcher path, extracted-root routing, and optional `_history` writes.
   - **Professor** gates the `9.x` optimistic-concurrency contract and performs final mutation-surface rereview.
@@ -431,7 +431,7 @@ Batch the remaining `conversation-memory-foundations` scope (`4.1`–`12.5`) int
 **Why:** The current spec/tasks already promise a single direct successor and rejection of the second supersede write; narrowing now would redefine a real user-visible integrity failure rather than fix it. Bender is the best remaining fit because the blocker is a destructive race on the real write-through seam, and his lane is breaking shaky assumptions, validating rollback-free integrity, and defending regressions honestly.
 
 
-## Leela — conversation-memory foundations Wave 1 truth repair
+## Leela ΓÇö conversation-memory foundations Wave 1 truth repair
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -453,7 +453,7 @@ Truth-repair the Wave 1 OpenSpec artifacts to describe the shipped queue lease r
 - Future extracted-root routing remains with the later extracted-fact/file-edit work; this repair only narrows wording to the shipped Wave 1 surface.
 
 
-# Leela — slm-extraction-and-correction execution slices
+# Leela ΓÇö slm-extraction-and-correction execution slices
 
 **Date:** 2026-05-05T06:49:17.593+08:00  
 **Requested by:** macro88  
@@ -463,15 +463,15 @@ Truth-repair the Wave 1 OpenSpec artifacts to describe the shipped queue lease r
 
 Do **not** route this change on the current dirty `feat/slm-conversation-mem` checkout. Reset routing to a refreshed branch from current `origin/main` / `v0.18.0`, then execute in reviewable waves:
 
-1. **Schema v9 baseline** — close `1.1–1.6` together only: `correction_sessions`, partial index, config defaults, `SCHEMA_VERSION = 9`, and schema-version tests in one atomic batch.
-2. **Model cache / download plumbing** — close `3.1–3.6` together: alias resolution, atomic install, integrity cleanup, cache layout tests.
-3. **SLM runtime + strict parse contract** — close `2.1–2.7` with `6.1–6.5`: loader, deterministic inference, panic isolation, typed JSON parser, mixed-validity handling.
-4. **Fact resolution + vault write seam** — close `7.1–8.5` together only after adversarial review of extracted-file writes and supersede routing.
-5. **Worker orchestration / replay surfaces** — close `5.1–5.7` with `9.1–9.4`, then `10.1–11.4`, then CLI replay/status items (`4.4`, `13.1–13.6`) once the write path is stable.
+1. **Schema v9 baseline** ΓÇö close `1.1ΓÇô1.6` together only: `correction_sessions`, partial index, config defaults, `SCHEMA_VERSION = 9`, and schema-version tests in one atomic batch.
+2. **Model cache / download plumbing** ΓÇö close `3.1ΓÇô3.6` together: alias resolution, atomic install, integrity cleanup, cache layout tests.
+3. **SLM runtime + strict parse contract** ΓÇö close `2.1ΓÇô2.7` with `6.1ΓÇô6.5`: loader, deterministic inference, panic isolation, typed JSON parser, mixed-validity handling.
+4. **Fact resolution + vault write seam** ΓÇö close `7.1ΓÇô8.5` together only after adversarial review of extracted-file writes and supersede routing.
+5. **Worker orchestration / replay surfaces** ΓÇö close `5.1ΓÇô5.7` with `9.1ΓÇô9.4`, then `10.1ΓÇô11.4`, then CLI replay/status items (`4.4`, `13.1ΓÇô13.6`) once the write path is stable.
 
-`12.1–12.8` should wait until wave 4 is proven, because correction commits are forced supersedes over the same write path. `14.1–15.4` are release-blocking endgame work, not early-slice closure material.
+`12.1ΓÇô12.8` should wait until wave 4 is proven, because correction commits are forced supersedes over the same write path. `14.1ΓÇô15.4` are release-blocking endgame work, not early-slice closure material.
 
-Open a **new draft PR** for this change after waves 1–3 are green and reviewed. Do not reuse merged PR #153. Hold `v0.19.0` until merged `main` re-validates serial tests plus `cargo llvm-cov` above 90% and the benchmark/integration lane is green.
+Open a **new draft PR** for this change after waves 1ΓÇô3 are green and reviewed. Do not reuse merged PR #153. Hold `v0.19.0` until merged `main` re-validates serial tests plus `cargo llvm-cov` above 90% and the benchmark/integration lane is green.
 
 ## Why
 
@@ -485,7 +485,7 @@ Open a **new draft PR** for this change after waves 1–3 are green and reviewed
 - **Professor second:** wave 2/3 API and panic-boundary review before draft PR opens.
 - **Nibbler pre-gate:** required before wave 4 (`7.*`, `8.*`) and again before correction dialogue (`12.*`).
 - **Scruffy:** after each landed wave, rerun serial tests first, then explicit `cargo llvm-cov` confirmation; coverage >90% is still a human gate.
-- **Zapp:** draft PR upkeep once waves 1–3 are merged into a coherent branch; `v0.19.0` only after final mainline validation.
+- **Zapp:** draft PR upkeep once waves 1ΓÇô3 are merged into a coherent branch; `v0.19.0` only after final mainline validation.
 
 
 ---
@@ -523,7 +523,7 @@ topic: file-edit supersede closure
 - Exclude `extracted/_history/**/*.md` from watcher dirty-path classification and reconciler ingestion so opt-in sidecars cannot become live pages or self-archive recursively.
 
 
-## Mom — conversation-memory-foundations slice 2 revision
+## Mom ΓÇö conversation-memory-foundations slice 2 revision
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -544,7 +544,7 @@ Keep supersede-chain validation in two places on the put path: preflight it befo
 - The new Unix test proves rejected non-head supersedes leave vault bytes, active raw-import bytes, and recovery state unchanged while still surfacing `SupersedeConflictError`.
 
 
-## Mom — conversation-memory foundations Wave 1 revision
+## Mom ΓÇö conversation-memory foundations Wave 1 revision
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -567,7 +567,7 @@ Use explicit ownership and explicit sentinels for the Wave 1 seams: queue comple
 - `src/core/conversation/format.rs` now renders metadata with ` ```json turn-metadata`, and tests prove a bare trailing JSON fence remains content.
 
 
-# Mom — future schema mismatch must fail closed
+# Mom ΓÇö future schema mismatch must fail closed
 
 - **Date:** 2026-05-05
 - **Scope:** `src/core/db.rs` schema-version gate
@@ -598,7 +598,7 @@ topic: whitespace-noop rename tracking
 - Prove the seam with an `apply_reingest` test that renames an extracted preference without changing bytes, then asserts the new path is still classified as `unchanged`.
 
 
-# Nibbler — conversation-memory file-edit pregate
+# Nibbler ΓÇö conversation-memory file-edit pregate
 
 - **Date:** 2026-05-04T07:22:12.881+08:00
 - **Requested by:** macro88
@@ -645,7 +645,7 @@ Writing archives to `extracted/_history/*.md` under the watched tree is a trap. 
 `cargo test --quiet --test supersede_chain --test conversation_turn_capture` passes on the current branch. That is useful baseline evidence for the landed waves, but it does not close the remaining file-edit/history seam.
 
 
-# Nibbler — concurrent supersede race analysis
+# Nibbler ΓÇö concurrent supersede race analysis
 
 - **Date:** 2026-05-04T07:22:12.881+08:00
 - **Requested by:** macro88
@@ -689,7 +689,7 @@ Because the repo already operates under a single-writer model, holding the SQLit
 - **Why:** the current implementation still allows a rejected non-head supersede attempt to mutate the vault under concurrent contenders
 
 
-# Nibbler — conversation-memory Wave 1 seam analysis
+# Nibbler ΓÇö conversation-memory Wave 1 seam analysis
 
 - **Date:** 2026-05-04T07:22:12.881+08:00
 - **Requested by:** macro88
@@ -699,7 +699,7 @@ Because the repo already operates under a single-writer model, holding the SQLit
 
 Wave 1 is not honestly "fully implemented." The landed core tests pass, but the three Professor seams are real, and one of them is a format-level ambiguity that should narrow scope instead of getting hand-waved as a small parser fix.
 
-## Seam 1 — stale leased job completion by bare `job_id`
+## Seam 1 ΓÇö stale leased job completion by bare `job_id`
 
 `dequeue()` can recycle an expired `running` row back to `running` again on the same row id, but `mark_done()` still finalizes by `id` alone and `mark_failed()` only gates on `id + status='running'`. That lets a stale worker from an older lease complete or fail the newer claim.
 
@@ -711,7 +711,7 @@ Every dequeue claim must mint a fresh lease identity, and only that exact live c
 
 This seam is a direct blocker for `6.5`. The safe repair is a per-claim token or generation carried through dequeue and required by completion/failure transitions.
 
-## Seam 2 — same-session append serialization is only in-process
+## Seam 2 ΓÇö same-session append serialization is only in-process
 
 `append_turn()` serializes by a process-local `OnceLock<Mutex<...>>`, then computes ordinals from the filesystem and appends with ordinary file writes. A second process can still race file creation, ordinal assignment, or same-file append ordering.
 
@@ -723,7 +723,7 @@ For a given `{memory root, namespace, session_id}`, ordinal assignment and durab
 
 If the team wants to keep task `5.5` as written, this needs a real cross-process exclusion mechanism held across snapshot + create/append + fsync. If that is out of scope for Wave 1, the task and closure note must narrow to single-process serialization only.
 
-## Seam 3 — parser metadata misclassifies trailing JSON fences
+## Seam 3 ΓÇö parser metadata misclassifies trailing JSON fences
 
 `split_content_and_metadata()` treats any terminal ```json ... ``` block as metadata. That means ordinary turn content that naturally ends with a JSON example cannot round-trip; the parser silently steals content into `metadata`.
 
@@ -741,11 +741,11 @@ This is the seam that should force scope narrowing instead of a heuristic patch.
 - **Why:** two concurrency invariants are still underpowered, and the metadata fence contract is ambiguous enough to require either redesign or narrowed scope
 
 
-# Nibbler — model lifecycle / airgap risk memo
+# Nibbler ΓÇö model lifecycle / airgap risk memo
 
 - **Timestamp:** 2026-05-05T06:49:17.593+08:00
 - **Requested by:** macro88
-- **Scope:** upcoming `3.1–3.6` model lifecycle + extraction enablement surface
+- **Scope:** upcoming `3.1ΓÇô3.6` model lifecycle + extraction enablement surface
 - **Verdict:** **REJECT current closure bar until the risks below are explicitly closed**
 
 ## Blocking findings
@@ -755,20 +755,20 @@ This is the seam that should force scope narrowing instead of a heuristic patch.
    - A future DB with `schema_version > 9` is allowed through open, which means an older binary can attach to a newer schema instead of failing closed.
    - Acceptance bar: reject on any schema-version mismatch (`!=`), and prove it with a regression that seeds `schema_version = 10` and asserts the binary exits before doing normal open work.
 
-2. **The current “integrity check” is not anchored trust for SLM downloads.**
+2. **The current ΓÇ£integrity checkΓÇ¥ is not anchored trust for SLM downloads.**
    - `src\core\conversation\model_lifecycle.rs:391-438` accepts the expected SHA-256 from response headers (`ETag`, `x-sha256`, etc.) and compares the file against that value.
    - That only proves the bytes match what the server said in that response. It does **not** prove the curated alias cache contains the intended model if the remote host, mirror, or overridden base URL is malicious.
    - Acceptance bar: for shipped aliases (`phi-3.5-mini`, `gemma-3-*`), pin expected file hashes in source and verify against those pins. If raw repo IDs stay supported, the guarantee must be explicitly downgraded for them and never described as the same integrity level.
 
-3. **“Enable once, then airgapped forever” is still unproved and easy to accidentally violate in the runtime loader.**
+3. **ΓÇ£Enable once, then airgapped foreverΓÇ¥ is still unproved and easy to accidentally violate in the runtime loader.**
    - `src\commands\extraction.rs:28-36` makes download explicit at enable time, but nothing in the landed surface yet proves the future SLM load path will refuse network and use only a verified local cache.
    - The upcoming runtime can still accidentally call `download_model()` (or equivalent fetch logic) when `extraction.enabled = true` and the cache is missing/corrupt, silently breaking the explicit-download promise.
    - Acceptance bar: runtime load must be local-only; missing/invalid cache must runtime-disable extraction with an actionable reason; add a test that enables once, blocks network, deletes or corrupts cache, then proves the daemon does **not** fetch and instead reports disabled/failure state.
 
 4. **Partial-download cleanup is only proved on returned-error paths, not on crash/interruption paths.**
    - `src\core\conversation\model_lifecycle.rs:288-316` installs via temp dir + rename, which avoids promoting a partial cache, but cleanup only happens when the function returns an error normally.
-   - A kill/crash during download leaves `.alias-download-*` directories behind. That is not a correctness break for cache selection, but it is an unclosed disk-growth seam and weakens the “partial download cleanup” claim.
-   - Acceptance bar: either narrow the claim to “no partial cache promotion” only, or add stale-temp-dir cleanup on next install/startup and prove it with an interrupted-download regression.
+   - A kill/crash during download leaves `.alias-download-*` directories behind. That is not a correctness break for cache selection, but it is an unclosed disk-growth seam and weakens the ΓÇ£partial download cleanupΓÇ¥ claim.
+   - Acceptance bar: either narrow the claim to ΓÇ£no partial cache promotionΓÇ¥ only, or add stale-temp-dir cleanup on next install/startup and prove it with an interrupted-download regression.
 
 5. **The current Windows proof lane for lifecycle/integrity is not honest.**
    - `tests\model_lifecycle.rs:175` uses a non-blocking mock socket and panics on `WouldBlock`; on this Windows lane, `cargo test --no-default-features --features bundled,online-model --test model_lifecycle` currently fails in the stale-cache and bad-integrity cases.
@@ -777,7 +777,7 @@ This is the seam that should force scope narrowing instead of a heuristic patch.
 
 ## Required reviewer bar for Fry
 
-Fry does **not** get approval for `3.1–3.6` unless all of the following are true:
+Fry does **not** get approval for `3.1ΓÇô3.6` unless all of the following are true:
 
 1. Explicit enable/download is the **only** networked path.
 2. Runtime load is local-only and fail-closed.
@@ -787,7 +787,7 @@ Fry does **not** get approval for `3.1–3.6` unless all of the following are tr
 6. Windows-targeted lifecycle tests pass and cover: cache integrity failure, stale cache recovery, no silent runtime fetch, and future-schema rejection.
 
 
-# Professor decision — conversation memory close action review
+# Professor decision ΓÇö conversation memory close action review
 
 - Timestamp: 2026-05-04T07:22:12.881+08:00
 - Change: conversation-memory-foundations
@@ -836,7 +836,7 @@ Approve the conversation-memory file-edit/history slice as landed across `b84e8b
 - `cargo test --quiet extracted_path_detection_recognizes_namespace_and_history_sidecars`
 
 
-## Professor — conversation-memory-foundations slice 1 re-review
+## Professor ΓÇö conversation-memory-foundations slice 1 re-review
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -858,7 +858,7 @@ The earlier rejection was explicitly limited to contract truth. That mismatch is
 - `cargo test --quiet -j 1` passed during re-review.
 
 
-## Professor — conversation-memory-foundations slice 2 Bender review
+## Professor ΓÇö conversation-memory-foundations slice 2 Bender review
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -889,7 +889,7 @@ APPROVE Bender's race-fix revision for slice `2.2`-`2.5` / `3.1`-`3.7`.
 - Host note: this Windows review lane cannot execute the new Unix-only contender test directly, so approval rests on the code-path review plus the deterministic proof now landed at the correct seam.
 
 
-## Professor — conversation-memory-foundations slice 2 re-review
+## Professor ΓÇö conversation-memory-foundations slice 2 re-review
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -912,7 +912,7 @@ Reject Mom's rerevision for slice `2.2`-`2.5` / `3.1`-`3.7`.
 - Validation run on this branch passed for `cargo check --quiet`, `cargo test --quiet supersede_chain`, and `cargo test --quiet superseding_non_head_page_is_rejected_without_partial_write`, but there is no proof covering the concurrent same-target race.
 
 
-## Professor — conversation-memory-foundations slice 2 review
+## Professor ΓÇö conversation-memory-foundations slice 2 review
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -940,7 +940,7 @@ REJECT Fry's supersede/retrieval slice for tasks 2.2-2.5 and 3.1-3.7.
 - add tests that prove the rejected non-head supersede leaves the vault file and raw-import/source state unchanged on the real write-through path.
 
 
-## Professor — conversation-memory foundations Wave 1 re-review
+## Professor ΓÇö conversation-memory foundations Wave 1 re-review
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -965,7 +965,7 @@ I revalidated the landed slice with `cargo check --quiet`, `cargo test --test co
 Wave 1 is **APPROVED** for the requested scope (`4.1`-`6.6`, `11.1`-`11.4`). Leela's artifact repair is sufficient; no further revision is required for this checkpoint.
 
 
-## Professor — conversation-memory foundations Wave 1 review
+## Professor ΓÇö conversation-memory foundations Wave 1 review
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -997,7 +997,7 @@ REJECT the Wave 1 artifact for scope `4.1`-`6.6` and `11.1`-`11.4`.
 Fry and Scruffy may not author the next revision of this rejected Wave 1 artifact. The next revision must be independently produced by a different agent.
 
 
-### 2026-05-04T07:22:12.881+08:00: Professor review — conversation-memory Wave 2
+### 2026-05-04T07:22:12.881+08:00: Professor review ΓÇö conversation-memory Wave 2
 
 **By:** Professor  
 **What:** Approved Wave 2 as landed across `b7a0b2d` and `e2fcb65` for tasks `7.1`-`8.6` and `12.1`-`12.3`.  
@@ -1006,7 +1006,7 @@ Fry and Scruffy may not author the next revision of this rejected Wave 1 artifac
 **Decision:** APPROVE. No revision lockout applies because this artifact is not rejected.
 
 
-# Professor — Schema v9 first-slice review
+# Professor ΓÇö Schema v9 first-slice review
 
 - Date: 2026-05-05
 - Change: `slm-extraction-and-correction`
@@ -1038,7 +1038,7 @@ Approve the first slice. The schema bump is fail-closed for v8 databases, `corre
 Proceed to the next narrow slice: runtime/model lifecycle and control-surface plumbing (`2.*` / `3.*`, optionally the thinnest `4.*` wiring). Do not widen into worker-side fact writing or correction orchestration until that model-loading contract is landed and reviewed.
 
 
-# Scruffy — conversation-memory close-action test decision
+# Scruffy ΓÇö conversation-memory close-action test decision
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **Scope:** `conversation-memory-foundations` tasks `9.1`-`9.5`
@@ -1054,7 +1054,7 @@ Proceed to the next narrow slice: runtime/model lifecycle and control-surface pl
 - Test impact: Keep one focused integration file that covers chain relinking, whitespace no-op, type/path gating, and sidecar behavior under the Windows coverage lane.
 
 
-# Scruffy — conversation-memory queue/core coverage decision
+# Scruffy ΓÇö conversation-memory queue/core coverage decision
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **Scope:** `conversation-memory-foundations` tasks 4.1-6.6 and 11.1-11.4
@@ -1063,7 +1063,7 @@ Proceed to the next narrow slice: runtime/model lifecycle and control-surface pl
 - **Coverage note:** On this Windows lane, `cargo test -j 1` passes and `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` reports 90.02% total line coverage, so the slice clears the requested floor without pretending branch coverage was rerun.
 
 
-# Scruffy — conversation-memory race-fix coverage decision
+# Scruffy ΓÇö conversation-memory race-fix coverage decision
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **Scope:** `conversation-memory-foundations` tasks 2.2-2.5 after commit `d98e010`
@@ -1072,7 +1072,7 @@ Proceed to the next narrow slice: runtime/model lifecycle and control-surface pl
 - **Test note:** No extra test was added in this lane because the missing proof is environmental, not a missing branch in the committed test suite.
 
 
-# Scruffy — conversation-memory slice 2 test decision
+# Scruffy ΓÇö conversation-memory slice 2 test decision
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **Scope:** `conversation-memory-foundations` tasks 2.2-2.5 / 3.1-3.7
@@ -1081,7 +1081,7 @@ Proceed to the next narrow slice: runtime/model lifecycle and control-surface pl
 - **Coverage note:** Current honest coverage is far below 90% for the branch, so this slice should be reported truthfully rather than treated as "covered enough" by the existing broad suite.
 
 
-# Scruffy — conversation-memory Wave 1 rerecheck
+# Scruffy ΓÇö conversation-memory Wave 1 rerecheck
 
 - **Timestamp:** 2026-05-04T07:22:12.881+08:00
 - **Scope:** `conversation-memory-foundations` tasks 4.1-6.6 after commit `5c88104`
@@ -1154,7 +1154,7 @@ Refresh draft PR #153 so it claims the supersede/retrieval slice as approved aft
 - The truthful next merge action remains a narrow refresh from `main` plus resolution of these OpenSpec conflicts: `design.md`, `proposal.md`, `specs/add-only-supersede-chain/spec.md`, `specs/conversation-turn-capture/spec.md`, and `tasks.md`.
 
 
-## Zapp — conversation-memory draft PR final-wave refresh
+## Zapp ΓÇö conversation-memory draft PR final-wave refresh
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -1211,7 +1211,7 @@ Draft PR #153 should claim only the live v8 baseline, commit `a348e7f`'s superse
 - Minimal next action: merge or rebase `main` into `feat/slm-conversation-mem` and resolve these five OpenSpec conflicts: `design.md`, `proposal.md`, `specs/add-only-supersede-chain/spec.md`, `specs/conversation-turn-capture/spec.md`, and `tasks.md`.
 
 
-## Zapp — conversation-memory draft PR Wave 2 refresh
+## Zapp ΓÇö conversation-memory draft PR Wave 2 refresh
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -1226,7 +1226,7 @@ Refresh draft PR #153 so it says Wave 1 is approved and complete, names Wave 2 a
 Professor already approved the Wave 1 artifact, so leaving the draft body framed around the older checkpoint would understate the branch's real progress. A fresh merge simulation now shows six spec-only add/add conflicts rather than the previously listed five, so the truthful update must move both the scope boundary and the conflict count together.
 
 
-# Zapp — SLM PR / release surface decision
+# Zapp ΓÇö SLM PR / release surface decision
 
 - **Date:** 2026-05-05
 - **Decision:** Do **not** reuse `feat/slm-conversation-mem` as the next draft-PR head. Its remote ref already backed merged PR #153, while the local head now diverges with a smaller, coherent `v0.18.0` release-truth slice. Publish that slice under a fresh head ref, and keep any future `v0.19.0` PR claims blocked until extraction/correction code actually lands.
@@ -1234,7 +1234,7 @@ Professor already approved the Wave 1 artifact, so leaving the draft body framed
 - **Consequences:** Open the draft PR now for the pushed `v0.18.0` release-prep slice only, with explicit non-claims for SLM extraction/correction. For `v0.19.0`, keep the pre-tag truth checklist ready: Cargo version parity, release workflow/tag gate, README + getting-started + install docs wording, roadmap status, MCP tool-count copy, and release asset contract all need a fresh truth pass once the implementation branch is real.
 
 
-### 2026-04-28: Professor Batch 1 watcher-reliability pre-gate — REJECT current closure
+### 2026-04-28: Professor Batch 1 watcher-reliability pre-gate ΓÇö REJECT current closure
 
 **By:** Professor  
 **What:** Rejected Batch 1 watcher-reliability closure plan as written due to three blocking contradictions.  
@@ -1254,7 +1254,7 @@ Professor already approved the Wave 1 artifact, so leaving the draft body framed
 ### 2026-04-29T21:29:11.071+08:00: User directive
 **By:** macro88 (via Copilot)
 **What:** Start implementation branches from main/origin-main, not from an existing release or dirty branch.
-**Why:** User request — captured for team memory
+**Why:** User request ΓÇö captured for team memory
 
 
 # Fry Batch 3 implementation
@@ -1320,7 +1320,7 @@ The current checkout is not safe for Batch 3 or release work: it is on an old re
 
 ## Routing
 
-- **Fry first:** implement Batch 3 in the clean worktree using the existing recon order (UUID/frontmatter seam → shared write path → live-owner guard → CLI surfaces/tests/OpenSpec checkboxes).
+- **Fry first:** implement Batch 3 in the clean worktree using the existing recon order (UUID/frontmatter seam ΓåÆ shared write path ΓåÆ live-owner guard ΓåÆ CLI surfaces/tests/OpenSpec checkboxes).
 - **Professor second:** review `src\core\vault_sync.rs`, `src\core\page_uuid.rs`, and any shared writer extraction before merge.
 - **Scruffy third:** run targeted test/coverage passes and verify the coverage report stays above 90%.
 - **Nibbler fourth:** adversarial review of serve-live refusal, write-gate enforcement, and rename-before-commit safety.
@@ -1392,7 +1392,7 @@ Batch 3 safety is not acceptable to ship.
 - The frozen `brain_collections` MCP contract stays closed: `failing_jobs` remains skipped from serialization and the exact-key test still enforces the existing field set.
 
 
-## 2026-04-29T20:33:01.970+08:00 — Batch 3 coverage lane split
+## 2026-04-29T20:33:01.970+08:00 ΓÇö Batch 3 coverage lane split
 
 - Keep the Batch 3 proof on the real seams:
   - `src/core/vault_sync.rs` owns atomic UUID write-back, read-only skip, `file_state`/`raw_imports` rotation, and live-owner refusal helpers.
@@ -1513,7 +1513,7 @@ None.
 - Optional: mirror the getting-started page's explicit "Unix-only bulk rewrite" caveat into the README Batch 3 mention so every top-level surface carries the same constraint wording.
 
 ---
-# Leela decision — v0.12.0 merge lane
+# Leela decision ΓÇö v0.12.0 merge lane
 
 - **Timestamp:** 2026-04-29T21:29:11.071+08:00
 - **Requested by:** macro88
@@ -1553,7 +1553,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 1. Keep the Unix platform gate narrow; do **not** widen Windows vault-write support as part of this slice.
 2. Keep `memory_collections` on the frozen 13-field MCP schema; no Batch 4 work should add fields there.
 
-## Task 12.1 — full 13-step rename-before-commit
+## Task 12.1 ΓÇö full 13-step rename-before-commit
 
 ### Already implemented
 
@@ -1593,14 +1593,14 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 - Explicit dedup-insert collision / duplicate-entry failure coverage
 - Typed symlink-escape coverage (today only the raw error string is present)
 
-## Task 12.6 — mandatory `expected_version` everywhere
+## Task 12.6 ΓÇö mandatory `expected_version` everywhere
 
 ### Already implemented
 
 - MCP enforces the contract up front:
-  - existing page + missing `expected_version` → conflict (`src\mcp\server.rs:589-615`, tests at `1651-1673`, `1677-1707`)
-  - stale `expected_version` → conflict (`src\mcp\server.rs:589-615`, tests at `1711-1740`)
-  - create with unexpected `expected_version` → conflict (`src\mcp\server.rs:597-604`, tests at `1814-1828`)
+  - existing page + missing `expected_version` ΓåÆ conflict (`src\mcp\server.rs:589-615`, tests at `1651-1673`, `1677-1707`)
+  - stale `expected_version` ΓåÆ conflict (`src\mcp\server.rs:589-615`, tests at `1711-1740`)
+  - create with unexpected `expected_version` ΓåÆ conflict (`src\mcp\server.rs:597-604`, tests at `1814-1828`)
 - The Unix CLI/write-through core also enforces missing/stale update versions before sentinel creation (`src\commands\put.rs:376-381`, tests at `1221-1280`).
 - CLI help text already documents the intended rule: `--expected-version` required for Unix updates, optional for creates (`src\main.rs:41-46`).
 
@@ -1611,7 +1611,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 ### Still missing
 
 - The contract is not yet closed through the deferred live-routing path from `12.6a`; `quaid put` still writes directly regardless of serve ownership.
-- There is still a non-Unix fallback path and test that allow unconditional update semantics (`src\commands\put.rs:323-339`, `1780-1792`). Do **not** widen platform support to “fix” this; instead keep the Unix gate truthful and keep Batch 4 scoped to vault-write surfaces only.
+- There is still a non-Unix fallback path and test that allow unconditional update semantics (`src\commands\put.rs:323-339`, `1780-1792`). Do **not** widen platform support to ΓÇ£fixΓÇ¥ this; instead keep the Unix gate truthful and keep Batch 4 scoped to vault-write surfaces only.
 
 ### Tests that already exist
 
@@ -1622,7 +1622,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 
 - A serve-owned CLI-routing test proving the same OCC contract still holds once `12.6a` is implemented
 
-## Task 12.6a — `quaid put` live-owner/offline routing
+## Task 12.6a ΓÇö `quaid put` live-owner/offline routing
 
 ### Already implemented
 
@@ -1639,7 +1639,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 - `quaid put` is still direct-dispatch only:
   - `main.rs` sends `Commands::Put` straight to `commands::put::run(...)` (`src\main.rs:301-305`)
   - `commands::put::run(...)` only applies the Unix gate, reads stdin, and calls `put_from_string(...)` (`src\commands\put.rs:90-97`)
-  - there is **no** live-owner detection, no refusal instructing “use MCP or stop serve”, no offline temporary lease/heartbeat wrapper, and no IPC path
+  - there is **no** live-owner detection, no refusal instructing ΓÇ£use MCP or stop serveΓÇ¥, no offline temporary lease/heartbeat wrapper, and no IPC path
 - This task must stay in the refuse-or-offline shape only; do not reopen Batch 5 IPC work here.
 
 ### Tests that already exist
@@ -1652,7 +1652,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 - `quaid put` acquires/releases an offline owner lease when no live owner exists
 - refusal message includes pid/host once the error surface is repaired
 
-## Task 12.6b — bulk rewrite routing
+## Task 12.6b ΓÇö bulk rewrite routing
 
 ### Already implemented
 
@@ -1674,7 +1674,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 
 ### Batch 3 stale/incomplete callout
 
-- `tasks.md` is honest that Batch 3 remains open (`5a.5`, `5a.5a`, `9.2a`, `17.5ii9`, `17.5ww`, `17.5ww2` are still unchecked), but the current `implementation_plan.md` is stale where it says Batch 3 bulk-write routing “already implements” the `12.6b` refusal (`openspec\changes\vault-sync-engine\implementation_plan.md:221`).
+- `tasks.md` is honest that Batch 3 remains open (`5a.5`, `5a.5a`, `9.2a`, `17.5ii9`, `17.5ww`, `17.5ww2` are still unchecked), but the current `implementation_plan.md` is stale where it says Batch 3 bulk-write routing ΓÇ£already implementsΓÇ¥ the `12.6b` refusal (`openspec\changes\vault-sync-engine\implementation_plan.md:221`).
 - That stale assumption is contradicted by the live code in `src\commands\collection.rs`, which still rejects `--write-quaid-id` and exposes no `migrate-uuids` command.
 
 ### Tests that already exist
@@ -1688,7 +1688,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 - `collection add --write-quaid-id` live-owner refusal
 - bulk refusal message naming pid/host and stop-serve guidance
 
-## Task 12.7 — tests
+## Task 12.7 ΓÇö tests
 
 ### What already exists
 
@@ -1743,7 +1743,7 @@ Do **not** start Batch 4 implementation on this branch state yet. The rename-bef
 created_at: 2026-04-30T06:37:20.531+08:00
 author: Leela
 type: routing-decision
-subject: Batch 4 execution lane — recovery path from stale checkout
+subject: Batch 4 execution lane ΓÇö recovery path from stale checkout
 ---
 
 # Decision: Batch 4 Branch Routing and Recovery Path
@@ -1753,7 +1753,7 @@ subject: Batch 4 execution lane — recovery path from stale checkout
 The current working directory (`D:\repos\quaid`) is parked on `release/v0.11.0`, which is
 12 commits ahead of `origin/release/v0.11.0` (all Scribe log commits) and is **not on main**.
 `origin/main` is at `v0.12.0` (SHA `5a8bdf0`). The local tasks.md shows Batch 3 items as
-open only because the stale branch predates the Batch 3 merge — all Batch 3 closures
+open only because the stale branch predates the Batch 3 merge ΓÇö all Batch 3 closures
 (`5a.5`, `5a.5a`, `9.2a`, `5a.7`, `17.5ww`, `17.5ww2`, `17.5ww3`, `17.5ii9`, `12.6b`, `17.5www`)
 are confirmed closed on `origin/main`. No `v0.13.0` tag or `release/v0.13.0` branch exists.
 There are 2 modified `.squad/` files and 1 untracked `.squad/` health report in the working tree.
@@ -1779,37 +1779,37 @@ Starting SHA: `5a8bdf0` (tagged `v0.12.0`, confirmed clean).
 ### Batch 4 task scope
 
 Open tasks on `origin/main`:
-- `12.1` — complete the 13-step rename-before-commit sequence (audit `put_from_string` against all 13 steps; wire steps 2 `walk_to_parent`, 3 `check_fs_precondition`, 7 symlink defense-in-depth, and 8 dedup insert timing on ALL vault-byte write paths)
-- `12.6` — mandatory `expected_version` enforcement audit across MCP + CLI (no blind-update escape hatch)
-- `12.6a` — CLI write routing for `quaid put` single-file (refuse with `ServeOwnsCollectionError` when live owner exists; offline lease path when no live owner)
-- `12.6b` — **ALREADY CLOSED** on main (Batch 3 Mom revision). Verify guard in place; no re-implementation needed.
-- `12.7` — tests covering every rename-before-commit failure mode (tempfile fsync error, parent fsync error, commit error, foreign rename in window, concurrent dedup entries, external write mid-precondition)
+- `12.1` ΓÇö complete the 13-step rename-before-commit sequence (audit `put_from_string` against all 13 steps; wire steps 2 `walk_to_parent`, 3 `check_fs_precondition`, 7 symlink defense-in-depth, and 8 dedup insert timing on ALL vault-byte write paths)
+- `12.6` ΓÇö mandatory `expected_version` enforcement audit across MCP + CLI (no blind-update escape hatch)
+- `12.6a` ΓÇö CLI write routing for `quaid put` single-file (refuse with `ServeOwnsCollectionError` when live owner exists; offline lease path when no live owner)
+- `12.6b` ΓÇö **ALREADY CLOSED** on main (Batch 3 Mom revision). Verify guard in place; no re-implementation needed.
+- `12.7` ΓÇö tests covering every rename-before-commit failure mode (tempfile fsync error, parent fsync error, commit error, foreign rename in window, concurrent dedup entries, external write mid-precondition)
 
 ### Agent assignments
 
 | Agent | Task |
 |-------|------|
 | Fry | Implements 12.1, 12.6, 12.6a, 12.7 in the sibling worktree |
-| Scruffy | Monitors unit test coverage ≥ 90% throughout |
+| Scruffy | Monitors unit test coverage ΓëÑ 90% throughout |
 | Professor | Code peer review of 12.1 (security-adjacent) and 12.6 (contract enforcement) |
 | Nibbler | Adversarial review of 12.6a (CLI write routing, live-owner detection) |
 | Bender | End-to-end validation pass after Fry signals implementation complete |
 | Amy | Documentation review for any new error types or CLI changes |
-| Zapp | Release lane: `release/v0.13.0` → PR → merge to main → tag `v0.13.0` after all gates clear |
+| Zapp | Release lane: `release/v0.13.0` ΓåÆ PR ΓåÆ merge to main ΓåÆ tag `v0.13.0` after all gates clear |
 
 ### Gate sequence before code begins
 
-1. ✅ No active reviewer gate (all prior Batch 3 gates cleared at v0.12.0 merge)
-2. ✅ No v0.13.0 tag collision
-3. ✅ `origin/main` is clean at `5a8bdf0`
-4. ✅ Batch 3 closures verified on `origin/main` — no re-closure needed
+1. Γ£à No active reviewer gate (all prior Batch 3 gates cleared at v0.12.0 merge)
+2. Γ£à No v0.13.0 tag collision
+3. Γ£à `origin/main` is clean at `5a8bdf0`
+4. Γ£à Batch 3 closures verified on `origin/main` ΓÇö no re-closure needed
 5. **Required before first commit:** Fry creates the worktree as specified above
 
 ### Gate sequence before release
 
 1. `cargo test` green in the worktree
-2. Coverage ≥ 90% confirmed by Scruffy (CI publishes coverage evidence; Scruffy must confirm manually)
-3. Professor and Nibbler approve (no admin-merge around reviewer gates — lesson from v0.12.0)
+2. Coverage ΓëÑ 90% confirmed by Scruffy (CI publishes coverage evidence; Scruffy must confirm manually)
+3. Professor and Nibbler approve (no admin-merge around reviewer gates ΓÇö lesson from v0.12.0)
 4. All review threads resolved
 5. `release/v0.13.0` branch PR opened against `main`
 6. PR merged cleanly
@@ -1817,15 +1817,15 @@ Open tasks on `origin/main`:
 
 ### Constraints
 
-- **Do NOT merge Batch 4 into or from `release/v0.11.0`** — that branch is dead.
-- **Do NOT touch the 3 dirty files in `D:\repos\quaid`** during Batch 4 — they are Scribe artifacts and should be committed or pruned separately by Scribe.
-- Tasks `12.6c`–`12.6g` (IPC socket) are **Batch 5 scope** — do not pull them into Batch 4.
+- **Do NOT merge Batch 4 into or from `release/v0.11.0`** ΓÇö that branch is dead.
+- **Do NOT touch the 3 dirty files in `D:\repos\quaid`** during Batch 4 ΓÇö they are Scribe artifacts and should be committed or pruned separately by Scribe.
+- Tasks `12.6c`ΓÇô`12.6g` (IPC socket) are **Batch 5 scope** ΓÇö do not pull them into Batch 4.
 - `12.6b` is already closed; Batch 4 only needs to verify the guard is present, not re-implement it.
 
 ## Risk flags
 
 - `12.1` is security-adjacent (rename-before-commit discipline). Professor must review before merge, not after.
-- The coverage threshold is not CI-enforced — human confirmation required before Zapp starts release lane.
+- The coverage threshold is not CI-enforced ΓÇö human confirmation required before Zapp starts release lane.
 - `now.md` is stale (updated 2026-04-25). The active branch field says `spec/vault-sync-engine` but actual work branch is a sibling worktree. No action needed for Batch 4 execution, but Scribe should update `now.md` after Batch 4 lands.
 
 
@@ -1846,10 +1846,10 @@ coverage baseline is **89.47%** from
 
 The Batch 4 lane is uneven:
 
-- `src\core\vault_sync.rs` — 83.22% line coverage
-- `src\commands\put.rs` — 95.70%
-- `src\commands\collection.rs` — 91.70%
-- `src\mcp\server.rs` — 96.90%
+- `src\core\vault_sync.rs` ΓÇö 83.22% line coverage
+- `src\commands\put.rs` ΓÇö 95.70%
+- `src\commands\collection.rs` ΓÇö 91.70%
+- `src\mcp\server.rs` ΓÇö 96.90%
 
 The same assessment also confirmed that Batch 4 routing tasks are still genuinely open:
 `quaid put` does not yet perform live-owner routing, `ServeOwnsCollectionError` still lacks
@@ -1885,14 +1885,14 @@ For Batch 4 implementation work, the lean honest path is:
 
 This keeps scope tight while still proving the real Batch 4 contract.
 
-# Bender — conversation memory baseline
+# Bender ΓÇö conversation memory baseline
 
 - **Date:** 2026-05-04T07:22:12.881+08:00
 - **Decision:** Do not call the conversation-memory branch release-ready yet, even though the current baseline clears the requested line-coverage bar.
 - **Why now:** The measured baseline is good enough on code health (`cargo llvm-cov report` = 92.11% TOTAL line coverage; default coverage run, online-feature tests, clippy, cargo check, release-asset parity, and install-release seam all passed), but the release lane still has two hard gates: `Cargo.toml` is still `0.17.0`, so the tag-driven `release.yml` would reject `v0.18.0`, and the >90% coverage requirement still depends on explicit human confirmation because CI only reports coverage. Local `tests/install_profile.sh` failures are permission-semantics noise from the Windows bash / NTFS environment, not evidence that the Linux/macOS release asset contract is broken.
 - **Next gate:** Let implementation continue, but do not open or merge a release-bound PR until the version bump is in the actual release candidate commit and someone reruns `cargo llvm-cov report` on the final tree to re-confirm the line-coverage floor.
 
-# Fry — conversation-memory-foundations schema slice
+# Fry ΓÇö conversation-memory-foundations schema slice
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -1906,7 +1906,7 @@ Implement the first conversation-memory schema slice as a strict v8 foundation p
 
 The repo already ships `SCHEMA_VERSION = 8`, so the honest minimal slice is to add the new `superseded_by`/`extraction_queue` artefacts, strengthen tests, and keep v7 databases on the existing schema-mismatch/re-init path. A raw `json_extract(frontmatter, '$.session_id')` expression index broke existing malformed-frontmatter tolerance in unit tests, so the guarded form is the safe way to land the session lookup seam without widening this slice into frontmatter-cleanup or migration work.
 
-# Fry — Batch 7 PR opening gate
+# Fry ΓÇö Batch 7 PR opening gate
 
 **Date:** 2026-05-02T21:49:40.366+08:00  
 **Requested by:** macro88  
@@ -1920,7 +1920,7 @@ Open the Batch 7 product PR from `sync-engine/batch-7` to `main` after committin
 
 This records the explicit review gate for the Batch 7 lane and keeps the release handoff truthful: `v0.17.0` is still deferred until the PR lands and post-merge validation is rerun on `main`.
 
-# Leela — conversation-memory-foundations batching gate
+# Leela ΓÇö conversation-memory-foundations batching gate
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -1928,13 +1928,13 @@ This records the explicit review gate for the Batch 7 lane and keeps the release
 
 ## Decision
 
-Do not fan implementation past the already-started schema edits until the OpenSpec artifacts are truth-repaired and routing is reset. Treat the schema work as a v8 → v9 change until proven otherwise, resolve the `pages.type` versus `pages.kind` DDL mismatch in the artifacts before more Section 1 work, and require Nibbler pre-gate on the watcher/file-edit slice before Fry starts task 10. Open the draft PR after the corrected preflight slice plus the first stable implementation slices land (`1.1–2.5` and `11.1–11.2`), not at the end of the 70-task change.
+Do not fan implementation past the already-started schema edits until the OpenSpec artifacts are truth-repaired and routing is reset. Treat the schema work as a v8 ΓåÆ v9 change until proven otherwise, resolve the `pages.type` versus `pages.kind` DDL mismatch in the artifacts before more Section 1 work, and require Nibbler pre-gate on the watcher/file-edit slice before Fry starts task 10. Open the draft PR after the corrected preflight slice plus the first stable implementation slices land (`1.1ΓÇô2.5` and `11.1ΓÇô11.2`), not at the end of the 70-task change.
 
 ## Why
 
-The repo already advertises schema version 8 in code and schema, while the change artifacts still describe a v7 → v8 reset. The current tasks also specify `idx_pages_supersede_head ON pages(kind, superseded_by)` even though the live table stores that field as `type`, so leaving the artifacts unchanged would make the first batch lie about what is actually shipping. The branch is already dirty with partial work on this change, so the safe routing move is to pause widening, repair the truth in the specs/tasks, then continue under explicit reviewer and coverage gates.
+The repo already advertises schema version 8 in code and schema, while the change artifacts still describe a v7 ΓåÆ v8 reset. The current tasks also specify `idx_pages_supersede_head ON pages(kind, superseded_by)` even though the live table stores that field as `type`, so leaving the artifacts unchanged would make the first batch lie about what is actually shipping. The branch is already dirty with partial work on this change, so the safe routing move is to pause widening, repair the truth in the specs/tasks, then continue under explicit reviewer and coverage gates.
 
-# Leela — conversation-memory-foundations truth repair
+# Leela ΓÇö conversation-memory-foundations truth repair
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -1942,13 +1942,13 @@ The repo already advertises schema version 8 in code and schema, while the chang
 
 ## Decision
 
-Truth-repair this change so it explicitly treats schema v8 plus the landed first plumbing slice (`pages.superseded_by`, the head/session indexes, `extraction_queue`, config defaults, and `Page.superseded_by`) as the current baseline. Rewrite stale `pages.kind` references to `pages.type`, and keep tasks `1.1`–`1.8` / `2.1` checked by rephrasing them as already-landed baseline work. Remaining implementation scope starts at `2.2`; no additional schema bump is in scope.
+Truth-repair this change so it explicitly treats schema v8 plus the landed first plumbing slice (`pages.superseded_by`, the head/session indexes, `extraction_queue`, config defaults, and `Page.superseded_by`) as the current baseline. Rewrite stale `pages.kind` references to `pages.type`, and keep tasks `1.1`ΓÇô`1.8` / `2.1` checked by rephrasing them as already-landed baseline work. Remaining implementation scope starts at `2.2`; no additional schema bump is in scope.
 
 ## Why
 
-The live repo already ships the first slice, so leaving the artifacts on a planned `v7 → v8` bump and `pages(kind, superseded_by)` would make reviewers and implementers work against a false baseline. Reframing the checked tasks keeps scope unchanged while making OpenSpec honest about what is already landed versus what remains.
+The live repo already ships the first slice, so leaving the artifacts on a planned `v7 ΓåÆ v8` bump and `pages(kind, superseded_by)` would make reviewers and implementers work against a false baseline. Reframing the checked tasks keeps scope unchanged while making OpenSpec honest about what is already landed versus what remains.
 
-# Professor — conversation-memory-foundations slice 1 review
+# Professor ΓÇö conversation-memory-foundations slice 1 review
 
 **Date:** 2026-05-04T07:22:12.881+08:00  
 **Requested by:** macro88  
@@ -1975,13 +1975,13 @@ Reject Fry's first slice for tasks 1.1-1.8 and 2.1. The code lands the narrow `p
 - `openspec/changes/conversation-memory-foundations/proposal.md` and `tasks.md` still describe `pages(kind, superseded_by)` and an unguarded `json_extract(frontmatter, '$.session_id')`.
 - `cargo test --quiet -j 1` passed during review, so the rejection is about contract truth, not failing tests.
 
-## 2026-05-04T07:22:12.881+08:00 — Conversation-memory slice 1 test gate
+## 2026-05-04T07:22:12.881+08:00 ΓÇö Conversation-memory slice 1 test gate
 
 - `src\core\db.rs` already carries the high-value slice-1 proofs: schema v8 artefacts/defaults, `superseded_by` foreign-key enforcement, `extraction_queue` CHECK failures, and v7 rejection on open/init.
 - The practical seam to keep green while Fry widens the slice is every hand-built `Page` fixture. When `Page` gains a field, update those fixtures in the same commit and add one serde-backcompat test proving legacy payloads still deserialize with the new field defaulted.
 - Coordinator gate nuance: run `cargo test --quiet -j 1` with `RUST_TEST_THREADS=1` before `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` (also with `RUST_TEST_THREADS=1`). The plain serial test pass flushes fixture drift and the `commands::embed` ordering flake early; otherwise the coverage lane fails late on compile-only or order-sensitive targets and muddies the real coverage signal.
 
-# Zapp — conversation memory release lane
+# Zapp ΓÇö conversation memory release lane
 
 - **Date:** 2026-05-04T07:22:12.881+08:00
 - **Decision:** Do not open the draft PR for `feat/slm-conversation-mem` yet.

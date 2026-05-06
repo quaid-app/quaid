@@ -1,9 +1,11 @@
 # fry history
 
+- [2026-05-06T00:05:41Z] COMPLETED: Validated `vault-sync-engine` task 5.8 (restore/remap safety pipeline) against latest main. Safety pipeline confirmed already satisfied. Task marked complete. Delta specs synced into `openspec/specs/{agent-writes,collections,vault-sync}/spec.md`. Change archived under `openspec/changes/archive/2026-05-06-vault-sync-engine`.
 - [2026-04-29T07-04-07Z] History summarized and archived
 
 ## Learnings
 
+- [2026-05-06T07:33:07.816+08:00] For OpenSpec housekeeping, an umbrella task can be closed only after the latest-main worktree shows both the production seam and the proof seam: here `run_restore_remap_safety_pipeline_inner()` plus `verify_remap_root()` enforced the restore/remap gates, and restore/remap regressions proved the destructive step stayed downstream of those phases.
 - [2026-05-04T07:22:12.881+08:00] Release-lane truth prep is two coupled checks, not one: bump the version-gated manifest only on the release-bound commit, then audit every public/install surface for moved doc links or stale “upcoming tag” copy so the branch can be tagged without shipping broken release-note pointers.
 - [2026-05-04T07:22:12.881+08:00] `memory_close_action` stayed truest once its MCP surface was tightened back to the spec-sized `{slug, status, note?}` contract and its OCC race proof used an internal pre-write seam, not extra public routing arguments or timing-based concurrency tests.
 - [2026-05-04T07:22:12.881+08:00] Conversation-session Wave 2 needed two tiny but coupled contracts to stay truthful: persist `closed_at` in conversation frontmatter so `memory_close_session` can re-close idempotently without rewriting, and qualify queue `session_id` values with namespace internally so identical session ids do not collapse across namespace-local extraction queues.

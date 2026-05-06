@@ -200,3 +200,13 @@ Scribe owns logs, orchestration records, and decision merging for GigaBrain.
    - Co-authored: Copilot
 
 **Status:** K2 APPROVED FOR LANDING — offline restore integrity closure is real, end-to-end, with persisted/compared restore originator identity, durable Tx-B residue, coherent manifest retry/escalation/tamper behavior, truthful reset/finalize surfaces, and proven CLI completion path via \sync --finalize-pending -> attach\. Team memory synchronized.
+---
+
+## Spawn Session — 2026-05-06T13:44:12Z
+
+**Agent:** Scribe
+**Event:** Manifest execution
+
+- Decision inbox merged: 63 files
+- Decisions archived: 1 entry (2026-04-29)
+- Team synchronized

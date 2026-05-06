@@ -20,6 +20,7 @@
 - [2026-04-30T06:37:20.531+08:00] Batch 4 audit: the rename-before-commit core is mostly landed in `src\commands\put.rs`, but the real `12.1` gap is still step 2 — `src\core\fs_safety.rs::walk_to_parent` has no `create_dirs` mode, and the writer still falls back to path-based `fs::create_dir_all(...)` before reopening the parent fd.
 - [2026-04-30T06:37:20.531+08:00] Batch 4 audit: `implementation_plan.md` assumes Batch 3 `migrate-uuids` / `--write-quaid-id` already exist for `12.6b`, but `src\commands\collection.rs` still rejects `write_memory_id` as deferred and has no `MigrateUuids` action, so Batch 3 task state is still incomplete/stale.
 - [2026-04-30T06:37:20Z] Batch 4 decision merged to team ledger. Awaiting Leela worktree setup before implementation begins.
+- [2026-05-06T21:44:12.265+08:00] Housekeeping backports from a clean worktree need to move the archived change folders and their synced main specs as one set; archiving alone leaves the checkout in a split-brain state where roadmap/spec truth and change state disagree.
 
 ## 2026-04-29T13:57:48Z — Memory Cycle: Batch 3 Validation Gate FAIL
 
@@ -37,3 +38,13 @@
 - Decisions consolidated: inbox merged → decisions.md (8 files)
 - Archive: 5698 lines archived to decisions-archive.md
 - Status: All agents' work reflected in team memory
+---
+
+## Spawn Session — 2026-05-06T13:44:12Z
+
+**Agent:** Scribe
+**Event:** Manifest execution
+
+- Decision inbox merged: 63 files
+- Decisions archived: 1 entry (2026-04-29)
+- Team synchronized

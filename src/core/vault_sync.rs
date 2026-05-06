@@ -45,9 +45,9 @@ use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{
     self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
 };
+use crate::core::conversation::extractor::Worker;
 #[cfg(unix)]
 use crate::core::conversation::file_edit::is_history_sidecar_path;
-use crate::core::conversation::extractor::Worker;
 use crate::core::conversation::idle_close;
 use crate::core::conversation::janitor;
 use crate::core::conversation::slm::LazySlmRunner;

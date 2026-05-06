@@ -5825,3 +5825,10 @@ Review boundary:
 
 Result: APPROVE the rename on this docs lane.
 
+
+
+# Fry Batch 3 implementation
+
+- Date: 2026-04-29T20:33:01.970+08:00
+- Decision: Keep `page_uuid` dual-read (`quaid_id` first, legacy `memory_id` fallback) but canonicalize every render/write/export to `quaid_id`.
+- Why: Batch 3 needs an explicit migration target for files missing `quaid_id`, while existing vault content and fixtures can still be ingested safely during the transition. Reusing `put_from_string` for write-back preserves the rename-before-commit and raw_import invariants without maintaining a second file writer.

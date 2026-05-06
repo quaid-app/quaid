@@ -111,3 +111,42 @@
 - `scan_due_sessions` returns `IdleCloseResult` with `newly_closed: bool` — callers can distinguish first-close from idempotent re-close.
 
 **No defects found. Section 10 is green.**
+
+## Session: correction dialogue validation (section 12)
+**Timestamp:** 2026-05-07T00:00:00Z
+
+**Context:** Validation lane for tasks 12.1–12.8 of `slm-extraction-and-correction` change. Session resumed from prior compaction where implementation was absent; discovered Mom had already landed everything.
+
+**State on arrival:**
+- `src/core/conversation/correction.rs` — fully implemented by Mom (~680 lines): `CorrectionStep`, `CorrectionError`, `start_correction`, `continue_correction`, `apply_slm_outcome`, session management, SLM prompt, outcome parsing, `MAX_CORRECTION_TURNS = 3`
+- `src/core/conversation/mod.rs` — `pub mod correction;` already declared
+- `src/mcp/server.rs` — `memory_correct`, `memory_correct_continue`, `map_correction_error`, `correction_step_result` already wired; one unused import `CorrectionAbandonReason` required removal
+- `tests/memory_correct.rs` — 7 tests already written
+- All 12.1–12.8 already closed in tasks.md
+
+**One fix applied (already committed in 869507c):**
+- Removed unused `CorrectionAbandonReason` from import in `src/mcp/server.rs` line 18 — `CorrectionStep::Abandoned` uses a plain `String` reason field, not the enum
+
+**Verification:**
+- All 7/7 `memory_correct` tests pass: one-shot commit, clarify-then-commit, explicit abandon, turn-cap-abandon (via clarify path), expired-session rejection, non-head rejection, non-fact-kind rejection
+- `cargo clippy` — no new warnings in correction.rs or server.rs
+- `collection_cli_truth` compile failure is pre-existing (confirmed by stash-and-retest); not caused by section 12 work
+
+**Key API contracts confirmed:**
+- `CorrectionStep::Abandoned.reason` is a plain `String` (`"user_requested"`, `"turn_cap_reached"`, `"slm_abandoned"`) — NOT an enum
+- `MAX_CORRECTION_TURNS = 3`; clarify/abandon at turn 3 forces `Abandoned { reason: "turn_cap_reached" }`
+- Commit path: `force_supersede_fact_in_context` writes file with `corrected_via: explicit` → `ingest::run` re-ingests into DB
+- Session `exchange_log` stores: `[user_msg_1, assistant_clarify, user_msg_2, assistant_commit]` = 4 entries for clarify-then-commit
+- `correction_write_context` uses `collection_id = 1` (hardcoded in `ensure_collection_vault_write_allowed`)
+
+**All 12.1–12.8 confirmed closed. Section 12 is green.**
+---
+
+## Spawn Session — 2026-05-06T13:44:12Z
+
+**Agent:** Scribe
+**Event:** Manifest execution
+
+- Decision inbox merged: 63 files
+- Decisions archived: 1 entry (2026-04-29)
+- Team synchronized

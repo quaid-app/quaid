@@ -17,3 +17,13 @@ _Archived history available in history-archive.md_
 - 2026-05-04T07:22:12.881+08:00 — For namespaced conversation queues, the durable proof is to key pending extraction rows by an internal `<namespace>::<session_id>` composite while leaving the on-disk session files namespace-local. That closes queue-collapse bleed without changing the public session id contract.
 - 2026-05-04T07:22:12.881+08:00 — For MCP OCC surfaces like `memory_close_action`, the cleanest conflict proof is a thin public handler over a private helper with a pre-write seam; the test can land the competing write on the same connection, assert `ConflictError`, and verify the stale caller's status/note never persisted. On this lane, `cargo test -j 1` plus `cargo llvm-cov --lib --tests --summary-only -j 1` kept honest line coverage at 90.06%.
 - 2026-05-04T07:22:12.881+08:00 — For extracted file-edit coverage, the honest proof is a two-step chain test: first manual edit creates one archived predecessor, second manual edit proves the code relinks the older predecessor to the new archive instead of forking history. Pair that with a reserved `_history` sidecar assertion so on-disk archives never masquerade as live extracted pages.
+---
+
+## Spawn Session — 2026-05-06T13:44:12Z
+
+**Agent:** Scribe
+**Event:** Manifest execution
+
+- Decision inbox merged: 63 files
+- Decisions archived: 1 entry (2026-04-29)
+- Team synchronized

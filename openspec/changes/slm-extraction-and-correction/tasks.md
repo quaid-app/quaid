@@ -47,6 +47,8 @@
 - [x] 5.5 Build the SLM prompt per the `fact-extraction-schema` spec: system prompt + user prompt with new-turns and lookback-context delimited
 - [x] 5.6 Invoke `SlmRunner::infer` with `max_tokens = 2048` (configurable later)
 - [x] 5.7 Tests: `tests/extraction_window.rs` covers window slicing with sufficient new turns, with sparse new turns, and the session_close empty-window case
+- [x] 5.8 Wire `extractor::Worker::run_once` into `start_serve_runtime` as a dedicated long-lived thread on `ServeRuntime` so queued jobs are actually drained in production `quaid serve`; the worker thread checks the existing stop signal between polls and joins on `ServeRuntime::drop`. Init/run failures log `WARN: extraction_worker_{db_open,init,run}_failed` instead of crashing the daemon.
+  > **Closure note (RocketDog, 2026-05-06):** Reported as issue #162 — the `Worker` and its `run_forever` loop had landed in 5.1/5.2, but neither `src/commands/serve.rs` nor `start_serve_runtime` ever spawned them, so `extraction_queue` rows enqueued by `idle_close::scan_due_sessions` and `memory_close_session` had no consumer in production. Tests/benches that constructed `Worker::new` directly hid the gap. Fix wires the worker as a sibling of the existing maintenance thread inside `start_serve_runtime` and joins its handle in `Drop for ServeRuntime`. This satisfies extraction-worker spec Requirement 1 ("The system SHALL run a single extraction worker inside `quaid serve`…").
 
 ## 6. Output parsing — strict JSON contract
 

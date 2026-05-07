@@ -64,13 +64,32 @@ Quaid can function as a persistent memory layer for OpenClaw agents. It gives Op
    ```
 
 5. ### Enable conversation memory
-   Quaid v0.20.0+ can extract memory from conversation turns using the local Phi-3.5 Mini SLM:
+   Quaid v0.20.0+ can extract memory from conversation turns using the local Phi-3.5 Mini SLM.
 
+   **Option A — Bootstrap with the online binary (recommended for first-time setup):**
    ```bash
+   curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+     | QUAID_CHANNEL=online sh
    QUAID_DB=~/.quaid/memory.db quaid extraction enable
+   # Model downloads to ~/.quaid/models/phi-3.5-mini/ (~2GB, one-time)
+   # Switch back to the airgapped binary — it reads from cache permanently
+   curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
    ```
 
-   This enables background extraction of conversation turns and remains fully airgapped after setup.
+   **Option B — Manual model placement (fully offline machines):**
+   Download the Phi-3.5 Mini safetensors and tokenizer files from HuggingFace and place them at:
+   ```
+   ~/.quaid/models/phi-3.5-mini/
+   ├── tokenizer.json
+   ├── tokenizer_config.json
+   └── model.safetensors   (or sharded files)
+   ```
+   Then enable extraction:
+   ```bash
+   QUAID_DB=~/.quaid/memory.db quaid config set extraction.enabled true
+   ```
+
+   In both cases, once the model is cached the airgapped binary runs extraction fully offline, permanently.
 
 </Steps>
 

@@ -85,13 +85,13 @@
 
 ## 6. Migration: `src/core/reconciler.rs`
 
-- [ ] 6.1 Repeat scratch-file procedure for
+- [x] 6.1 Repeat scratch-file procedure for
   [src/core/reconciler.rs](../../../src/core/reconciler.rs)'s
   `mod tests` at line 3119.
-- [ ] 6.2 Distribute moved tests across `tests/reconciler_*.rs` files,
+- [x] 6.2 Distribute moved tests across `tests/reconciler_*.rs` files,
   per-feature, each ≤ 1,500 LOC.
-- [ ] 6.3 Lift any newly-shared helpers to `tests/common/`.
-- [ ] 6.4 Run `cargo test`; confirm pass count match-or-grow; commit
+- [x] 6.3 Lift any newly-shared helpers to `tests/common/`.
+- [x] 6.4 Run `cargo test`; confirm pass count match-or-grow; commit
   as a single atomic step with pass-count evidence.
 
 ## 7. Migration: `src/core/vault_sync.rs` (largest, last)

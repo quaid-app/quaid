@@ -15,7 +15,8 @@
       "Bash(grep *)",
       "Skill(rust-best-practices)",
       "Skill(rust-best-practices:*)",
-      "Bash(cargo test *)"
+      "Bash(cargo test *)",
+      "Bash(cargo build *)"
     ]
   }
 }

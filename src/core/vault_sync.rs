@@ -1,9 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "addressed in remove-production-panic-paths"
-)]
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
@@ -3380,15 +3374,14 @@ pub fn finalize_pending_restore(
         return Ok(FinalizeOutcome::Deferred);
     }
 
-    if collection.pending_root_path.is_none() {
+    let Some(pending_root_path) = collection.pending_root_path.as_deref() else {
         if collection.state == CollectionState::Restoring {
             revert_orphan_restore_state(conn, &collection)?;
             return Ok(FinalizeOutcome::OrphanRecovered);
         }
         return Ok(FinalizeOutcome::NoPendingWork);
-    }
-
-    let pending_root_path = PathBuf::from(collection.pending_root_path.clone().unwrap());
+    };
+    let pending_root_path = PathBuf::from(pending_root_path);
     if !pending_root_path.exists() {
         revert_aborted_restore(conn, &collection)?;
         return Ok(FinalizeOutcome::Aborted);
@@ -5630,20 +5623,24 @@ fn build_new_root_ignore_globset(root: &Path) -> Result<globset::GlobSet, VaultS
     let user_patterns_json = if ignore_path.exists() {
         let content = fs::read_to_string(&ignore_path)?;
         match ignore_patterns::parse_ignore_file(&content) {
-            ignore_patterns::ParseResult::Valid(patterns) => Some(
-                serde_json::to_string(&patterns)
-                    .expect("serializing validated .quaidignore patterns should never fail"),
-            ),
+            ignore_patterns::ParseResult::Valid(patterns) => {
+                Some(serde_json::to_string(&patterns).map_err(|e| {
+                    VaultSyncError::InvariantViolation {
+                        message: format!(
+                            "failed to serialize validated .quaidignore patterns: {e}"
+                        ),
+                    }
+                })?)
+            }
             ignore_patterns::ParseResult::Invalid(errors) => {
-                let first = errors
-                    .first()
-                    .expect("invalid parse must include at least one error");
-                return Err(VaultSyncError::InvariantViolation {
-                    message: format!(
+                let message = match errors.first() {
+                    Some(first) => format!(
                         "invalid .quaidignore in remap root at line {}: {}",
                         first.line, first.message
                     ),
-                });
+                    None => "invalid .quaidignore in remap root (no error details)".to_owned(),
+                };
+                return Err(VaultSyncError::InvariantViolation { message });
             }
         }
     } else {
@@ -5937,6 +5934,8 @@ pub fn get_page_by_input(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use crate::core::db;
     use std::ffi::OsString;
@@ -7602,6 +7601,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(aborted, FinalizeOutcome::Aborted);
+    }
+
+    #[test]
+    fn finalize_pending_restore_returns_no_pending_work_when_pending_root_path_is_null() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "no-pending-null", Path::new("vault-np"));
+        // insert_collection sets state='active' and pending_root_path defaults to NULL
+        let outcome = finalize_pending_restore(
+            &conn,
+            collection_id,
+            FinalizeCaller::ExternalFinalize {
+                session_id: "serve-null-1".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome, FinalizeOutcome::NoPendingWork);
+    }
+
+    #[test]
+    fn finalize_pending_restore_returns_orphan_recovered_when_restoring_with_null_pending_root() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "orphan-null", Path::new("vault-orphan-null"));
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 restore_command_id = 'restore-orphan-null',
+                 pending_root_path = NULL
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let outcome = finalize_pending_restore(
+            &conn,
+            collection_id,
+            FinalizeCaller::ExternalFinalize {
+                session_id: "serve-null-2".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome, FinalizeOutcome::OrphanRecovered);
+        let reverted = load_collection_by_id(&conn, collection_id).unwrap();
+        assert_ne!(reverted.state, CollectionState::Restoring);
     }
 
     #[cfg(unix)]

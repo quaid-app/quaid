@@ -48,15 +48,28 @@
 
 ## 3. Migration: `src/commands/put.rs`
 
-- [ ] 3.1 Repeat the scratch-file procedure (design.md §1) for
+- [x] 3.1 Repeat the scratch-file procedure (design.md §1) for
   [src/commands/put.rs](../../../src/commands/put.rs)'s `mod tests` at
-  line 1383. White-box residue stays inline with annotations.
-- [ ] 3.2 Distribute moved tests across `tests/cli_put_*.rs` files,
-  per-feature, each ≤ 1,500 LOC.
-- [ ] 3.3 Lift any newly-shared helpers to `tests/common/`.
-- [ ] 3.4 Run `cargo test`; confirm pass count match-or-grow vs the
+  line 1391. White-box residue stays inline with annotations.
+  **23 white-box tests stay inline, documented via a single
+  module-level annotation listing the private items used (per
+  design.md §7 — the `> 5` threshold for module-level instead of
+  per-fn comments).**
+- [x] 3.2 Distribute moved tests across `tests/cli_put_*.rs` files,
+  per-feature, each ≤ 1,500 LOC. **20 movable tests (19 always
+  active + 1 `cfg(not(unix))`) across 5 files: `cli_put_create.rs`
+  (3), `cli_put_update_occ.rs` (5 + 1 non-unix), `cli_put_supersede.rs`
+  (3), `cli_put_source_invariants.rs` (4), `cli_put_render.rs` (4).**
+- [x] 3.3 Lift any newly-shared helpers to `tests/common/`.
+  **Added `tests/common/put_fixtures.rs` with `open_test_db`,
+  `read_page`, `active_raw_import_count_for_slug`,
+  `active_raw_import_bytes_for_slug`, `superseded_by_for_slug`,
+  `page_id_for_slug` — each used by ≥ 2 of the new files.
+  Inline copies of these helpers stay in `src/commands/put.rs`
+  because the white-box residue still depends on them.**
+- [x] 3.4 Run `cargo test`; confirm pass count match-or-grow vs the
   prior commit; commit as a single atomic step with pass-count
-  evidence.
+  evidence. **passed=1357 failed=0 (matches baseline of 1357).**
 
 ## 4. Migration: `src/commands/collection.rs`
 

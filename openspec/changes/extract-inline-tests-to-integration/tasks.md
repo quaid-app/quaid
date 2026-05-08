@@ -1,37 +1,47 @@
 ## 1. Pre-flight
 
-- [ ] 1.1 Create branch `refactor/move-inline-tests` from `main`.
-- [ ] 1.2 Capture baseline `cargo test` output to a tracked file (not
+- [x] 1.1 Create branch `refactor/move-inline-tests` from `main`.
+- [x] 1.2 Capture baseline `cargo test` output to a tracked file (not
   committed): `cargo test 2>&1 | tee /tmp/quaid-test-baseline.txt`.
   Extract the total `passed=N` count using the awk one-liner from
   design.md §4. Record this number — every migration commit must
-  match-or-grow it.
-- [ ] 1.3 Confirm the working tree is clean (`git status` shows no
+  match-or-grow it. **Baseline: passed=1357, failed=0.**
+- [x] 1.3 Confirm the working tree is clean (`git status` shows no
   staged or unstaged changes outside `openspec/changes/extract-inline-tests-to-integration/`)
   and that `cargo build --tests` succeeds.
 
 ## 2. Migration: `src/core/db.rs` (smallest, validates approach)
 
-- [ ] 2.1 Apply the scratch-file procedure from design.md §1: cut
+- [x] 2.1 Apply the scratch-file procedure from design.md §1: cut
   `mod tests` from line 967 of [src/core/db.rs](../../../src/core/db.rs)
   into `tests/_db_scratch.rs` (untracked), rewrite imports to
   `use quaid::...;`, run
   `cargo test --test _db_scratch 2>&1 | tee /tmp/scratch.log`. Record
   every compile error caused by a non-`pub` reference.
-- [ ] 2.2 Send each test that fails to compile back into the inline
+- [x] 2.2 Send each test that fails to compile back into the inline
   `mod tests` block, annotated `// reason: white-box; needs <item>`
-  per the test-organization spec.
-- [ ] 2.3 Group the tests that did compile by feature/scenario. Create
+  per the test-organization spec. **23 white-box tests stay inline,
+  documented via a single module-level annotation listing the
+  private items used (per design.md §7 — the `> 5` threshold for
+  module-level instead of per-fn comments).**
+- [x] 2.3 Group the tests that did compile by feature/scenario. Create
   per-feature files under `tests/db_*.rs`, each ≤ 1,500 LOC.
   Distribute the tests verbatim — no body edits except `use` paths.
-- [ ] 2.4 If any helper is needed by ≥ 2 of the new files, lift it
+  **20 movable tests across 5 files: `db_open.rs` (6), `db_schema_v9.rs`
+  (5), `db_schema_migrations.rs` (2), `db_quaid_config.rs` (5),
+  `db_model_channel.rs` (2, online-model gated).**
+- [x] 2.4 If any helper is needed by ≥ 2 of the new files, lift it
   into `tests/common/<helper>.rs` and import via `mod common;`.
-- [ ] 2.5 Delete `tests/_db_scratch.rs`. Delete the moved tests from
+  **No shared helper required at this scale — `seed_existing_db` is
+  used only by white-box tests and stays inline.**
+- [x] 2.5 Delete `tests/_db_scratch.rs`. Delete the moved tests from
   `src/core/db.rs`. Confirm `mod tests` in `db.rs` either is gone or
-  is < 500 LOC (only white-box residue).
-- [ ] 2.6 Run `cargo test 2>&1 | tee /tmp/quaid-test-after-db.txt`.
+  is < 500 LOC (only white-box residue). **Remaining `mod tests`
+  block is 493 LOC.**
+- [x] 2.6 Run `cargo test 2>&1 | tee /tmp/quaid-test-after-db.txt`.
   Confirm `passed >= baseline`, `failed == 0`. If not, stop and
-  diagnose — do not commit.
+  diagnose — do not commit. **passed=1357 failed=0 (matches
+  baseline of 1357).**
 - [ ] 2.7 Commit with message body containing both pass counts and
   the list of new `tests/db_*.rs` files. Do not include any other
   changes in this commit.

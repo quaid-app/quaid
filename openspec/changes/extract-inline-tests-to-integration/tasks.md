@@ -86,15 +86,25 @@
 
 ## 5. Migration: `src/mcp/server.rs`
 
-- [ ] 5.1 Repeat scratch-file procedure for
+- [x] 5.1 Repeat scratch-file procedure for
   [src/mcp/server.rs](../../../src/mcp/server.rs)'s `mod tests` at
-  line 2016.
-- [ ] 5.2 Distribute moved tests across `tests/mcp_server_*.rs` files,
+  line 2019.
+- [x] 5.2 Distribute moved tests across `tests/mcp_server_*.rs` files,
   per-feature (one file per tool group when natural), each ≤ 1,500
-  LOC.
-- [ ] 5.3 Lift any newly-shared helpers to `tests/common/`.
-- [ ] 5.4 Run `cargo test`; confirm pass count match-or-grow; commit
+  LOC. **70 movable tests across 6 files: `mcp_server_get_put.rs` (11),
+  `mcp_server_query_search_list.rs` (12), `mcp_server_link_graph.rs`
+  (13), `mcp_server_check_timeline_tags.rs` (11),
+  `mcp_server_gap_stats.rs` (16), `mcp_server_misc.rs` (7). 37 white-box
+  tests (private `QuaidServer::db` field, private fns/consts) stay
+  inline with a module-level annotation.**
+- [x] 5.3 Lift any newly-shared helpers to `tests/common/`.
+  **`tests/common/mcp_harness.rs` exposes `open_test_db`,
+  `create_page`, `create_page_in_collection`, `insert_collection`,
+  `set_collection_state`, and `extract_text` for shared use across
+  the new `tests/mcp_server_*.rs` files.**
+- [x] 5.4 Run `cargo test`; confirm pass count match-or-grow; commit
   as a single atomic step with pass-count evidence.
+  **passed=1357 failed=0 (matches baseline of 1357).**
 
 ## 6. Migration: `src/core/reconciler.rs`
 

@@ -60,15 +60,15 @@
 
 ## 4. Migration: `src/commands/collection.rs`
 
-- [ ] 4.1 Repeat scratch-file procedure for
+- [x] 4.1 Repeat scratch-file procedure for
   [src/commands/collection.rs](../../../src/commands/collection.rs)'s
   `mod tests` at line 1562.
-- [ ] 4.2 Distribute moved tests across `tests/cli_collection_*.rs`
+- [x] 4.2 Distribute moved tests across `tests/cli_collection_*.rs`
   files. Note: `tests/cli_collection_*.rs` is the same prefix used in
   task §8 below; coordinate names so no collision occurs (e.g. reserve
   `tests/cli_collection_truth_*.rs` for the section-8 split).
-- [ ] 4.3 Lift any newly-shared helpers to `tests/common/`.
-- [ ] 4.4 Run `cargo test`; confirm pass count match-or-grow; commit
+- [x] 4.3 Lift any newly-shared helpers to `tests/common/`.
+- [x] 4.4 Run `cargo test`; confirm pass count match-or-grow; commit
   as a single atomic step with pass-count evidence.
 
 ## 5. Migration: `src/mcp/server.rs`

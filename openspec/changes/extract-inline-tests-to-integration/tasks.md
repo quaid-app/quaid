@@ -115,17 +115,19 @@
 
 ## 8. Split: `tests/collection_cli_truth.rs` by command
 
-- [ ] 8.1 Read [tests/collection_cli_truth.rs](../../../tests/collection_cli_truth.rs)
+- [x] 8.1 Read [tests/collection_cli_truth.rs](../../../tests/collection_cli_truth.rs)
   and group its `#[test] fn`s by the command they exercise (`add`,
   `sync`, `remove`, etc.). Reuse the same per-feature rule from
   design.md §2.
-- [ ] 8.2 Create `tests/cli_collection_truth_<command>.rs` per group,
+- [x] 8.2 Create `tests/cli_collection_truth_<command>.rs` per group,
   each ≤ 1,500 LOC. Move tests verbatim; only `use` paths and the
-  `mod common;` line are allowed to change.
-- [ ] 8.3 Delete the original `tests/collection_cli_truth.rs`.
-- [ ] 8.4 Run `cargo test`; confirm pass count match-or-grow vs the
+  `mod common;` line are allowed to change. **10 per-command files
+  created (add, audit, info, list, migrate_uuids, quarantine, remap,
+  restore, slug_routing, sync), plus shared `tests/common/truth_fixtures.rs`.**
+- [x] 8.3 Delete the original `tests/collection_cli_truth.rs`.
+- [x] 8.4 Run `cargo test`; confirm pass count match-or-grow vs the
   prior commit; commit as a single atomic step with pass-count
-  evidence.
+  evidence. **passed=1357 failed=0 (matches baseline).**
 
 ## 9. Verification across the series
 

@@ -1,3 +1,8 @@
+#![expect(
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -109,7 +114,6 @@ fn assertion_subject(page: &Page) -> &str {
 }
 
 /// Detect contradictions for the requested page and insert any newly discovered rows.
-#[allow(dead_code)]
 pub fn check_assertions(
     slug: &str,
     conn: &Connection,

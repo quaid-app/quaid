@@ -18,7 +18,8 @@ amended accordingly: the file-size and lints recommendations stand, but they
 are **follow-up work**, not P0.
 
 The fixes are tracked in OpenSpec change `fix-extraction-force-correctness`
-(`openspec/changes/fix-extraction-force-correctness/`).
+(`openspec/changes/fix-extraction-force-correctness/`) and implemented on
+branch `fix/code-review` (see "Resolution status" below).
 
 ### Top blockers (added)
 
@@ -47,13 +48,21 @@ The fixes are tracked in OpenSpec change `fix-extraction-force-correctness`
   `BEGIN IMMEDIATE`), but the fix is strictly better with no downside —
   use `rusqlite::Transaction` with RAII `Drop` rollback.
 
+### Resolution status — implemented on `fix/code-review`
+
+| Finding | Implementation | Regression test |
+|---|---|---|
+| `extract --force` rebuild gap | New `queue::enqueue_force_path` (`src/core/conversation/queue.rs`) collapses on `(session_id, conversation_path)`; `commands/extract.rs::run` now loops over every day-file in chronological order under `--force`. | `extract_single_session_force_resets_all_day_file_cursors_and_enqueues_one_job_per_file` and `extract_force_is_idempotent_and_does_not_grow_the_queue` in `tests/cli_extract.rs`. |
+| Unlocked cursor-reset rewrite | New `turn_writer::with_session_locks<F, R, E>` helper acquires the same in-process mutex + on-disk `SessionFileLock` as `append_turn`; `reset_cursors` now runs the entire day-file rewrite loop under one acquisition. | `extract_force_blocks_while_another_process_holds_the_session_file_lock` (`flock(LOCK_EX)` from a sibling test process against `quaid extract --force`). |
+| Queue commit-failure recovery | `with_immediate_transaction` now rolls back explicitly after a failed `COMMIT TRANSACTION`. The originally specced switch to `rusqlite::Transaction` was rejected because it would cascade `&mut Connection` through `mcp/server.rs`, `idle_close.rs`, and `commands/extract.rs`; the explicit-rollback path satisfies Codex's finding (which accepted both options) with a strictly local change. Rationale in `openspec/changes/fix-extraction-force-correctness/design.md` §3. | `with_immediate_transaction_recovers_when_commit_is_aborted` (uses SQLite's `commit_hook`, gated on the rusqlite `hooks` feature added to `Cargo.toml`). |
+
 ### Reprioritization
 
 | Severity | Item | Status |
 |---|---|---|
-| Blocker | `extract --force` rebuild gap | tracked in `fix-extraction-force-correctness` |
-| Blocker | Unlocked cursor-reset rewrite | tracked in `fix-extraction-force-correctness` |
-| Should-fix | Queue commit-failure recovery | tracked in `fix-extraction-force-correctness` |
+| Blocker | `extract --force` rebuild gap | **resolved** in `fix/code-review` |
+| Blocker | Unlocked cursor-reset rewrite | **resolved** in `fix/code-review` |
+| Should-fix | Queue commit-failure recovery | **resolved** in `fix/code-review` |
 | Follow-up | File-size monoliths (§1) | unchanged from original; not a ship-gate |
 | Follow-up | Error-type splitting (§2.2–2.3) | unchanged |
 | Follow-up | Lints + CI gate (§3) | unchanged; valuable but not blocking |

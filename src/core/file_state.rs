@@ -50,8 +50,8 @@ fn stat_file_fallback(path: &Path) -> io::Result<FileStat> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let mtime_ns = (metadata.mtime() as i64) * 1_000_000_000 + (metadata.mtime_nsec() as i64);
-        let ctime_ns = (metadata.ctime() as i64) * 1_000_000_000 + (metadata.ctime_nsec() as i64);
+        let mtime_ns = metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec();
+        let ctime_ns = metadata.ctime() * 1_000_000_000 + metadata.ctime_nsec();
         let inode = metadata.ino() as i64;
         Ok(FileStat {
             mtime_ns,

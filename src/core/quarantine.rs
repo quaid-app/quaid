@@ -1121,7 +1121,10 @@ struct ParsedRestoredPage {
 }
 
 #[cfg(unix)]
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "restore-page transaction binds the full page-restoration context (conn, record, ids, paths, cycle bookkeeping); collapsing into a struct here would obscure the call site"
+)]
 fn restore_page_transaction(
     conn: &Connection,
     page: &QuarantinedPageRecord,

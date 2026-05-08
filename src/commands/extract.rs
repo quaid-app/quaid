@@ -1,3 +1,12 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+#![expect(
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

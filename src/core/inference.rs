@@ -8,6 +8,11 @@
 //! The public API (`embed`, `search_vec`, `configure_runtime_model`,
 //! `resolve_model`, `embedding_to_blob`) is stable regardless of backend.
 
+#![expect(
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "online-model")]
@@ -74,7 +79,6 @@ impl ModelConfig {
         &self.model_id
     }
 
-    #[allow(dead_code)]
     pub fn model_hint(&self) -> &str {
         if self.alias == "custom" {
             &self.model_id
@@ -83,7 +87,6 @@ impl ModelConfig {
         }
     }
 
-    #[allow(dead_code)]
     pub fn is_small(&self) -> bool {
         self.alias == "small" || self.model_id == "BAAI/bge-small-en-v1.5"
     }
@@ -192,7 +195,6 @@ pub fn resolve_model(input: &str) -> ModelConfig {
     }
 }
 
-#[allow(dead_code)]
 pub fn resolve_requested_model(input: Option<&str>) -> ModelConfig {
     let requested = resolve_model(input.unwrap_or(DEFAULT_MODEL_ALIAS));
     coerce_model_for_build(&requested)
@@ -351,7 +353,10 @@ impl EmbeddingModel {
             return load_online_backend(config);
         }
 
-        #[allow(unreachable_code)]
+        #[expect(
+            unreachable_code,
+            reason = "either embedded-model or online-model feature returns above; this fallback only fires if neither is enabled at build time"
+        )]
         Err("no model channel enabled".to_owned())
     }
 
@@ -431,6 +436,10 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
         "bert" => {
             let config: BertConfig = serde_json::from_str(&config_text)
                 .map_err(|e| format!("parse config.json: {e}"))?;
+            #[expect(
+                unsafe_code,
+                reason = "candle's VarBuilder::from_mmaped_safetensors mmaps tensor data; safety hinges on the file not being mutated for the lifetime of the VarBuilder, which we uphold by reading from immutable on-disk model weights"
+            )]
             let vb = unsafe {
                 VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
                     .map_err(|e| format!("load model weights: {e}"))?
@@ -448,6 +457,10 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
             let max_len = read_max_position_embeddings_from_config(&config_path)?;
             let config: XLMRobertaConfig = serde_json::from_str(&config_text)
                 .map_err(|e| format!("parse config.json: {e}"))?;
+            #[expect(
+                unsafe_code,
+                reason = "candle's VarBuilder::from_mmaped_safetensors mmaps tensor data; safety hinges on the file not being mutated for the lifetime of the VarBuilder, which we uphold by reading from immutable on-disk model weights"
+            )]
             let vb = unsafe {
                 VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
                     .map_err(|e| format!("load model weights: {e}"))?
@@ -1086,7 +1099,6 @@ pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError
         .evidence_kind())
 }
 
-#[allow(dead_code)]
 pub fn search_vec(
     query: &str,
     k: usize,
@@ -1138,7 +1150,6 @@ pub fn search_vec_with_namespace_filtered(
     )
 }
 
-#[allow(dead_code)]
 pub fn search_vec_canonical(
     query: &str,
     k: usize,
@@ -1190,7 +1201,10 @@ pub fn search_vec_canonical_with_namespace_filtered(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal vector-search dispatcher binds the full search context (query, k, wing, collection, namespace, superseded flag, conn, canonical flag); the public wrappers are the right boundary for grouping"
+)]
 fn search_vec_internal(
     query: &str,
     k: usize,

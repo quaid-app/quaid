@@ -566,6 +566,10 @@ fn maybe_hold_session_lock_for_tests() -> Result<(), TurnWriteError> {
 fn lock_file(file: &File) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
 
+    #[expect(
+        unsafe_code,
+        reason = "POSIX flock() is a syscall with no safe Rust wrapper; we pass a valid file descriptor obtained from File::as_raw_fd"
+    )]
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
     if rc == 0 {
         Ok(())
@@ -578,6 +582,10 @@ fn lock_file(file: &File) -> std::io::Result<()> {
 fn unlock_file(file: &File) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
 
+    #[expect(
+        unsafe_code,
+        reason = "POSIX flock() is a syscall with no safe Rust wrapper; we pass a valid file descriptor obtained from File::as_raw_fd"
+    )]
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
     if rc == 0 {
         Ok(())
@@ -593,6 +601,10 @@ fn lock_file(file: &File) -> std::io::Result<()> {
     const ERROR_LOCK_VIOLATION: i32 = 33;
     const ERROR_SHARING_VIOLATION: i32 = 32;
 
+    #[expect(
+        unsafe_code,
+        reason = "extern \"system\" declaration of the Win32 LockFile API; signature mirrors the documented kernel32 export"
+    )]
     #[link(name = "kernel32")]
     extern "system" {
         fn LockFile(
@@ -605,6 +617,10 @@ fn lock_file(file: &File) -> std::io::Result<()> {
     }
 
     loop {
+        #[expect(
+            unsafe_code,
+            reason = "Win32 LockFile is a syscall; we pass a valid handle from File::as_raw_handle"
+        )]
         let locked = unsafe { LockFile(file.as_raw_handle(), 0, 0, 1, 0) };
         if locked != 0 {
             return Ok(());
@@ -624,6 +640,10 @@ fn lock_file(file: &File) -> std::io::Result<()> {
 fn unlock_file(file: &File) -> std::io::Result<()> {
     use std::os::windows::io::AsRawHandle;
 
+    #[expect(
+        unsafe_code,
+        reason = "extern \"system\" declaration of the Win32 UnlockFile API; signature mirrors the documented kernel32 export"
+    )]
     #[link(name = "kernel32")]
     extern "system" {
         fn UnlockFile(
@@ -635,6 +655,10 @@ fn unlock_file(file: &File) -> std::io::Result<()> {
         ) -> i32;
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "Win32 UnlockFile is a syscall; we pass a valid handle from File::as_raw_handle"
+    )]
     let unlocked = unsafe { UnlockFile(file.as_raw_handle(), 0, 0, 1, 0) };
     if unlocked != 0 {
         Ok(())

@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -113,7 +121,7 @@ fn concurrent_dequeue_claims_single_pending_row_once() {
 
     let barrier = Arc::new(Barrier::new(3));
     let first_path = db_path.clone();
-    let second_path = db_path.clone();
+    let second_path = db_path;
     let first_barrier = barrier.clone();
     let second_barrier = barrier.clone();
 

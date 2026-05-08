@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 use quaid::core::conversation::model_lifecycle::{cache_dir_for_alias, resolve_model_alias};
 use quaid::core::conversation::slm::{parse_response, LazySlmRunner, SlmError, SlmRunner};
 use quaid::core::types::RawFact;

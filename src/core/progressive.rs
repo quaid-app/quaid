@@ -17,7 +17,6 @@ const MAX_DEPTH: u32 = 3;
 ///
 /// `collection_filter` restricts expansion to pages belonging to the given
 /// collection ID. Pass `None` to allow cross-collection expansion (CLI path).
-#[allow(dead_code)]
 pub fn progressive_retrieve(
     initial: Vec<SearchResult>,
     budget: usize,
@@ -320,7 +319,7 @@ mod tests {
         insert_link(&conn, "a", "b");
 
         let initial = vec![make_result("a")];
-        let result = progressive_retrieve(initial.clone(), 100_000, 0, None, false, &conn).unwrap();
+        let result = progressive_retrieve(initial, 100_000, 0, None, false, &conn).unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].slug, "a");

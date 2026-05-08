@@ -1,3 +1,12 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    unreachable_pub,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites; common test helpers are pub-shared across test modules but are unreachable from non-test crates"
+)]
+
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 

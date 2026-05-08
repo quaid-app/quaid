@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10,14 +18,19 @@ use rusqlite::Connection;
 
 fn open_turn_server(root: &Path) -> (tempfile::TempDir, PathBuf, QuaidServer) {
     let db_dir = tempfile::TempDir::new().unwrap();
-    let db_path = db_dir.path().join("memory.db");
+    // Canonicalize: macOS resolves /var → /private/var; production code canonicalizes
+    // collection roots and conversation paths, so the test must store canonical paths
+    // for production-side lookups to find the seeded state.
+    let db_dir_canonical = std::fs::canonicalize(db_dir.path()).unwrap();
+    let db_path = db_dir_canonical.join("memory.db");
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    let root_canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     conn.execute(
         "UPDATE collections
          SET root_path = ?1,
              state = 'active'
          WHERE id = 1",
-        [root.display().to_string()],
+        [root_canonical.display().to_string()],
     )
     .unwrap();
     (db_dir, db_path, QuaidServer::new(conn))

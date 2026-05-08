@@ -1,3 +1,16 @@
+#![allow(
+    clippy::print_stdout,
+    reason = "the quaid CLI prints user-facing output to stdout by design; print_stdout is appropriate for production code in lib/CLI commands but not the CLI binary itself"
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::expect_used,
+        clippy::panic,
+        reason = "test fixtures legitimately panic/expect on setup failure; the lib-crate's test exemption doesn't reach the bin crate"
+    )
+)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 

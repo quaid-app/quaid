@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+
 use std::path::Path;
 
 use anyhow::Result;

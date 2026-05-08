@@ -1,5 +1,9 @@
 // Consumers (commands/, mcp/) not yet wired — remove when they are.
 #![allow(dead_code)]
+#![expect(
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
 
 use regex::Regex;
 

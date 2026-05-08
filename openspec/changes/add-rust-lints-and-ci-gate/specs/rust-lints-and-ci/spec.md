@@ -4,8 +4,8 @@
 
 The repository SHALL declare its lint configuration in `Cargo.toml` so that every contributor's local `cargo clippy` invocation matches what CI enforces. The configuration SHALL include:
 
-- a `[lints.rust]` table with at minimum `unsafe_code = "forbid"`, `missing_docs = "warn"`, and `unreachable_pub = "warn"`.
-- a `[lints.clippy]` table with `clippy::all = { level = "warn", priority = -1 }`, `clippy::pedantic = { level = "warn", priority = -1 }`, and explicit `warn`-level entries for `unwrap_used`, `expect_used`, `panic`, `print_stdout`, `redundant_clone`, `needless_collect`, and `large_enum_variant`.
+- a `[lints.rust]` table with at minimum `unsafe_code = "deny"` (so existing FFI/mmap/syscall sites can be annotated with `#[expect(unsafe_code, reason = "...")]`), `missing_docs = "allow"` (deferred to proposal #7 `add-crate-and-public-api-docs`), and `unreachable_pub = "warn"`.
+- a `[lints.clippy]` table with `clippy::all = { level = "warn", priority = -1 }` and explicit `warn`-level entries for `unwrap_used`, `expect_used`, `panic`, `print_stdout`, `redundant_clone`, `needless_collect`, and `large_enum_variant`. (`clippy::pedantic` was deferred — see design.md "Decision 1" — to a follow-up after the named production-cleanup proposals land.)
 
 Adding a new lint to the table SHALL be a code-review event, not a silent change — the table is the authoritative list of "what we care about."
 
@@ -14,15 +14,16 @@ Adding a new lint to the table SHALL be a code-review event, not a silent change
 - **WHEN** a contributor runs `cargo clippy --all-targets --all-features --locked` against the current `main`
 - **THEN** the lints declared in `[lints.rust]` and `[lints.clippy]` are applied, including `unwrap_used = "warn"` and `large_enum_variant = "warn"`
 
-#### Scenario: `unsafe_code` is forbidden, not warned
+#### Scenario: `unsafe_code` is denied, with per-site reasons required
 
-- **WHEN** a contributor introduces an `unsafe` block in `src/` and runs `cargo build`
-- **THEN** the build fails with `unsafe code is forbidden by Cargo.toml [lints.rust]`
+- **WHEN** a contributor introduces an `unsafe` block in `src/` without an `#[expect(unsafe_code, reason = "...")]` annotation and runs `cargo clippy -- -D warnings`
+- **THEN** the build fails because `unsafe_code` is denied by `Cargo.toml [lints.rust]`
+- **AND** an existing `unsafe` block annotated with `#[expect(unsafe_code, reason = "...")]` continues to compile, with the reason explaining why the FFI/mmap/syscall is unavoidable
 
-#### Scenario: Pedantic warns are downgrade-able per file
+#### Scenario: Test code is exempt from the lint set's noisier rules
 
-- **WHEN** a `pedantic` lint fires on a specific function and the team accepts it as a known false positive
-- **THEN** that function MAY be annotated with `#[expect(clippy::<lint>, reason = "...")]` rather than removing the `pedantic` warn from `Cargo.toml`
+- **WHEN** a contributor writes a test fixture in `#[cfg(test)] mod tests` or in `tests/*.rs` that legitimately uses `unwrap()`, `expect()`, `panic!`, or `println!`
+- **THEN** the crate-level `#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::print_stdout, reason = "..."))]` in `src/lib.rs` and the equivalent inner attribute in each `tests/*.rs` exempt the suppression, and the test compiles without per-site annotations
 
 ### Requirement: All in-source lint suppressions use `#[expect(...)]` with a reason
 
@@ -54,8 +55,10 @@ The repository's CI workflow SHALL fail any pull request whose checked-out tree 
 The minimum gate SHALL include:
 
 - `cargo fmt --all -- --check`
-- `cargo clippy --all-targets --all-features --locked -- -D warnings` for the default (airgapped) feature channel
+- `cargo clippy --all-targets --locked -- -D warnings` for the default (airgapped, `bundled,embedded-model`) feature channel
 - `cargo clippy --all-targets --no-default-features --features bundled,online-model --locked -- -D warnings` for the online-model channel
+
+Note: `--all-features` SHALL NOT be used because the codebase enforces a compile-time mutual exclusion between `embedded-model` and `online-model` (`src/core/inference.rs` `compile_error!`). The two-channel invocation pattern is the supported way to lint both feature sets.
 
 The `--locked` flag SHALL be present so a stale `Cargo.lock` cannot mask a dependency change.
 
@@ -83,12 +86,12 @@ A blanket `#[allow(...)]` at file or crate level SHALL NOT be used to defer this
 #### Scenario: Deferred unwrap is annotated, not allowed
 
 - **WHEN** the lint set lands and `src/core/vault_sync.rs:3380`'s production unwrap is not yet fixed
-- **THEN** the unwrap line carries `#[expect(clippy::unwrap_used, reason = "addressed in fix-production-unwraps-and-panics")]` directly above it, and `cargo clippy -- -D warnings` passes
+- **THEN** the unwrap line carries `#[expect(clippy::unwrap_used, reason = "addressed in remove-production-panic-paths")]` directly above it, and `cargo clippy -- -D warnings` passes
 
 #### Scenario: Follow-up proposal removes deferred annotations
 
-- **WHEN** the `fix-production-unwraps-and-panics` change replaces the unwrap with proper error handling
-- **THEN** the `#[expect(clippy::unwrap_used, reason = "addressed in fix-production-unwraps-and-panics")]` annotation is also removed, and `cargo clippy` continues to pass because the `#[expect]` is no longer dead
+- **WHEN** the `remove-production-panic-paths` change replaces the unwrap with proper error handling
+- **THEN** the `#[expect(clippy::unwrap_used, reason = "addressed in remove-production-panic-paths")]` annotation is also removed, and `cargo clippy` continues to pass because the `#[expect]` is no longer dead
 
 #### Scenario: Crate-wide `#[allow]` is rejected
 

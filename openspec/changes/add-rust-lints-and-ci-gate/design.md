@@ -2,7 +2,7 @@
 
 `Cargo.toml` currently has no lint configuration. `.github/workflows/ci.yml::check` already runs `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` against both feature channels (default airgapped, online-model), so the *enforcement* infrastructure exists. What's missing is the *configuration* of which lints to enforce. As a result, CI passes today even though the codebase has 46 `#[allow(...)]` annotations across 16 files in `src/`, four production `serde_json::*.unwrap()` panics, six mutex `lock().unwrap()` calls in `core/inference.rs`, and several un-namespaced FTS variants kept alive only by `#[allow(dead_code)]`. These are the targets of `docs/CODE_REVIEW.md` §2.1, §3.1, §3.2.
 
-This change is item #1 in `docs/temp_IMPL_PLAN.md`. Its job is to declare the lint policy and migrate the existing suppressions. It deliberately does **not** fix the production unwraps — that is proposal #2 (`fix-production-unwraps-and-panics`). Sites that need engineering work get a per-site `#[expect(clippy::<lint>, reason = "addressed in fix-production-unwraps-and-panics")]` so they're greppable and surface the moment the next proposal removes them.
+This change is item #1 in `docs/temp_IMPL_PLAN.md`. Its job is to declare the lint policy and migrate the existing suppressions. It deliberately does **not** fix the production unwraps — that is proposal #2 (`remove-production-panic-paths`). Sites that need engineering work get a per-site `#[expect(clippy::<lint>, reason = "addressed in remove-production-panic-paths")]` so they're greppable and surface the moment the next proposal removes them.
 
 Rust toolchain pin: the repo has no `rust-toolchain.toml`; CI uses `dtolnay/rust-toolchain@stable`. `#[expect(...)]` requires Rust ≥ 1.81. Stable is currently 1.92+, so no toolchain pin is required.
 
@@ -19,8 +19,8 @@ Rust toolchain pin: the repo has no `rust-toolchain.toml`; CI uses `dtolnay/rust
 **Non-Goals:**
 
 - Fixing the four production `serde_json` unwraps in `mcp/server.rs`, the `vault_sync.rs:3380` panic, or the six `inference.rs` mutex unwraps. These move to proposal #2.
-- Restructuring code to satisfy `large_enum_variant` on `VaultSyncError`. The split into per-subsystem child enums is part of proposal #4 (`split-vault-sync-module`); for this change, the `large_enum_variant` warning is suppressed with a reason pointing at #4.
-- Removing the `#[allow(dead_code)]` annotations on FTS un-namespaced variants by deleting the variants themselves. That's proposal #6 (`collapse-search-fts-api-surface`); for this change, the `dead_code` warnings are suppressed with a reason pointing at #6.
+- Restructuring code to satisfy `large_enum_variant` on `VaultSyncError`. The split into per-subsystem child enums is part of proposal #4 (`decompose-vault-sync-module`); for this change, the `large_enum_variant` warning is suppressed with a reason pointing at #4.
+- Removing the `#[allow(dead_code)]` annotations on FTS un-namespaced variants by deleting the variants themselves. That's proposal #6 (`collapse-search-fn-variants`); for this change, the `dead_code` warnings are suppressed with a reason pointing at #6.
 - Adding a `rust-toolchain.toml` pin. The current `dtolnay/rust-toolchain@stable` is fine; pinning is a separate decision.
 - Adding `clippy.toml` or `rustfmt.toml`. Defaults are sufficient until a specific tuning need arises.
 
@@ -32,13 +32,12 @@ Rust toolchain pin: the repo has no `rust-toolchain.toml`; CI uses `dtolnay/rust
 
 ```toml
 [lints.rust]
-unsafe_code = "forbid"
-missing_docs = "warn"
+unsafe_code = "deny"
+missing_docs = "allow"
 unreachable_pub = "warn"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
@@ -48,13 +47,16 @@ needless_collect = "warn"
 large_enum_variant = "warn"
 ```
 
-The `priority = -1` on `all` and `pedantic` lets individual lints raise themselves above the group level — required because we want some `pedantic` rules to remain warnings even when the group is downgraded.
+The `priority = -1` on `all` lets individual lints raise themselves above the group level — useful when an individual `clippy::all` rule would otherwise mask a higher-severity explicit warn.
+
+`clippy::pedantic` was originally proposed as `warn`, but the implementation surfaced 5,672 baseline warnings (mostly `missing_errors_doc`, `must_use_candidate`, `needless_pass_by_value`, `cast_possible_wrap`, etc.) — 5,250+ of them in test code which the design exempts. Even after applying the `#[cfg(test)]` and per-test-file exemptions, the production-side pedantic warnings would require either ~hundreds of `#[expect(...)]` annotations or a crate-level `#![allow(clippy::pedantic)]` that defeats the purpose. The design's own §Risks anticipated this fallback: "*If the false-positive rate is unmanageable, drop `pedantic` from the table — that decision becomes evidence-driven, not pre-emptive.*" That evidence now exists. Pedantic is dropped; a follow-up proposal can reintroduce it after production code has been cleaned up by the named follow-ups (#2 remove-production-panic-paths, #4 decompose-vault-sync-module, #6 collapse-search-fn-variants, #7 add-crate-and-public-api-docs).
 
 **Alternatives considered:**
 
 - *`clippy::nursery = "warn"`.* Rejected: nursery lints have a higher false-positive rate. We can opt in per-rule later if useful.
-- *`unsafe_code = "deny"` instead of `"forbid"`.* `forbid` cannot be locally overridden by `#[allow]` or `#[expect]`; `deny` can. Quaid genuinely has zero `unsafe` blocks today, and locking that in is the right default. If a future feature legitimately needs `unsafe`, downgrading to `deny` for that one block is a defensible code-review event.
-- *`missing_docs = "deny"` instead of `"warn"`.* Rejected for now. The repo will not be fully documented until proposal #7 lands. Warning is enough — CI denies warnings, so the practical effect is the same once #7 fills in the gaps.
+- *`unsafe_code = "forbid"` instead of `"deny"`.* Initially preferred on the assumption that the codebase had zero `unsafe` blocks, but the audit during implementation surfaced ~18 legitimate `unsafe` blocks across `core/db.rs` (sqlite-vec FFI init), `core/inference.rs` and `core/conversation/slm.rs` (candle `VarBuilder::from_mmaped_safetensors`), `core/conversation/turn_writer.rs` (POSIX `flock` / Win32 `LockFile`), `core/vault_sync.rs`, `core/raw_imports.rs`, `core/reconciler.rs`, and `commands/put.rs` (libc syscalls — `geteuid`, `listen`, `getpeereid`, `ucred`, etc.). `forbid` cannot be locally overridden, so it would either reject these legitimate FFI/mmap/syscall sites or require deletion of features that depend on them. `deny` allows per-site `#[expect(unsafe_code, reason = "...")]` with a justification, which matches the rest of the proposal's discipline (every suppression is explicit and reasoned). Decision: `deny`, with each existing `unsafe` block annotated.
+- *`missing_docs = "warn"` (the original Apollo recommendation).* Initially preferred, but with `pedantic` already shipping a wave of new warnings and proposal #7 (`add-crate-and-public-api-docs`) explicitly scheduled to fill in module/crate docs, warning on `missing_docs` here would either generate ~hundreds of suppressions or churn `#[expect(missing_docs, reason = "addressed in add-crate-and-public-api-docs")]` across every public item. Decision: `missing_docs = "allow"` at crate level for this change. Proposal #7 flips it back to `"warn"` (or `"deny"`) once the docs land. Documented in task 1.4.
+- *`missing_docs = "deny"` instead of `"warn"`.* Rejected for now. Same reasoning as above — proposal #7 owns the documentation work; this change owns the lint scaffolding.
 
 ### 2. `#[allow]` → `#[expect]` migration: file-by-file, with reasons
 
@@ -81,9 +83,9 @@ Test-side `#[allow]` (in `#[cfg(test)] mod tests { ... }` and `tests/`) is exemp
 
 The follow-up names are stable (defined in `docs/temp_IMPL_PLAN.md`):
 
-- `fix-production-unwraps-and-panics` — for the 11 production unwraps in `vault_sync.rs:3380`, `mcp/server.rs:1793/1880/1892/1990`, and `inference.rs` (×6 mutex locks).
-- `split-vault-sync-module` — for `clippy::large_enum_variant` on `VaultSyncError`.
-- `collapse-search-fts-api-surface` — for `dead_code` allows on un-namespaced FTS variants and the two `clippy::too_many_arguments` in `core/fts.rs`.
+- `remove-production-panic-paths` — for the 11 production unwraps in `vault_sync.rs:3380`, `mcp/server.rs:1793/1880/1892/1990`, and `inference.rs` (×6 mutex locks).
+- `decompose-vault-sync-module` — for `clippy::large_enum_variant` on `VaultSyncError`.
+- `collapse-search-fn-variants` — for `dead_code` allows on un-namespaced FTS variants and the two `clippy::too_many_arguments` in `core/fts.rs`.
 
 When the follow-up lands, its first commit removes the suppressions, and clippy starts surfacing the underlying issues that the follow-up then fixes.
 
@@ -93,22 +95,22 @@ When the follow-up lands, its first commit removes the suppressions, and clippy 
 
 ### 4. CI gate: tighten what's already there, don't restructure
 
-**Decision:** Edit `.github/workflows/ci.yml::check` in place to add `--all-features --locked` to the default-channel clippy invocation, and `--locked` to the online-channel invocation. Keep the existing job structure. Both channels stay enforced.
+**Decision:** Edit `.github/workflows/ci.yml::check` in place to add `--locked` to both clippy invocations (default airgapped + online channels). Keep the existing two-channel job structure.
 
 ```yaml
 - name: Cargo clippy (default / airgapped channel)
-  run: cargo clippy --all-targets --all-features --locked -- -D warnings
+  run: cargo clippy --all-targets --locked -- -D warnings
 
 - name: Cargo clippy (online channel)
   run: cargo clippy --all-targets --no-default-features --features bundled,online-model --locked -- -D warnings
 ```
 
-`--all-features` triggers a build of every feature combination; for Quaid this means the airgapped invocation also exercises `online-model` code paths gated by `cfg(feature = "online-model")`. Combined with the dedicated online-channel invocation, both feature sets get linted. `--locked` ensures `Cargo.lock` reflects `Cargo.toml`.
+The earlier draft of this design proposed `--all-features --locked` for the default invocation, on the assumption that `--all-features` would broaden coverage. That's wrong for Quaid: `src/core/inference.rs:38` emits `compile_error!("Enable only one model channel: \`embedded-model\` or \`online-model\`.")` precisely so the two backends can't both be compiled in. `--all-features` therefore *fails to compile* and cannot be used here. The correct shape — already present in CI — is two distinct clippy invocations, one per channel. We just add `--locked` to both. `--locked` ensures `Cargo.lock` reflects `Cargo.toml`.
 
 **Alternatives considered:**
 
 - *Add a separate `lints` job.* Rejected — the existing `Check` job is the right place. Splitting adds complexity without adding signal.
-- *Drop the online-channel clippy invocation now that `--all-features` covers it.* Tempting but rejected: the two invocations exercise *different* feature combinations (`default = bundled,embedded-model` vs `bundled,online-model`), and a regression in one isn't necessarily caught by the other. Keep both.
+- *`--all-features` on either invocation.* Rejected — incompatible with the channel-mutex `compile_error!`. The two-channel runs already cover both feature sets.
 
 ## Risks / Trade-offs
 

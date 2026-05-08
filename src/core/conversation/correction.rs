@@ -1,3 +1,8 @@
+#![expect(
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::path::PathBuf;
 
 use rusqlite::{params, Connection, OptionalExtension};

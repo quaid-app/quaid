@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+
 use std::fs;
 use std::io;
 use std::io::Write;
@@ -320,7 +325,7 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
 
     if args.writable && !writable {
         return Err(anyhow!(vault_sync::VaultSyncError::CollectionReadOnly {
-            collection_name: args.name.clone(),
+            collection_name: args.name,
         }
         .to_string()));
     }
@@ -1590,6 +1595,11 @@ mod tests {
     }
 
     fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
+        // Production paths reach the `collections.root_path` column via add() which
+        // canonicalizes via fs::canonicalize. Tests insert directly here, so canonicalize
+        // here too; otherwise macOS's /var ↔ /private/var symlink causes mismatches with
+        // production-side lookups (live-owner checks, etc.).
+        let root_path = fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
         conn.execute(
             "INSERT INTO collections (name, root_path, state, writable, is_write_target)
              VALUES (?1, ?2, 'active', 1, 0)",
@@ -2262,7 +2272,7 @@ mod tests {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM collections WHERE root_path = ?1",
-                [root.path().display().to_string()],
+                [fs::canonicalize(root.path()).unwrap().display().to_string()],
                 |row| row.get(0),
             )
             .unwrap();

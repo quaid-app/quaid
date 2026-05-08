@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -321,7 +329,7 @@ fn concurrent_appends_to_different_sessions_write_separate_files() {
     drop(conn);
 
     let first_db = db_path.clone();
-    let second_db = db_path.clone();
+    let second_db = db_path;
     let first = thread::spawn(move || {
         let conn = db::open(first_db.to_str().unwrap()).unwrap();
         append_turn(

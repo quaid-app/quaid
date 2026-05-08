@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+
 use crate::core::gaps;
 use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::types::SearchResult;
@@ -18,7 +23,10 @@ fn read_token_budget(db: &Connection) -> usize {
     .unwrap_or(4000)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "query command CLI accepts the documented user-facing flags directly; collapsing into a struct would obscure the dispatch boundary"
+)]
 pub async fn run(
     db: &Connection,
     query: &str,

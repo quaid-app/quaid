@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+
 use std::io::{self, Read};
 
 #[cfg(unix)]
@@ -167,7 +172,6 @@ fn put_from_cli_string(
 }
 
 /// Apply page content supplied by the caller.
-#[allow(dead_code)]
 pub fn put_from_string(
     db: &Connection,
     slug_input: &str,
@@ -729,7 +733,10 @@ fn persist_with_vault_write(
 }
 
 #[cfg(unix)]
-#[allow(clippy::question_mark)]
+#[expect(
+    clippy::question_mark,
+    reason = "explicit if-let early-return makes the empty/in-memory db_path guard control flow more readable than the equivalent ? chain"
+)]
 fn persist_with_vault_write(
     db: &Connection,
     prepared: &PreparedPut,
@@ -1173,7 +1180,10 @@ fn remove_recovery_sentinel(
 }
 
 #[cfg(unix)]
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "post-rename failure handler binds the full recovery context (db, prepared put, paths, sentinel, dedup keys); collapsing into a struct here would obscure the call site"
+)]
 fn handle_post_rename_failure(
     db: &Connection,
     prepared: &PreparedPut,
@@ -1350,7 +1360,6 @@ fn maybe_block_inside_write_lock(db: &Connection) {
 }
 
 #[cfg(not(all(test, unix)))]
-#[allow(dead_code)]
 fn maybe_block_after_supersede_claim(_db: &Connection, _supersedes: Option<&str>) {}
 
 #[cfg(all(test, unix))]
@@ -1423,6 +1432,10 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var is unsafe on Rust 1.81+; tests serialise mutations via the surrounding env-mutation lock"
+            )]
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -1433,6 +1446,10 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var/remove_var are unsafe on Rust 1.81+; restores the previous value inside the same locked window as the constructor"
+            )]
             unsafe {
                 if let Some(value) = self.previous.as_ref() {
                     std::env::set_var(self.key, value);
@@ -1472,14 +1489,19 @@ mod tests {
     #[cfg(unix)]
     fn open_test_db_with_vault() -> (tempfile::TempDir, String, Connection, PathBuf) {
         let dir = tempfile::TempDir::new().unwrap();
+        // Canonicalize once: macOS's /var → /private/var symlink would otherwise cause
+        // production-side path lookups (PRAGMA database_list, fs::canonicalize on
+        // collection roots) to disagree with the symlinked TempDir path the test stores.
+        let canonical_dir = std::fs::canonicalize(dir.path()).unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&canonical_dir, std::fs::Permissions::from_mode(0o700))
+                .unwrap();
         }
-        let db_path = dir.path().join("test_memory.db");
+        let db_path = canonical_dir.join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         conn.busy_timeout(Duration::from_millis(0)).unwrap();
-        let vault_root = dir.path().join("vault");
+        let vault_root = canonical_dir.join("vault");
         std::fs::create_dir_all(&vault_root).unwrap();
         conn.execute(
             "UPDATE collections

@@ -183,12 +183,12 @@ mod tests {
         );
 
         let chunks = chunk_page(&page);
-        let timeline_chunks: Vec<_> = chunks
+        let timeline_chunk_count = chunks
             .iter()
             .filter(|chunk| chunk.chunk_type == "timeline_entry")
-            .collect();
+            .count();
 
-        assert_eq!(timeline_chunks.len(), 5);
+        assert_eq!(timeline_chunk_count, 5);
     }
 
     #[test]

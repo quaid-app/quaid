@@ -1203,7 +1203,7 @@ where
     let dirty_status = is_collection_dirty(conn, collection.id, request.recovery_root)?;
     if dirty_status.is_dirty() && !request.allow_finalize_pending {
         return Err(ReconcileError::CollectionDirtyError {
-            collection_name: collection.name.clone(),
+            collection_name: collection.name,
             status: dirty_status,
         });
     }
@@ -3142,6 +3142,10 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var is unsafe on Rust 1.81+; tests serialise via the surrounding ENV_MUTATION_LOCK"
+            )]
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -3151,6 +3155,10 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var/remove_var are unsafe on Rust 1.81+; restores the previous value inside the same locked window as the constructor"
+            )]
             unsafe {
                 if let Some(value) = self.previous.as_ref() {
                     std::env::set_var(self.key, value);
@@ -3772,7 +3780,7 @@ mod tests {
             "---\nslug: preferences/noop\n title: Noop\ntype: preference\n---\nbody  \n\n";
         fs::write(root.path().join(&relative_path), whitespace_only).unwrap();
         let current_stat = file_state::stat_file(&root.path().join(&relative_path)).unwrap();
-        let walked = HashMap::from([(relative_path.clone(), current_stat.clone())]);
+        let walked = HashMap::from([(relative_path.clone(), current_stat)]);
         let diff = stat_diff_from_walk(&conn, collection.id, root.path(), walked.clone()).unwrap();
         assert!(diff.modified.is_empty());
         assert!(diff.unchanged.contains(&relative_path));
@@ -3876,7 +3884,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let walked = HashMap::from([(new_relative_path.clone(), renamed_stat.clone())]);
+        let walked = HashMap::from([(new_relative_path.clone(), renamed_stat)]);
         let diff = stat_diff_from_walk(&conn, collection.id, root.path(), walked).unwrap();
 
         assert!(!outcome.created);
@@ -5118,7 +5126,7 @@ mod tests {
             remaining_new: HashMap::from([
                 (native_to.clone(), stat.clone()),
                 (uuid_to.clone(), stat.clone()),
-                (hash_to.clone(), stat.clone()),
+                (hash_to.clone(), stat),
             ]),
             remaining_missing: HashSet::from([
                 native_from.clone(),
@@ -5139,7 +5147,7 @@ mod tests {
                 },
             ),
             (
-                uuid_from.clone(),
+                uuid_from,
                 MissingPageIdentity {
                     page_id: 2,
                     uuid: Some("uuid-match".to_owned()),
@@ -5149,7 +5157,7 @@ mod tests {
                 },
             ),
             (
-                hash_from.clone(),
+                hash_from,
                 MissingPageIdentity {
                     page_id: 3,
                     uuid: None,
@@ -5173,7 +5181,7 @@ mod tests {
             (
                 uuid_to.clone(),
                 NewTreeIdentity {
-                    relative_path: uuid_to.clone(),
+                    relative_path: uuid_to,
                     sha256: "uuid-hash".to_owned(),
                     uuid: Some("uuid-match".to_owned()),
                     body_size_bytes: 80,
@@ -5183,7 +5191,7 @@ mod tests {
             (
                 hash_to.clone(),
                 NewTreeIdentity {
-                    relative_path: hash_to.clone(),
+                    relative_path: hash_to,
                     sha256: "hash-match".to_owned(),
                     uuid: None,
                     body_size_bytes: 80,
@@ -5196,8 +5204,8 @@ mod tests {
             &mut resolution,
             &missing_identities,
             &[NativeRename {
-                from_path: native_from.clone(),
-                to_path: native_to.clone(),
+                from_path: native_from,
+                to_path: native_to,
             }],
             &new_identities,
         );
@@ -6906,9 +6914,9 @@ mod tests {
         let new_stat = stat_for(root.path(), "new.md");
 
         let walked_files = HashMap::from([
-            (PathBuf::from("unchanged.md"), unchanged_stat.clone()),
-            (PathBuf::from("modified.md"), modified_new_stat.clone()),
-            (PathBuf::from("new.md"), new_stat.clone()),
+            (PathBuf::from("unchanged.md"), unchanged_stat),
+            (PathBuf::from("modified.md"), modified_new_stat),
+            (PathBuf::from("new.md"), new_stat),
         ]);
 
         let plan = build_full_hash_plan(&conn, collection.id, root.path(), &walked_files).unwrap();

@@ -95,7 +95,6 @@ pub fn search_fts(
 }
 
 /// Namespace-aware variant of [`search_fts`].
-#[allow(dead_code)]
 pub fn search_fts_with_namespace(
     query: &str,
     wing_filter: Option<&str>,
@@ -116,7 +115,6 @@ pub fn search_fts_with_namespace(
     )
 }
 
-#[allow(dead_code)]
 pub fn search_fts_canonical(
     query: &str,
     wing_filter: Option<&str>,
@@ -188,7 +186,6 @@ pub fn expand_fts_query_or(sanitized: &str) -> String {
 /// chain so documents matching any individual term are surfaced.
 ///
 /// Callers must pass a **sanitized** query from [`sanitize_fts_query`].
-#[allow(dead_code)]
 pub fn search_fts_tiered(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -249,7 +246,6 @@ pub fn search_fts_tiered_with_namespace_filtered(
 
 /// Canonical-slug variant of [`search_fts_tiered`].
 /// Returns slugs in `<collection>::<slug>` format.
-#[allow(dead_code)]
 pub fn search_fts_canonical_tiered(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -308,7 +304,10 @@ pub fn search_fts_canonical_tiered_with_namespace_filtered(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "addressed in collapse-search-fn-variants — internal tiered-FTS dispatcher; proposal #6 collapses the API surface and the public wrappers are the right boundary for grouping"
+)]
 fn search_fts_tiered_internal(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -351,7 +350,10 @@ fn search_fts_tiered_internal(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "addressed in collapse-search-fn-variants — internal FTS dispatcher; proposal #6 collapses the API surface and the public wrappers are the right boundary for grouping"
+)]
 fn search_fts_internal(
     query: &str,
     wing_filter: Option<&str>,

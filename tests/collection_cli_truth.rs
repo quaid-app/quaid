@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 mod common;
 #[path = "common/subprocess.rs"]
 mod common_subprocess;
@@ -2873,10 +2881,14 @@ fn offline_restore_round_trips_exact_raw_import_bytes() {
 #[test]
 fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
     let dir = tempfile::TempDir::new().expect("temp dir");
-    let db_path = test_db_path(&dir, "online-restore-live-serve.db");
+    // Resolve the TempDir through any platform symlinks (macOS /var → /private/var)
+    // so test-side paths match the canonical paths that production code, FSEvents,
+    // and SQLite all use.
+    let dir_canonical = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+    let db_path = dir_canonical.join("online-restore-live-serve.db");
     let conn = open_test_db(&db_path);
-    let source_root = dir.path().join("source");
-    let target_root = dir.path().join("restored");
+    let source_root = dir_canonical.join("source");
+    let target_root = dir_canonical.join("restored");
     std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
     let collection_id = insert_collection(&conn, "work", &source_root);
     conn.execute(
@@ -3024,23 +3036,23 @@ fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
     )
     .expect("write live edit into restored root");
 
-    thread::sleep(Duration::from_secs(3));
-
-    let conn = open_test_db(&db_path);
-    let rebind_row: (String, i64) = conn
-        .query_row(
-            "SELECT p.compiled_truth,
-                    (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2)
-             FROM pages p
-             WHERE p.collection_id = ?1
-               AND p.slug = 'notes/online'",
-            params![collection_id, runtime.session_id.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .expect("load rebound page state");
+    let rebind_row = wait_for_db_value(&db_path, Duration::from_secs(15), |verify| {
+        verify
+            .query_row(
+                "SELECT p.compiled_truth,
+                        (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2)
+                 FROM pages p
+                 WHERE p.collection_id = ?1
+                   AND p.slug = 'notes/online'",
+                params![collection_id, runtime.session_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .ok()
+            .filter(|row: &(String, i64)| row.0.contains("updated after online restore"))
+    })
+    .expect("watcher never reconciled the live edit on the restored target");
     assert!(rebind_row.0.contains("updated after online restore"));
     assert_eq!(rebind_row.1, 1);
-    drop(conn);
 
     drop(runtime);
 }

@@ -1,3 +1,9 @@
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
@@ -130,7 +136,6 @@ struct SelfWriteDedupEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum WatcherMode {
     Native,
     Poll,
@@ -164,9 +169,15 @@ pub struct WatcherHealthView {
 #[cfg(unix)]
 enum WatcherHandle {
     // Fields are held for Drop semantics (keeping the watcher alive), not read directly.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "field is owned for Drop semantics (keeps the underlying notify watcher alive); not read directly"
+    )]
     Native(RecommendedWatcher),
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "field is owned for Drop semantics (keeps the underlying poll watcher alive); not read directly"
+    )]
     Poll(PollWatcher),
 }
 
@@ -496,7 +507,6 @@ pub enum VaultSyncError {
     },
 
     #[cfg(unix)]
-    #[allow(dead_code)]
     #[error(
         "PostRenameRecoveryPendingError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} stage={stage} reason={reason}"
     )]
@@ -608,7 +618,6 @@ struct FsPreconditionInspection {
     stored_row: Option<file_state::FileStateRow>,
 }
 
-#[allow(dead_code)]
 pub struct ServeRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
@@ -686,7 +695,13 @@ pub fn current_host() -> String {
 
 #[cfg(unix)]
 pub(crate) fn current_effective_uid() -> u32 {
-    unsafe { libc::geteuid() as u32 }
+    #[expect(
+        unsafe_code,
+        reason = "libc::geteuid is an always-safe POSIX syscall returning the calling process's effective uid; the cast normalises the platform-specific uid_t"
+    )]
+    unsafe {
+        libc::geteuid() as u32
+    }
 }
 
 #[cfg(unix)]
@@ -715,7 +730,6 @@ pub fn check_update_expected_version(
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 fn inspect_fs_precondition(
     conn: &Connection,
     collection_id: i64,
@@ -823,7 +837,10 @@ fn inspect_fs_precondition_with_parent_fd<Fd: AsFd>(
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "addressed in decompose-vault-sync-module — pre-sentinel fs-precondition check helper kept for proposal #4's split"
+)]
 pub(crate) fn check_fs_precondition_before_sentinel(
     conn: &Connection,
     collection_id: i64,
@@ -1545,7 +1562,6 @@ fn maybe_suppress_self_write_event(path: &Path) -> Result<bool, VaultSyncError> 
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 pub fn mark_collection_needs_full_sync_via_fresh_connection(
     conn: &Connection,
     collection_id: i64,
@@ -1557,7 +1573,6 @@ pub fn mark_collection_needs_full_sync_via_fresh_connection(
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
     let inserted = registries
@@ -1575,7 +1590,6 @@ pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 pub fn remove_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
     registries
@@ -1587,7 +1601,6 @@ pub fn remove_write_dedup(key: &str) -> Result<(), VaultSyncError> {
 }
 
 #[cfg(all(test, unix))]
-#[allow(dead_code)]
 pub fn has_write_dedup(key: &str) -> Result<bool, VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
     Ok(registries
@@ -2154,7 +2167,6 @@ pub(crate) fn live_serve_endpoint_for_root_path(
     }
 }
 
-#[allow(dead_code)]
 pub fn ensure_no_live_serve_owner(
     conn: &Connection,
     collection_id: i64,
@@ -2236,7 +2248,6 @@ pub fn acquire_owner_lease(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn release_owner_lease(
     conn: &Connection,
     collection_id: i64,
@@ -3848,6 +3859,10 @@ fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
 
 #[cfg(unix)]
 fn listen_with_backlog(listener: &UnixListener) -> Result<(), VaultSyncError> {
+    #[expect(
+        unsafe_code,
+        reason = "POSIX listen() is a syscall; we pass a valid file descriptor obtained from UnixListener::as_raw_fd"
+    )]
     let rc = unsafe { libc::listen(listener.as_raw_fd(), 16) };
     if rc == 0 {
         Ok(())
@@ -3915,8 +3930,16 @@ pub(crate) fn peer_credentials_for_stream(
     let fd = stream.as_raw_fd();
     #[cfg(target_os = "linux")]
     {
+        #[expect(
+            unsafe_code,
+            reason = "MaybeUninit-style zero-init of libc::ucred which is plain-old-data; subsequent getsockopt fills it in"
+        )]
         let mut creds: libc::ucred = unsafe { zeroed() };
         let mut len = size_of::<libc::ucred>() as libc::socklen_t;
+        #[expect(
+            unsafe_code,
+            reason = "POSIX getsockopt SO_PEERCRED is a syscall; we pass a valid fd, a stable libc::ucred buffer, and a matching length"
+        )]
         let rc = unsafe {
             libc::getsockopt(
                 fd,
@@ -3938,12 +3961,20 @@ pub(crate) fn peer_credentials_for_stream(
     {
         let mut uid: libc::uid_t = 0;
         let mut gid: libc::gid_t = 0;
+        #[expect(
+            unsafe_code,
+            reason = "POSIX getpeereid syscall; we pass a valid fd and stack-allocated outputs"
+        )]
         let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
         if rc != 0 {
             return Err(io::Error::last_os_error().into());
         }
         let mut pid: libc::pid_t = 0;
         let mut len = size_of::<libc::pid_t>() as libc::socklen_t;
+        #[expect(
+            unsafe_code,
+            reason = "macOS LOCAL_PEERPID getsockopt syscall; we pass a valid fd, a stable pid_t buffer, and a matching length"
+        )]
         let rc = unsafe {
             libc::getsockopt(
                 fd,
@@ -4717,7 +4748,7 @@ pub fn begin_restore(
              SET restore_lease_session_id = ?2,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?1",
-            params![collection.id, expected_session_id.clone()],
+            params![collection.id, expected_session_id],
         )?;
         #[cfg(unix)]
         {
@@ -4834,7 +4865,7 @@ pub fn begin_restore(
                 collection.id,
                 target_path.display().to_string(),
                 serde_json::to_string(&manifest)?,
-                command_id.clone(),
+                command_id,
                 std::process::id() as i64,
                 current_host()
             ],
@@ -4899,7 +4930,7 @@ pub fn remap_collection(
             recovery_root: &recovery_root,
             operation: RestoreRemapOperation::Remap,
             authorization: FullHashReconcileAuthorization::ActiveLease {
-                lease_session_id: expected_session_id.clone(),
+                lease_session_id: expected_session_id,
             },
             allow_finalize_pending: false,
             stability_max_iters: 0,
@@ -5098,7 +5129,6 @@ pub(crate) struct ShortLivedLease {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     _guard: LeaseGuard,
-    #[allow(dead_code)]
     session_id: String,
 }
 
@@ -5934,6 +5964,10 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var is unsafe on Rust 1.81+; tests are single-threaded under ENV_MUTATION_LOCK so the data-race precondition is upheld"
+            )]
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -5942,6 +5976,10 @@ mod tests {
 
         fn clear(key: &'static str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::remove_var is unsafe on Rust 1.81+; serialised via ENV_MUTATION_LOCK"
+            )]
             unsafe {
                 std::env::remove_var(key);
             }
@@ -5951,6 +5989,10 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var/remove_var are unsafe on Rust 1.81+; the guard owns the same lock window as the constructor"
+            )]
             unsafe {
                 if let Some(value) = self.previous.as_ref() {
                     std::env::set_var(self.key, value);
@@ -5967,12 +6009,22 @@ mod tests {
 
     fn open_test_db_file() -> (tempfile::TempDir, String, Connection) {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("memory.db");
+        // Canonicalize: SQLite resolves /var → /private/var on macOS when reading
+        // PRAGMA database_list, so we must store the canonical path as the test's
+        // identifier so production-side lookups (e.g. test-hook keys, runtime
+        // registry keys) match.
+        let canonical_dir = fs::canonicalize(dir.path()).unwrap();
+        let db_path = canonical_dir.join("memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         (dir, db_path.display().to_string(), conn)
     }
 
     fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
+        // Production paths reach the `collections.root_path` column via add() which
+        // canonicalizes via fs::canonicalize. Tests insert directly here, so canonicalize
+        // here too; otherwise macOS's /var ↔ /private/var symlink causes mismatches with
+        // production-side lookups (live-owner checks, watcher path matching).
+        let root_path = fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
         conn.execute(
             "INSERT INTO collections (name, root_path, state, writable, is_write_target)
              VALUES (?1, ?2, 'active', 1, 0)",
@@ -7290,7 +7342,8 @@ mod tests {
     fn infer_restore_relative_path_prefers_relative_inputs_and_strips_collection_root() {
         let conn = open_test_db();
         let root = tempfile::TempDir::new().unwrap();
-        let collection_id = insert_collection(&conn, "work", root.path());
+        let root_canonical = fs::canonicalize(root.path()).unwrap();
+        let collection_id = insert_collection(&conn, "work", &root_canonical);
         let collection = load_collection_by_id(&conn, collection_id).unwrap();
         #[cfg(unix)]
         let foreign_raw_path = "/elsewhere/foreign.md";
@@ -7315,7 +7368,7 @@ mod tests {
                 &collection,
                 "notes/example",
                 Some(
-                    root.path()
+                    root_canonical
                         .join("notes")
                         .join("absolute.md")
                         .to_string_lossy()
@@ -8082,7 +8135,7 @@ mod tests {
 
         let external_rename = NotifyEvent {
             kind: NotifyEventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)),
-            paths: vec![source_path.clone(), target_path.clone()],
+            paths: vec![source_path, target_path.clone()],
             attrs: Default::default(),
         };
         let actions = classify_watch_event(root.path(), external_rename).unwrap();
@@ -8558,11 +8611,12 @@ mod tests {
     fn sync_collection_watchers_preserves_crashed_watcher_until_backoff_expires() {
         let (_dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
-        let collection_id = insert_collection(&conn, "work", root.path());
+        let root_canonical = fs::canonicalize(root.path()).unwrap();
+        let collection_id = insert_collection(&conn, "work", &root_canonical);
         let (_sender, receiver) = mpsc::channel(1);
         let backoff_until = Instant::now() + Duration::from_secs(5);
         let crashed = CollectionWatcherState {
-            root_path: root.path().to_path_buf(),
+            root_path: root_canonical,
             generation: 0,
             receiver,
             watcher: None,
@@ -8799,12 +8853,8 @@ mod tests {
                 "notes/already-buffered.md",
             )))
             .unwrap();
-        let mut callback = watch_callback(
-            collection_id,
-            root.path().to_path_buf(),
-            db_path.clone(),
-            sender,
-        );
+        let mut callback =
+            watch_callback(collection_id, root.path().to_path_buf(), db_path, sender);
         let event = NotifyEvent {
             kind: NotifyEventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
             paths: vec![file_path],
@@ -11059,9 +11109,12 @@ mod tests {
     fn start_serve_runtime_defers_fresh_restore_heartbeat_and_leaves_collection_blocked() {
         let (_dir, db_path, conn) = open_test_db_file();
         let source_root = tempfile::TempDir::new().unwrap();
+        let source_root_canonical = fs::canonicalize(source_root.path()).unwrap();
         let pending_parent = tempfile::TempDir::new().unwrap();
-        let pending_root = pending_parent.path().join("restored");
-        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let pending_root = fs::canonicalize(pending_parent.path())
+            .unwrap()
+            .join("restored");
+        let collection_id = insert_collection(&conn, "work", &source_root_canonical);
         write_restore_file(&pending_root, "notes/a.md", b"hello from restore");
         let manifest_json = manifest_json_for_directory(&pending_root);
         conn.execute(
@@ -11139,7 +11192,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row.0, "restoring");
-        assert_eq!(row.1, source_root.path().display().to_string());
+        assert_eq!(row.1, source_root_canonical.display().to_string());
         assert_eq!(row.2, 0);
         assert_eq!(row.3.as_deref(), Some(pending_root.to_str().unwrap()));
         assert_eq!(row.4.as_deref(), Some("restore-1"));
@@ -12084,9 +12137,10 @@ mod tests {
     fn short_lived_owner_lease_for_root_path_claims_same_root_aliases_and_cleans_up() {
         let (_dir, _db_path, conn) = open_test_db_file();
         let temp = tempfile::TempDir::new().unwrap();
-        let root_path = temp.path().display().to_string();
-        let work_id = insert_collection(&conn, "work", temp.path());
-        let alias_id = insert_collection(&conn, "alias", temp.path());
+        let temp_canonical = fs::canonicalize(temp.path()).unwrap();
+        let root_path = temp_canonical.display().to_string();
+        let work_id = insert_collection(&conn, "work", &temp_canonical);
+        let alias_id = insert_collection(&conn, "alias", &temp_canonical);
 
         let lease = start_short_lived_owner_lease_for_root_path(&conn, &root_path).unwrap();
         let claimed_rows: Vec<(i64, Option<String>)> = conn
@@ -12131,8 +12185,9 @@ mod tests {
     fn serve_session_can_steal_cli_short_lived_lease() {
         let (_dir, _db_path, conn) = open_test_db_file();
         let temp = tempfile::TempDir::new().unwrap();
-        let root_path = temp.path().display().to_string();
-        let collection_id = insert_collection(&conn, "work", temp.path());
+        let temp_canonical = fs::canonicalize(temp.path()).unwrap();
+        let root_path = temp_canonical.display().to_string();
+        let collection_id = insert_collection(&conn, "work", &temp_canonical);
 
         // CLI offline lease takes ownership.
         let _lease = start_short_lived_owner_lease_for_root_path(&conn, &root_path).unwrap();
@@ -12164,8 +12219,9 @@ mod tests {
     fn ensure_no_live_serve_owner_for_root_path_reports_same_root_alias_owner() {
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
-        let collection_id = insert_collection(&conn, "work", temp.path());
-        insert_collection(&conn, "alias", temp.path());
+        let temp_canonical = fs::canonicalize(temp.path()).unwrap();
+        let collection_id = insert_collection(&conn, "work", &temp_canonical);
+        insert_collection(&conn, "alias", &temp_canonical);
         conn.execute(
             "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
              VALUES ('serve-live', 77, 'batch3-host', datetime('now'))",
@@ -12179,7 +12235,7 @@ mod tests {
         .unwrap();
 
         let error =
-            ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string())
+            ensure_no_live_serve_owner_for_root_path(&conn, &temp_canonical.display().to_string())
                 .unwrap_err();
         let text = error.to_string();
         assert!(text.contains("ServeOwnsCollectionError"));

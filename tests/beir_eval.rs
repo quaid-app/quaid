@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 //! BEIR retrieval regression gate — offline CI benchmark.
 //!
 //! Evaluates hybrid search quality on NQ and FiQA subsets using nDCG@10.

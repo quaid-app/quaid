@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 mod common;
 #[path = "common/subprocess.rs"]
 mod common_subprocess;
@@ -334,6 +342,10 @@ fn extract_force_blocks_while_another_process_holds_the_session_file_lock() {
         .truncate(false)
         .open(&lock_path)
         .unwrap();
+    #[expect(
+        unsafe_code,
+        reason = "POSIX flock() is a syscall with no safe Rust wrapper; the test holds an exclusive lock to verify the writer blocks while held"
+    )]
     let rc = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
     assert_eq!(rc, 0, "test failed to acquire LOCK_EX");
 
@@ -354,6 +366,10 @@ fn extract_force_blocks_while_another_process_holds_the_session_file_lock() {
     );
 
     let started_release = Instant::now();
+    #[expect(
+        unsafe_code,
+        reason = "POSIX flock() is a syscall with no safe Rust wrapper; releasing the lock the test acquired above"
+    )]
     let rc = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) };
     assert_eq!(rc, 0, "test failed to release LOCK_UN");
     drop(lock_file);

@@ -32,7 +32,9 @@ Docs (#7) is half a day once the modules are stable.
 
 | # | Name | Status | Covers (§) | Effort |
 |--:|---|:--:|---|--:|
-| 1 | [`add-rust-lints-and-ci-gate`](../openspec/changes/add-rust-lints-and-ci-gate/) | 🟢 | 3.1, 3.2, 3.3, 7 partial | <1d |
+| 1 | [`add-rust-lints-and-ci-gate`](../openspec/changes/add-rust-lints-and-ci-gate/) | ✅ shipped | 3.1, 3.2, 3.3, 7 partial | <1d |
+
+> Proposal #1 shipped: Cargo.toml `[lints.*]` tables + CI `--locked` gate; 46 `#[allow]` migrated (33 dead deleted, 13 → `#[expect]` with reasons); 18 `unsafe` blocks annotated; deferred unwraps/expects suppressed at file level pointing at proposal #2 `remove-production-panic-paths`. `clippy::pedantic` dropped per design Decision 1 (5,672 baseline warnings — evidence-driven fallback already documented in design.md). Follow-up names in source annotations match this dashboard.
 | 2 | [`remove-production-panic-paths`](../openspec/changes/remove-production-panic-paths/) | 🟡 (after #1) | 2.1 | <1d |
 | 3 | [`extract-inline-tests-to-integration`](../openspec/changes/extract-inline-tests-to-integration/) | 🟢 | 1.5, 4.2 partial | 1–2d |
 | 4 | [`decompose-vault-sync-module`](../openspec/changes/decompose-vault-sync-module/) | 🟡 (after #3) | 1.3, 2.2, 2.3, 5.3 partial | 3–4d |

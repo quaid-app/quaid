@@ -1,3 +1,8 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Once;
@@ -77,20 +82,27 @@ impl QuaidConfig {
 }
 
 fn ensure_sqlite_vec() {
-    SQLITE_VEC_INIT.call_once(|| unsafe {
-        let init_fn = std::mem::transmute::<
-            *const (),
-            unsafe extern "C" fn(
-                *mut rusqlite::ffi::sqlite3,
-                *mut *const std::ffi::c_char,
-                *const rusqlite::ffi::sqlite3_api_routines,
-            ) -> std::ffi::c_int,
-        >(sqlite_vec::sqlite3_vec_init as *const ());
-        rusqlite::ffi::sqlite3_auto_extension(Some(init_fn));
+    SQLITE_VEC_INIT.call_once(|| {
+        // FFI registration of sqlite-vec's auto-extension entry point — the
+        // C calling convention is fixed by sqlite3_auto_extension's contract.
+        #[expect(
+            unsafe_code,
+            reason = "sqlite-vec exposes a C entry point we must register via sqlite3_auto_extension; transmute reshapes its function pointer to the SQLite-expected signature"
+        )]
+        unsafe {
+            let init_fn = std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(
+                    *mut rusqlite::ffi::sqlite3,
+                    *mut *const std::ffi::c_char,
+                    *const rusqlite::ffi::sqlite3_api_routines,
+                ) -> std::ffi::c_int,
+            >(sqlite_vec::sqlite3_vec_init as *const ());
+            rusqlite::ffi::sqlite3_auto_extension(Some(init_fn));
+        }
     });
 }
 
-#[allow(dead_code)]
 pub fn open(path: &str) -> Result<Connection, DbError> {
     open_with_model(path, &default_model()).map(|opened| opened.conn)
 }

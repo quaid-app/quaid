@@ -38,7 +38,6 @@ pub fn derive_room(content: &str) -> String {
 /// A token is "slug-like" if it contains at least one `/` separating
 /// two non-empty segments (e.g. `people/alice`). Returns the wing
 /// (first segment) of the first slug-like token found, or `None`.
-#[allow(dead_code)] // Wired in Phase 2 Group 9 (MCP query classification)
 pub fn classify_intent(query: &str) -> Option<String> {
     query
         .split_whitespace()

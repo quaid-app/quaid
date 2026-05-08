@@ -1,3 +1,8 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::sync::{Arc, Mutex};
 
 use rmcp::model::*;

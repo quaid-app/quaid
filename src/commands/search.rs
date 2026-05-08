@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+
 use anyhow::Result;
 use rusqlite::Connection;
 
@@ -6,7 +11,10 @@ use crate::core::fts::{
     search_fts_canonical_with_namespace_filtered,
 };
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "search command CLI accepts the documented user-facing flags directly; collapsing into a struct would obscure the dispatch boundary"
+)]
 pub fn run(
     db: &Connection,
     query: &str,

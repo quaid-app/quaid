@@ -1,3 +1,8 @@
+#![expect(
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -39,7 +44,10 @@ pub struct SlmRunner {
     device: Device,
     inference: SlmInferenceConfig,
     eos_token_id: Option<u32>,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "model_dir is held for diagnostics/Debug logging of which weights backed this runner; not read from struct fields directly"
+    )]
     model_dir: PathBuf,
 }
 
@@ -147,6 +155,10 @@ impl SlmRunner {
 
         let model_paths = safetensor_paths(&model_dir)?;
         let device = Device::Cpu;
+        #[expect(
+            unsafe_code,
+            reason = "candle's VarBuilder::from_mmaped_safetensors mmaps the on-disk Phi-3 weights; safety holds because we treat the cached model files as immutable for the lifetime of the VarBuilder"
+        )]
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_paths, DType::F32, &device) }
             .map_err(|error| SlmError::Weights {
                 cache_dir: model_dir.display().to_string(),

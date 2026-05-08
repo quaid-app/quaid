@@ -211,6 +211,10 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var is unsafe on Rust 1.81+; tests serialise through ENV_MUTATION_LOCK so the data-race precondition is upheld"
+            )]
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -219,6 +223,10 @@ mod tests {
 
         fn clear(key: &'static str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::remove_var is unsafe on Rust 1.81+; serialised via ENV_MUTATION_LOCK"
+            )]
             unsafe {
                 std::env::remove_var(key);
             }
@@ -228,6 +236,10 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var/remove_var are unsafe on Rust 1.81+; the guard's drop runs inside the same lock window as the constructor"
+            )]
             unsafe {
                 if let Some(value) = self.previous.as_ref() {
                     std::env::set_var(self.key, value);

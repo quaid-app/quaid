@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "addressed in remove-production-panic-paths"
-)]
-
 use std::sync::{Arc, Mutex};
 
 use rmcp::model::*;
@@ -400,6 +395,10 @@ fn map_search_error(e: SearchError) -> rmcp::Error {
             rmcp::Error::new(ErrorCode(-32003), format!("search error: {message}"), None)
         }
     }
+}
+
+fn serialize_response<T: serde::Serialize>(value: &T) -> Result<String, rmcp::Error> {
+    serde_json::to_string_pretty(value).map_err(|e| map_anyhow_error(anyhow::Error::from(e)))
 }
 
 fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
@@ -1795,7 +1794,7 @@ impl QuaidServer {
             "page_id": page_id,
         });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
+            serialize_response(&result)?,
         )]))
     }
 
@@ -1882,7 +1881,7 @@ impl QuaidServer {
         });
 
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
+            serialize_response(&result)?,
         )]))
     }
 
@@ -1894,7 +1893,7 @@ impl QuaidServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let collections = vault_sync::list_memory_collections(&db).map_err(map_vault_sync_error)?;
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&collections).unwrap(),
+            serialize_response(&collections)?,
         )]))
     }
 
@@ -1992,7 +1991,7 @@ impl QuaidServer {
         let row_id = db.last_insert_rowid();
         let result = serde_json::json!({ "id": row_id });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
+            serialize_response(&result)?,
         )]))
     }
 }
@@ -2019,7 +2018,7 @@ pub async fn run(conn: Connection) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use crate::core::db;
@@ -2027,6 +2026,25 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn serialize_response_returns_rmcp_error_on_unrepresentable_input() {
+        // Spec note: feeding `f64::NAN` through `json!` collapses to `null`
+        // (Value cannot hold NaN), so use a custom Serialize that always
+        // errors. That exercises the same error path: `serialize_response`
+        // must return a structured `rmcp::Error` rather than panicking.
+        struct AlwaysFails;
+        impl serde::Serialize for AlwaysFails {
+            fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("intentional"))
+            }
+        }
+        let result = serialize_response(&AlwaysFails);
+        assert!(result.is_err());
+    }
 
     fn open_test_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::TempDir::new().unwrap();

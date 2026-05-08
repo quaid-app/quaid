@@ -8,11 +8,6 @@
 //! The public API (`embed`, `search_vec`, `configure_runtime_model`,
 //! `resolve_model`, `embedding_to_blob`) is stable regardless of backend.
 
-#![expect(
-    clippy::expect_used,
-    reason = "addressed in remove-production-panic-paths"
-)]
-
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "online-model")]
@@ -258,7 +253,7 @@ fn model_runtime() -> &'static Mutex<ModelRuntime> {
 }
 
 pub fn configure_runtime_model(model: ModelConfig) {
-    let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    let mut runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
     if runtime.configured != model {
         runtime.configured = model;
         runtime.loaded = None;
@@ -272,7 +267,7 @@ pub fn set_model_config(model: ModelConfig) {
 fn runtime_model_config() -> ModelConfig {
     model_runtime()
         .lock()
-        .expect("model runtime lock poisoned")
+        .unwrap_or_else(|e| e.into_inner())
         .configured
         .clone()
 }
@@ -1044,7 +1039,7 @@ pub fn ensure_model() {
     // the expensive download/mmap so concurrent callers (e.g. `quaid serve`)
     // are not blocked for the full model-load duration.
     let needs_reload = {
-        let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+        let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
         runtime
             .loaded
             .as_ref()
@@ -1054,7 +1049,7 @@ pub fn ensure_model() {
 
     if needs_reload {
         let new_model = EmbeddingModel::new(configured.clone());
-        let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
+        let mut runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
         // Re-check in case another thread loaded the same model while we were
         // building it — avoid an unnecessary double-install.
         let still_needs_reload = runtime
@@ -1075,7 +1070,7 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
     }
 
     ensure_model();
-    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
     // Use `ok_or` rather than `expect` so a race between configure_runtime_model
     // (which sets loaded = None) and embed() returns an error instead of a panic.
     runtime
@@ -1089,7 +1084,7 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
 
 pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError> {
     ensure_model();
-    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
     Ok(runtime
         .loaded
         .as_ref()
@@ -1446,6 +1441,8 @@ fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use crate::core::db;
     use crate::core::types::Page;
@@ -1606,6 +1603,48 @@ mod tests {
     fn embed_hash_shim_uses_runtime_dimension() {
         let embedding = embed_hash_shim("test input", 1024).expect("hash shim");
         assert_eq!(embedding.len(), 1024);
+    }
+
+    #[test]
+    fn embed_recovers_from_poisoned_model_runtime_mutex() {
+        // Locks env_mutation_lock so we can safely toggle the hash-shim env
+        // var without racing other tests, mirroring the pattern at
+        // embed_returns_normalized_vector_of_expected_length.
+        let _env_guard = env_mutation_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _force_hash_shim = EnvVarGuard::set("QUAID_FORCE_HASH_SHIM", "1");
+
+        // Poison MODEL_RUNTIME by panicking inside its guard on a worker
+        // thread; .join() captures the panic so it does not propagate.
+        let join = std::thread::spawn(|| {
+            let _g = model_runtime().lock().unwrap();
+            panic!("intentional");
+        })
+        .join();
+        assert!(join.is_err(), "worker thread did not panic");
+
+        // After poisoning, both APIs that previously panicked on poisoned
+        // mutex acquisition must now recover and return Ok(_).
+        configure_runtime_model(default_model());
+        // Reset loaded so the env var is honored on the next embed call.
+        model_runtime()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .loaded = None;
+        let result = embed("recovery probe");
+        assert!(result.is_ok(), "embed failed after poison: {result:?}");
+
+        // Reset state so subsequent tests in the same process are not
+        // observably contaminated. clear_poison restores the mutex to a
+        // healthy state for sibling tests (e.g.
+        // embed_returns_normalized_vector_of_expected_length) that still
+        // call `.expect("lock")` on this same static mutex.
+        model_runtime()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .loaded = None;
+        model_runtime().clear_poison();
     }
 
     #[test]

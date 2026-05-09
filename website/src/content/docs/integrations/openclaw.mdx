@@ -1,0 +1,149 @@
+---
+title: OpenClaw Agent
+description: Use Quaid as the persistent memory layer for OpenClaw agents
+guide:
+  eyebrow: Integration
+  accentBar: true
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Quaid can function as a persistent memory layer for OpenClaw agents. It gives OpenClaw a local, semantically searchable knowledge engine that can preserve useful context across sessions without sending memory outside the machine.
+
+## Why use Quaid for OpenClaw
+
+- **Semantic retrieval across sessions.** OpenClaw can recover relevant knowledge from previous work, even when the current prompt uses different words.
+- **Conversation memory extraction.** Quaid v0.20.0+ can extract durable facts from conversation turns in the background.
+- **ADD-only trustworthy personalization.** Agents add new evidence and stable preferences without silently rewriting history.
+- **Fully airgapped.** Memory storage, retrieval, embeddings, and conversation extraction run locally.
+- **Human-readable vault.** Your durable memory remains inspectable as Markdown-backed pages.
+
+## Setup
+
+<Steps>
+
+1. ### Install Quaid
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
+   quaid --version
+   ```
+
+2. ### Configure the MCP server in OpenClaw
+   Add Quaid under `mcp.servers.quaid` in `openclaw.json`:
+
+   ```json
+   {
+     "mcp": {
+       "servers": {
+         "quaid": {
+           "command": "quaid",
+           "args": ["serve"],
+           "env": {
+             "QUAID_DB": "~/.quaid/memory.db"
+           }
+         }
+       }
+     }
+   }
+   ```
+
+3. ### Initialize a vault and collections
+   Attach the directories OpenClaw should be able to search and maintain:
+
+   ```bash
+   quaid init ~/.quaid/memory.db
+   quaid collection add docs ~/docs
+   quaid collection add memory ~/.openclaw/workspace/memory
+   ```
+
+   The file watcher runs automatically inside `quaid serve`; no separate daemon is needed.
+
+4. ### Generate embeddings
+   ```bash
+   QUAID_DB=~/.quaid/memory.db quaid embed
+   ```
+
+5. ### Enable conversation memory
+   Quaid v0.20.0+ can extract memory from conversation turns using the local Phi-3.5 Mini SLM.
+
+   **Option A — Bootstrap with the online binary (recommended for first-time setup):**
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+     | QUAID_CHANNEL=online sh
+   QUAID_DB=~/.quaid/memory.db quaid extraction enable
+   # Model downloads to ~/.quaid/models/phi-3.5-mini/ (~2GB, one-time)
+   # Switch back to the airgapped binary — it reads from cache permanently
+   curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
+   ```
+
+   **Option B — Manual model placement (fully offline machines):**
+   Download the Phi-3.5 Mini safetensors and tokenizer files from HuggingFace and place them at:
+   ```
+   ~/.quaid/models/phi-3.5-mini/
+   ├── tokenizer.json
+   ├── tokenizer_config.json
+   └── model.safetensors   (or sharded files)
+   ```
+   Then enable extraction:
+   ```bash
+   QUAID_DB=~/.quaid/memory.db quaid config set extraction.enabled true
+   ```
+
+   In both cases, once the model is cached the airgapped binary runs extraction fully offline, permanently.
+
+</Steps>
+
+## Agent-specific instructions
+
+If you are an agent reading this, follow these protocols:
+
+### Storing memory
+
+Use `memory_search` for retrieval, `memory_put` for writing new pages, and `memory_add_turn` for conversation capture.
+
+- **Retrieval:** Search before writing so new pages extend existing memory instead of duplicating it.
+- **Writing:** Use `memory_put` for durable pages with stable facts in compiled truth and events in timeline.
+- **Capture:** Use `memory_add_turn` for each user and assistant exchange so conversation extraction can run in the background.
+
+### Conversation capture
+
+For each exchange, call `memory_add_turn` with a stable `session_id`, the speaker `role`, and the raw turn `content`:
+
+```json
+{
+  "session_id": "openclaw-2026-05-07-project-a",
+  "role": "user",
+  "content": "Remember that I prefer terse status updates while coding."
+}
+```
+
+### Retrieving context
+
+At the start of a session or a complex task, run `memory_search` with the relevant project, user, repository, or task context:
+
+```json
+{
+  "query": "OpenClaw agent preferences and current project context",
+  "limit": 8
+}
+```
+
+### Namespace isolation
+
+Use the `--namespace` flag, or the MCP `namespace` field when available, for agent-specific memory. This keeps OpenClaw memory separate from other agents while still allowing a shared global vault when you intentionally omit a namespace.
+
+```bash
+QUAID_DB=~/.quaid/memory.db quaid query "current OpenClaw project context" --namespace openclaw
+```
+
+## Configuration summary
+
+| Component | Setting |
+| --------- | ------- |
+| Protocol | MCP (stdio JSON-RPC 2.0) |
+| Durable store | SQLite + sqlite-vec (`memory.db`) |
+| Memory organization | Human-readable Markdown vault with agent namespaces |
+| Live sync | `quaid collection add …` plus `quaid serve` |
+| Conversation memory | `memory_add_turn` plus `quaid extraction enable` on v0.20.0+ |
+
+For deeper detail, see the [MCP tool reference](/reference/mcp/) and the [agent quickstart](/agents/quickstart/).

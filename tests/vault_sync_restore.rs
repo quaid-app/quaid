@@ -970,7 +970,7 @@ fn restore_offline_source_uses_short_lived_lease_and_inline_attach() {
     let source = production_vault_sync_source();
     let restore_start = source.find("pub fn begin_restore(").unwrap();
     let restore_end = source[restore_start..]
-        .find("pub fn remap_collection(")
+        .find("pub(super) fn ensure_restore_not_blocked(")
         .map(|offset| restore_start + offset)
         .unwrap();
     let restore_source = &source[restore_start..restore_end];

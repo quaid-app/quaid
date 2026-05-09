@@ -196,17 +196,32 @@ pub fn write_restore_file(root: &Path, relative_path: &str, bytes: &[u8]) {
 }
 
 pub fn production_vault_sync_source() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let mod_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("core")
         .join("vault_sync")
         .join("mod.rs");
-    let source = std::fs::read_to_string(path).unwrap();
-    if let Some(test_module_start) = source.rfind("#[cfg(test)]") {
-        source[..test_module_start].to_owned()
+    let mod_source = std::fs::read_to_string(mod_path).unwrap();
+    let mod_production = if let Some(test_module_start) = mod_source.rfind("#[cfg(test)]") {
+        &mod_source[..test_module_start]
     } else {
-        source
-    }
+        mod_source.as_str()
+    };
+    let restore_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("core")
+        .join("vault_sync")
+        .join("restore.rs");
+    let restore_source = std::fs::read_to_string(restore_path).unwrap();
+    let restore_production = if let Some(test_module_start) = restore_source.rfind("#[cfg(test)]") {
+        &restore_source[..test_module_start]
+    } else {
+        restore_source.as_str()
+    };
+    let mut combined = String::with_capacity(mod_production.len() + restore_production.len());
+    combined.push_str(mod_production);
+    combined.push_str(restore_production);
+    combined
 }
 
 pub fn manifest_json_for_directory(root: &Path) -> String {

@@ -3633,6 +3633,38 @@ pub fn begin_restore(
     target_path: &Path,
     online: bool,
 ) -> Result<String, VaultSyncError> {
+    let prep = validate_target(conn, collection_name, target_path, online)?;
+    let command_id = stage_pending(conn, &prep, target_path)?;
+    register_manifest(conn, &prep, &command_id)?;
+    Ok(command_id)
+}
+
+struct RestorePrep {
+    collection: Collection,
+    db_path: PathBuf,
+    recovery_root: PathBuf,
+    online: bool,
+    /// The session id that owns the restore lease — the expected
+    /// session id from the handshake on the online path, or the
+    /// short-lived lease session id on the offline path.
+    session_id: String,
+    /// Held for Drop semantics on the offline path so the
+    /// short-lived lease keeps heartbeating until `register_manifest`
+    /// has run. `None` on the online path because the watcher owns
+    /// the lease via the handshake.
+    #[expect(
+        dead_code,
+        reason = "field is owned for Drop semantics (keeps the short-lived owner lease's heartbeat thread alive across stage_pending and register_manifest); not read directly"
+    )]
+    lease: Option<ShortLivedLease>,
+}
+
+fn validate_target(
+    conn: &Connection,
+    collection_name: &str,
+    target_path: &Path,
+    online: bool,
+) -> Result<RestorePrep, VaultSyncError> {
     let collection = collections::get_by_name(conn, collection_name)?.ok_or_else(|| {
         VaultSyncError::CollectionNotFound {
             name: collection_name.to_owned(),
@@ -3644,7 +3676,7 @@ pub fn begin_restore(
     let recovery_root = recovery_root_for_db_path(&db_path);
     bootstrap_recovery_directories(conn, &recovery_root)?;
 
-    if online {
+    let (session_id, lease) = if online {
         let (_, expected_session_id, generation) =
             mark_collection_restoring_for_handshake(conn, collection.id)?;
         wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?;
@@ -3655,37 +3687,66 @@ pub fn begin_restore(
              WHERE id = ?1",
             params![collection.id, expected_session_id],
         )?;
-        #[cfg(unix)]
-        {
-            let request = RestoreRemapSafetyRequest {
-                collection_id: collection.id,
-                db_path: &db_path,
-                recovery_root: &recovery_root,
-                operation: RestoreRemapOperation::Restore,
-                authorization: FullHashReconcileAuthorization::RestoreLease {
-                    lease_session_id: expected_session_id.clone(),
-                },
-                allow_finalize_pending: false,
-                stability_max_iters: 0,
-            };
-            if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request)
-            {
-                return Err(convert_reconcile_error(
-                    conn,
-                    collection.id,
-                    &collection.name,
-                    err,
-                )?);
-            }
+        (expected_session_id, None)
+    } else {
+        let lease = start_short_lived_owner_lease(conn, collection.id)?;
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  restore_lease_session_id = ?2,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?1",
+            params![collection.id, lease.session_id.clone()],
+        )?;
+        (lease.session_id.clone(), Some(lease))
+    };
+
+    Ok(RestorePrep {
+        collection,
+        db_path,
+        recovery_root,
+        online,
+        session_id,
+        lease,
+    })
+}
+
+fn stage_pending(
+    conn: &Connection,
+    prep: &RestorePrep,
+    target_path: &Path,
+) -> Result<String, VaultSyncError> {
+    #[cfg(unix)]
+    {
+        let request = RestoreRemapSafetyRequest {
+            collection_id: prep.collection.id,
+            db_path: &prep.db_path,
+            recovery_root: &prep.recovery_root,
+            operation: RestoreRemapOperation::Restore,
+            authorization: FullHashReconcileAuthorization::RestoreLease {
+                lease_session_id: prep.session_id.clone(),
+            },
+            allow_finalize_pending: false,
+            stability_max_iters: 0,
+        };
+        if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request) {
+            return Err(convert_reconcile_error(
+                conn,
+                prep.collection.id,
+                &prep.collection.name,
+                err,
+            )?);
         }
-        let command_id = Uuid::now_v7().to_string();
-        let staging_path = staging_path_for_target(target_path);
-        if staging_path.exists() {
-            let _ = fs::remove_dir_all(&staging_path);
-        }
-        materialize_collection_to_path(conn, &collection, &staging_path)?;
-        let manifest = build_restore_manifest_for_directory(&staging_path)?;
-        let manifest_json = serde_json::to_string(&manifest)?;
+    }
+    let command_id = Uuid::now_v7().to_string();
+    let staging_path = staging_path_for_target(target_path);
+    if staging_path.exists() {
+        let _ = fs::remove_dir_all(&staging_path);
+    }
+    materialize_collection_to_path(conn, &prep.collection, &staging_path)?;
+    let manifest = build_restore_manifest_for_directory(&staging_path)?;
+    let manifest_json = serde_json::to_string(&manifest)?;
+    if prep.online {
         conn.execute(
             "UPDATE collections
              SET pending_root_path = ?2,
@@ -3698,64 +3759,16 @@ pub fn begin_restore(
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?1",
             params![
-                collection.id,
+                prep.collection.id,
                 target_path.display().to_string(),
                 manifest_json,
                 command_id,
                 std::process::id() as i64,
                 current_host(),
-                expected_session_id
+                prep.session_id,
             ],
         )?;
-        remove_empty_target_then_rename(&staging_path, target_path)?;
-        let _ = finalize_pending_restore(
-            conn,
-            collection.id,
-            FinalizeCaller::RestoreOriginator {
-                command_id: command_id.clone(),
-            },
-        )?;
-        Ok(command_id)
     } else {
-        let lease = start_short_lived_owner_lease(conn, collection.id)?;
-        conn.execute(
-            "UPDATE collections
-             SET state = 'restoring',
-                  restore_lease_session_id = ?2,
-                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-              WHERE id = ?1",
-            params![collection.id, lease.session_id.clone()],
-        )?;
-        #[cfg(unix)]
-        {
-            let request = RestoreRemapSafetyRequest {
-                collection_id: collection.id,
-                db_path: &db_path,
-                recovery_root: &recovery_root,
-                operation: RestoreRemapOperation::Restore,
-                authorization: FullHashReconcileAuthorization::RestoreLease {
-                    lease_session_id: lease.session_id.clone(),
-                },
-                allow_finalize_pending: false,
-                stability_max_iters: 0,
-            };
-            if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request)
-            {
-                return Err(convert_reconcile_error(
-                    conn,
-                    collection.id,
-                    &collection.name,
-                    err,
-                )?);
-            }
-        }
-        let command_id = Uuid::now_v7().to_string();
-        let staging_path = staging_path_for_target(target_path);
-        if staging_path.exists() {
-            let _ = fs::remove_dir_all(&staging_path);
-        }
-        materialize_collection_to_path(conn, &collection, &staging_path)?;
-        let manifest = build_restore_manifest_for_directory(&staging_path)?;
         conn.execute(
             "UPDATE collections
              SET pending_root_path = ?2,
@@ -3767,48 +3780,63 @@ pub fn begin_restore(
                   updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
               WHERE id = ?1",
             params![
-                collection.id,
+                prep.collection.id,
                 target_path.display().to_string(),
-                serde_json::to_string(&manifest)?,
+                manifest_json,
                 command_id,
                 std::process::id() as i64,
-                current_host()
+                current_host(),
             ],
         )?;
-        remove_empty_target_then_rename(&staging_path, target_path)?;
-        match finalize_pending_restore(
-            conn,
-            collection.id,
-            FinalizeCaller::RestoreOriginator {
-                command_id: command_id.clone(),
-            },
-        )? {
-            FinalizeOutcome::Finalized => {}
-            outcome => {
-                return Err(VaultSyncError::Restore(
-                    RestoreError::RestoreCommandBlocked {
-                        collection_name: collection.name,
-                        outcome: finalize_outcome_label(&outcome),
-                    },
-                ))
-            }
-        }
-        let attached = complete_attach(
-            conn,
-            collection.id,
-            &lease.session_id,
-            AttachReason::RestorePostFinalize,
-        )?;
-        if !attached {
-            return Err(VaultSyncError::InvariantViolation {
-                message: format!(
-                    "collection={} restore offline path did not complete attach",
-                    collection.name
-                ),
-            });
-        }
-        Ok(command_id)
     }
+    remove_empty_target_then_rename(&staging_path, target_path)?;
+    Ok(command_id)
+}
+
+fn register_manifest(
+    conn: &Connection,
+    prep: &RestorePrep,
+    command_id: &str,
+) -> Result<(), VaultSyncError> {
+    let outcome = finalize_pending_restore(
+        conn,
+        prep.collection.id,
+        FinalizeCaller::RestoreOriginator {
+            command_id: command_id.to_owned(),
+        },
+    )?;
+    if prep.online {
+        // Online path treats the finalize result as advisory; the
+        // watcher will retry via run_rcrt_pass on its own cadence.
+        let _ = outcome;
+        return Ok(());
+    }
+    match outcome {
+        FinalizeOutcome::Finalized => {}
+        other => {
+            return Err(VaultSyncError::Restore(
+                RestoreError::RestoreCommandBlocked {
+                    collection_name: prep.collection.name.clone(),
+                    outcome: finalize_outcome_label(&other),
+                },
+            ));
+        }
+    }
+    let attached = complete_attach(
+        conn,
+        prep.collection.id,
+        &prep.session_id,
+        AttachReason::RestorePostFinalize,
+    )?;
+    if !attached {
+        return Err(VaultSyncError::InvariantViolation {
+            message: format!(
+                "collection={} restore offline path did not complete attach",
+                prep.collection.name
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub fn remap_collection(

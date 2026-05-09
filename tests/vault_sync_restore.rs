@@ -380,8 +380,9 @@ fn finalize_pending_restore_production_callers_pass_explicit_finalize_caller_var
 
     assert_eq!(
         callsites.len(),
-        4,
-        "expected exactly four production finalize_pending_restore call sites"
+        3,
+        "expected exactly three production finalize_pending_restore call sites \
+         (begin_restore unified its online/offline calls into register_manifest)"
     );
 
     for callsite in callsites {
@@ -904,76 +905,63 @@ fn offline_restore_runs_attach_inline_and_reopens_writes() {
 
 #[test]
 fn restore_source_runs_safety_pipeline_before_materialization() {
+    // After §6 begin_restore was decomposed into validate_target /
+    // stage_pending / register_manifest, both branches of the
+    // online/offline split share a single stage_pending body. The
+    // safety-pipeline-before-materialization invariant is now a
+    // single ordering inside stage_pending; the orchestrator call
+    // order (validate_target → stage_pending → register_manifest)
+    // means it also holds across the begin_restore call.
     let source = production_vault_sync_source();
-    let restore_start = source.find("pub fn begin_restore(").unwrap();
-    let restore_end = source[restore_start..]
-        .find("pub fn remap_collection(")
-        .map(|offset| restore_start + offset)
+    let stage_start = source.find("fn stage_pending(").unwrap();
+    let stage_end = source[stage_start..]
+        .find("fn register_manifest(")
+        .map(|offset| stage_start + offset)
         .unwrap();
-    let restore_source = &source[restore_start..restore_end];
-
-    let online_start = restore_source
-        .find("let (_, expected_session_id, generation) =")
-        .unwrap();
-    let online_end = restore_source[online_start..]
-        .find("} else {")
-        .map(|offset| online_start + offset)
-        .unwrap();
-    let online_source = &restore_source[online_start..online_end];
-    let online_safety_idx = online_source
+    let stage_source = &source[stage_start..stage_end];
+    let safety_idx = stage_source
         .find("run_restore_remap_safety_pipeline_without_mount_check")
         .unwrap();
-    let online_materialize_idx = online_source
-        .find("materialize_collection_to_path(conn, &collection, &staging_path)?;")
+    let materialize_idx = stage_source
+        .find("materialize_collection_to_path(conn, &prep.collection, &staging_path)?;")
         .unwrap();
     assert!(
-        online_safety_idx < online_materialize_idx,
-        "online restore must capture old-root drift before materializing raw_imports into the target"
-    );
-
-    let offline_start = restore_source
-        .find("let lease = start_short_lived_owner_lease(conn, collection.id)?;")
-        .unwrap();
-    let offline_source = &restore_source[offline_start..];
-    let offline_safety_idx = offline_source
-        .find("run_restore_remap_safety_pipeline_without_mount_check")
-        .unwrap();
-    let offline_materialize_idx = offline_source
-        .find("materialize_collection_to_path(conn, &collection, &staging_path)?;")
-        .unwrap();
-    assert!(
-        offline_safety_idx < offline_materialize_idx,
-        "offline restore must capture old-root drift before materializing raw_imports into the target"
+        safety_idx < materialize_idx,
+        "stage_pending must capture old-root drift before materializing raw_imports into the target"
     );
 }
 
 #[test]
 fn restore_online_source_waits_for_exact_ack_before_safety_pipeline() {
+    // After §6 the online-restore handshake (mark + ack +
+    // initial UPDATE) lives in validate_target while the safety
+    // pipeline lives in stage_pending. The orchestrator runs
+    // validate_target before stage_pending, so the
+    // "ack-before-safety-pipeline" invariant becomes:
+    // wait_for_exact_ack appears in validate_target, and
+    // run_restore_remap_safety_pipeline_without_mount_check
+    // appears in stage_pending.
     let source = production_vault_sync_source();
-    let restore_start = source.find("pub fn begin_restore(").unwrap();
-    let restore_end = source[restore_start..]
-        .find("pub fn remap_collection(")
-        .map(|offset| restore_start + offset)
+    let validate_start = source.find("fn validate_target(").unwrap();
+    let validate_end = source[validate_start..]
+        .find("fn stage_pending(")
+        .map(|offset| validate_start + offset)
         .unwrap();
-    let restore_source = &source[restore_start..restore_end];
-    let online_start = restore_source
-        .find("let (_, expected_session_id, generation) =")
-        .unwrap();
-    let online_end = restore_source[online_start..]
-        .find("} else {")
-        .map(|offset| online_start + offset)
-        .unwrap();
-    let online_source = &restore_source[online_start..online_end];
-    let ack_idx = online_source
-        .find("wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?")
-        .unwrap();
-    let safety_idx = online_source
-        .find("run_restore_remap_safety_pipeline_without_mount_check")
-        .unwrap();
-
+    let validate_source = &source[validate_start..validate_end];
     assert!(
-        ack_idx < safety_idx,
-        "online restore must wait for the acknowledged owner lease before drift capture"
+        validate_source
+            .contains("wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?"),
+        "validate_target must wait for the acknowledged owner lease (online branch) before stage_pending runs"
+    );
+    let stage_start = validate_end;
+    let stage_end = source[stage_start..]
+        .find("fn register_manifest(")
+        .map(|offset| stage_start + offset)
+        .unwrap();
+    let stage_source = &source[stage_start..stage_end];
+    assert!(
+        stage_source.contains("run_restore_remap_safety_pipeline_without_mount_check"),
+        "stage_pending owns the safety pipeline call (after validate_target's ack)"
     );
 }
 

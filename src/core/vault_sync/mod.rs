@@ -1,3 +1,31 @@
+//! Vault-sync module root.
+//!
+//! `vault_sync` is the subsystem that keeps the SQLite-backed page
+//! state and the on-disk vault directory in sync, plus the IPC,
+//! restore, and recovery flows that live alongside that contract.
+//! This file (`mod.rs`) hosts the cross-cutting helpers — process
+//! registries, IPC accept loop, supervisor handle map,
+//! `start_serve_runtime`, `begin_restore`, `remap_collection`,
+//! reconcile-error conversion — and re-exports the focused
+//! submodules that own the rest:
+//!
+//! - [`error`] — parent `VaultSyncError`
+//! - [`precondition`] — fs precondition checks before a write
+//! - [`recovery`] — recovery-in-progress guard + sentinel paths
+//! - [`watcher`] — watcher state types and `WatcherError`
+//! - [`ownership`] — live owner / lease helpers
+//! - [`session`] — serve / cli session lifecycle
+//! - [`write_lock`] — slug locking + write-dedup helpers
+//! - [`restore`] — restore-flow types, `RestoreError`,
+//!   `ConflictError`
+//! - [`ipc`] — IPC datagram types, `IpcError`, socket auth
+//!
+//! Items reachable as `crate::core::vault_sync::Foo` before the
+//! split remain reachable at the same path via re-exports declared
+//! near the top of this file. New code that extends `vault_sync`
+//! should land in the submodule whose concern matches; if no
+//! submodule fits, add a new one rather than overloading `mod.rs`.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;

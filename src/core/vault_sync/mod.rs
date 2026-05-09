@@ -31,7 +31,7 @@ use uuid::Uuid;
 #[cfg(unix)]
 use notify::{
     event::ModifyKind, Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind,
-    PollWatcher, RecommendedWatcher, RecursiveMode, Watcher,
+    PollWatcher, RecursiveMode, Watcher,
 };
 #[cfg(all(test, unix))]
 use rustix::fs::fsync;
@@ -81,10 +81,6 @@ const FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const DEFAULT_FULL_HASH_AUDIT_DAYS: i64 = 7;
 #[cfg(unix)]
-const WATCH_CHANNEL_CAPACITY: usize = 4096;
-#[cfg(unix)]
-const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 1500;
-#[cfg(unix)]
 const SELF_WRITE_DEDUP_TTL_SECS: u64 = 5;
 #[cfg(unix)]
 const SELF_WRITE_DEDUP_SWEEP_SECS: u64 = 10;
@@ -123,83 +119,6 @@ struct SupervisorHandle {
 struct SelfWriteDedupEntry {
     sha256: String,
     inserted_at: Instant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WatcherMode {
-    Native,
-    Poll,
-    Crashed,
-}
-
-impl WatcherMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::Poll => "poll",
-            Self::Crashed => "crashed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WatcherHealthSnapshot {
-    mode: WatcherMode,
-    last_event_at: Option<String>,
-    channel_depth: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WatcherHealthView {
-    pub mode: String,
-    pub last_event_at: Option<String>,
-    pub channel_depth: i64,
-}
-
-#[cfg(unix)]
-enum WatcherHandle {
-    // Fields are held for Drop semantics (keeping the watcher alive), not read directly.
-    #[expect(
-        dead_code,
-        reason = "field is owned for Drop semantics (keeps the underlying notify watcher alive); not read directly"
-    )]
-    Native(RecommendedWatcher),
-    #[expect(
-        dead_code,
-        reason = "field is owned for Drop semantics (keeps the underlying poll watcher alive); not read directly"
-    )]
-    Poll(PollWatcher),
-}
-
-#[cfg(unix)]
-struct CollectionWatcherState {
-    root_path: PathBuf,
-    generation: i64,
-    receiver: mpsc::Receiver<WatchEvent>,
-    watcher: Option<WatcherHandle>,
-    buffer: WatchBatchBuffer,
-    mode: WatcherMode,
-    last_event_at: Option<String>,
-    last_watcher_error: Option<Instant>,
-    backoff_until: Option<Instant>,
-    consecutive_failures: u32,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Default)]
-struct WatchBatchBuffer {
-    dirty_paths: HashSet<PathBuf>,
-    native_renames: Vec<crate::core::reconciler::NativeRename>,
-    ignore_file_changed: bool,
-    debounce_deadline: Option<Instant>,
-}
-
-#[cfg(unix)]
-#[derive(Debug, PartialEq, Eq)]
-enum WatchEvent {
-    DirtyPath(PathBuf),
-    NativeRename(crate::core::reconciler::NativeRename),
-    IgnoreFileChanged,
 }
 
 pub(super) static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
@@ -329,9 +248,10 @@ mod error;
 #[cfg(unix)]
 mod precondition;
 mod recovery;
+mod watcher;
 
 #[cfg(unix)]
-pub use error::{ConflictError, IpcError, WatcherError};
+pub use error::{ConflictError, IpcError};
 pub use error::{RestoreError, VaultSyncError};
 #[cfg(all(test, unix))]
 pub use precondition::check_fs_precondition;
@@ -345,6 +265,15 @@ use recovery::{bootstrap_recovery_directories, recovery_sentinel_paths, Recovery
 pub use recovery::{
     collection_recovery_dir, collection_recovery_in_progress, recovery_root_for_db_path,
 };
+#[cfg(unix)]
+pub use watcher::WatcherError;
+use watcher::WatcherHealthSnapshot;
+#[cfg(unix)]
+use watcher::{
+    CollectionWatcherState, WatchBatchBuffer, WatchEvent, WatcherHandle, DEFAULT_WATCH_DEBOUNCE_MS,
+    WATCH_CHANNEL_CAPACITY,
+};
+pub use watcher::{WatcherHealthView, WatcherMode};
 
 pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError> {
     #[cfg(unix)]

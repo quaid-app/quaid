@@ -22,6 +22,9 @@ use thiserror::Error;
 use crate::core::collections::CollectionError;
 use crate::core::reconciler::ReconcileError;
 
+#[cfg(unix)]
+use super::watcher::WatcherError;
+
 #[derive(Debug, Error)]
 pub enum VaultSyncError {
     #[error("collection not found: {name}")]
@@ -273,40 +276,5 @@ pub enum ConflictError {
         collection_id: i64,
         relative_path: String,
         sentinel_path: String,
-    },
-}
-
-#[cfg(unix)]
-#[derive(Debug, Error)]
-pub enum WatcherError {
-    #[error("DuplicateWriteDedupError: key={key}")]
-    DuplicateWriteDedup { key: String },
-
-    #[error(
-        "RecoverySentinelError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} reason={reason}"
-    )]
-    RecoverySentinel {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-        reason: String,
-    },
-
-    #[cfg(test)]
-    #[error("DurabilityError: collection_id={collection_id} relative_path={relative_path}")]
-    Durability {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[error(
-        "PostRenameRecoveryPendingError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} stage={stage} reason={reason}"
-    )]
-    PostRenameRecoveryPending {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-        stage: &'static str,
-        reason: String,
     },
 }

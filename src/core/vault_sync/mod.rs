@@ -53,11 +53,10 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use uuid::Uuid;
 
+#[cfg(all(test, unix))]
+use notify::{event::ModifyKind, Event as NotifyEvent, EventKind as NotifyEventKind};
 #[cfg(unix)]
-use notify::{
-    event::ModifyKind, Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind,
-    PollWatcher, RecursiveMode, Watcher,
-};
+use notify::{Config as NotifyConfig, PollWatcher, RecursiveMode, Watcher};
 #[cfg(all(test, unix))]
 use rustix::fs::fsync;
 
@@ -68,8 +67,6 @@ use tokio::sync::mpsc::{self, error::TryRecvError};
 
 use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{self, Collection, CollectionState, OpKind, SlugResolution};
-#[cfg(unix)]
-use crate::core::conversation::file_edit::is_history_sidecar_path;
 use crate::core::conversation::idle_close;
 use crate::core::conversation::janitor;
 #[cfg(all(test, unix))]
@@ -81,9 +78,9 @@ use crate::core::page_uuid;
 use crate::core::quarantine;
 use crate::core::raw_imports;
 use crate::core::reconciler::{
-    fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, is_markdown_file,
-    reconcile, scheduled_full_hash_audit_authorized, FullHashReconcileAuthorization,
-    FullHashReconcileMode, ReconcileError, ReconcileStats,
+    fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, reconcile,
+    scheduled_full_hash_audit_authorized, FullHashReconcileAuthorization, FullHashReconcileMode,
+    ReconcileError, ReconcileStats,
 };
 
 pub(super) const SESSION_LIVENESS_SECS: i64 = 15;
@@ -268,10 +265,15 @@ pub use session::{
 #[cfg(unix)]
 pub use watcher::WatcherError;
 use watcher::WatcherHealthSnapshot;
+#[cfg(all(test, unix))]
+use watcher::{
+    classify_watch_event, relative_markdown_path, set_force_native_watcher_init_failure,
+    FORCE_NATIVE_WATCHER_INIT_FAILURE,
+};
 #[cfg(unix)]
 use watcher::{
-    CollectionWatcherState, WatchBatchBuffer, WatchEvent, WatcherHandle, DEFAULT_WATCH_DEBOUNCE_MS,
-    WATCH_CHANNEL_CAPACITY,
+    mark_watcher_crashed, reconcile_halt_details, watch_callback, watch_debounce_duration,
+    CollectionWatcherState, WatchBatchBuffer, WatchEvent, WatcherHandle, WATCH_CHANNEL_CAPACITY,
 };
 pub use watcher::{WatcherHealthView, WatcherMode};
 #[cfg(all(test, unix))]
@@ -779,7 +781,7 @@ fn claim_owned_collections(conn: &Connection, session_id: &str) -> Result<(), Va
     Ok(())
 }
 
-fn mark_collection_needs_full_sync(
+pub(in crate::core::vault_sync) fn mark_collection_needs_full_sync(
     conn: &Connection,
     collection_id: i64,
 ) -> Result<(), VaultSyncError> {
@@ -791,22 +793,6 @@ fn mark_collection_needs_full_sync(
         [collection_id],
     )?;
     Ok(())
-}
-
-#[cfg(unix)]
-fn watch_debounce_duration() -> Duration {
-    std::env::var("QUAID_WATCH_DEBOUNCE_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_millis(DEFAULT_WATCH_DEBOUNCE_MS))
-}
-
-#[cfg(unix)]
-fn watcher_backoff_duration(consecutive_failures: u32) -> Duration {
-    let shift = consecutive_failures.saturating_sub(1).min(6);
-    Duration::from_secs((1_u64 << shift).min(60))
 }
 
 #[cfg(unix)]
@@ -899,7 +885,9 @@ fn sweep_expired_self_write_entries_at(now: Instant) -> Result<usize, VaultSyncE
 }
 
 #[cfg(unix)]
-fn maybe_suppress_self_write_event(path: &Path) -> Result<bool, VaultSyncError> {
+pub(in crate::core::vault_sync) fn maybe_suppress_self_write_event(
+    path: &Path,
+) -> Result<bool, VaultSyncError> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -1486,131 +1474,6 @@ pub(in crate::core::vault_sync) fn convert_reconcile_error(
 }
 
 #[cfg(unix)]
-fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
-    let relative = path.strip_prefix(root_path).ok()?;
-    (is_markdown_file(relative) && !is_history_sidecar_path(relative))
-        .then(|| relative.to_path_buf())
-}
-
-#[cfg(unix)]
-fn is_root_ignore_path(root_path: &Path, path: &Path) -> bool {
-    path.strip_prefix(root_path)
-        .ok()
-        .is_some_and(|relative| relative == Path::new(".quaidignore"))
-}
-
-#[cfg(unix)]
-fn should_suppress_self_write_rename(
-    root_path: &Path,
-    event_paths: &[PathBuf],
-) -> Result<bool, VaultSyncError> {
-    let Some(target_path) = event_paths.get(1) else {
-        return Ok(false);
-    };
-    if !maybe_suppress_self_write_event(target_path)? {
-        return Ok(false);
-    }
-    let Some(source_path) = event_paths.first() else {
-        return Ok(true);
-    };
-    if relative_markdown_path(root_path, source_path).is_none() {
-        return Ok(true);
-    }
-    maybe_suppress_self_write_event(source_path)
-}
-
-#[cfg(unix)]
-fn classify_watch_event(
-    root_path: &Path,
-    event: NotifyEvent,
-) -> Result<Vec<WatchEvent>, VaultSyncError> {
-    let mut actions = Vec::new();
-    let ignore_file_changed = event
-        .paths
-        .iter()
-        .any(|path| is_root_ignore_path(root_path, path));
-    if ignore_file_changed {
-        actions.push(WatchEvent::IgnoreFileChanged);
-    }
-    if matches!(event.kind, NotifyEventKind::Modify(ModifyKind::Name(_))) && event.paths.len() >= 2
-    {
-        let from_path = relative_markdown_path(root_path, &event.paths[0]);
-        let to_path = relative_markdown_path(root_path, &event.paths[1]);
-        if should_suppress_self_write_rename(root_path, &event.paths)? {
-            return Ok(actions);
-        }
-        if let (Some(from_path), Some(to_path)) = (from_path, to_path) {
-            actions.push(WatchEvent::NativeRename(
-                crate::core::reconciler::NativeRename {
-                    from_path: from_path.clone(),
-                    to_path: to_path.clone(),
-                },
-            ));
-            actions.push(WatchEvent::DirtyPath(from_path));
-            actions.push(WatchEvent::DirtyPath(to_path));
-            return Ok(actions);
-        }
-    }
-
-    for full_path in event.paths {
-        if is_root_ignore_path(root_path, &full_path) {
-            continue;
-        }
-        let Some(relative_path) = relative_markdown_path(root_path, &full_path) else {
-            continue;
-        };
-        if maybe_suppress_self_write_event(&full_path)? {
-            continue;
-        }
-        actions.push(WatchEvent::DirtyPath(relative_path));
-    }
-    Ok(actions)
-}
-
-#[cfg(unix)]
-fn watch_callback(
-    collection_id: i64,
-    callback_root: PathBuf,
-    db_path: String,
-    sender: mpsc::Sender<WatchEvent>,
-) -> impl FnMut(notify::Result<NotifyEvent>) + Send + 'static {
-    move |result: notify::Result<NotifyEvent>| {
-        let Ok(event) = result else {
-            return;
-        };
-        let Ok(actions) = classify_watch_event(&callback_root, event) else {
-            return;
-        };
-        for action in actions {
-            match sender.try_send(action) {
-                Ok(()) => {}
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    if let Ok(conn) = Connection::open(&db_path) {
-                        let _ = mark_collection_needs_full_sync(&conn, collection_id);
-                    }
-                    eprintln!(
-                        "WARN: watch_channel_full collection_id={} root={}",
-                        collection_id,
-                        callback_root.display()
-                    );
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-#[cfg(test)]
-static FORCE_NATIVE_WATCHER_INIT_FAILURE: AtomicBool = AtomicBool::new(false);
-
-#[cfg(unix)]
-#[cfg(test)]
-fn set_force_native_watcher_init_failure(enabled: bool) {
-    FORCE_NATIVE_WATCHER_INIT_FAILURE.store(enabled, Ordering::SeqCst);
-}
-
-#[cfg(unix)]
 fn start_collection_watcher(
     collection_id: i64,
     root_path: &Path,
@@ -1896,24 +1759,6 @@ fn poll_collection_watcher(
 }
 
 #[cfg(unix)]
-fn mark_watcher_crashed(collection_id: i64, state: &mut CollectionWatcherState) -> Duration {
-    let now = Instant::now();
-    state.mode = WatcherMode::Crashed;
-    state.watcher = None;
-    state.buffer = WatchBatchBuffer::default();
-    state.last_watcher_error = Some(now);
-    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
-    let backoff = watcher_backoff_duration(state.consecutive_failures);
-    state.backoff_until = Some(now + backoff);
-    eprintln!(
-        "WARN: watcher_crashed collection_id={} backoff_secs={}",
-        collection_id,
-        backoff.as_secs()
-    );
-    backoff
-}
-
-#[cfg(unix)]
 fn publish_watcher_health(
     session_id: &str,
     watchers: &HashMap<i64, CollectionWatcherState>,
@@ -2006,33 +1851,6 @@ fn run_overflow_recovery_pass(
         }
     }
     Ok(actions)
-}
-
-fn reconcile_halt_details(err: &ReconcileError) -> Option<(&'static str, String)> {
-    match err {
-        ReconcileError::DuplicateUuidError { uuid, paths } => Some((
-            "duplicate_uuid",
-            format!(
-                "DuplicateUuidError: uuid={} paths={}",
-                uuid,
-                paths.join(",")
-            ),
-        )),
-        ReconcileError::UnresolvableTrivialContentError {
-            missing_path,
-            candidate_paths,
-            reason,
-        } => Some((
-            "unresolvable_trivial_content",
-            format!(
-                "UnresolvableTrivialContentError: missing={} candidates={} reason={}",
-                missing_path,
-                candidate_paths.join(","),
-                reason
-            ),
-        )),
-        _ => None,
-    }
 }
 
 pub fn ensure_all_collections_write_allowed(conn: &Connection) -> Result<(), VaultSyncError> {

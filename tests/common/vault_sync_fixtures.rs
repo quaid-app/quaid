@@ -216,11 +216,20 @@ pub fn production_vault_sync_source() -> String {
     sources.sort_by(|a, b| a.0.cmp(&b.0));
     let mut combined = String::new();
     for (_path, source) in sources {
-        let production = if let Some(test_module_start) = source.rfind("#[cfg(test)]") {
-            &source[..test_module_start]
-        } else {
-            source.as_str()
-        };
+        // Truncate at the inline `#[cfg(test)] mod tests { ... }`
+        // block at the end of the file (if present). We anchor on
+        // `mod tests` rather than any `#[cfg(test)]` marker because
+        // production code legitimately uses cfg(test) on individual
+        // items (e.g., `#[cfg(test)] Variant` inside an enum) — a
+        // plain `rfind("#[cfg(test)]")` over-truncates.
+        let production = source
+            .rfind("\nmod tests {")
+            .and_then(|mod_tests_start| {
+                source[..mod_tests_start]
+                    .rfind("#[cfg(test)]")
+                    .map(|cfg_start| &source[..cfg_start])
+            })
+            .unwrap_or(source.as_str());
         combined.push_str(production);
         combined.push('\n');
     }

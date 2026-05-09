@@ -15,25 +15,53 @@
 //! watcher-specific failure paths (write-dedup poisoning, recovery
 //! sentinel violations, post-rename recovery, durability bugs).
 //!
-//! The watcher *logic* (start/run/sync/poll/reconcile) currently
-//! still lives in `vault_sync::mod` and imports these types via
-//! `super::watcher`. A follow-up commit moves that logic here once
-//! the supervisor-handle plumbing is widened to `pub(super)`.
+//! [`watch_debounce_duration`] / [`watcher_backoff_duration`] are
+//! the single source of truth for the supervisor's debounce window
+//! and the per-watcher exponential back-off after a crash. The
+//! event-classification leaf bundle ([`relative_markdown_path`],
+//! [`is_root_ignore_path`], [`should_suppress_self_write_rename`],
+//! [`classify_watch_event`], [`watch_callback`]) turns a raw
+//! `notify::Event` into the one-or-many [`WatchEvent`]s the
+//! supervisor consumes; it lives here because the only callers are
+//! the watcher orchestrators.
+//!
+//! [`mark_watcher_crashed`] flips a `CollectionWatcherState` into
+//! crashed-with-back-off; [`reconcile_halt_details`] turns a
+//! reconciler error into the (`reason_code`, human message) pair
+//! `convert_reconcile_error` writes into `collections.reconcile_halt_*`.
+//!
+//! The heavier orchestrators (`start_collection_watcher`,
+//! `sync_collection_watchers`, `poll_collection_watcher`,
+//! `run_overflow_recovery_pass`, `publish_watcher_health`) still
+//! live in `vault_sync::mod` because they reach into the supervisor
+//! handle map and per-session liveness state.
 
 #[cfg(unix)]
 use std::collections::HashSet;
 #[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(all(unix, test))]
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[cfg(unix)]
-use notify::{PollWatcher, RecommendedWatcher};
+use notify::{
+    event::ModifyKind, Event as NotifyEvent, EventKind as NotifyEventKind, PollWatcher,
+    RecommendedWatcher,
+};
+#[cfg(unix)]
+use rusqlite::Connection;
 #[cfg(unix)]
 use tokio::sync::mpsc;
+
+#[cfg(unix)]
+use crate::core::conversation::file_edit::is_history_sidecar_path;
+#[cfg(unix)]
+use crate::core::reconciler::{is_markdown_file, ReconcileError};
 
 #[cfg(unix)]
 pub(super) const WATCH_CHANNEL_CAPACITY: usize = 4096;
@@ -150,4 +178,233 @@ pub enum WatcherError {
         stage: &'static str,
         reason: String,
     },
+}
+
+/// Default supervisor debounce window between the first dirty-event
+/// in a batch and the reconcile that drains it. Operators can
+/// override via the `QUAID_WATCH_DEBOUNCE_MS` env var (positive
+/// values only; zero/negative falls back to the default).
+#[cfg(unix)]
+pub(super) fn watch_debounce_duration() -> Duration {
+    std::env::var("QUAID_WATCH_DEBOUNCE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_millis(DEFAULT_WATCH_DEBOUNCE_MS))
+}
+
+/// Exponential back-off (capped at 60s) the supervisor honours
+/// before re-arming a watcher after a crash. `consecutive_failures`
+/// is the counter on `CollectionWatcherState`; it grows by one on
+/// every `mark_watcher_crashed` call and resets on the first
+/// successful event.
+#[cfg(unix)]
+pub(super) fn watcher_backoff_duration(consecutive_failures: u32) -> Duration {
+    let shift = consecutive_failures.saturating_sub(1).min(6);
+    Duration::from_secs((1_u64 << shift).min(60))
+}
+
+/// Returns `Some(relative_path)` if `path` is a markdown file
+/// inside `root_path` (and not a conversation history sidecar);
+/// `None` otherwise. The watcher uses this to ignore non-markdown
+/// noise (lockfiles, hidden temp files) without paying for a full
+/// reconcile pass.
+#[cfg(unix)]
+pub(super) fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(root_path).ok()?;
+    (is_markdown_file(relative) && !is_history_sidecar_path(relative))
+        .then(|| relative.to_path_buf())
+}
+
+#[cfg(unix)]
+pub(super) fn is_root_ignore_path(root_path: &Path, path: &Path) -> bool {
+    path.strip_prefix(root_path)
+        .ok()
+        .is_some_and(|relative| relative == Path::new(".quaidignore"))
+}
+
+/// True if a notify rename event's pair of `(from, to)` paths
+/// looks like a writer-side self-write (CLI vault write or
+/// IPC-proxied put) and the supervisor should suppress it. The
+/// rule: suppress when the destination is in the dedup window;
+/// also suppress when the source is in the dedup window or is a
+/// non-markdown path (a tempfile being renamed into place).
+#[cfg(unix)]
+pub(super) fn should_suppress_self_write_rename(
+    root_path: &Path,
+    event_paths: &[PathBuf],
+) -> Result<bool, super::VaultSyncError> {
+    let Some(target_path) = event_paths.get(1) else {
+        return Ok(false);
+    };
+    if !super::maybe_suppress_self_write_event(target_path)? {
+        return Ok(false);
+    }
+    let Some(source_path) = event_paths.first() else {
+        return Ok(true);
+    };
+    if relative_markdown_path(root_path, source_path).is_none() {
+        return Ok(true);
+    }
+    super::maybe_suppress_self_write_event(source_path)
+}
+
+/// Turns a raw `notify::Event` into the per-collection
+/// [`WatchEvent`]s the supervisor consumes. Renames produce a
+/// `NativeRename` plus two `DirtyPath`s (so reconcile sees both
+/// the old and new identity); single-path events produce one
+/// `DirtyPath`; paths that match `.quaidignore` produce an
+/// `IgnoreFileChanged`. Self-writes are suppressed via
+/// `super::maybe_suppress_self_write_event`.
+#[cfg(unix)]
+pub(super) fn classify_watch_event(
+    root_path: &Path,
+    event: NotifyEvent,
+) -> Result<Vec<WatchEvent>, super::VaultSyncError> {
+    let mut actions = Vec::new();
+    let ignore_file_changed = event
+        .paths
+        .iter()
+        .any(|path| is_root_ignore_path(root_path, path));
+    if ignore_file_changed {
+        actions.push(WatchEvent::IgnoreFileChanged);
+    }
+    if matches!(event.kind, NotifyEventKind::Modify(ModifyKind::Name(_))) && event.paths.len() >= 2
+    {
+        let from_path = relative_markdown_path(root_path, &event.paths[0]);
+        let to_path = relative_markdown_path(root_path, &event.paths[1]);
+        if should_suppress_self_write_rename(root_path, &event.paths)? {
+            return Ok(actions);
+        }
+        if let (Some(from_path), Some(to_path)) = (from_path, to_path) {
+            actions.push(WatchEvent::NativeRename(
+                crate::core::reconciler::NativeRename {
+                    from_path: from_path.clone(),
+                    to_path: to_path.clone(),
+                },
+            ));
+            actions.push(WatchEvent::DirtyPath(from_path));
+            actions.push(WatchEvent::DirtyPath(to_path));
+            return Ok(actions);
+        }
+    }
+
+    for full_path in event.paths {
+        if is_root_ignore_path(root_path, &full_path) {
+            continue;
+        }
+        let Some(relative_path) = relative_markdown_path(root_path, &full_path) else {
+            continue;
+        };
+        if super::maybe_suppress_self_write_event(&full_path)? {
+            continue;
+        }
+        actions.push(WatchEvent::DirtyPath(relative_path));
+    }
+    Ok(actions)
+}
+
+/// Builds the closure passed to `notify::Watcher::new`. Drops
+/// notify errors silently, classifies the event into one or more
+/// [`WatchEvent`]s, and pushes each onto the per-collection mpsc
+/// channel. On `try_send`-full it marks the collection
+/// `needs_full_sync = 1` via a fresh connection so the next
+/// supervisor pass picks up the lost events; on closed it returns
+/// (the collection has been detached).
+#[cfg(unix)]
+pub(super) fn watch_callback(
+    collection_id: i64,
+    callback_root: PathBuf,
+    db_path: String,
+    sender: mpsc::Sender<WatchEvent>,
+) -> impl FnMut(notify::Result<NotifyEvent>) + Send + 'static {
+    move |result: notify::Result<NotifyEvent>| {
+        let Ok(event) = result else {
+            return;
+        };
+        let Ok(actions) = classify_watch_event(&callback_root, event) else {
+            return;
+        };
+        for action in actions {
+            match sender.try_send(action) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    if let Ok(conn) = Connection::open(&db_path) {
+                        let _ = super::mark_collection_needs_full_sync(&conn, collection_id);
+                    }
+                    eprintln!(
+                        "WARN: watch_channel_full collection_id={} root={}",
+                        collection_id,
+                        callback_root.display()
+                    );
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+            }
+        }
+    }
+}
+
+/// Flips a watcher state into `Crashed`, schedules the next
+/// re-arm via [`watcher_backoff_duration`], and returns the
+/// chosen back-off (so the supervisor can log it).
+#[cfg(unix)]
+pub(super) fn mark_watcher_crashed(
+    collection_id: i64,
+    state: &mut CollectionWatcherState,
+) -> Duration {
+    let now = Instant::now();
+    state.mode = WatcherMode::Crashed;
+    state.watcher = None;
+    state.buffer = WatchBatchBuffer::default();
+    state.last_watcher_error = Some(now);
+    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+    let backoff = watcher_backoff_duration(state.consecutive_failures);
+    state.backoff_until = Some(now + backoff);
+    eprintln!(
+        "WARN: watcher_crashed collection_id={} backoff_secs={}",
+        collection_id,
+        backoff.as_secs()
+    );
+    backoff
+}
+
+/// Maps a `ReconcileError` to the `(reason_code, rendered_reason)`
+/// pair `convert_reconcile_error` writes into the
+/// `reconcile_halted_at` / `reconcile_halt_reason` columns. Returns
+/// `None` for transient errors that should not halt reconcile.
+#[cfg(unix)]
+pub(super) fn reconcile_halt_details(err: &ReconcileError) -> Option<(&'static str, String)> {
+    match err {
+        ReconcileError::DuplicateUuidError { uuid, paths } => Some((
+            "duplicate_uuid",
+            format!(
+                "DuplicateUuidError: uuid={} paths={}",
+                uuid,
+                paths.join(",")
+            ),
+        )),
+        ReconcileError::UnresolvableTrivialContentError {
+            missing_path,
+            candidate_paths,
+            reason,
+        } => Some((
+            "unresolvable_trivial_content",
+            format!(
+                "UnresolvableTrivialContentError: missing={} candidates={} reason={}",
+                missing_path,
+                candidate_paths.join(","),
+                reason
+            ),
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(all(unix, test))]
+pub(super) static FORCE_NATIVE_WATCHER_INIT_FAILURE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(unix, test))]
+pub(super) fn set_force_native_watcher_init_failure(enabled: bool) {
+    FORCE_NATIVE_WATCHER_INIT_FAILURE.store(enabled, Ordering::SeqCst);
 }

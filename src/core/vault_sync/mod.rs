@@ -3116,33 +3116,27 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let conn = Connection::open(&db_path)?;
     sweep_stale_sessions(&conn)?;
     let session_id = register_session(&conn)?;
+
     #[cfg(unix)]
-    let published_ipc = match publish_ipc_socket(&conn, &session_id) {
-        Ok(published) => published,
-        Err(error) => {
-            let _ = unregister_session(&conn, &session_id);
-            return Err(error);
-        }
-    };
+    let published_ipc = bind_socket(&conn, &session_id)?;
+
     if let Err(error) = run_startup_sequence(&conn, Path::new(&db_path), &session_id) {
         #[cfg(unix)]
         let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
         let _ = unregister_session(&conn, &session_id);
         return Err(error);
     }
+
     #[cfg(unix)]
-    let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
-    #[cfg(unix)]
-    if let Err(error) = sync_collection_watchers(&conn, &db_path, &mut watchers) {
-        let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
-        let _ = unregister_session(&conn, &session_id);
-        return Err(error);
-    }
-    let mut stmt = conn.prepare("SELECT id, reload_generation FROM collections")?;
-    let initial_generations = stmt
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
-        .collect::<Result<HashMap<_, _>, _>>()?;
-    drop(stmt);
+    let watchers = match spawn_watcher(&conn, &db_path) {
+        Ok(watchers) => watchers,
+        Err(error) => {
+            let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
+            let _ = unregister_session(&conn, &session_id);
+            return Err(error);
+        }
+    };
+    let initial_generations = load_initial_generations(&conn)?;
     drop(conn);
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -3153,178 +3147,20 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let extractor_session_id = session_id.clone();
     #[cfg(unix)]
     let ipc_in_flight = Arc::new(AtomicUsize::new(0));
+
     let handle = thread::spawn(move || {
-        #[cfg(unix)]
-        let published_ipc = published_ipc;
-        #[cfg(unix)]
-        let ipc_in_flight = ipc_in_flight;
-        let mut last_heartbeat = Instant::now();
-        let mut last_idle_close_sweep =
-            Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
-        let mut last_janitor_sweep =
-            Instant::now() - Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS);
-        let mut last_quarantine_sweep = Instant::now();
-        let mut last_generations = initial_generations;
-        #[cfg(unix)]
-        let mut watchers = watchers;
-        #[cfg(unix)]
-        let mut last_dedup_sweep = Instant::now();
-        #[cfg(unix)]
-        let mut last_overflow_recovery = Instant::now();
-        let mut last_full_hash_audit =
-            Instant::now() - Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS);
-        let mut last_raw_import_ttl_sweep =
-            Instant::now() - Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS);
-        let mut last_embedding_drain =
-            Instant::now() - Duration::from_secs(embedding_drain_interval_secs());
-        while !stop_signal.load(Ordering::SeqCst) {
-            if let Ok(conn) = Connection::open(&db_path) {
-                if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
-                    let _ = sweep_stale_sessions(&conn);
-                    let _ = heartbeat_session(&conn, &session_id_for_thread);
-                    last_heartbeat = Instant::now();
-                }
-                if last_idle_close_sweep.elapsed()
-                    >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = idle_close::scan_due_sessions(&conn, &db_path) {
-                        eprintln!(
-                            "WARN: idle_close_sweep_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_idle_close_sweep = Instant::now();
-                }
-                if last_quarantine_sweep.elapsed()
-                    >= Duration::from_secs(QUARANTINE_SWEEP_INTERVAL_SECS)
-                {
-                    let _ = quarantine::sweep_expired_quarantined_pages(&conn);
-                    last_quarantine_sweep = Instant::now();
-                }
-                if last_janitor_sweep.elapsed() >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = janitor::run_tick(&conn) {
-                        eprintln!(
-                            "WARN: janitor_sweep_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_janitor_sweep = Instant::now();
-                }
-                #[cfg(unix)]
-                {
-                    accept_ipc_clients(
-                        &published_ipc.listener,
-                        &published_ipc.path,
-                        &db_path,
-                        &session_id_for_thread,
-                        &ipc_in_flight,
-                    );
-                    let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
-                    for (collection_id, state) in &mut watchers {
-                        if let Err(error) = poll_collection_watcher(&conn, *collection_id, state) {
-                            if matches!(error, VaultSyncError::InvariantViolation { .. }) {
-                                let _ = mark_watcher_crashed(*collection_id, state);
-                            } else {
-                                eprintln!(
-                                    "WARN: watcher_poll_failed collection_id={} error={}",
-                                    collection_id, error
-                                );
-                            }
-                        }
-                    }
-                    if last_dedup_sweep.elapsed() >= self_write_dedup_sweep_interval() {
-                        let _ = sweep_expired_self_write_entries_at(Instant::now());
-                        last_dedup_sweep = Instant::now();
-                    }
-                }
-                if let Ok(mut stmt) = conn.prepare("SELECT id, reload_generation FROM collections")
-                {
-                    if let Ok(rows) = stmt
-                        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
-                        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-                    {
-                        for (collection_id, generation) in rows {
-                            let _ =
-                                acquire_owner_lease(&conn, collection_id, &session_id_for_thread);
-                            let supervisor_generation = with_supervisor_handles(|handles| {
-                                handles.get(&collection_id).and_then(|handle| {
-                                    (handle.session_id == session_id_for_thread)
-                                        .then_some(handle.generation)
-                                })
-                            })
-                            .ok()
-                            .flatten();
-                            let previous_generation = last_generations
-                                .get(&collection_id)
-                                .copied()
-                                .unwrap_or(generation);
-                            if generation > previous_generation
-                                && supervisor_generation
-                                    .map(|tracked_generation| tracked_generation < generation)
-                                    .unwrap_or(false)
-                            {
-                                let _ = write_supervisor_ack_if_needed(
-                                    &conn,
-                                    collection_id,
-                                    &session_id_for_thread,
-                                    generation,
-                                );
-                                let _ =
-                                    remove_supervisor_handle(collection_id, &session_id_for_thread);
-                            }
-                            last_generations.insert(collection_id, generation);
-                        }
-                    }
-                }
-                if last_full_hash_audit.elapsed()
-                    >= Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread) {
-                        eprintln!(
-                            "WARN: scheduled_full_hash_audit_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_full_hash_audit = Instant::now();
-                }
-                if last_raw_import_ttl_sweep.elapsed()
-                    >= Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = sweep_raw_import_ttl(&conn) {
-                        eprintln!(
-                            "WARN: raw_import_ttl_sweep_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_raw_import_ttl_sweep = Instant::now();
-                }
-                let _ = run_rcrt_pass(&conn, &session_id_for_thread);
-                let _ = sync_supervisor_handles(&conn, &session_id_for_thread);
-                if last_embedding_drain.elapsed()
-                    >= Duration::from_secs(embedding_drain_interval_secs())
-                {
-                    let _ = drain_embedding_queue(&conn);
-                    last_embedding_drain = Instant::now();
-                }
-                #[cfg(unix)]
-                {
-                    let _ = publish_watcher_health(&session_id_for_thread, &watchers);
-                    if last_overflow_recovery.elapsed() >= Duration::from_millis(500) {
-                        let _ = run_overflow_recovery_pass(&conn, &session_id_for_thread);
-                        last_overflow_recovery = Instant::now();
-                    }
-                }
-            }
-            thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
-        }
-        if let Ok(conn) = Connection::open(&db_path) {
+        run_supervisor_loop(
+            db_path,
+            session_id_for_thread,
+            stop_signal,
+            initial_generations,
             #[cfg(unix)]
-            let _ =
-                cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path);
-            let _ = clear_supervisor_handles_for_session(&session_id_for_thread);
-            let _ = unregister_session(&conn, &session_id_for_thread);
-        }
+            published_ipc,
+            #[cfg(unix)]
+            ipc_in_flight,
+            #[cfg(unix)]
+            watchers,
+        );
     });
 
     let extractor_handle = thread::spawn(move || {
@@ -3337,6 +3173,202 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         extractor_handle: Some(extractor_handle),
         session_id,
     })
+}
+
+#[cfg(unix)]
+fn bind_socket(conn: &Connection, session_id: &str) -> Result<PublishedIpcSocket, VaultSyncError> {
+    publish_ipc_socket(conn, session_id).inspect_err(|_| {
+        let _ = unregister_session(conn, session_id);
+    })
+}
+
+#[cfg(unix)]
+fn spawn_watcher(
+    conn: &Connection,
+    db_path: &str,
+) -> Result<HashMap<i64, CollectionWatcherState>, VaultSyncError> {
+    let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
+    sync_collection_watchers(conn, db_path, &mut watchers)?;
+    Ok(watchers)
+}
+
+fn load_initial_generations(conn: &Connection) -> Result<HashMap<i64, i64>, VaultSyncError> {
+    let mut stmt = conn.prepare("SELECT id, reload_generation FROM collections")?;
+    let generations = stmt
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(generations)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_supervisor_loop(
+    db_path: String,
+    session_id_for_thread: String,
+    stop_signal: Arc<AtomicBool>,
+    initial_generations: HashMap<i64, i64>,
+    #[cfg(unix)] published_ipc: PublishedIpcSocket,
+    #[cfg(unix)] ipc_in_flight: Arc<AtomicUsize>,
+    #[cfg(unix)] mut watchers: HashMap<i64, CollectionWatcherState>,
+) {
+    let mut last_heartbeat = Instant::now();
+    let mut last_idle_close_sweep =
+        Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
+    let mut last_janitor_sweep = Instant::now() - Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS);
+    let mut last_quarantine_sweep = Instant::now();
+    let mut last_generations = initial_generations;
+    #[cfg(unix)]
+    let mut last_dedup_sweep = Instant::now();
+    #[cfg(unix)]
+    let mut last_overflow_recovery = Instant::now();
+    let mut last_full_hash_audit =
+        Instant::now() - Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS);
+    let mut last_raw_import_ttl_sweep =
+        Instant::now() - Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS);
+    let mut last_embedding_drain =
+        Instant::now() - Duration::from_secs(embedding_drain_interval_secs());
+    while !stop_signal.load(Ordering::SeqCst) {
+        if let Ok(conn) = Connection::open(&db_path) {
+            if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
+                let _ = sweep_stale_sessions(&conn);
+                let _ = heartbeat_session(&conn, &session_id_for_thread);
+                last_heartbeat = Instant::now();
+            }
+            if last_idle_close_sweep.elapsed()
+                >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
+            {
+                if let Err(error) = idle_close::scan_due_sessions(&conn, &db_path) {
+                    eprintln!(
+                        "WARN: idle_close_sweep_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_idle_close_sweep = Instant::now();
+            }
+            if last_quarantine_sweep.elapsed()
+                >= Duration::from_secs(QUARANTINE_SWEEP_INTERVAL_SECS)
+            {
+                let _ = quarantine::sweep_expired_quarantined_pages(&conn);
+                last_quarantine_sweep = Instant::now();
+            }
+            if last_janitor_sweep.elapsed() >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS) {
+                if let Err(error) = janitor::run_tick(&conn) {
+                    eprintln!(
+                        "WARN: janitor_sweep_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_janitor_sweep = Instant::now();
+            }
+            #[cfg(unix)]
+            {
+                accept_ipc_clients(
+                    &published_ipc.listener,
+                    &published_ipc.path,
+                    &db_path,
+                    &session_id_for_thread,
+                    &ipc_in_flight,
+                );
+                let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
+                for (collection_id, state) in &mut watchers {
+                    if let Err(error) = poll_collection_watcher(&conn, *collection_id, state) {
+                        if matches!(error, VaultSyncError::InvariantViolation { .. }) {
+                            let _ = mark_watcher_crashed(*collection_id, state);
+                        } else {
+                            eprintln!(
+                                "WARN: watcher_poll_failed collection_id={} error={}",
+                                collection_id, error
+                            );
+                        }
+                    }
+                }
+                if last_dedup_sweep.elapsed() >= self_write_dedup_sweep_interval() {
+                    let _ = sweep_expired_self_write_entries_at(Instant::now());
+                    last_dedup_sweep = Instant::now();
+                }
+            }
+            if let Ok(mut stmt) = conn.prepare("SELECT id, reload_generation FROM collections") {
+                if let Ok(rows) = stmt
+                    .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+                    .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+                {
+                    for (collection_id, generation) in rows {
+                        let _ = acquire_owner_lease(&conn, collection_id, &session_id_for_thread);
+                        let supervisor_generation = with_supervisor_handles(|handles| {
+                            handles.get(&collection_id).and_then(|handle| {
+                                (handle.session_id == session_id_for_thread)
+                                    .then_some(handle.generation)
+                            })
+                        })
+                        .ok()
+                        .flatten();
+                        let previous_generation = last_generations
+                            .get(&collection_id)
+                            .copied()
+                            .unwrap_or(generation);
+                        if generation > previous_generation
+                            && supervisor_generation
+                                .map(|tracked_generation| tracked_generation < generation)
+                                .unwrap_or(false)
+                        {
+                            let _ = write_supervisor_ack_if_needed(
+                                &conn,
+                                collection_id,
+                                &session_id_for_thread,
+                                generation,
+                            );
+                            let _ = remove_supervisor_handle(collection_id, &session_id_for_thread);
+                        }
+                        last_generations.insert(collection_id, generation);
+                    }
+                }
+            }
+            if last_full_hash_audit.elapsed()
+                >= Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS)
+            {
+                if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread) {
+                    eprintln!(
+                        "WARN: scheduled_full_hash_audit_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_full_hash_audit = Instant::now();
+            }
+            if last_raw_import_ttl_sweep.elapsed()
+                >= Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS)
+            {
+                if let Err(error) = sweep_raw_import_ttl(&conn) {
+                    eprintln!(
+                        "WARN: raw_import_ttl_sweep_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_raw_import_ttl_sweep = Instant::now();
+            }
+            let _ = run_rcrt_pass(&conn, &session_id_for_thread);
+            let _ = sync_supervisor_handles(&conn, &session_id_for_thread);
+            if last_embedding_drain.elapsed()
+                >= Duration::from_secs(embedding_drain_interval_secs())
+            {
+                let _ = drain_embedding_queue(&conn);
+                last_embedding_drain = Instant::now();
+            }
+            #[cfg(unix)]
+            {
+                let _ = publish_watcher_health(&session_id_for_thread, &watchers);
+                if last_overflow_recovery.elapsed() >= Duration::from_millis(500) {
+                    let _ = run_overflow_recovery_pass(&conn, &session_id_for_thread);
+                    last_overflow_recovery = Instant::now();
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
+    }
+    if let Ok(conn) = Connection::open(&db_path) {
+        #[cfg(unix)]
+        let _ = cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path);
+        let _ = clear_supervisor_handles_for_session(&session_id_for_thread);
+        let _ = unregister_session(&conn, &session_id_for_thread);
+    }
 }
 
 fn run_extraction_worker(db_path: String, stop: Arc<AtomicBool>, session_id: String) {

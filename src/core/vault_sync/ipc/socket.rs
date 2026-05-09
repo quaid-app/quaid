@@ -356,7 +356,11 @@ fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
                     | io::ErrorKind::ConnectionAborted
             ) =>
         {
-            fs::remove_file(path)?;
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(remove_error) if remove_error.kind() == io::ErrorKind::NotFound => {}
+                Err(remove_error) => return Err(remove_error.into()),
+            }
         }
         Err(error) => {
             return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {

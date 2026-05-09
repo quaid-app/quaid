@@ -39,8 +39,8 @@ use crate::mcp::validation::{
 #[cfg(test)]
 use crate::mcp::validation::{MAX_SLUG_LEN, MAX_TAGS_PER_REQUEST};
 
-type DbRef = Arc<Mutex<Connection>>;
-type SlmRef = Arc<dyn SlmClient + Send + Sync>;
+pub(crate) type DbRef = Arc<Mutex<Connection>>;
+pub(crate) type SlmRef = Arc<dyn SlmClient + Send + Sync>;
 
 fn canonical_slug(collection_name: &str, slug: &str) -> String {
     format!("{collection_name}::{slug}")
@@ -161,8 +161,8 @@ fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
 
 #[derive(Clone)]
 pub struct QuaidServer {
-    db: DbRef,
-    slm: SlmRef,
+    pub(crate) db: DbRef,
+    pub(crate) slm: SlmRef,
 }
 
 impl QuaidServer {
@@ -178,6 +178,19 @@ impl QuaidServer {
             db: Arc::new(Mutex::new(conn)),
             slm,
         }
+    }
+
+    /// Borrow the shared database handle. Used by tool bodies in
+    /// `crate::mcp::tools::*` that need to take the lock.
+    pub(crate) fn db(&self) -> &DbRef {
+        &self.db
+    }
+
+    /// Borrow the shared SLM handle. Used by tool bodies that need to call
+    /// out to the small-language-model client.
+    #[allow(dead_code)]
+    pub(crate) fn slm(&self) -> &SlmRef {
+        &self.slm
     }
 }
 
@@ -380,7 +393,6 @@ pub struct MemoryRawInput {
     pub overwrite: Option<bool>,
 }
 
-#[tool(tool_box)]
 impl QuaidServer {
     #[tool(description = "Get a page by slug")]
     pub fn memory_get(
@@ -1379,121 +1391,6 @@ impl QuaidServer {
             .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
-
-    #[tool(description = "Brain statistics (page count, link count, etc.)")]
-    pub fn memory_stats(
-        &self,
-        #[tool(aggr)] _input: MemoryStatsInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        let page_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-        let link_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM links", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-        let assertion_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-        let contradiction_count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM contradictions WHERE resolved_at IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(map_db_error)?;
-        let gap_count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM knowledge_gaps WHERE resolved_at IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(map_db_error)?;
-        let embedding_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-
-        let active_model: Option<String> = db
-            .query_row(
-                "SELECT name FROM embedding_models WHERE active = 1 LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        let db_size_bytes: u64 = db
-            .query_row(
-                "SELECT file FROM pragma_database_list WHERE name = 'main'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .ok()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .map(|m| m.len())
-            .unwrap_or(0);
-
-        let result = serde_json::json!({
-            "page_count": page_count,
-            "link_count": link_count,
-            "assertion_count": assertion_count,
-            "contradiction_count": contradiction_count,
-            "gap_count": gap_count,
-            "embedding_count": embedding_count,
-            "active_model": active_model,
-            "db_size_bytes": db_size_bytes,
-        });
-
-        Ok(CallToolResult::success(vec![Content::text(
-            serialize_response(&result)?,
-        )]))
-    }
-
-    #[tool(description = "List collection status for MCP clients")]
-    pub fn memory_collections(
-        &self,
-        #[tool(aggr)] _input: MemoryCollectionsInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let collections = vault_sync::list_memory_collections(&db).map_err(map_vault_sync_error)?;
-        Ok(CallToolResult::success(vec![Content::text(
-            serialize_response(&collections)?,
-        )]))
-    }
-
-    #[tool(description = "Create namespace metadata")]
-    pub fn memory_namespace_create(
-        &self,
-        #[tool(aggr)] input: MemoryNamespaceCreateInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let namespace = namespace::create_namespace(&db, &input.id, input.ttl_hours)
-            .map_err(map_namespace_error)?;
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&namespace)
-                .map_err(map_serialize_error)?,
-        )]))
-    }
-
-    #[tool(description = "Destroy a namespace and all pages assigned to it")]
-    pub fn memory_namespace_destroy(
-        &self,
-        #[tool(aggr)] input: MemoryNamespaceDestroyInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let deleted_pages =
-            namespace::destroy_namespace(&db, &input.id).map_err(map_namespace_error)?;
-        let result = serde_json::json!({
-            "status": "ok",
-            "namespace": input.id,
-            "deleted_pages": deleted_pages,
-        });
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result)
-                .map_err(map_serialize_error)?,
-        )]))
-    }
-
     #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
     pub fn memory_raw(
         &self,
@@ -1560,6 +1457,49 @@ impl QuaidServer {
     }
 }
 
+// Central registry: every `#[tool]` method exposed by `QuaidServer`,
+// regardless of which file in `crate::mcp::tools::*` defines it, must be
+// listed here. The `rmcp::tool_box!` macro generates the static `ToolBox`
+// that the `ServerHandler` impl below queries via `Self::tool_box()`.
+// Adding a new `#[tool]` method WITHOUT updating this list silently drops
+// it from the MCP `tools/list` response.
+impl QuaidServer {
+    rmcp::tool_box!(QuaidServer {
+        // pages
+        memory_get,
+        memory_put,
+        memory_list,
+        memory_raw,
+        // search
+        memory_query,
+        memory_search,
+        // links
+        memory_link,
+        memory_link_close,
+        memory_backlinks,
+        memory_graph,
+        // assertions
+        memory_check,
+        // tags
+        memory_timeline,
+        memory_tags,
+        // gaps
+        memory_gap,
+        memory_gaps,
+        // conversation
+        memory_add_turn,
+        memory_close_session,
+        memory_close_action,
+        memory_correct,
+        memory_correct_continue,
+        // admin
+        memory_stats,
+        memory_collections,
+        memory_namespace_create,
+        memory_namespace_destroy,
+    } tool_box);
+}
+
 #[tool(tool_box)]
 impl ServerHandler for QuaidServer {
     fn get_info(&self) -> ServerInfo {
@@ -1597,6 +1537,51 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
+
+    /// Spec: every `#[tool]` method declared in `mcp::tools::*` (or in this
+    /// file's residual impl block) MUST be wired into the central
+    /// `tool_box!` registry in `server.rs`. If the tool count drifts, this
+    /// test catches it before the post-split MCP wire surface diverges from
+    /// the pre-split baseline.
+    #[test]
+    fn tool_registry_lists_all_24_tools() {
+        let names: std::collections::BTreeSet<String> = QuaidServer::tool_box()
+            .list()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let expected: std::collections::BTreeSet<String> = [
+            "memory_get",
+            "memory_put",
+            "memory_list",
+            "memory_raw",
+            "memory_query",
+            "memory_search",
+            "memory_link",
+            "memory_link_close",
+            "memory_backlinks",
+            "memory_graph",
+            "memory_check",
+            "memory_timeline",
+            "memory_tags",
+            "memory_gap",
+            "memory_gaps",
+            "memory_stats",
+            "memory_collections",
+            "memory_namespace_create",
+            "memory_namespace_destroy",
+            "memory_add_turn",
+            "memory_close_session",
+            "memory_close_action",
+            "memory_correct",
+            "memory_correct_continue",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        assert_eq!(names, expected, "tool registry drift");
+        assert_eq!(names.len(), 24, "expected 24 tools, got {}", names.len());
+    }
 
     #[test]
     fn serialize_response_returns_rmcp_error_on_unrepresentable_input() {

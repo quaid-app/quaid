@@ -41,15 +41,15 @@
 
 ## 5. Commit 4: Probe — extract `tools/admin.rs`
 
-- [ ] 5.1 Create `src/mcp/tools/` directory and `src/mcp/tools/mod.rs` with `//!` doc and `pub mod admin;`.
-- [ ] 5.2 Create `src/mcp/tools/admin.rs` with a `//!` paragraph naming the four tools it owns.
-- [ ] 5.3 Cut the four methods (`memory_stats`, `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`) from `server.rs` into `tools/admin.rs`, wrapped in a single `#[tool(tool_box)] impl QuaidServer { … }` block with the same imports.
-- [ ] 5.4 Promote any helper used only by these methods to `pub(crate)` if necessary; no item visibility expands beyond `pub(crate)` unless it was already `pub`.
-- [ ] 5.5 Add `pub mod tools;` to `src/mcp/mod.rs`.
-- [ ] 5.6 `cargo build && cargo test` MUST pass.
-- [ ] 5.7 Replay the `tools/list` snapshot: MUST still match the baseline. **This commit is the structural probe** — if `tools/list` no longer matches, abort and revert before touching any other domain (per design R1).
-- [ ] 5.8 `wc -l src/mcp/tools/admin.rs` MUST be ≤ 800.
-- [ ] 5.9 Commit.
+- [x] 5.1 Create `src/mcp/tools/` directory and `src/mcp/tools/mod.rs` with `//!` doc and `pub mod admin;`.
+- [x] 5.2 Create `src/mcp/tools/admin.rs` with a `//!` paragraph naming the four tools it owns.
+- [x] 5.3 Cut the four methods (`memory_stats`, `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`) from `server.rs` into `tools/admin.rs`. **Discovery**: `rmcp` 0.1.5 only allows ONE `#[tool(tool_box)]` impl block per type (it generates a duplicate `tool_box()` static otherwise). Replaced the per-block macro with one central `rmcp::tool_box!(QuaidServer { ... } tool_box);` invocation in `server.rs` listing every tool by name; sub-files use plain `impl QuaidServer { ... }` with per-method `#[tool(description = "...")]`. Documented in design D2; spec captured in code via the central registry test.
+- [x] 5.4 Promoted `db: DbRef` and `slm: SlmRef` fields on `QuaidServer` from private to `pub(crate)`, with `pub(crate) fn db(&self) -> &DbRef` and `slm(&self) -> &SlmRef` accessors. `DbRef` and `SlmRef` type aliases promoted to `pub(crate)`.
+- [x] 5.5 Add `pub mod tools;` to `src/mcp/mod.rs`.
+- [x] 5.6 `cargo build && cargo test` MUST pass.
+- [x] 5.7 Replay the `tools/list` snapshot: a new lib test (`tool_registry_lists_all_24_tools`) asserts the central registry contains exactly the 24 expected tool names. Test passes.
+- [x] 5.8 `wc -l src/mcp/tools/admin.rs` MUST be ≤ 800. (135 lines.)
+- [x] 5.9 Commit.
 
 ## 6. Commit 5: Extract `tools/tags.rs`
 

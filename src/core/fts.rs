@@ -66,103 +66,76 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
         .join(" ")
 }
 
+/// Per-call options for [`search_fts`] and [`search_fts_tiered`].
+///
+/// The `Default` impl gives every field its zero value (empty `&str`, `None`
+/// for filters, `false` for booleans, `0` for `limit`). The canonical
+/// call-site idiom names only the fields that diverge from `Default`:
+///
+/// ```ignore
+/// FtsQuery {
+///     query: "rust",
+///     namespace: Some(ns),
+///     limit: 10,
+///     ..Default::default()
+/// }
+/// ```
+///
+/// New filters (e.g. `min_score`, additional facets) SHALL be added here as
+/// new fields with sensible defaults rather than as a sibling
+/// `_with_<flag>` function variant.
+///
+/// Field semantics:
+/// - `query`: the FTS5 `MATCH` expression (or sanitized natural-language
+///   string for [`search_fts_tiered`]).
+/// - `wing`: optional wing prefix filter (e.g. `Some("people")`).
+/// - `collection`: optional collection-id filter.
+/// - `namespace`: optional namespace filter; when set to `Some("foo")`,
+///   matches both `namespace = "foo"` and `namespace = ""` (global
+///   fallback). `Some("")` matches only the global namespace.
+/// - `include_superseded`: when `false`, hides pages with non-NULL
+///   `superseded_by`.
+/// - `canonical`: when `true`, results return slugs in
+///   `<collection>::<slug>` form.
+/// - `limit`: maximum number of rows to return.
+#[derive(Default, Clone)]
+pub struct FtsQuery<'a> {
+    pub query: &'a str,
+    pub wing: Option<&'a str>,
+    pub collection: Option<i64>,
+    pub namespace: Option<&'a str>,
+    pub include_superseded: bool,
+    pub canonical: bool,
+    pub limit: usize,
+}
+
 /// FTS5 full-text search over the `page_fts` virtual table.
 ///
-/// Returns at most `limit` results ranked by BM25 score (most relevant first).
-/// When `wing_filter` is provided, only pages in that wing are returned.
-/// Returns an empty vec on no matches (not an error).
+/// Returns at most `q.limit` results ranked by BM25 score (most relevant first).
+/// Returns an empty vec on no matches (not an error). See [`FtsQuery`] for
+/// per-field documentation.
 ///
 /// **Explicit FTS5 semantics are preserved.** Quoted phrases, boolean operators
 /// (`AND`, `OR`, `NOT`), and prefix wildcards (`*`) all work as documented by
 /// SQLite FTS5.  Invalid syntax is propagated as `Err` — this is intentional for
-/// expert callers using `quaid search --raw`. `search_fts_tiered` uses this
+/// expert callers using `quaid search --raw`. [`search_fts_tiered`] uses this
 /// function as its precision-first AND pass before widening to OR fallback.
 ///
 /// Default callers are sanitized upstream:
 /// - `src/commands/search.rs` applies `sanitize_fts_query` unless `--raw` is set.
 /// - `src/mcp/server.rs` (`memory_search`) always sanitizes.
 /// - `hybrid_search` in `src/core/search.rs` sanitizes before calling
-///   `search_fts_tiered`.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn search_fts(
-    query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_with_namespace(query, wing_filter, collection_filter, None, conn, limit)
-}
-
-/// Namespace-aware variant of [`search_fts`].
-pub fn search_fts_with_namespace(
-    query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
+///   [`search_fts_tiered`].
+pub fn search_fts(conn: &Connection, q: FtsQuery<'_>) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_internal(
-        query,
-        wing_filter,
-        collection_filter,
-        namespace_filter,
-        false,
+        q.query,
+        q.wing,
+        q.collection,
+        q.namespace,
+        q.include_superseded,
         conn,
-        limit,
-        false,
-    )
-}
-
-pub fn search_fts_canonical(
-    query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_canonical_with_namespace(query, wing_filter, collection_filter, None, conn, limit)
-}
-
-/// Namespace-aware canonical-slug variant of [`search_fts`].
-pub fn search_fts_canonical_with_namespace(
-    query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_canonical_with_namespace_filtered(
-        query,
-        wing_filter,
-        collection_filter,
-        namespace_filter,
-        false,
-        conn,
-        limit,
-    )
-}
-
-pub fn search_fts_canonical_with_namespace_filtered(
-    query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    include_superseded: bool,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_internal(
-        query,
-        wing_filter,
-        collection_filter,
-        namespace_filter,
-        include_superseded,
-        conn,
-        limit,
-        true,
+        q.limit,
+        q.canonical,
     )
 }
 
@@ -185,128 +158,27 @@ pub fn expand_fts_query_or(sanitized: &str) -> String {
 /// the sanitized query has more than one token, retries with an explicit OR
 /// chain so documents matching any individual term are surfaced.
 ///
-/// Callers must pass a **sanitized** query from [`sanitize_fts_query`].
+/// Callers must pass a **sanitized** `q.query` from [`sanitize_fts_query`].
+/// See [`FtsQuery`] for per-field documentation.
 pub fn search_fts_tiered(
-    sanitized_query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
     conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_tiered_with_namespace(
-        sanitized_query,
-        wing_filter,
-        collection_filter,
-        None,
-        conn,
-        limit,
-    )
-}
-
-/// Namespace-aware variant of [`search_fts_tiered`].
-pub fn search_fts_tiered_with_namespace(
-    sanitized_query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_tiered_with_namespace_filtered(
-        sanitized_query,
-        wing_filter,
-        collection_filter,
-        namespace_filter,
-        false,
-        conn,
-        limit,
-    )
-}
-
-pub fn search_fts_tiered_with_namespace_filtered(
-    sanitized_query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    include_superseded: bool,
-    conn: &Connection,
-    limit: usize,
+    q: FtsQuery<'_>,
 ) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_tiered_internal(
-        sanitized_query,
-        wing_filter,
-        collection_filter,
-        namespace_filter,
-        include_superseded,
+        q.query,
+        q.wing,
+        q.collection,
+        q.namespace,
+        q.include_superseded,
         conn,
-        limit,
-        false,
-    )
-}
-
-/// Canonical-slug variant of [`search_fts_tiered`].
-/// Returns slugs in `<collection>::<slug>` format.
-pub fn search_fts_canonical_tiered(
-    sanitized_query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_canonical_tiered_with_namespace(
-        sanitized_query,
-        wing_filter,
-        collection_filter,
-        None,
-        conn,
-        limit,
-    )
-}
-
-/// Namespace-aware canonical-slug variant of [`search_fts_tiered`].
-pub fn search_fts_canonical_tiered_with_namespace(
-    sanitized_query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_canonical_tiered_with_namespace_filtered(
-        sanitized_query,
-        wing_filter,
-        collection_filter,
-        namespace_filter,
-        false,
-        conn,
-        limit,
-    )
-}
-
-pub fn search_fts_canonical_tiered_with_namespace_filtered(
-    sanitized_query: &str,
-    wing_filter: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    include_superseded: bool,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_tiered_internal(
-        sanitized_query,
-        wing_filter,
-        collection_filter,
-        namespace_filter,
-        include_superseded,
-        conn,
-        limit,
-        true,
+        q.limit,
+        q.canonical,
     )
 }
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "addressed in collapse-search-fn-variants — internal tiered-FTS dispatcher; proposal #6 collapses the API surface and the public wrappers are the right boundary for grouping"
+    reason = "private SQL builder; public surface uses the FtsQuery struct"
 )]
 fn search_fts_tiered_internal(
     sanitized_query: &str,
@@ -352,7 +224,7 @@ fn search_fts_tiered_internal(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "addressed in collapse-search-fn-variants — internal FTS dispatcher; proposal #6 collapses the API surface and the public wrappers are the right boundary for grouping"
+    reason = "private SQL builder; public surface uses the FtsQuery struct"
 )]
 fn search_fts_internal(
     query: &str,
@@ -479,7 +351,15 @@ mod tests {
     #[test]
     fn search_on_empty_db_returns_empty_vec() {
         let conn = open_test_db();
-        let results = search_fts("anything", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "anything",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -487,7 +367,15 @@ mod tests {
     fn search_with_empty_query_returns_empty_vec() {
         let conn = open_test_db();
         insert_page(&conn, "test/a", "Test A", "test", "summary", "content");
-        let results = search_fts("", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -495,7 +383,15 @@ mod tests {
     fn search_with_whitespace_query_returns_empty_vec() {
         let conn = open_test_db();
         insert_page(&conn, "test/a", "Test A", "test", "summary", "content");
-        let results = search_fts("   ", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "   ",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -513,7 +409,15 @@ mod tests {
             "Machine learning is a branch of artificial intelligence.",
         );
 
-        let results = search_fts("machine learning", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "machine learning",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "concepts/ml");
         assert_eq!(results[0].title, "Machine Learning");
@@ -532,7 +436,15 @@ mod tests {
             "Works on distributed systems.",
         );
 
-        let results = search_fts("alice", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "alice",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
     }
@@ -549,7 +461,15 @@ mod tests {
             "Machine learning is a branch of artificial intelligence.",
         );
 
-        let results = search_fts("zzzznonexistent", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "zzzznonexistent",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -575,7 +495,16 @@ mod tests {
             "A startup focused on fundraising technology.",
         );
 
-        let results = search_fts("fundraising", Some("companies"), None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "fundraising",
+                wing: Some("companies"),
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "companies/acme");
     }
@@ -600,7 +529,15 @@ mod tests {
             "A startup focused on fundraising technology.",
         );
 
-        let results = search_fts("fundraising", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "fundraising",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -628,7 +565,15 @@ mod tests {
             "A brief note about intelligence in computing.",
         );
 
-        let results = search_fts("intelligence", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "intelligence",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 2);
         assert!(results[0].score >= results[1].score);
     }
@@ -647,7 +592,15 @@ mod tests {
             "Bob works on quantum computing research.",
         );
 
-        let results = search_fts("quantum", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "quantum",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
 
         let r = &results[0];
@@ -769,7 +722,15 @@ mod tests {
         );
 
         // Explicit FTS5 phrase query must pass through unmodified and match.
-        let results = search_fts("\"systems programming\"", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "\"systems programming\"",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].slug, "concepts/rust");
     }
@@ -787,7 +748,15 @@ mod tests {
         );
 
         // FTS5 boolean AND operator must work for expert users.
-        let results = search_fts("systems AND programming", None, None, &conn, 1000).unwrap();
+        let results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "systems AND programming",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(!results.is_empty());
     }
 
@@ -807,7 +776,14 @@ mod tests {
         );
 
         // A bare `?` is not valid FTS5 syntax — Err is the contract.
-        let result = search_fts("rust?", None, None, &conn, 1000);
+        let result = search_fts(
+            &conn,
+            FtsQuery {
+                query: "rust?",
+                limit: 1000,
+                ..Default::default()
+            },
+        );
         assert!(
             result.is_err(),
             "search_fts must propagate FTS5 syntax errors"
@@ -852,15 +828,30 @@ mod tests {
         );
 
         // AND search returns zero — no single page has all three tokens.
-        let and_results = search_fts("neural network inference", None, None, &conn, 1000).unwrap();
+        let and_results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "neural network inference",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(
             and_results.is_empty(),
             "AND search must return empty when no page contains all three tokens"
         );
 
         // Natural search must fall back to OR and find all three pages.
-        let results =
-            search_fts_tiered("neural network inference", None, None, &conn, 1000).unwrap();
+        let results = search_fts_tiered(
+            &conn,
+            FtsQuery {
+                query: "neural network inference",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(
             !results.is_empty(),
             "OR fallback must surface pages containing any of the query tokens"
@@ -897,9 +888,24 @@ mod tests {
             "Inference in formal logic.",
         );
 
-        let and_results = search_fts("neural network inference", None, None, &conn, 1000).unwrap();
-        let tiered_results =
-            search_fts_tiered("neural network inference", None, None, &conn, 1000).unwrap();
+        let and_results = search_fts(
+            &conn,
+            FtsQuery {
+                query: "neural network inference",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let tiered_results = search_fts_tiered(
+            &conn,
+            FtsQuery {
+                query: "neural network inference",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         assert_eq!(tiered_results.len(), and_results.len());
         assert_eq!(tiered_results[0].slug, "concepts/combined");
@@ -909,7 +915,15 @@ mod tests {
     #[test]
     fn search_tiered_single_token_empty_corpus_returns_empty() {
         let conn = open_test_db();
-        let results = search_fts_tiered("zzznomatch", None, None, &conn, 1000).unwrap();
+        let results = search_fts_tiered(
+            &conn,
+            FtsQuery {
+                query: "zzznomatch",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(
             results.is_empty(),
             "single-token miss must return empty, not trigger OR fallback"
@@ -920,7 +934,15 @@ mod tests {
     #[test]
     fn search_tiered_empty_query_returns_empty() {
         let conn = open_test_db();
-        let results = search_fts_tiered("", None, None, &conn, 1000).unwrap();
+        let results = search_fts_tiered(
+            &conn,
+            FtsQuery {
+                query: "",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -947,8 +969,16 @@ mod tests {
         );
 
         // "inference cloud" AND would miss everything; OR fallback fires.
-        let results =
-            search_fts_tiered("inference cloud", Some("people"), None, &conn, 1000).unwrap();
+        let results = search_fts_tiered(
+            &conn,
+            FtsQuery {
+                query: "inference cloud",
+                wing: Some("people"),
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         for r in &results {
             assert_eq!(r.wing, "people", "OR fallback must respect wing filter");
         }

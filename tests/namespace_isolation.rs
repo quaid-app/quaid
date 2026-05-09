@@ -8,7 +8,7 @@
 
 use quaid::commands::put;
 use quaid::core::db;
-use quaid::core::search::hybrid_search_canonical_with_namespace;
+use quaid::core::search::{hybrid_search, HybridSearch};
 
 #[test]
 fn namespaced_write_is_visible_to_namespace_global_filter_and_unfiltered_query() {
@@ -25,34 +25,36 @@ fn namespaced_write_is_visible_to_namespace_global_filter_and_unfiltered_query()
     )
     .expect("write namespaced page");
 
-    let namespaced = hybrid_search_canonical_with_namespace(
-        "namespaceprobe",
-        None,
-        None,
-        Some("test-ns"),
-        false,
+    let namespaced = hybrid_search(
         &conn,
-        10,
+        HybridSearch {
+            query: "namespaceprobe",
+            namespace: Some("test-ns"),
+            canonical: true,
+            limit: 10,
+            ..Default::default()
+        },
     )
     .expect("query namespace");
-    let global_only = hybrid_search_canonical_with_namespace(
-        "namespaceprobe",
-        None,
-        None,
-        Some(""),
-        false,
+    let global_only = hybrid_search(
         &conn,
-        10,
+        HybridSearch {
+            query: "namespaceprobe",
+            namespace: Some(""),
+            canonical: true,
+            limit: 10,
+            ..Default::default()
+        },
     )
     .expect("query global namespace");
-    let unfiltered = hybrid_search_canonical_with_namespace(
-        "namespaceprobe",
-        None,
-        None,
-        None,
-        false,
+    let unfiltered = hybrid_search(
         &conn,
-        10,
+        HybridSearch {
+            query: "namespaceprobe",
+            canonical: true,
+            limit: 10,
+            ..Default::default()
+        },
     )
     .expect("query all namespaces");
 

@@ -327,12 +327,15 @@ mod watcher_core {
         std::fs::write(&note_path, updated_markdown).expect("write updated note");
 
         let phase_one = wait_for_db_value(&db_path, Duration::from_secs(10), |verify| {
-            let fts_results = fts::search_fts_canonical_tiered(
-                "orbital rendezvous burn window",
-                None,
-                Some(collection_id),
+            let fts_results = fts::search_fts_tiered(
                 verify,
-                5,
+                fts::FtsQuery {
+                    query: "orbital rendezvous burn window",
+                    collection: Some(collection_id),
+                    canonical: true,
+                    limit: 5,
+                    ..Default::default()
+                },
             )
             .ok()?;
             let embedding_jobs: i64 = verify

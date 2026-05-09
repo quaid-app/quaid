@@ -9,19 +9,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::{check, get, link, put};
 
-use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
+use crate::core::collections::{self, OpKind, SlugResolution};
 use crate::core::conversation::{
     correction, extractor::SlmClient, queue as conversation_queue, slm::LazySlmRunner, turn_writer,
 };
 use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
-use crate::core::graph::{self, GraphError, TemporalFilter};
+#[cfg(test)]
+use crate::core::graph::GraphError;
+use crate::core::graph::{self, TemporalFilter};
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::search::{hybrid_search, HybridSearch};
 use crate::core::supersede;
-use crate::core::types::{ExtractionTriggerKind, SearchError, TurnRole};
+use crate::core::types::{ExtractionTriggerKind, TurnRole};
 use crate::core::vault_sync;
+use crate::mcp::errors::{
+    ambiguous_slug_error, invalid_params, map_anyhow_error, map_close_action_put_error,
+    map_collection_error, map_correction_error, map_db_error, map_extraction_queue_error,
+    map_graph_error, map_namespace_error, map_search_error, map_turn_write_error,
+    map_vault_sync_error, serialize_response,
+};
 
 type DbRef = Arc<Mutex<Connection>>;
 type SlmRef = Arc<dyn SlmClient + Send + Sync>;
@@ -34,10 +42,6 @@ const MAX_TAG_LEN: usize = 64;
 const MAX_TAGS_PER_REQUEST: usize = 100;
 const MAX_GAP_CONTEXT_LEN: usize = 500;
 const MAX_RAW_DATA_LEN: usize = 1_048_576; // 1 MB
-
-fn invalid_params(message: impl Into<String>) -> rmcp::Error {
-    rmcp::Error::new(ErrorCode(-32602), message.into(), None)
-}
 
 fn validate_slug(slug: &str) -> Result<(), rmcp::Error> {
     if slug.is_empty() {
@@ -53,36 +57,6 @@ fn validate_slug(slug: &str) -> Result<(), rmcp::Error> {
 
 fn canonical_slug(collection_name: &str, slug: &str) -> String {
     format!("{collection_name}::{slug}")
-}
-
-fn ambiguous_slug_error(slug: &str, candidates: Vec<String>) -> rmcp::Error {
-    rmcp::Error::new(
-        ErrorCode(-32002),
-        format!("AmbiguityError: slug `{slug}` matches multiple collections"),
-        Some(serde_json::json!({
-            "code": "ambiguous_slug",
-            "candidates": candidates,
-        })),
-    )
-}
-
-fn map_collection_error(error: CollectionError) -> rmcp::Error {
-    match error {
-        CollectionError::NotFound { name } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("collection not found: {name}"),
-            None,
-        ),
-        CollectionError::Ambiguous { slug, candidates } => ambiguous_slug_error(
-            &slug,
-            candidates
-                .split(", ")
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-        CollectionError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-        other => invalid_params(other.to_string()),
-    }
 }
 
 fn resolve_slug_for_mcp(
@@ -194,44 +168,6 @@ fn append_note(body: &mut String, note: &str) {
     }
     body.push('\n');
     body.push_str(note);
-}
-
-fn resolved_page_version(
-    db: &Connection,
-    resolved: &vault_sync::ResolvedSlug,
-) -> Result<Option<i64>, rmcp::Error> {
-    db.query_row(
-        "SELECT version
-         FROM pages
-         WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![resolved.collection_id, &resolved.slug],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(map_db_error)
-}
-
-fn map_close_action_put_error(
-    db: &Connection,
-    resolved: &vault_sync::ResolvedSlug,
-    error: anyhow::Error,
-) -> rmcp::Error {
-    let message = error.to_string();
-    if message.contains("Conflict:") || message.contains("ConflictError") {
-        let current_version = resolved_page_version(db, resolved).ok().flatten();
-        let normalized = if message.contains("Conflict: ") {
-            message.replace("Conflict: ", "ConflictError: ")
-        } else {
-            message
-        };
-        rmcp::Error::new(
-            ErrorCode(-32009),
-            normalized,
-            Some(serde_json::json!({ "current_version": current_version })),
-        )
-    } else {
-        map_anyhow_error(error)
-    }
 }
 
 fn validate_token(
@@ -351,229 +287,6 @@ fn validate_temporal_value(value: &str, field: &str) -> Result<(), rmcp::Error> 
         Err(invalid_params(format!(
             "invalid {field}: expected YYYY-MM, YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SSZ"
         )))
-    }
-}
-
-fn map_db_error(e: rusqlite::Error) -> rmcp::Error {
-    if let rusqlite::Error::SqliteFailure(ref err, ref msg) = e {
-        // SQLITE_CONSTRAINT_UNIQUE (extended code 2067)
-        if err.extended_code == 2067 {
-            return rmcp::Error::new(
-                ErrorCode(-32009),
-                format!(
-                    "conflict: {}",
-                    msg.as_deref().unwrap_or("unique constraint violation")
-                ),
-                None,
-            );
-        }
-        // FTS5 parse/syntax errors surface as SQLITE_ERROR with "fts5" in message
-        if let Some(ref msg_str) = msg {
-            if msg_str.contains("fts5") {
-                return rmcp::Error::new(
-                    ErrorCode(-32602),
-                    format!("invalid search query: {msg_str}"),
-                    None,
-                );
-            }
-        }
-    }
-    rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None)
-}
-
-fn map_search_error(e: SearchError) -> rmcp::Error {
-    match e {
-        SearchError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-        SearchError::Ambiguous { slug, candidates } => ambiguous_slug_error(
-            &slug,
-            candidates
-                .split(", ")
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-        SearchError::Internal { message } => {
-            rmcp::Error::new(ErrorCode(-32003), format!("search error: {message}"), None)
-        }
-    }
-}
-
-fn serialize_response<T: serde::Serialize>(value: &T) -> Result<String, rmcp::Error> {
-    serde_json::to_string_pretty(value).map_err(|e| map_anyhow_error(anyhow::Error::from(e)))
-}
-
-fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
-    let msg = e.to_string();
-    if msg.contains("ConflictError")
-        || msg.contains("ConcurrentRenameError")
-        || msg.contains("SupersedeConflictError")
-    {
-        rmcp::Error::new(ErrorCode(-32009), msg, None)
-    } else if msg.contains("page not found") || msg.contains("link not found") {
-        rmcp::Error::new(ErrorCode(-32001), msg, None)
-    } else if msg.contains("CollectionRestoringError")
-        || msg.contains("ServeOwnsCollectionError")
-        || msg.contains("Restore")
-        || msg.contains("NewRoot")
-        || msg.contains("ambiguous slug")
-    {
-        rmcp::Error::new(ErrorCode(-32002), msg, None)
-    } else {
-        rmcp::Error::new(ErrorCode(-32003), msg, None)
-    }
-}
-
-fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
-    if let vault_sync::VaultSyncError::AmbiguousSlug { slug, candidates } = &e {
-        return ambiguous_slug_error(
-            slug,
-            candidates
-                .split(", ")
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        );
-    }
-    let code = match e {
-        vault_sync::VaultSyncError::PageNotFound { .. } => ErrorCode(-32001),
-        vault_sync::VaultSyncError::AmbiguousSlug { .. }
-        | vault_sync::VaultSyncError::CollectionRestoring { .. }
-        | vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestoreInProgress {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestorePendingFinalize {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(
-            vault_sync::RestoreError::RestoreIntegrityBlocked { .. },
-        )
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestoreNonEmptyTarget {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(
-            vault_sync::RestoreError::ServeDiedDuringHandshake { .. },
-        )
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::HandshakeTimeout {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(
-            vault_sync::RestoreError::NewRootVerificationFailed { .. },
-        )
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::NewRootUnstable {
-            ..
-        })
-        | vault_sync::VaultSyncError::ReconcileHalted { .. } => ErrorCode(-32002),
-        #[cfg(unix)]
-        vault_sync::VaultSyncError::Conflict(
-            vault_sync::ConflictError::MissingExpectedVersion { .. },
-        )
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::StaleExpectedVersion {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ExternalDelete {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ExternalCreate {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::HashMismatch {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ConcurrentRename {
-            ..
-        }) => ErrorCode(-32009),
-        _ => ErrorCode(-32003),
-    };
-    rmcp::Error::new(code, e.to_string(), None)
-}
-
-fn map_graph_error(e: GraphError) -> rmcp::Error {
-    match e {
-        GraphError::PageNotFound { slug } => {
-            rmcp::Error::new(ErrorCode(-32001), format!("page not found: {slug}"), None)
-        }
-        GraphError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-    }
-}
-
-fn map_namespace_error(e: namespace::NamespaceError) -> rmcp::Error {
-    match e {
-        namespace::NamespaceError::NotFound { id } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("namespace not found: {id}"),
-            None,
-        ),
-        namespace::NamespaceError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-        other => invalid_params(other.to_string()),
-    }
-}
-
-fn map_turn_write_error(e: turn_writer::TurnWriteError) -> rmcp::Error {
-    match e {
-        turn_writer::TurnWriteError::InvalidSessionId { message } => invalid_params(message),
-        turn_writer::TurnWriteError::SessionClosed { session_id } => rmcp::Error::new(
-            ErrorCode(-32009),
-            format!("ConflictError: session `{session_id}` is already closed"),
-            None,
-        ),
-        turn_writer::TurnWriteError::SessionNotFound { session_id } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("NotFoundError: session `{session_id}` not found"),
-            None,
-        ),
-        turn_writer::TurnWriteError::Config { message } => {
-            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {message}"), None)
-        }
-        turn_writer::TurnWriteError::Io(error) => {
-            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None)
-        }
-        turn_writer::TurnWriteError::Sqlite(error) => map_db_error(error),
-        turn_writer::TurnWriteError::Format(error) => rmcp::Error::new(
-            ErrorCode(-32003),
-            format!("conversation error: {error}"),
-            None,
-        ),
-    }
-}
-
-fn map_extraction_queue_error(e: conversation_queue::ExtractionQueueError) -> rmcp::Error {
-    match e {
-        conversation_queue::ExtractionQueueError::Sqlite(error) => map_db_error(error),
-        conversation_queue::ExtractionQueueError::Config { message } => {
-            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {message}"), None)
-        }
-        conversation_queue::ExtractionQueueError::StaleLease { job_id, attempts } => {
-            rmcp::Error::new(
-                ErrorCode(-32009),
-                format!(
-                    "ConflictError: stale extraction lease for job {job_id} attempt {attempts}"
-                ),
-                None,
-            )
-        }
-    }
-}
-
-fn map_correction_error(e: correction::CorrectionError) -> rmcp::Error {
-    match e {
-        correction::CorrectionError::NotFound { .. } => {
-            rmcp::Error::new(ErrorCode(-32001), e.to_string(), None)
-        }
-        correction::CorrectionError::Kind { .. }
-        | correction::CorrectionError::InvalidRequest { .. }
-        | correction::CorrectionError::Config { .. } => {
-            rmcp::Error::new(ErrorCode(-32002), e.to_string(), None)
-        }
-        correction::CorrectionError::Conflict { message } => {
-            rmcp::Error::new(ErrorCode(-32009), message, None)
-        }
-        correction::CorrectionError::Sqlite(error) => map_db_error(error),
-        correction::CorrectionError::VaultSync(error) => map_vault_sync_error(error),
-        correction::CorrectionError::Json(_)
-        | correction::CorrectionError::Slm(_)
-        | correction::CorrectionError::FactResolution(_)
-        | correction::CorrectionError::Output { .. } => {
-            rmcp::Error::new(ErrorCode(-32003), e.to_string(), None)
-        }
     }
 }
 

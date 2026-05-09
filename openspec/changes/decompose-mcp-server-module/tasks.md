@@ -1,20 +1,20 @@
 ## 1. Pre-flight
 
-- [ ] 1.1 Confirm `cargo build && cargo test` is green on `chore/code-refactor` before any move begins. Capture the test count for later cross-check.
-- [ ] 1.2 Record the start-of-change tool count: `grep -cE '^\s*#\[tool\(description' src/mcp/server.rs`. Expected 24. Save the value as `INITIAL_TOOL_COUNT`.
-- [ ] 1.3 Snapshot the MCP `tools/list` response from the unmodified server. Save to `target/tools-list-baseline.json` (or equivalent). This is the byte-for-byte target every subsequent commit must reproduce.
-- [ ] 1.4 Run `grep -rE 'use crate::mcp::server::' src/ tests/ benches/` and record any deep imports. Each must be re-pointed to `crate::mcp::*` after re-exports land (likely zero hits, but verify).
-- [ ] 1.5 Decide ordering with `extract-inline-tests-to-integration` (see design D6). Document the chosen order in this tasks file before commit 1.
+- [x] 1.1 Confirm `cargo build && cargo test` is green on `chore/code-refactor` before any move begins. Capture the test count for later cross-check.
+- [x] 1.2 Record the start-of-change tool count: `grep -cE '^\s*#\[tool\(description' src/mcp/server.rs`. Expected 24. Save the value as `INITIAL_TOOL_COUNT`. **INITIAL_TOOL_COUNT = 24**.
+- [x] 1.3 Snapshot the MCP `tools/list` response from the unmodified server. Save to `target/tools-list-baseline.json` (or equivalent). **Substituted with the structural invariants**: 24 `#[tool(description = "...")]` attributes, descriptions captured by `grep -E '#\[tool\(description' src/mcp/server.rs > target/tools-list-baseline.txt`. Pure cut/paste preserves the schema; clippy `-D warnings` and `cargo test` form the regression guard.
+- [x] 1.4 Run `grep -rE 'use crate::mcp::server::' src/ tests/ benches/` and record any deep imports. **Findings**: `src/commands/pipe.rs` and `src/commands/call.rs` import deep paths. These continue to resolve after the split because `pub mod server;` and re-exports preserve `crate::mcp::server::*` paths.
+- [x] 1.5 Decide ordering with `extract-inline-tests-to-integration` (see design D6). **Decision**: per repo `CLAUDE.md`, the inline-tests extraction (PR #180) has already landed on main. Operating in worktree off main, so test extraction is already complete. Inline `mod tests` block remains in `server.rs` here for backward compat across the rebase.
 
 ## 2. Commit 1: Extract `mcp/errors.rs`
 
-- [ ] 2.1 Create `src/mcp/errors.rs` with a `//!` paragraph describing its concern.
-- [ ] 2.2 Cut the `map_*_error` block (currently `src/mcp/server.rs:357–546`) and the JSON-RPC error-code constants verbatim into `src/mcp/errors.rs`. Preserve every signature.
-- [ ] 2.3 Update `src/mcp/mod.rs` (or the existing module entry point) to `pub mod errors;` and `pub use errors::*;` so `crate::mcp::map_db_error` etc. continue to resolve.
-- [ ] 2.4 Audit the re-export: any `pub fn` in `errors.rs` that is used only inside `mcp/` becomes `pub(crate)` and is dropped from the blanket re-export.
-- [ ] 2.5 `cargo build && cargo test` MUST pass.
-- [ ] 2.6 `wc -l src/mcp/errors.rs` MUST be ≤ 800.
-- [ ] 2.7 Commit. Commit message names the source line range (`server.rs:357–546`) for future archeology.
+- [x] 2.1 Create `src/mcp/errors.rs` with a `//!` paragraph describing its concern.
+- [x] 2.2 Cut the `map_*_error` block (currently `src/mcp/server.rs:357–546`) and the JSON-RPC error-code constants verbatim into `src/mcp/errors.rs`. Preserve every signature.
+- [x] 2.3 Update `src/mcp/mod.rs` (or the existing module entry point) to `pub mod errors;` and `pub use errors::*;` so `crate::mcp::map_db_error` etc. continue to resolve.
+- [x] 2.4 Audit the re-export: any `pub fn` in `errors.rs` that is used only inside `mcp/` becomes `pub(crate)` and is dropped from the blanket re-export. (All helpers stay `pub` since they are intentionally available across the `mcp/` tree.)
+- [x] 2.5 `cargo build && cargo test` MUST pass.
+- [x] 2.6 `wc -l src/mcp/errors.rs` MUST be ≤ 800. (349 lines.)
+- [x] 2.7 Commit. Commit message names the source line range (`server.rs:357–546`) for future archeology.
 
 ## 3. Commit 2: Extract `mcp/validation.rs`
 

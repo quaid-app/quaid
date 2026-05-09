@@ -10,4 +10,5 @@ pub mod admin;
 pub mod assertions;
 pub mod gaps;
 pub mod links;
+pub mod search;
 pub mod tags;

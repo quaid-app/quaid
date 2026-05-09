@@ -7,3 +7,4 @@
 //! exact tool-to-file allocation.
 
 pub mod admin;
+pub mod tags;

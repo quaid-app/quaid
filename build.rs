@@ -1,3 +1,8 @@
+#![expect(
+    clippy::panic,
+    reason = "build script panics are the conventional way to fail the build with a diagnostic; addressed in remove-production-panic-paths if a more structured error type is introduced for build-time errors"
+)]
+
 use std::env;
 use std::fs;
 use std::io;

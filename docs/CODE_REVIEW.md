@@ -18,7 +18,8 @@ amended accordingly: the file-size and lints recommendations stand, but they
 are **follow-up work**, not P0.
 
 The fixes are tracked in OpenSpec change `fix-extraction-force-correctness`
-(`openspec/changes/fix-extraction-force-correctness/`).
+(`openspec/changes/fix-extraction-force-correctness/`) and implemented on
+branch `fix/code-review` (see "Resolution status" below).
 
 ### Top blockers (added)
 
@@ -47,13 +48,21 @@ The fixes are tracked in OpenSpec change `fix-extraction-force-correctness`
   `BEGIN IMMEDIATE`), but the fix is strictly better with no downside —
   use `rusqlite::Transaction` with RAII `Drop` rollback.
 
+### Resolution status — implemented on `fix/code-review`
+
+| Finding | Implementation | Regression test |
+|---|---|---|
+| `extract --force` rebuild gap | New `queue::enqueue_force_path` (`src/core/conversation/queue.rs`) collapses on `(session_id, conversation_path)`; `commands/extract.rs::run` now loops over every day-file in chronological order under `--force`. | `extract_single_session_force_resets_all_day_file_cursors_and_enqueues_one_job_per_file` and `extract_force_is_idempotent_and_does_not_grow_the_queue` in `tests/cli_extract.rs`. |
+| Unlocked cursor-reset rewrite | New `turn_writer::with_session_locks<F, R, E>` helper acquires the same in-process mutex + on-disk `SessionFileLock` as `append_turn`; `reset_cursors` now runs the entire day-file rewrite loop under one acquisition. | `extract_force_blocks_while_another_process_holds_the_session_file_lock` (`flock(LOCK_EX)` from a sibling test process against `quaid extract --force`). |
+| Queue commit-failure recovery | `with_immediate_transaction` now rolls back explicitly after a failed `COMMIT TRANSACTION`. The originally specced switch to `rusqlite::Transaction` was rejected because it would cascade `&mut Connection` through `mcp/server.rs`, `idle_close.rs`, and `commands/extract.rs`; the explicit-rollback path satisfies Codex's finding (which accepted both options) with a strictly local change. Rationale in `openspec/changes/fix-extraction-force-correctness/design.md` §3. | `with_immediate_transaction_recovers_when_commit_is_aborted` (uses SQLite's `commit_hook`, gated on the rusqlite `hooks` feature added to `Cargo.toml`). |
+
 ### Reprioritization
 
 | Severity | Item | Status |
 |---|---|---|
-| Blocker | `extract --force` rebuild gap | tracked in `fix-extraction-force-correctness` |
-| Blocker | Unlocked cursor-reset rewrite | tracked in `fix-extraction-force-correctness` |
-| Should-fix | Queue commit-failure recovery | tracked in `fix-extraction-force-correctness` |
+| Blocker | `extract --force` rebuild gap | **resolved** in `fix/code-review` |
+| Blocker | Unlocked cursor-reset rewrite | **resolved** in `fix/code-review` |
+| Should-fix | Queue commit-failure recovery | **resolved** in `fix/code-review` |
 | Follow-up | File-size monoliths (§1) | unchanged from original; not a ship-gate |
 | Follow-up | Error-type splitting (§2.2–2.3) | unchanged |
 | Follow-up | Lints + CI gate (§3) | unchanged; valuable but not blocking |
@@ -209,7 +218,11 @@ This is significantly cleaner than typical Rust codebases. Apollo's chapter 4 ca
 **Concrete fixes:**
 
 - `src/core/vault_sync.rs:3380` — `let pending_root_path = PathBuf::from(collection.pending_root_path.clone().unwrap());` will panic if `pending_root_path` is `None` while a restore is mid‑flight. The two lines above already check `manifest_json.is_some()`. Use `let Some(pending_root_path) = collection.pending_root_path.as_deref() else { return Ok(FinalizeOutcome::NoPendingWork); };` or return `VaultSyncError::InvariantViolation { … }`.
+  - **Resolution status:** Resolved by OpenSpec change `remove-production-panic-paths`. The let-else collapse landed in `finalize_pending_restore`, eliminating both the `is_none()` guard duplication and the unreachable `.unwrap()`. Locked in by `finalize_pending_restore_returns_no_pending_work_when_pending_root_path_is_null` and `finalize_pending_restore_returns_orphan_recovered_when_restoring_with_null_pending_root` in `src/core/vault_sync.rs`'s `mod tests`.
 - `src/mcp/server.rs:1793, 1880, 1892, 1990` — `serde_json::to_string_pretty(...).unwrap()` is technically infallible for these inputs, but propagating with `.map_err(map_anyhow_error)?` (or a dedicated `serialize_response()` helper) removes the panic path and is one line shorter than `.unwrap()` once you factor out the helper. There are likely more in non‑checked code paths; clippy will find them.
+  - **Resolution status:** Resolved by OpenSpec change `remove-production-panic-paths`. A private `serialize_response<T: Serialize>(&T) -> Result<String, rmcp::Error>` helper was added next to `map_anyhow_error`; all four call sites now propagate via `?`. Locked in by `serialize_response_returns_rmcp_error_on_unrepresentable_input` in `src/mcp/server.rs`'s `mod tests`. (Two additional `.expect()` sites in `src/core/vault_sync.rs::build_new_root_ignore_globset` — uncovered when removing the `add-rust-lints-and-ci-gate` bridging `#![expect(...)]` attributes — were folded into the same change and converted to `VaultSyncError::InvariantViolation` propagation.)
+- `src/core/inference.rs` (six lock acquisitions, lines 261/272/1047/1057/1078/1092 in `configure_runtime_model`, `runtime_model_config`, `ensure_model` ×2, `embed`, `embedding_evidence_kind`) — `.lock().expect("model runtime lock poisoned")` panicked the daemon on `PoisonError`.
+  - **Resolution status:** Resolved by OpenSpec change `remove-production-panic-paths`. All six sites now use `.lock().unwrap_or_else(|e| e.into_inner())`, the recovery pattern already in production at `src/mcp/server.rs:1804`. `ensure_model` re-validates `loaded.config == configured` on every entry, so the worst-case outcome of a recovered poison is one redundant model load. Locked in by `embed_recovers_from_poisoned_model_runtime_mutex` in `src/core/inference.rs`'s `mod tests`.
 
 ### 2.2 `VaultSyncError` is a kitchen sink
 

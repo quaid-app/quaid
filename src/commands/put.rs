@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+
 use std::io::{self, Read};
 
 #[cfg(unix)]
@@ -167,7 +172,6 @@ fn put_from_cli_string(
 }
 
 /// Apply page content supplied by the caller.
-#[allow(dead_code)]
 pub fn put_from_string(
     db: &Connection,
     slug_input: &str,
@@ -729,7 +733,10 @@ fn persist_with_vault_write(
 }
 
 #[cfg(unix)]
-#[allow(clippy::question_mark)]
+#[expect(
+    clippy::question_mark,
+    reason = "explicit if-let early-return makes the empty/in-memory db_path guard control flow more readable than the equivalent ? chain"
+)]
 fn persist_with_vault_write(
     db: &Connection,
     prepared: &PreparedPut,
@@ -1173,7 +1180,10 @@ fn remove_recovery_sentinel(
 }
 
 #[cfg(unix)]
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "post-rename failure handler binds the full recovery context (db, prepared put, paths, sentinel, dedup keys); collapsing into a struct here would obscure the call site"
+)]
 fn handle_post_rename_failure(
     db: &Connection,
     prepared: &PreparedPut,
@@ -1350,7 +1360,6 @@ fn maybe_block_inside_write_lock(db: &Connection) {
 }
 
 #[cfg(not(all(test, unix)))]
-#[allow(dead_code)]
 fn maybe_block_after_supersede_claim(_db: &Connection, _supersedes: Option<&str>) {}
 
 #[cfg(all(test, unix))]
@@ -1379,11 +1388,14 @@ fn maybe_block_after_supersede_claim(db: &Connection, supersedes: Option<&str>) 
     }
 }
 
+// reason: white-box; needs PutTestHooks, WriteLockBlockState, SupersedeClaimBlockState,
+// put_test_hooks, write_lock_blocker_for_path, supersede_claim_blocker_for_path,
+// put_from_cli_string, write_dedup_key, sha256_hex, vault_sync::has_write_dedup
+// (cfg(test)-gated) — public-API tests have been moved to tests/cli_put_*.rs.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::db;
-    use crate::core::markdown;
     #[cfg(all(unix, target_os = "linux"))]
     use std::ffi::OsString;
     use std::fs as stdfs;
@@ -1423,6 +1435,10 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var is unsafe on Rust 1.81+; tests serialise mutations via the surrounding env-mutation lock"
+            )]
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -1433,6 +1449,10 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var/remove_var are unsafe on Rust 1.81+; restores the previous value inside the same locked window as the constructor"
+            )]
             unsafe {
                 if let Some(value) = self.previous.as_ref() {
                     std::env::set_var(self.key, value);
@@ -1443,43 +1463,22 @@ mod tests {
         }
     }
 
-    fn open_test_db() -> Connection {
-        let dir = tempfile::TempDir::new().unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let db_path = dir.path().join("test_memory.db");
-        let conn = db::open(db_path.to_str().unwrap()).unwrap();
-        let vault_root = dir.path().join("vault");
-        std::fs::create_dir_all(&vault_root).unwrap();
-        conn.execute(
-            "UPDATE collections
-             SET root_path = ?1,
-                 writable = 1,
-                 is_write_target = 1,
-                 state = 'active',
-                 needs_full_sync = 0
-             WHERE id = 1",
-            [vault_root.display().to_string()],
-        )
-        .unwrap();
-        std::mem::forget(dir);
-        conn
-    }
-
     #[cfg(unix)]
     fn open_test_db_with_vault() -> (tempfile::TempDir, String, Connection, PathBuf) {
         let dir = tempfile::TempDir::new().unwrap();
+        // Canonicalize once: macOS's /var → /private/var symlink would otherwise cause
+        // production-side path lookups (PRAGMA database_list, fs::canonicalize on
+        // collection roots) to disagree with the symlinked TempDir path the test stores.
+        let canonical_dir = std::fs::canonicalize(dir.path()).unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&canonical_dir, std::fs::Permissions::from_mode(0o700))
+                .unwrap();
         }
-        let db_path = dir.path().join("test_memory.db");
+        let db_path = canonical_dir.join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         conn.busy_timeout(Duration::from_millis(0)).unwrap();
-        let vault_root = dir.path().join("vault");
+        let vault_root = canonical_dir.join("vault");
         std::fs::create_dir_all(&vault_root).unwrap();
         conn.execute(
             "UPDATE collections
@@ -1778,224 +1777,6 @@ mod tests {
         .unwrap()
     }
 
-    // ── create ─────────────────────────────────────────────────
-
-    #[test]
-    fn create_page_sets_version_to_1() {
-        let conn = open_test_db();
-        let md = "---\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme.\n";
-
-        put_from_string(&conn, "people/alice", md, None).unwrap();
-
-        let (version, page_type, title, truth, timeline) =
-            read_page(&conn, "people/alice").unwrap();
-        assert_eq!(version, 1);
-        assert_eq!(page_type, "person");
-        assert_eq!(title, "Alice");
-        assert!(truth.contains("Alice is an operator"));
-        assert!(timeline.contains("Joined Acme"));
-    }
-
-    #[test]
-    fn create_page_derives_wing_from_slug() {
-        let conn = open_test_db();
-        let md = "---\ntitle: Alice\ntype: person\n---\nContent.\n";
-
-        put_from_string(&conn, "people/alice-jones", md, None).unwrap();
-
-        let wing: String = conn
-            .query_row(
-                "SELECT wing FROM pages WHERE slug = ?1",
-                ["people/alice-jones"],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(wing, "people");
-    }
-
-    #[test]
-    fn create_page_defaults_type_to_concept_when_missing() {
-        let conn = open_test_db();
-        let md = "---\ntitle: Readme\n---\nJust a concept.\n";
-
-        put_from_string(&conn, "readme", md, None).unwrap();
-
-        let (_, page_type, _, _, _) = read_page(&conn, "readme").unwrap();
-        assert_eq!(page_type, "concept");
-    }
-
-    // ── update with OCC ───────────────────────────────────────
-
-    #[test]
-    fn update_with_correct_expected_version_bumps_version() {
-        let conn = open_test_db();
-        let md1 = "---\ntitle: Alice\ntype: person\n---\nOriginal.\n";
-        put_from_string(&conn, "people/alice", md1, None).unwrap();
-
-        let md2 = "---\ntitle: Alice\ntype: person\n---\nUpdated.\n";
-        put_from_string(&conn, "people/alice", md2, Some(1)).unwrap();
-
-        let (version, _, _, truth, _) = read_page(&conn, "people/alice").unwrap();
-        assert_eq!(version, 2);
-        assert!(truth.contains("Updated"));
-    }
-
-    #[test]
-    fn update_without_quaid_id_frontmatter_keeps_existing_page_uuid() {
-        let conn = open_test_db();
-        let original = "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\nOriginal.\n";
-        put_from_string(&conn, "people/alice", original, None).unwrap();
-
-        let updated = "---\ntitle: Alice\ntype: person\n---\nUpdated.\n";
-        put_from_string(&conn, "people/alice", updated, Some(1)).unwrap();
-
-        let stored_uuid: String = conn
-            .query_row(
-                "SELECT uuid FROM pages WHERE slug = ?1",
-                ["people/alice"],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(stored_uuid, "01969f11-9448-7d79-8d3f-c68f54761234");
-    }
-
-    #[test]
-    fn update_with_stale_expected_version_returns_conflict_error() {
-        let conn = open_test_db();
-        let md = "---\ntitle: Alice\ntype: person\n---\nContent.\n";
-        put_from_string(&conn, "people/alice", md, None).unwrap();
-
-        // Simulate a concurrent update by bumping version directly.
-        conn.execute(
-            "UPDATE pages SET version = 2, updated_at = '2099-01-01T00:00:00Z' WHERE slug = 'people/alice'",
-            [],
-        )
-        .unwrap();
-
-        let md2 = "---\ntitle: Alice\ntype: person\n---\nStale update.\n";
-        let result = put_from_string(&conn, "people/alice", md2, Some(1));
-
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Conflict"));
-        assert!(err.contains("current version: 2"));
-    }
-
-    #[test]
-    fn update_with_stale_expected_version_leaves_existing_page_body_unchanged() {
-        let conn = open_test_db();
-        let original = "---\ntitle: Alice\ntype: person\n---\nOriginal body.\n";
-        put_from_string(&conn, "people/alice", original, None).unwrap();
-
-        conn.execute(
-            "UPDATE pages SET version = 2, compiled_truth = 'Concurrent body' WHERE slug = 'people/alice'",
-            [],
-        )
-        .unwrap();
-
-        let stale = "---\ntitle: Alice\ntype: person\n---\nStale body.\n";
-        let result = put_from_string(&conn, "people/alice", stale, Some(1));
-        assert!(result.is_err());
-
-        let (version, _, _, truth, _) = read_page(&conn, "people/alice").unwrap();
-        assert_eq!(version, 2);
-        assert_eq!(truth, "Concurrent body");
-    }
-
-    #[test]
-    fn put_occ_update_keeps_exactly_one_active_raw_import_row_for_latest_bytes() {
-        let conn = open_test_db();
-        let original = "---\ntitle: Alice\ntype: person\n---\nOriginal body.\n";
-        put_from_string(&conn, "people/alice", original, None).unwrap();
-
-        let updated = "---\ntitle: Alice\ntype: person\n---\nUpdated body.\n";
-        put_from_string(&conn, "people/alice", updated, Some(1)).unwrap();
-
-        assert_eq!(active_raw_import_count_for_slug(&conn, "people/alice"), 1);
-        assert_eq!(
-            active_raw_import_bytes_for_slug(&conn, "people/alice"),
-            updated.as_bytes()
-        );
-    }
-
-    #[test]
-    fn create_successor_updates_both_ends_of_supersede_chain_atomically() {
-        let conn = open_test_db();
-        put_from_string(
-            &conn,
-            "facts/a",
-            "---\ntitle: A\ntype: fact\n---\nOriginal fact\n",
-            None,
-        )
-        .unwrap();
-
-        put_from_string(
-            &conn,
-            "facts/b",
-            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nUpdated fact\n",
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(
-            superseded_by_for_slug(&conn, "facts/a"),
-            Some(page_id_for_slug(&conn, "facts/b"))
-        );
-        assert_eq!(superseded_by_for_slug(&conn, "facts/b"), None);
-        assert_eq!(
-            conn.query_row::<String, _, _>(
-                "SELECT compiled_truth FROM pages WHERE slug = 'facts/a'",
-                [],
-                |row| row.get(0)
-            )
-            .unwrap(),
-            "Original fact"
-        );
-    }
-
-    #[test]
-    fn superseding_non_head_page_is_rejected_without_partial_write() {
-        let conn = open_test_db();
-        put_from_string(
-            &conn,
-            "facts/a",
-            "---\ntitle: A\ntype: fact\n---\nA\n",
-            None,
-        )
-        .unwrap();
-        put_from_string(
-            &conn,
-            "facts/b",
-            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
-            None,
-        )
-        .unwrap();
-
-        let error = put_from_string(
-            &conn,
-            "facts/c",
-            "---\ntitle: C\ntype: fact\nsupersedes: facts/a\n---\nC\n",
-            None,
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("SupersedeConflictError"));
-        assert_eq!(
-            conn.query_row::<i64, _, _>(
-                "SELECT COUNT(*) FROM pages WHERE slug = 'facts/c'",
-                [],
-                |row| row.get(0)
-            )
-            .unwrap(),
-            0
-        );
-        assert_eq!(
-            superseded_by_for_slug(&conn, "facts/a"),
-            Some(page_id_for_slug(&conn, "facts/b"))
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn unix_non_head_supersede_rejects_before_write_through_mutation() {
@@ -2151,42 +1932,6 @@ mod tests {
             superseded_by_for_slug(&conn, "facts/a"),
             Some(page_id_for_slug(&conn, "facts/b"))
         );
-    }
-
-    #[test]
-    fn multi_step_supersede_chain_stays_linked() {
-        let conn = open_test_db();
-        put_from_string(
-            &conn,
-            "facts/a",
-            "---\ntitle: A\ntype: fact\n---\nA\n",
-            None,
-        )
-        .unwrap();
-        put_from_string(
-            &conn,
-            "facts/b",
-            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
-            None,
-        )
-        .unwrap();
-        put_from_string(
-            &conn,
-            "facts/c",
-            "---\ntitle: C\ntype: fact\nsupersedes: facts/b\n---\nC\n",
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(
-            superseded_by_for_slug(&conn, "facts/a"),
-            Some(page_id_for_slug(&conn, "facts/b"))
-        );
-        assert_eq!(
-            superseded_by_for_slug(&conn, "facts/b"),
-            Some(page_id_for_slug(&conn, "facts/c"))
-        );
-        assert_eq!(superseded_by_for_slug(&conn, "facts/c"), None);
     }
 
     #[cfg(unix)]
@@ -2906,81 +2651,6 @@ mod tests {
         fake_server.join().unwrap();
     }
 
-    #[test]
-    fn cli_put_source_routes_live_owner_through_ipc_without_direct_fallback() {
-        let source = stdfs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src")
-                .join("commands")
-                .join("put.rs"),
-        )
-        .unwrap();
-        let cli_start = source
-            .find("fn put_from_cli_string(")
-            .expect("cli put source present");
-        let cli_end = source[cli_start..]
-            .find("/// Apply page content supplied by the caller.")
-            .map(|offset| cli_start + offset)
-            .expect("cli helper boundary");
-        let cli_source = &source[cli_start..cli_end];
-        let proxy_idx = cli_source
-            .find("vault_sync::live_serve_endpoint_for_root_path")
-            .expect("live serve owner lookup");
-        let direct_idx = cli_source
-            .find("start_short_lived_owner_lease_for_root_path")
-            .expect("offline lease path");
-        assert!(
-            proxy_idx < direct_idx,
-            "live owner check must precede offline lease"
-        );
-        assert!(
-            cli_source.contains(
-                "proxy_put_via_live_serve(&endpoint, &canonical_slug, content, expected_version)?;"
-            ),
-            "live owner branch must proxy through IPC"
-        );
-        let return_idx = cli_source[proxy_idx..]
-            .find("return Ok(());")
-            .map(|offset| proxy_idx + offset)
-            .expect("live owner branch returns immediately after proxy");
-        assert!(
-            return_idx < direct_idx,
-            "live owner branch must return after IPC proxy instead of falling back to direct write"
-        );
-    }
-
-    #[test]
-    fn proxy_put_source_verifies_kernel_peer_before_whoami() {
-        let source = stdfs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src")
-                .join("commands")
-                .join("put.rs"),
-        )
-        .unwrap();
-        let proxy_start = source
-            .find("fn proxy_put_via_live_serve(")
-            .expect("proxy helper present");
-        let proxy_end = source[proxy_start..]
-            .find("fn send_ipc_request(")
-            .map(|offset| proxy_start + offset)
-            .expect("proxy helper boundary");
-        let proxy_source = &source[proxy_start..proxy_end];
-        let peer_idx = proxy_source
-            .find("vault_sync::peer_credentials_for_stream(&stream)")
-            .expect("peer credential call present");
-        let whoami_idx = proxy_source
-            .find("send_ipc_request(&mut stream, &vault_sync::IpcRequest::WhoAmI)")
-            .expect("whoami call present");
-        assert!(
-            peer_idx < whoami_idx,
-            "kernel peer auth must happen before whoami"
-        );
-        assert!(proxy_source.contains("socket mode {:o} is not 600"));
-        assert!(proxy_source.contains("socket uid {} does not match current uid {}"));
-        assert!(proxy_source.contains("peer pid {} does not match owner pid {}"));
-    }
-
     #[cfg(unix)]
     #[test]
     fn cli_put_holds_short_lived_owner_lease_for_direct_write() {
@@ -3044,203 +2714,5 @@ mod tests {
             stdfs::read_to_string(vault_root.join("notes").join("offline-lease.md")).unwrap(),
             "---\ntitle: Lease\ntype: note\n---\nHeld\n"
         );
-    }
-
-    #[test]
-    fn rename_before_commit_source_keeps_fd_relative_ordering() {
-        let source = stdfs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src")
-                .join("commands")
-                .join("put.rs"),
-        )
-        .unwrap();
-        let writer_start = source
-            .match_indices("fn persist_with_vault_write(")
-            .nth(1)
-            .map(|(index, _)| index)
-            .expect("unix writer function in production source");
-        let production = &source[writer_start
-            ..source
-                .find("fn slug_to_relative_path(")
-                .expect("helper boundary after writer function")];
-        let required_sequence = [
-            "vault_sync::check_update_expected_version(",
-            "fs_safety::open_root_fd(Path::new(&collection.root_path))",
-            "fs_safety::walk_to_parent_create_dirs(&root_fd, &relative_path_buf)",
-            "vault_sync::check_fs_precondition_with_parent_fd(",
-            "let tx = match db.unchecked_transaction()",
-            "let staged = match stage_page_record(&tx, prepared, expected_version)",
-            "create_recovery_sentinel(",
-            "create_tempfile(&parent_fd, &temp_name, raw_bytes)",
-            "fs_safety::stat_at_nofollow(&parent_fd, target_name)",
-            "vault_sync::insert_write_dedup(&dedup_key)",
-            "fs_safety::renameat_parent_fd(&parent_fd, &temp_name, target_name)",
-            "sync_fd(&parent_fd)",
-            "file_state::stat_file_fd(&parent_fd, target_name)",
-            "let outcome = match commit_staged_page_record(",
-            "let _ = vault_sync::remove_write_dedup(&dedup_key);",
-        ];
-        let mut last_index = 0;
-        for snippet in required_sequence {
-            let index = production
-                .find(snippet)
-                .unwrap_or_else(|| panic!("missing production seam snippet: {snippet}"));
-            assert!(
-                index >= last_index,
-                "rename-before-commit seam reordered: `{snippet}` moved before an earlier step"
-            );
-            last_index = index;
-        }
-        let sentinel_cleanup = production
-            .rfind("let _ = remove_recovery_sentinel(&recovery_dir, &sentinel_name);")
-            .expect("final sentinel cleanup after commit");
-        assert!(
-            sentinel_cleanup >= last_index,
-            "rename-before-commit seam reordered: final sentinel cleanup moved before the SQLite commit"
-        );
-        assert!(
-            !production.contains("fs::create_dir_all(parent)"),
-            "rename-before-commit writer must not widen parent creation back to path-based create_dir_all"
-        );
-    }
-
-    #[test]
-    fn duplicate_dedup_source_is_fail_closed_without_clearing_preexisting_entry() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let vault_source = stdfs::read_to_string(root.join("core").join("vault_sync.rs")).unwrap();
-        let insert_start = vault_source
-            .find("pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {")
-            .expect("insert_write_dedup production function");
-        let insert_end = vault_source[insert_start..]
-            .find("pub fn remove_write_dedup")
-            .map(|offset| insert_start + offset)
-            .expect("remove_write_dedup after insert_write_dedup");
-        let insert_fn = &vault_source[insert_start..insert_end];
-        assert!(
-            insert_fn.contains("Err(VaultSyncError::DuplicateWriteDedup"),
-            "duplicate write-dedup entries must fail closed with an explicit typed error"
-        );
-        assert!(
-            insert_fn.contains("if inserted {"),
-            "insert_write_dedup must branch on the HashSet::insert result instead of silently discarding duplicates"
-        );
-
-        let put_source = stdfs::read_to_string(root.join("commands").join("put.rs")).unwrap();
-        let dedup_fail_start = put_source
-            .find("if let Err(error) = vault_sync::insert_write_dedup(&dedup_key) {")
-            .expect("writer dedup failure block");
-        let dedup_fail_end = put_source[dedup_fail_start..]
-            .find("if let Err(error) = vault_sync::remember_self_write_path(&target_path, &prepared.sha256)")
-            .map(|offset| dedup_fail_start + offset)
-            .expect("self-write remember block after dedup failure block");
-        let dedup_fail_block = &put_source[dedup_fail_start..dedup_fail_end];
-        assert!(
-            dedup_fail_block.contains("cleanup_pre_rename_without_dedup_clear("),
-            "duplicate dedup insert failures must clean tempfile/sentinel without erasing the preexisting registry entry"
-        );
-        assert!(
-            !dedup_fail_block.contains("let _ = vault_sync::forget_self_write_path(&target_path);"),
-            "dedup insert failure happens before self-write tracking and must not clear unrelated path state"
-        );
-        assert!(
-            !dedup_fail_block.contains("cleanup_pre_rename("),
-            "dedup insert failure must not run the generic cleanup path that removes the preexisting dedup entry"
-        );
-    }
-
-    // ── unconditional upsert ──────────────────────────────────
-
-    #[cfg(not(unix))]
-    #[test]
-    fn update_without_expected_version_upserts_unconditionally() {
-        let conn = open_test_db();
-        let md1 = "---\ntitle: Bob\ntype: person\n---\nOriginal.\n";
-        put_from_string(&conn, "people/bob", md1, None).unwrap();
-
-        let md2 = "---\ntitle: Bob\ntype: person\n---\nOverwritten.\n";
-        put_from_string(&conn, "people/bob", md2, None).unwrap();
-
-        let (version, _, _, truth, _) = read_page(&conn, "people/bob").unwrap();
-        assert_eq!(version, 2);
-        assert!(truth.contains("Overwritten"));
-    }
-
-    // ── round-trip fidelity ───────────────────────────────────
-
-    #[test]
-    fn put_then_get_roundtrips_through_render() {
-        let conn = open_test_db();
-        let md = "---\ntitle: Carol\ntype: person\n---\n# Carol\n\nCarol builds things.\n---\n2024-06-01: Shipped v1.\n";
-
-        put_from_string(&conn, "people/carol", md, None).unwrap();
-
-        // Read back through get path
-        let page = crate::commands::get::get_page(&conn, "people/carol").unwrap();
-        let rendered = markdown::render_page(&page);
-        assert!(rendered.contains("quaid_id: "));
-        assert!(rendered.contains("title: Carol"));
-        assert!(rendered.contains("type: person"));
-        assert!(rendered.contains("# Carol\n\nCarol builds things."));
-        assert!(rendered.contains("2024-06-01: Shipped v1."));
-    }
-
-    #[test]
-    fn put_render_cannot_strip_existing_quaid_id_when_update_omits_it() {
-        let conn = open_test_db();
-        let original = "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Carol\ntype: person\n---\n# Carol\n\nOriginal.\n";
-        put_from_string(&conn, "people/carol", original, None).unwrap();
-
-        let updated = "---\ntitle: Carol\ntype: person\n---\n# Carol\n\nUpdated.\n";
-        put_from_string(&conn, "people/carol", updated, Some(1)).unwrap();
-
-        let page = crate::commands::get::get_page(&conn, "people/carol").unwrap();
-        let rendered = markdown::render_page(&page);
-
-        assert!(
-            rendered.contains("quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
-            "memory_put must not let a UUID-bearing page render back out without quaid_id"
-        );
-    }
-
-    // ── frontmatter stored as JSON ────────────────────────────
-
-    #[test]
-    fn frontmatter_is_stored_as_json_and_recoverable() {
-        let conn = open_test_db();
-        let md = "---\nsource: manual\ntitle: Data\ntype: concept\n---\nContent.\n";
-
-        put_from_string(&conn, "data/test", md, None).unwrap();
-
-        let fm_json: String = conn
-            .query_row(
-                "SELECT frontmatter FROM pages WHERE slug = ?1",
-                ["data/test"],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let fm: crate::core::types::Frontmatter = serde_json::from_str(&fm_json).unwrap();
-        assert_eq!(fm.get("source"), Some(&serde_json::json!("manual")));
-        assert_eq!(fm.get("title"), Some(&serde_json::json!("Data")));
-        assert_eq!(fm.get("type"), Some(&serde_json::json!("concept")));
-    }
-
-    // ── FTS5 trigger fires ────────────────────────────────────
-
-    #[test]
-    fn insert_triggers_fts5_indexing() {
-        let conn = open_test_db();
-        let md = "---\ntitle: Searchable\ntype: concept\n---\n# Searchable\n\nUnique searchable keyword xylophone.\n";
-
-        put_from_string(&conn, "test/searchable", md, None).unwrap();
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM page_fts WHERE page_fts MATCH 'xylophone'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
     }
 }

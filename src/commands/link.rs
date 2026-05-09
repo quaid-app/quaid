@@ -1,3 +1,12 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
+
 use anyhow::{bail, Result};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -337,7 +346,6 @@ fn format_validity(from: &Option<String>, until: &Option<String>) -> String {
 // ── helper: read a Link struct back from DB ──────────────────
 
 /// Read a link by its database ID, resolving page IDs back to slugs.
-#[allow(dead_code)]
 pub fn get_link(db: &Connection, link_id: i64) -> Result<Link> {
     let link = db.query_row(
         "SELECT l.id, cf.name || '::' || pf.slug, ct.name || '::' || pt.slug, l.relationship, l.context, \

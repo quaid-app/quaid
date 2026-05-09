@@ -66,7 +66,6 @@ const MAX_EDGES: usize = 1000;
 /// Returns a deduplicated set of reachable nodes and the edges connecting them.
 /// Depth is capped at [`MAX_DEPTH`] (10) regardless of the caller-supplied value.
 /// A `HashSet<i64>` visited set prevents cycles from causing infinite loops.
-#[allow(dead_code)]
 pub fn neighborhood_graph(
     slug: &str,
     depth: u32,

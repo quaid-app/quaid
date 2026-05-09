@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI command prints user-facing output to stdout by design"
+)]
+
 use anyhow::Result;
 use rusqlite::Connection;
 use serde::Serialize;
@@ -27,13 +32,11 @@ pub fn run(
 
     if json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else if entries.is_empty() {
+        println!("No pages found.");
     } else {
-        if entries.is_empty() {
-            println!("No pages found.");
-        } else {
-            for e in &entries {
-                println!("{}\t{}\t{}", e.slug, e.page_type, e.summary);
-            }
+        for e in &entries {
+            println!("{}\t{}\t{}", e.slug, e.page_type, e.summary);
         }
     }
 

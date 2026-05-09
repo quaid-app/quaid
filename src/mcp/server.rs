@@ -397,6 +397,10 @@ fn map_search_error(e: SearchError) -> rmcp::Error {
     }
 }
 
+fn serialize_response<T: serde::Serialize>(value: &T) -> Result<String, rmcp::Error> {
+    serde_json::to_string_pretty(value).map_err(|e| map_anyhow_error(anyhow::Error::from(e)))
+}
+
 fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
     let msg = e.to_string();
     if msg.contains("ConflictError")
@@ -1790,7 +1794,7 @@ impl QuaidServer {
             "page_id": page_id,
         });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
+            serialize_response(&result)?,
         )]))
     }
 
@@ -1877,7 +1881,7 @@ impl QuaidServer {
         });
 
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
+            serialize_response(&result)?,
         )]))
     }
 
@@ -1889,7 +1893,7 @@ impl QuaidServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let collections = vault_sync::list_memory_collections(&db).map_err(map_vault_sync_error)?;
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&collections).unwrap(),
+            serialize_response(&collections)?,
         )]))
     }
 
@@ -1987,7 +1991,7 @@ impl QuaidServer {
         let row_id = db.last_insert_rowid();
         let result = serde_json::json!({ "id": row_id });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
+            serialize_response(&result)?,
         )]))
     }
 }
@@ -2012,9 +2016,16 @@ pub async fn run(conn: Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
+// reason: white-box; needs `extraction_enabled`, `extraction_debounce_ms`,
+// `serialize_response`, `validate_slug`, `validate_relationship`,
+// `validate_tag_list`, `validate_temporal_value`, `parse_temporal_filter`,
+// `map_graph_error`, `memory_close_action_impl`, `canonical_slug`,
+// `map_anyhow_error`, `MAX_SLUG_LEN`, `MAX_TAGS_PER_REQUEST`, `TemporalFilter`,
+// `vault_sync::set_collection_recovery_in_progress_for_test`,
+// and the private `QuaidServer::db` field for state-verification queries.
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use crate::core::db;
@@ -2022,6 +2033,25 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn serialize_response_returns_rmcp_error_on_unrepresentable_input() {
+        // Spec note: feeding `f64::NAN` through `json!` collapses to `null`
+        // (Value cannot hold NaN), so use a custom Serialize that always
+        // errors. That exercises the same error path: `serialize_response`
+        // must return a structured `rmcp::Error` rather than panicking.
+        struct AlwaysFails;
+        impl serde::Serialize for AlwaysFails {
+            fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("intentional"))
+            }
+        }
+        let result = serialize_response(&AlwaysFails);
+        assert!(result.is_err());
+    }
 
     fn open_test_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::TempDir::new().unwrap();
@@ -2105,46 +2135,6 @@ mod tests {
     }
 
     #[test]
-    fn get_info_enables_tools_capability_and_exposes_core_tool_methods() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        let info = <QuaidServer as ServerHandler>::get_info(&server);
-
-        let _tool_methods = (
-            QuaidServer::memory_get
-                as fn(&QuaidServer, MemoryGetInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_add_turn
-                as fn(&QuaidServer, MemoryAddTurnInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_close_session
-                as fn(&QuaidServer, MemoryCloseSessionInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_close_action
-                as fn(&QuaidServer, MemoryCloseActionInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_put
-                as fn(&QuaidServer, MemoryPutInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_query
-                as fn(&QuaidServer, MemoryQueryInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_search
-                as fn(&QuaidServer, MemorySearchInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_list
-                as fn(&QuaidServer, MemoryListInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_collections
-                as fn(&QuaidServer, MemoryCollectionsInput) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_namespace_create
-                as fn(
-                    &QuaidServer,
-                    MemoryNamespaceCreateInput,
-                ) -> Result<CallToolResult, rmcp::Error>,
-            QuaidServer::memory_namespace_destroy
-                as fn(
-                    &QuaidServer,
-                    MemoryNamespaceDestroyInput,
-                ) -> Result<CallToolResult, rmcp::Error>,
-        );
-
-        assert!(info.capabilities.tools.is_some());
-    }
-
-    #[test]
     fn memory_add_turn_skips_enqueue_when_extraction_is_disabled() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -2170,108 +2160,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(queue_count, 0);
-    }
-
-    #[test]
-    fn memory_add_turn_returns_conflict_error_for_closed_session() {
-        let (dir, conn) = open_test_db();
-        let conversation_dir = dir
-            .path()
-            .join("vault")
-            .join("conversations")
-            .join("2026-05-03");
-        fs::create_dir_all(&conversation_dir).unwrap();
-        fs::write(
-            conversation_dir.join("session-closed.md"),
-            concat!(
-                "---\n",
-                "type: conversation\n",
-                "session_id: session-closed\n",
-                "date: 2026-05-03\n",
-                "started_at: 2026-05-03T09:14:22Z\n",
-                "status: closed\n",
-                "closed_at: 2026-05-03T09:15:00Z\n",
-                "last_extracted_at: null\n",
-                "last_extracted_turn: 1\n",
-                "---\n\n",
-                "## Turn 1 · user · 2026-05-03T09:14:22Z\n\n",
-                "done\n"
-            ),
-        )
-        .unwrap();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_add_turn(MemoryAddTurnInput {
-                session_id: "session-closed".to_string(),
-                role: "assistant".to_string(),
-                content: "late reply".to_string(),
-                timestamp: Some("2026-05-03T09:16:00Z".to_string()),
-                metadata: None,
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32009));
-        assert!(error.message.contains("ConflictError"));
-    }
-
-    #[test]
-    fn memory_add_turn_returns_config_error_for_missing_writable_root() {
-        let (_dir, conn) = open_test_db();
-        conn.execute("UPDATE collections SET root_path = '' WHERE id = 1", [])
-            .unwrap();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_add_turn(MemoryAddTurnInput {
-                session_id: "session-config".to_string(),
-                role: "user".to_string(),
-                content: "hello".to_string(),
-                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
-                metadata: None,
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32002));
-        assert!(error.message.contains("ConfigError"));
-    }
-
-    #[test]
-    fn memory_add_turn_uses_current_timestamp_when_omitted() {
-        let (dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let result = server
-            .memory_add_turn(MemoryAddTurnInput {
-                session_id: "session-now".to_string(),
-                role: "tool".to_string(),
-                content: "ran tool".to_string(),
-                timestamp: None,
-                metadata: Some(json!({"tool_name": "bash"})),
-                namespace: Some("alpha".to_string()),
-            })
-            .unwrap();
-
-        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(payload["conversation_path"]
-            .as_str()
-            .unwrap()
-            .starts_with("alpha/conversations/"));
-        let conversation_path = payload["conversation_path"]
-            .as_str()
-            .unwrap()
-            .split('/')
-            .fold(dir.path().join("vault"), |path, segment| path.join(segment));
-        let parsed = crate::core::conversation::format::parse(&conversation_path).unwrap();
-        assert_eq!(parsed.turns.len(), 1);
-        assert_eq!(parsed.turns[0].role, crate::core::types::TurnRole::Tool);
-        assert!(parsed.turns[0].timestamp.ends_with('Z'));
-        assert_eq!(
-            parsed.turns[0].metadata.as_ref().unwrap()["tool_name"],
-            "bash"
-        );
     }
 
     #[test]
@@ -2322,46 +2210,6 @@ mod tests {
             "alpha/conversations/2026-05-03/session-enabled.md"
         );
         assert_eq!(queue_row.3, "pending");
-    }
-
-    #[test]
-    fn memory_add_turn_rejects_non_object_metadata() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_add_turn(MemoryAddTurnInput {
-                session_id: "session-bad-metadata".to_string(),
-                role: "user".to_string(),
-                content: "hello".to_string(),
-                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
-                metadata: Some(json!(["not", "an", "object"])),
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-        assert!(error.message.contains("metadata must be a JSON object"));
-    }
-
-    #[test]
-    fn memory_add_turn_rejects_invalid_timestamp_shape() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_add_turn(MemoryAddTurnInput {
-                session_id: "session-bad-time".to_string(),
-                role: "user".to_string(),
-                content: "hello".to_string(),
-                timestamp: Some("2026-05-03 09:14:22".to_string()),
-                metadata: None,
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-        assert!(error.message.contains("invalid timestamp"));
     }
 
     #[test]
@@ -2494,35 +2342,6 @@ mod tests {
     }
 
     #[test]
-    fn memory_close_action_rejects_invalid_status_values() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "actions/review-tests",
-            concat!(
-                "---\n",
-                "title: Review tests\n",
-                "type: action_item\n",
-                "status: open\n",
-                "---\n",
-                "Review the close-action coverage.\n",
-            ),
-        );
-
-        let error = server
-            .memory_close_action(MemoryCloseActionInput {
-                slug: "actions/review-tests".to_string(),
-                status: "blocked".to_string(),
-                note: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-        assert!(error.message.contains("invalid status"));
-    }
-
-    #[test]
     fn memory_close_action_returns_conflict_error_when_page_changes_after_read() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -2609,144 +2428,6 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(error.message.contains("invalid extraction.debounce_ms"));
-    }
-
-    #[test]
-    fn memory_get_returns_not_found_error_code_for_missing_slug() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_get(MemoryGetInput {
-                slug: "definitely-does-not-exist".to_string(),
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
-
-    #[test]
-    fn memory_get_returns_structured_ambiguity_payload_for_colliding_bare_slug() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "memory", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nDefault Alice\n",
-        );
-        create_page_in_collection(
-            &server,
-            "memory",
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nMemory Alice\n",
-        );
-
-        let error = server
-            .memory_get(MemoryGetInput {
-                slug: "people/alice".to_string(),
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32002));
-        let data = error.data.unwrap();
-        assert_eq!(data["code"], "ambiguous_slug");
-        let mut candidates = data["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap().to_string())
-            .collect::<Vec<_>>();
-        candidates.sort();
-        assert_eq!(
-            candidates,
-            vec![
-                "default::people/alice".to_string(),
-                "memory::people/alice".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn memory_get_explicit_collection_slug_reads_resolved_page_when_slug_collides() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "memory", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nDefault Alice\n",
-        );
-        create_page_in_collection(
-            &server,
-            "memory",
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nMemory Alice\n",
-        );
-
-        let result = server
-            .memory_get(MemoryGetInput {
-                slug: "memory::people/alice".to_string(),
-            })
-            .unwrap();
-
-        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(payload["slug"], "memory::people/alice");
-        assert_eq!(payload["compiled_truth"], "Memory Alice");
-    }
-
-    #[test]
-    fn memory_put_returns_occ_conflict_error_with_current_version_for_stale_write() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        server
-            .memory_put(MemoryPutInput {
-                slug: "notes/test".to_string(),
-                content: "---\ntitle: Test\ntype: note\n---\nInitial content\n".to_string(),
-                expected_version: None,
-                namespace: None,
-            })
-            .unwrap();
-
-        let error = server
-            .memory_put(MemoryPutInput {
-                slug: "notes/test".to_string(),
-                content: "---\ntitle: Test\ntype: note\n---\nUpdated content\n".to_string(),
-                expected_version: Some(0),
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32009));
-        assert_eq!(error.data, Some(json!({ "current_version": 1 })));
-    }
-
-    #[test]
-    fn memory_put_rejects_update_without_expected_version() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        server
-            .memory_put(MemoryPutInput {
-                slug: "notes/occ".to_string(),
-                content: "---\ntitle: Test\ntype: note\n---\nInitial\n".to_string(),
-                expected_version: None,
-                namespace: None,
-            })
-            .unwrap();
-
-        let error = server
-            .memory_put(MemoryPutInput {
-                slug: "notes/occ".to_string(),
-                content: "---\ntitle: Test\ntype: note\n---\nSneaky overwrite\n".to_string(),
-                expected_version: None,
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32009));
-        assert_eq!(error.data, Some(json!({ "current_version": 1 })));
     }
 
     #[test]
@@ -2887,111 +2568,6 @@ mod tests {
     }
 
     #[test]
-    fn memory_get_rejects_invalid_slug() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_get(MemoryGetInput {
-                slug: "Invalid/SLUG!".to_string(),
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
-
-    #[test]
-    fn memory_put_rejects_oversized_content() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let large_content = "x".repeat(1_048_577);
-        let error = server
-            .memory_put(MemoryPutInput {
-                slug: "test/large".to_string(),
-                content: large_content,
-                expected_version: None,
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
-
-    #[test]
-    fn memory_put_rejects_empty_slug() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_put(MemoryPutInput {
-                slug: "".to_string(),
-                content: "content".to_string(),
-                expected_version: None,
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
-
-    #[test]
-    fn memory_put_rejects_create_with_expected_version_when_page_does_not_exist() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        // Page does not exist; supplying expected_version is a client bug — reject as OCC conflict.
-        let error = server
-            .memory_put(MemoryPutInput {
-                slug: "notes/ghost".to_string(),
-                content: "---\ntitle: Ghost\ntype: note\n---\nContent\n".to_string(),
-                expected_version: Some(3),
-                namespace: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32009));
-        assert_eq!(error.data, Some(json!({ "current_version": null })));
-    }
-
-    #[test]
-    fn memory_get_renders_persisted_memory_id_after_update_omits_frontmatter_uuid() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        server
-            .memory_put(MemoryPutInput {
-                slug: "notes/uuid".to_string(),
-                content: "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
-                expected_version: None,
-                namespace: None,
-            })
-            .unwrap();
-        server
-            .memory_put(MemoryPutInput {
-                slug: "notes/uuid".to_string(),
-                content: "---\ntitle: UUID\ntype: note\n---\nUpdated\n".to_string(),
-                expected_version: Some(1),
-                namespace: None,
-            })
-            .unwrap();
-
-        let result = server
-            .memory_get(MemoryGetInput {
-                slug: "notes/uuid".to_string(),
-            })
-            .unwrap();
-        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-
-        assert_eq!(
-            payload["frontmatter"]["quaid_id"],
-            "01969f11-9448-7d79-8d3f-c68f54761234"
-        );
-        assert_eq!(payload["slug"], "default::notes/uuid");
-        assert_eq!(payload["compiled_truth"], "Updated");
-    }
-
-    #[test]
     fn memory_put_write_stampede_keeps_fts_fresh_and_drains_embedding_queue() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -3079,427 +2655,9 @@ mod tests {
         assert!(rows.is_empty() && gap_count == 1);
     }
 
-    #[test]
-    fn memory_query_auto_depth_expands_linked_results() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "concepts/root",
-            "---\ntitle: Root\ntype: concept\n---\nalpha anchor\n",
-        );
-        create_page(
-            &server,
-            "concepts/child",
-            "---\ntitle: Child\ntype: concept\n---\nlinked expansion result\n",
-        );
-        server
-            .memory_link(MemoryLinkInput {
-                from_slug: "concepts/root".to_string(),
-                to_slug: "concepts/child".to_string(),
-                relationship: "related".to_string(),
-                valid_from: None,
-                valid_until: None,
-            })
-            .unwrap();
-
-        let result = server
-            .memory_query(MemoryQueryInput {
-                query: "alpha".to_string(),
-                collection: None,
-                namespace: None,
-                wing: None,
-                limit: Some(1),
-                depth: Some("auto".to_string()),
-                include_superseded: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(rows
-            .iter()
-            .any(|row| row["slug"] == "default::concepts/child"));
-    }
-
     // 13.5 contract: depth="auto" must NOT expand across collection boundaries
-    #[test]
-    fn memory_query_auto_depth_does_not_expand_across_collections() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "work", false);
-        let server = QuaidServer::new(conn);
-
-        // Anchor page in "default" — will match the query
-        create_page(
-            &server,
-            "concepts/anchor",
-            "---\ntitle: Anchor\ntype: concept\n---\ncross collection fence anchor\n",
-        );
-        // Outside page in "work" — linked from anchor but must NOT appear
-        create_page_in_collection(
-            &server,
-            "work",
-            "concepts/outside",
-            "---\ntitle: Outside\ntype: concept\n---\nshould not appear in filtered results\n",
-        );
-        // Cross-collection link: default::concepts/anchor -> work::concepts/outside
-        server
-            .memory_link(MemoryLinkInput {
-                from_slug: "default::concepts/anchor".to_string(),
-                to_slug: "work::concepts/outside".to_string(),
-                relationship: "related".to_string(),
-                valid_from: None,
-                valid_until: None,
-            })
-            .unwrap();
-
-        let result = server
-            .memory_query(MemoryQueryInput {
-                query: "cross collection fence anchor".to_string(),
-                collection: Some("default".to_string()),
-                namespace: None,
-                wing: None,
-                limit: Some(5),
-                depth: Some("auto".to_string()),
-                include_superseded: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(
-            !rows
-                .iter()
-                .any(|row| row["slug"] == "work::concepts/outside"),
-            "depth=auto expansion must not cross into a different collection: got {rows:?}"
-        );
-    }
-
-    #[test]
-    fn memory_search_returns_matching_pages() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme builds fundraising software.\n",
-        );
-
-        let result = server
-            .memory_search(MemorySearchInput {
-                query: "fundraising".to_string(),
-                collection: None,
-                namespace: None,
-                wing: None,
-                limit: None,
-                include_superseded: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows[0]["slug"], "default::companies/acme");
-    }
 
     // D.6 — memory_search with natural-language '?' query returns valid JSON-RPC response
-    #[test]
-    fn memory_search_natural_language_question_mark_returns_valid_response() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        // '?' would be invalid FTS5 syntax if passed raw — memory_search must sanitize.
-        let result = server.memory_search(MemorySearchInput {
-            query: "what is CLARITY?".to_string(),
-            collection: None,
-            namespace: None,
-            wing: None,
-            limit: None,
-            include_superseded: None,
-        });
-
-        assert!(
-            result.is_ok(),
-            "memory_search with '?' must not return an MCP error: {result:?}"
-        );
-        // The response content must parse as a JSON array (empty or populated).
-        let text = extract_text(&result.unwrap());
-        let parsed: serde_json::Value =
-            serde_json::from_str(&text).expect("memory_search response must be valid JSON");
-        assert!(
-            parsed.is_array(),
-            "memory_search response must be a JSON array"
-        );
-    }
-
-    #[test]
-    fn memory_list_applies_wing_and_type_filters() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        let result = server
-            .memory_list(MemoryListInput {
-                collection: None,
-                namespace: None,
-                wing: Some("people".to_string()),
-                page_type: Some("person".to_string()),
-                limit: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["slug"], "default::people/alice");
-    }
-
-    #[test]
-    fn memory_search_explicit_collection_filter_returns_only_named_collection() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "work", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "notes/default-hit",
-            "---\ntitle: Default Hit\ntype: note\n---\nshared needle\n",
-        );
-        create_page_in_collection(
-            &server,
-            "work",
-            "notes/work-hit",
-            "---\ntitle: Work Hit\ntype: note\n---\nshared needle\n",
-        );
-
-        let result = server
-            .memory_search(MemorySearchInput {
-                query: "shared".to_string(),
-                collection: Some("work".to_string()),
-                namespace: None,
-                wing: None,
-                limit: None,
-                include_superseded: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["slug"], "work::notes/work-hit");
-    }
-
-    #[test]
-    fn memory_query_explicit_collection_filter_returns_only_named_collection() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "work", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "notes/default-hit",
-            "---\ntitle: Default Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
-        );
-        create_page_in_collection(
-            &server,
-            "work",
-            "notes/work-hit",
-            "---\ntitle: Work Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
-        );
-
-        let result = server
-            .memory_query(MemoryQueryInput {
-                query: "robotics leadership".to_string(),
-                collection: Some("work".to_string()),
-                namespace: None,
-                wing: None,
-                limit: None,
-                depth: None,
-                include_superseded: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["slug"], "work::notes/work-hit");
-    }
-
-    #[test]
-    fn memory_list_explicit_collection_filter_returns_only_named_collection() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "work", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice Default\ntype: person\n---\nDefault Alice\n",
-        );
-        create_page_in_collection(
-            &server,
-            "work",
-            "people/alice",
-            "---\ntitle: Alice Work\ntype: person\n---\nWork Alice\n",
-        );
-
-        let result = server
-            .memory_list(MemoryListInput {
-                collection: Some("work".to_string()),
-                namespace: None,
-                wing: Some("people".to_string()),
-                page_type: Some("person".to_string()),
-                limit: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["slug"], "work::people/alice");
-    }
-
-    #[test]
-    fn read_tools_unknown_collection_filter_errors_clearly() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let query_error = server
-            .memory_query(MemoryQueryInput {
-                query: "anything".to_string(),
-                collection: Some("missing".to_string()),
-                namespace: None,
-                wing: None,
-                limit: None,
-                depth: None,
-                include_superseded: None,
-            })
-            .unwrap_err();
-        assert_eq!(query_error.code, ErrorCode(-32001));
-        assert!(query_error
-            .message
-            .contains("collection not found: missing"));
-
-        let search_error = server
-            .memory_search(MemorySearchInput {
-                query: "anything".to_string(),
-                collection: Some("missing".to_string()),
-                namespace: None,
-                wing: None,
-                limit: None,
-                include_superseded: None,
-            })
-            .unwrap_err();
-        assert_eq!(search_error.code, ErrorCode(-32001));
-        assert!(search_error
-            .message
-            .contains("collection not found: missing"));
-
-        let list_error = server
-            .memory_list(MemoryListInput {
-                collection: Some("missing".to_string()),
-                namespace: None,
-                wing: None,
-                page_type: None,
-                limit: None,
-            })
-            .unwrap_err();
-        assert_eq!(list_error.code, ErrorCode(-32001));
-        assert!(list_error.message.contains("collection not found: missing"));
-    }
-
-    #[test]
-    fn memory_search_defaults_to_single_active_collection() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "work", false);
-        set_collection_state(&conn, "default", "detached");
-        let server = QuaidServer::new(conn);
-        create_page_in_collection(
-            &server,
-            "work",
-            "notes/only-active",
-            "---\ntitle: Only Active\ntype: note\n---\nsole active marker\n",
-        );
-
-        let result = server
-            .memory_search(MemorySearchInput {
-                query: "sole".to_string(),
-                collection: None,
-                namespace: None,
-                wing: None,
-                limit: None,
-                include_superseded: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["slug"], "work::notes/only-active");
-    }
-
-    #[test]
-    fn memory_query_defaults_to_write_target_when_multiple_collections_are_active() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "work", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "notes/default-target",
-            "---\ntitle: Default Target\ntype: note\n---\nshared semantic marker\n",
-        );
-        create_page_in_collection(
-            &server,
-            "work",
-            "notes/work-target",
-            "---\ntitle: Work Target\ntype: note\n---\nshared semantic marker\n",
-        );
-
-        let result = server
-            .memory_query(MemoryQueryInput {
-                query: "shared semantic marker".to_string(),
-                collection: None,
-                namespace: None,
-                wing: None,
-                limit: None,
-                depth: None,
-                include_superseded: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["slug"], "default::notes/default-target");
-    }
-
-    #[test]
-    fn memory_list_defaults_to_write_target_when_multiple_collections_are_active() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "work", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "notes/default-target",
-            "---\ntitle: Default Target\ntype: note\n---\ndefault target body\n",
-        );
-        create_page_in_collection(
-            &server,
-            "work",
-            "notes/work-target",
-            "---\ntitle: Work Target\ntype: note\n---\nwork target body\n",
-        );
-
-        let result = server
-            .memory_list(MemoryListInput {
-                collection: None,
-                namespace: None,
-                wing: Some("notes".to_string()),
-                page_type: Some("note".to_string()),
-                limit: None,
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["slug"], "default::notes/default-target");
-    }
 
     // ── Phase 2 MCP tests ────────────────────────────────────
 
@@ -3547,14 +2705,6 @@ mod tests {
             "INSERT INTO collections (id, name, root_path, state, writable, is_write_target) \
              VALUES (?1, ?2, ?3, 'active', 1, ?4)",
             rusqlite::params![id, name, root_path, if is_write_target { 1 } else { 0 }],
-        )
-        .unwrap();
-    }
-
-    fn set_collection_state(conn: &Connection, name: &str, state: &str) {
-        conn.execute(
-            "UPDATE collections SET state = ?1 WHERE name = ?2",
-            rusqlite::params![state, name],
         )
         .unwrap();
     }
@@ -3719,104 +2869,7 @@ mod tests {
 
     // ── memory_link ───────────────────────────────────────────
 
-    #[test]
-    fn memory_link_with_unknown_from_slug_returns_not_found() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme Corp\n",
-        );
-
-        let error = server
-            .memory_link(MemoryLinkInput {
-                from_slug: "people/ghost".to_string(),
-                to_slug: "companies/acme".to_string(),
-                relationship: "works_at".to_string(),
-                valid_from: None,
-                valid_until: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
-
-    #[test]
-    fn memory_link_creates_link_between_existing_pages() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        let result = server
-            .memory_link(MemoryLinkInput {
-                from_slug: "people/alice".to_string(),
-                to_slug: "companies/acme".to_string(),
-                relationship: "works_at".to_string(),
-                valid_from: Some("2024-01".to_string()),
-                valid_until: None,
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        assert!(text.contains("Linked"));
-        assert!(text.contains("default::people/alice"));
-        assert!(text.contains("default::companies/acme"));
-    }
-
-    #[test]
-    fn memory_link_rejects_invalid_relationship() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        let error = server
-            .memory_link(MemoryLinkInput {
-                from_slug: "people/alice".to_string(),
-                to_slug: "companies/acme".to_string(),
-                relationship: "works at".to_string(),
-                valid_from: None,
-                valid_until: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
-
     // ── memory_link_close ─────────────────────────────────────
-
-    #[test]
-    fn memory_link_close_with_unknown_id_returns_not_found() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_link_close(MemoryLinkCloseInput {
-                link_id: 99999,
-                valid_until: "2025-06".to_string(),
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
 
     #[test]
     fn memory_link_close_sets_valid_until_on_existing_link() {
@@ -3862,388 +2915,11 @@ mod tests {
         assert!(text.contains(&format!("Closed link {link_id}")));
     }
 
-    #[test]
-    fn memory_link_close_rejects_invalid_temporal_value() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_link_close(MemoryLinkCloseInput {
-                link_id: 1,
-                valid_until: "not-a-date".to_string(),
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
-
     // ── memory_backlinks ──────────────────────────────────────
-
-    #[test]
-    fn memory_backlinks_returns_link_array() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        server
-            .memory_link(MemoryLinkInput {
-                from_slug: "people/alice".to_string(),
-                to_slug: "companies/acme".to_string(),
-                relationship: "works_at".to_string(),
-                valid_from: None,
-                valid_until: None,
-            })
-            .unwrap();
-
-        let result = server
-            .memory_backlinks(MemoryBacklinksInput {
-                slug: "companies/acme".to_string(),
-                limit: None,
-                temporal: None,
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let arr = parsed.as_array().unwrap();
-        assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["from_slug"], "default::people/alice");
-        assert_eq!(arr[0]["relationship"], "works_at");
-    }
-
-    #[test]
-    fn memory_backlinks_unknown_slug_returns_not_found() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_backlinks(MemoryBacklinksInput {
-                slug: "nobody/ghost".to_string(),
-                limit: None,
-                temporal: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
-
-    #[test]
-    fn memory_backlinks_applies_limit() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        for slug in ["people/alice", "people/bob", "people/carla"] {
-            create_page(
-                &server,
-                slug,
-                &format!("---\ntitle: {slug}\ntype: person\n---\n{slug}\n"),
-            );
-            server
-                .memory_link(MemoryLinkInput {
-                    from_slug: slug.to_string(),
-                    to_slug: "companies/acme".to_string(),
-                    relationship: "works_at".to_string(),
-                    valid_from: None,
-                    valid_until: None,
-                })
-                .unwrap();
-        }
-
-        let result = server
-            .memory_backlinks(MemoryBacklinksInput {
-                slug: "companies/acme".to_string(),
-                limit: Some(2),
-                temporal: None,
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        let arr: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-        assert_eq!(arr.len(), 2);
-    }
-
-    #[test]
-    fn memory_backlinks_temporal_all_includes_closed_links() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        server
-            .memory_link(MemoryLinkInput {
-                from_slug: "people/alice".to_string(),
-                to_slug: "companies/acme".to_string(),
-                relationship: "works_at".to_string(),
-                valid_from: Some("2020-01-01".to_string()),
-                valid_until: Some("2020-12-31".to_string()),
-            })
-            .unwrap();
-
-        let result = server
-            .memory_backlinks(MemoryBacklinksInput {
-                slug: "companies/acme".to_string(),
-                limit: None,
-                temporal: Some("all".to_string()),
-            })
-            .unwrap();
-
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows.len(), 1);
-    }
-
-    #[test]
-    fn memory_backlinks_rejects_invalid_temporal_filter() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_backlinks(MemoryBacklinksInput {
-                slug: "people/alice".to_string(),
-                limit: None,
-                temporal: Some("future".to_string()),
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
 
     // ── memory_graph ──────────────────────────────────────────
 
-    #[test]
-    fn memory_graph_returns_nodes_and_edges_json() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        server
-            .memory_link(MemoryLinkInput {
-                from_slug: "people/alice".to_string(),
-                to_slug: "companies/acme".to_string(),
-                relationship: "works_at".to_string(),
-                valid_from: None,
-                valid_until: None,
-            })
-            .unwrap();
-
-        let result = server
-            .memory_graph(MemoryGraphInput {
-                slug: "people/alice".to_string(),
-                depth: Some(2),
-                temporal: None,
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let node_slugs = parsed["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|node| node["slug"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert!(node_slugs.contains(&"default::people/alice"));
-        assert!(node_slugs.contains(&"default::companies/acme"));
-        assert!(parsed["edges"].as_array().unwrap().iter().any(|edge| {
-            edge["from"] == "default::people/alice" && edge["to"] == "default::companies/acme"
-        }));
-    }
-
-    #[test]
-    fn memory_graph_unknown_slug_returns_not_found() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_graph(MemoryGraphInput {
-                slug: "people/ghost".to_string(),
-                depth: None,
-                temporal: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
-
-    #[test]
-    fn memory_graph_temporal_all_includes_closed_links() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-        create_page(
-            &server,
-            "companies/acme",
-            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
-        );
-
-        server
-            .memory_link(MemoryLinkInput {
-                from_slug: "people/alice".to_string(),
-                to_slug: "companies/acme".to_string(),
-                relationship: "works_at".to_string(),
-                valid_from: Some("2020-01-01".to_string()),
-                valid_until: Some("2020-12-31".to_string()),
-            })
-            .unwrap();
-
-        let result = server
-            .memory_graph(MemoryGraphInput {
-                slug: "people/alice".to_string(),
-                depth: None,
-                temporal: Some("all".to_string()),
-            })
-            .unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(parsed["edges"].as_array().unwrap().len(), 1);
-    }
-
     // ── memory_check ──────────────────────────────────────────
-
-    #[test]
-    fn memory_check_on_clean_page_returns_empty_array() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice is a person.\n",
-        );
-
-        let result = server
-            .memory_check(MemoryCheckInput {
-                slug: Some("people/alice".to_string()),
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(parsed.as_array().unwrap().len(), 0);
-    }
-
-    #[test]
-    fn memory_check_detects_contradiction_on_page() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
-        );
-
-        let result = server
-            .memory_check(MemoryCheckInput {
-                slug: Some("people/alice".to_string()),
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert!(!parsed.as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn memory_check_filters_output_to_requested_slug() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
-        );
-        create_page(
-            &server,
-            "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
-        );
-
-        server
-            .memory_check(MemoryCheckInput {
-                slug: Some("people/bob".to_string()),
-            })
-            .unwrap();
-
-        let result = server
-            .memory_check(MemoryCheckInput {
-                slug: Some("people/alice".to_string()),
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
-        assert!(!parsed.is_empty());
-        assert!(parsed.iter().all(|row| {
-            row["page_slug"] == "default::people/alice"
-                || row["other_page_slug"] == "default::people/alice"
-        }));
-    }
-
-    #[test]
-    fn memory_check_explicit_collection_slug_filters_to_resolved_page_when_slug_collides() {
-        let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "memory", false);
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
-        );
-        create_page_in_collection(
-            &server,
-            "memory",
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nMemory Alice is a person.\n",
-        );
-
-        server
-            .memory_check(MemoryCheckInput {
-                slug: Some("default::people/alice".to_string()),
-            })
-            .unwrap();
-
-        let result = server
-            .memory_check(MemoryCheckInput {
-                slug: Some("memory::people/alice".to_string()),
-            })
-            .unwrap();
-
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(parsed.is_empty());
-    }
 
     #[test]
     fn memory_tags_explicit_collection_slug_updates_only_resolved_page_when_slug_collides() {
@@ -4304,67 +2980,7 @@ mod tests {
         assert_eq!(memory_tags, vec!["memory".to_string()]);
     }
 
-    #[test]
-    fn memory_check_without_slug_returns_all_unresolved_contradictions() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
-        );
-        create_page(
-            &server,
-            "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
-        );
-
-        let result = server
-            .memory_check(MemoryCheckInput { slug: None })
-            .unwrap();
-
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(parsed.len(), 2);
-    }
-
     // ── memory_timeline ───────────────────────────────────────
-
-    #[test]
-    fn memory_timeline_on_unknown_slug_returns_not_found() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_timeline(MemoryTimelineInput {
-                slug: "nobody/ghost".to_string(),
-                limit: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
-
-    #[test]
-    fn memory_timeline_returns_entries_for_page_with_timeline() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice bio\n\n## Timeline\n\n2024-01: Joined Acme\n---\n2024-06: Promoted\n",
-        );
-
-        let result = server
-            .memory_timeline(MemoryTimelineInput {
-                slug: "people/alice".to_string(),
-                limit: Some(10),
-            })
-            .unwrap();
-
-        let text = extract_text(&result);
-        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(parsed["slug"], "default::people/alice");
-    }
 
     #[test]
     fn memory_timeline_prefers_structured_entries_and_applies_limit() {
@@ -4399,132 +3015,11 @@ mod tests {
         assert_eq!(parsed["entries"].as_array().unwrap().len(), 1);
     }
 
-    #[test]
-    fn memory_timeline_returns_empty_entries_for_page_without_timeline_data() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice bio\n",
-        );
-
-        let result = server
-            .memory_timeline(MemoryTimelineInput {
-                slug: "people/alice".to_string(),
-                limit: None,
-            })
-            .unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(parsed["entries"].as_array().unwrap().is_empty());
-    }
-
     // ── memory_tags ───────────────────────────────────────────
-
-    #[test]
-    fn memory_tags_list_add_remove_round_trip() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-
-        // List tags — should be empty
-        let result = server
-            .memory_tags(MemoryTagsInput {
-                slug: "people/alice".to_string(),
-                add: None,
-                remove: None,
-            })
-            .unwrap();
-        let text = extract_text(&result);
-        let tags: Vec<String> = serde_json::from_str(&text).unwrap();
-        assert!(tags.is_empty());
-
-        // Add tags
-        let result = server
-            .memory_tags(MemoryTagsInput {
-                slug: "people/alice".to_string(),
-                add: Some(vec!["investor".to_string(), "founder".to_string()]),
-                remove: None,
-            })
-            .unwrap();
-        let text = extract_text(&result);
-        let tags: Vec<String> = serde_json::from_str(&text).unwrap();
-        assert_eq!(tags, vec!["founder", "investor"]);
-
-        // Remove a tag
-        let result = server
-            .memory_tags(MemoryTagsInput {
-                slug: "people/alice".to_string(),
-                add: None,
-                remove: Some(vec!["investor".to_string()]),
-            })
-            .unwrap();
-        let text = extract_text(&result);
-        let tags: Vec<String> = serde_json::from_str(&text).unwrap();
-        assert_eq!(tags, vec!["founder"]);
-    }
-
-    #[test]
-    fn memory_tags_unknown_slug_returns_not_found() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_tags(MemoryTagsInput {
-                slug: "nobody/ghost".to_string(),
-                add: Some(vec!["tag".to_string()]),
-                remove: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
-
-    #[test]
-    fn memory_tags_rejects_invalid_tag_values() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-
-        let error = server
-            .memory_tags(MemoryTagsInput {
-                slug: "people/alice".to_string(),
-                add: Some(vec!["bad tag".to_string()]),
-                remove: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
 
     // ── Phase 3 MCP tests ────────────────────────────────────
 
     // ── memory_gap ────────────────────────────────────────────
-
-    #[test]
-    fn memory_gap_with_empty_query_returns_invalid_params() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_gap(MemoryGapInput {
-                query: "".to_string(),
-                slug: None,
-                context: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
 
     #[test]
     fn memory_gap_stores_gap_with_null_query_text_and_internal_sensitivity() {
@@ -4558,134 +3053,9 @@ mod tests {
         assert!(context.is_empty());
     }
 
-    #[test]
-    fn memory_gap_duplicate_is_idempotent() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let r1 = server
-            .memory_gap(MemoryGapInput {
-                query: "same query".to_string(),
-                slug: None,
-                context: None,
-            })
-            .unwrap();
-        let r2 = server
-            .memory_gap(MemoryGapInput {
-                query: "same query".to_string(),
-                slug: None,
-                context: None,
-            })
-            .unwrap();
-
-        let id1: serde_json::Value = serde_json::from_str(&extract_text(&r1)).unwrap();
-        let id2: serde_json::Value = serde_json::from_str(&extract_text(&r2)).unwrap();
-        assert_eq!(id1["id"], id2["id"]);
-    }
-
-    #[test]
-    fn memory_gap_context_is_redacted_in_listings() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        server
-            .memory_gap(MemoryGapInput {
-                query: "sensitive query".to_string(),
-                slug: None,
-                context: Some("sensitive query with extra details".to_string()),
-            })
-            .unwrap();
-
-        let result = server
-            .memory_gaps(MemoryGapsInput {
-                resolved: None,
-                limit: None,
-            })
-            .unwrap();
-
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(parsed.len(), 1);
-        let context = parsed[0]["context"].as_str().unwrap_or_default();
-        assert!(context.is_empty());
-    }
-
     // ── memory_gaps ───────────────────────────────────────────
 
-    #[test]
-    fn memory_gaps_returns_array_with_limit() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        for i in 0..5 {
-            server
-                .memory_gap(MemoryGapInput {
-                    query: format!("gap query {i}"),
-                    slug: None,
-                    context: None,
-                })
-                .unwrap();
-        }
-
-        let result = server
-            .memory_gaps(MemoryGapsInput {
-                resolved: None,
-                limit: Some(3),
-            })
-            .unwrap();
-
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(parsed.len(), 3);
-    }
-
-    #[test]
-    fn memory_gaps_defaults_to_unresolved() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        server
-            .memory_gap(MemoryGapInput {
-                query: "unresolved gap".to_string(),
-                slug: None,
-                context: None,
-            })
-            .unwrap();
-
-        let result = server
-            .memory_gaps(MemoryGapsInput {
-                resolved: None,
-                limit: None,
-            })
-            .unwrap();
-
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert!(parsed[0]["resolved_at"].is_null());
-    }
-
     // ── memory_stats ──────────────────────────────────────────
-
-    #[test]
-    fn memory_stats_returns_all_expected_fields() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-
-        let result = server.memory_stats(MemoryStatsInput {}).unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(parsed["page_count"], 1);
-        assert!(parsed["link_count"].is_number());
-        assert!(parsed["assertion_count"].is_number());
-        assert!(parsed["contradiction_count"].is_number());
-        assert!(parsed["gap_count"].is_number());
-        assert!(parsed["embedding_count"].is_number());
-        assert!(parsed["active_model"].is_string());
-        assert!(parsed["db_size_bytes"].is_number());
-    }
 
     #[test]
     fn memory_collections_is_read_only_and_returns_frozen_schema_fields() {
@@ -5073,23 +3443,6 @@ mod tests {
     // ── memory_raw ────────────────────────────────────────────
 
     #[test]
-    fn memory_raw_with_unknown_slug_returns_not_found() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_raw(MemoryRawInput {
-                slug: "nobody/ghost".to_string(),
-                source: "test".to_string(),
-                data: json!({"key": "value"}),
-                overwrite: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32001));
-    }
-
-    #[test]
     fn memory_raw_with_valid_slug_stores_row() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);
@@ -5121,124 +3474,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn memory_raw_rejects_empty_source() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-
-        let error = server
-            .memory_raw(MemoryRawInput {
-                slug: "people/alice".to_string(),
-                source: "".to_string(),
-                data: json!({}),
-                overwrite: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
-
-    #[test]
-    fn memory_raw_rejects_invalid_slug() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let error = server
-            .memory_raw(MemoryRawInput {
-                slug: "Invalid/SLUG!".to_string(),
-                source: "test".to_string(),
-                data: json!({}),
-                overwrite: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-    }
-
-    #[test]
-    fn memory_raw_rejects_array_payload() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-
-        let error = server
-            .memory_raw(MemoryRawInput {
-                slug: "people/alice".to_string(),
-                source: "crustdata".to_string(),
-                data: json!([1, 2, 3]),
-                overwrite: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-        assert!(error.message.contains("JSON object"));
-    }
-
-    #[test]
-    fn memory_raw_rejects_scalar_payload() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-
-        for bad in [json!("string"), json!(42), json!(true), json!(null)] {
-            let error = server
-                .memory_raw(MemoryRawInput {
-                    slug: "people/alice".to_string(),
-                    source: "crustdata".to_string(),
-                    data: bad,
-                    overwrite: None,
-                })
-                .unwrap_err();
-            assert_eq!(error.code, ErrorCode(-32602));
-        }
-    }
-
-    #[test]
-    fn memory_raw_rejects_duplicate_source_without_overwrite() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
-        );
-
-        server
-            .memory_raw(MemoryRawInput {
-                slug: "people/alice".to_string(),
-                source: "crustdata".to_string(),
-                data: json!({"v": 1}),
-                overwrite: None,
-            })
-            .unwrap();
-
-        // Second write without overwrite must fail.
-        let error = server
-            .memory_raw(MemoryRawInput {
-                slug: "people/alice".to_string(),
-                source: "crustdata".to_string(),
-                data: json!({"v": 2}),
-                overwrite: None,
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32003));
-        assert!(error.message.contains("overwrite=true"));
     }
 
     #[test]
@@ -5310,39 +3545,6 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode(-32002));
         assert!(error.message.contains("CollectionRestoringError"));
-    }
-
-    #[test]
-    fn memory_gap_rejects_oversized_context() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let big_context = "x".repeat(501);
-        let error = server
-            .memory_gap(MemoryGapInput {
-                query: "who invented quantum socks".to_string(),
-                slug: None,
-                context: Some(big_context),
-            })
-            .unwrap_err();
-
-        assert_eq!(error.code, ErrorCode(-32602));
-        assert!(error.message.contains("context"));
-    }
-
-    #[test]
-    fn memory_gap_accepts_context_at_max_length() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let exact_context = "y".repeat(500);
-        server
-            .memory_gap(MemoryGapInput {
-                query: "boundary test query".to_string(),
-                slug: None,
-                context: Some(exact_context),
-            })
-            .unwrap();
     }
 
     #[test]
@@ -5805,89 +4007,6 @@ mod tests {
     }
 
     // ── 1.1b response completeness ───────────────────────────
-    #[test]
-    fn memory_gap_with_slug_response_includes_page_id() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-        create_page(
-            &server,
-            "notes/response-gap",
-            "---\ntitle: Response Gap\ntype: note\n---\ncontent\n",
-        );
-
-        let result = server
-            .memory_gap(MemoryGapInput {
-                query: "gap with page bound".to_string(),
-                slug: Some("notes/response-gap".to_string()),
-                context: None,
-            })
-            .unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(
-            parsed["page_id"].as_i64().is_some(),
-            "memory_gap with slug must return page_id in response: {parsed}"
-        );
-    }
-
-    #[test]
-    fn memory_gap_without_slug_response_has_null_page_id() {
-        let (_dir, conn) = open_test_db();
-        let server = QuaidServer::new(conn);
-
-        let result = server
-            .memory_gap(MemoryGapInput {
-                query: "global gap no page".to_string(),
-                slug: None,
-                context: None,
-            })
-            .unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(
-            parsed["page_id"].is_null(),
-            "memory_gap without slug must return null page_id: {parsed}"
-        );
-    }
-
-    /// Regression: memory_put must not call the printing `put_from_string` variant
-    /// (which would corrupt JSON-RPC framing by writing to stdout).  It must use
-    /// `put_from_string_quiet` (suppresses printing, returns `()`) or
-    /// `put_from_string_status` (returns a status string without printing).
-    #[test]
-    fn memory_put_does_not_call_printing_put_from_string_variant() {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src")
-                .join("mcp")
-                .join("server.rs"),
-        )
-        .unwrap();
-        // Locate the memory_put function body.
-        let fn_start = source
-            .find("pub fn memory_put(")
-            .expect("memory_put fn present");
-        // Find the closing brace of memory_put by looking at the next tool-decorated fn.
-        let fn_body_end = source[fn_start..]
-            .find("\n    #[tool(")
-            .map(|offset| fn_start + offset)
-            .expect("next tool fn after memory_put");
-        let fn_body = &source[fn_start..fn_body_end];
-
-        // The body must NOT contain the bare `put_from_string(` call (the printing variant).
-        assert!(
-            !fn_body.contains("put_from_string("),
-            "memory_put must not call the printing put_from_string variant; \
-             use put_from_string_quiet or put_from_string_status instead"
-        );
-        // The body MUST use a non-printing variant.
-        assert!(
-            fn_body.contains("put_from_string_quiet(")
-                || fn_body.contains("put_from_string_quiet_with_namespace(")
-                || fn_body.contains("put_from_string_status("),
-            "memory_put must call put_from_string_quiet or put_from_string_status"
-        );
-    }
 
     fn extract_text(result: &CallToolResult) -> String {
         result

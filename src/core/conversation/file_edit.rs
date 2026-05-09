@@ -99,7 +99,10 @@ pub fn parse_edited_page(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "extracted-edit handler binds the full per-page reconciliation context (db, ids, paths, stat, prior/new pages, raw bytes); regrouping into a struct here would obscure the call site"
+)]
 pub fn handle_extracted_edit(
     conn: &Connection,
     collection_id: i64,

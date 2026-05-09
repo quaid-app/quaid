@@ -1203,7 +1203,7 @@ where
     let dirty_status = is_collection_dirty(conn, collection.id, request.recovery_root)?;
     if dirty_status.is_dirty() && !request.allow_finalize_pending {
         return Err(ReconcileError::CollectionDirtyError {
-            collection_name: collection.name.clone(),
+            collection_name: collection.name,
             status: dirty_status,
         });
     }
@@ -3115,6 +3115,20 @@ impl From<std::io::Error> for ReconcileError {
 
 // ── Tests ─────────────────────────────────────────────────────
 
+// reason: white-box; needs apply_full_hash_metadata_self_heal, apply_hash_rename_matches,
+// apply_native_rename_matches, apply_reingest, apply_uuid_rename_matches,
+// authorize_full_hash_reconcile, build_full_hash_plan, canonical_body_refusal_reason,
+// capture_phase1_drift, classify_missing_paths, collection_recovery_dir, db_only_state_branches,
+// DbOnlyStateBranches, default_restore_stability_max_iters, detect_duplicate_uuids_in_tree,
+// fresh_collection_dirty_status, hash_refusal_reason, infer_type_from_path, is_markdown_file,
+// load_collection_by_id, load_db_files, load_frontmatter_map, MissingPageIdentity, NativeRename,
+// NewTreeIdentity, path_to_string, raw_import_invariant_result, reconcile_with_native_events,
+// RenameMatch, RenameResolution, resolve_rename_resolution, run_phase2_stability_check,
+// run_phase3_pre_destruction_fence, run_restore_remap_safety_pipeline_inner, sentinel_count,
+// stat_diff_from_walk, StatSnapshot, strip_numeric_prefix, take_stat_snapshot,
+// uuid_migration_preflight, verify_read_only_mount, walk_collection, plus private methods
+// FullHashReconcileMode::as_str, RestoreRemapOperation::as_str, DriftCaptureSummary::from_stats,
+// has_material_changes, add_assign, identity, and the private RenameMatchKind enum.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3124,8 +3138,6 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::sync::{Mutex, OnceLock};
-    #[cfg(unix)]
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
     static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -3142,6 +3154,10 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let previous = std::env::var_os(key);
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var is unsafe on Rust 1.81+; tests serialise via the surrounding ENV_MUTATION_LOCK"
+            )]
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -3151,6 +3167,10 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
+            #[expect(
+                unsafe_code,
+                reason = "std::env::set_var/remove_var are unsafe on Rust 1.81+; restores the previous value inside the same locked window as the constructor"
+            )]
             unsafe {
                 if let Some(value) = self.previous.as_ref() {
                     std::env::set_var(self.key, value);
@@ -3772,7 +3792,7 @@ mod tests {
             "---\nslug: preferences/noop\n title: Noop\ntype: preference\n---\nbody  \n\n";
         fs::write(root.path().join(&relative_path), whitespace_only).unwrap();
         let current_stat = file_state::stat_file(&root.path().join(&relative_path)).unwrap();
-        let walked = HashMap::from([(relative_path.clone(), current_stat.clone())]);
+        let walked = HashMap::from([(relative_path.clone(), current_stat)]);
         let diff = stat_diff_from_walk(&conn, collection.id, root.path(), walked.clone()).unwrap();
         assert!(diff.modified.is_empty());
         assert!(diff.unchanged.contains(&relative_path));
@@ -3876,7 +3896,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let walked = HashMap::from([(new_relative_path.clone(), renamed_stat.clone())]);
+        let walked = HashMap::from([(new_relative_path.clone(), renamed_stat)]);
         let diff = stat_diff_from_walk(&conn, collection.id, root.path(), walked).unwrap();
 
         assert!(!outcome.created);
@@ -3895,87 +3915,6 @@ mod tests {
         assert!(diff.new.is_empty());
         assert!(diff.modified.is_empty());
         assert!(diff.unchanged.contains(&new_relative_path));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_is_idempotent_when_disk_matches_file_state() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        fs::write(root.path().join("note.md"), "# note").unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = stat_for(root.path(), "note.md");
-        seed_file_state(&conn, collection.id, "notes/note", "note.md", &stat);
-
-        let first = reconcile(&conn, &collection).unwrap();
-        let second = reconcile(&conn, &collection).unwrap();
-
-        assert_eq!(first.walked, 1);
-        assert_eq!(first.unchanged, 1);
-        assert_eq!(first.modified, 0);
-        assert_eq!(first.new, 0);
-        assert_eq!(first.missing, 0);
-        assert_eq!(first.walked, second.walked);
-        assert_eq!(first.unchanged, second.unchanged);
-        assert_eq!(first.modified, second.modified);
-        assert_eq!(first.new, second.new);
-        assert_eq!(first.missing, second.missing);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_unchanged_path_keeps_existing_raw_import_row_without_rotation() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let content = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nStable body.\n";
-        fs::write(root.path().join("note.md"), content).unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = stat_for(root.path(), "note.md");
-        let sha256 = file_state::hash_file(&root.path().join("note.md")).unwrap();
-        let page_id = seed_page_with_identity(
-            &conn,
-            collection.id,
-            SeededPageIdentity {
-                slug: "notes/note",
-                uuid: "01969f11-9448-7d79-8d3f-c68f54761234",
-                relative_path: "note.md",
-                stat: &stat,
-                sha256: &sha256,
-                compiled_truth: "Stable body.",
-                timeline: "",
-            },
-        );
-        crate::core::raw_imports::rotate_active_raw_import(
-            &conn,
-            page_id,
-            "note.md",
-            content.as_bytes(),
-        )
-        .unwrap();
-
-        let before_full_hash_at =
-            crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-                .unwrap()
-                .expect("file_state row should exist")
-                .last_full_hash_at;
-        let stats = reconcile(&conn, &collection).unwrap();
-        let after_row = crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-            .unwrap()
-            .expect("file_state row should still exist");
-        let raw_import_rows: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(stats.unchanged, 1);
-        assert_eq!(stats.modified, 0);
-        assert_eq!(active_raw_import_count(&conn, page_id), 1);
-        assert_eq!(raw_import_rows, 1);
-        assert_eq!(active_raw_import_bytes(&conn, page_id), content.as_bytes());
-        assert_eq!(after_row.last_full_hash_at, before_full_hash_at);
     }
 
     #[cfg(unix)]
@@ -4435,22 +4374,6 @@ mod tests {
     }
 
     #[test]
-    fn collection_dirty_status_is_clean_without_flags_or_sentinels() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let recovery_root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-
-        let status = is_collection_dirty(&conn, collection.id, recovery_root.path()).unwrap();
-
-        assert!(!status.is_dirty());
-        assert!(!status.needs_full_sync);
-        assert_eq!(status.sentinel_count, 0);
-        assert!(!status.recovery_in_progress);
-        assert!(status.last_sync_at.is_none());
-    }
-
-    #[test]
     fn raw_import_invariant_result_reports_zero_rows_and_multi_active_histories() {
         let missing =
             raw_import_invariant_result(7, 0, 0, "reconcile", RawImportInvariantPolicy::Enforce)
@@ -4656,87 +4579,6 @@ mod tests {
         assert_eq!(second, DriftCaptureSummary::default());
     }
 
-    #[test]
-    fn remap_safety_pipeline_wrapper_source_skips_mount_verifier_only() {
-        let source = production_reconciler_source();
-        let start = source
-            .find("pub(crate) fn run_restore_remap_safety_pipeline_without_mount_check(")
-            .unwrap();
-        let end = source[start..]
-            .find("pub fn fresh_attach_reconcile_and_activate(")
-            .map(|offset| start + offset)
-            .unwrap();
-        let snippet = &source[start..end];
-
-        assert!(
-            snippet.contains("run_restore_remap_safety_pipeline_inner(conn, request, |_| Ok(()), || Ok(()))"),
-            "the no-mount wrapper must reuse the shared safety pipeline and only skip the mount verifier"
-        );
-    }
-
-    #[test]
-    fn remap_safety_pipeline_source_keeps_phase_order_before_dirty_recheck() {
-        let source = production_reconciler_source();
-        let start = source
-            .find("fn run_restore_remap_safety_pipeline_inner")
-            .expect("shared restore/remap safety pipeline must remain present");
-        let end = source[start..]
-            .find("pub fn run_restore_remap_safety_pipeline(")
-            .map(|offset| start + offset)
-            .expect("shared restore/remap safety wrapper must remain present");
-        let snippet = &source[start..end];
-        let phase1_idx = snippet
-            .find("let mut total_drift =")
-            .expect("phase 1 drift capture assignment must remain present");
-        let phase2_idx = snippet
-            .find("run_phase2_stability_check(")
-            .expect("phase 2 stability check must remain present");
-        let phase3_idx = snippet
-            .find("run_phase3_pre_destruction_fence(")
-            .expect("phase 3 fence must remain present");
-        let dirty_idx = snippet
-            .find("fresh_collection_dirty_status(")
-            .expect("fresh-connection dirty recheck must remain present");
-        assert!(
-            phase1_idx < phase2_idx && phase2_idx < phase3_idx && phase3_idx < dirty_idx,
-            "restore/remap safety must capture drift, prove stability, fence, then do the fresh dirty recheck"
-        );
-    }
-
-    #[test]
-    fn scheduled_full_hash_audit_source_uses_nofollow_fd_relative_reads() {
-        let source = production_reconciler_source();
-        let start = source
-            .find("pub fn scheduled_full_hash_audit_authorized(")
-            .expect("scheduled audit entrypoint must remain present");
-        let end = source[start..]
-            .find("fn authorize_full_hash_reconcile(")
-            .map(|offset| start + offset)
-            .expect("audit helper block must remain before authorization logic");
-        let snippet = &source[start..end];
-
-        assert!(
-            snippet.contains("let root_fd = fs_safety::open_root_fd(root_path)?;")
-                && snippet.contains("stat_and_hash_audit_path(&root_fd, relative_path)?")
-                && snippet.contains("fs_safety::walk_to_parent(root_fd, relative_path)")
-                && snippet
-                    .contains("fs_safety::stat_at_nofollow(&parent_fd, Path::new(entry_name))")
-                && snippet.contains("OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW"),
-            "scheduled audit must stay on fd-relative NOFOLLOW reads instead of path-based hashing"
-        );
-        assert!(
-            !snippet.contains("file_state::stat_file(&absolute_path)")
-                && !snippet.contains("file_state::hash_file(&absolute_path)"),
-            "scheduled audit must not fall back to path-based stat/hash reads that follow symlinks"
-        );
-        assert!(
-            snippet.contains("scheduled_full_hash_audit_missing_paths_marked_dirty")
-                && snippet.contains("SET needs_full_sync = 1")
-                && !snippet.contains("remaining_missing: plan.diff.missing.clone()"),
-            "scheduled audit must mark the collection dirty on missing paths instead of deleting pages inline"
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn scheduled_full_hash_audit_marks_collection_dirty_without_deleting_missing_pages() {
@@ -4814,59 +4656,6 @@ mod tests {
             .optional()
             .unwrap();
         assert_eq!(existing_page_id, Some(page_id));
-    }
-
-    #[test]
-    fn capture_phase1_drift_source_refuses_remap_on_material_changes() {
-        let source = production_reconciler_source();
-        let start = source.find("fn capture_phase1_drift(").unwrap();
-        let end = source[start..]
-            .find("fn run_phase2_stability_check")
-            .map(|offset| start + offset)
-            .unwrap();
-        let snippet = &source[start..end];
-
-        assert!(
-            snippet.contains("RestoreRemapOperation::Remap if summary.has_material_changes()")
-                && snippet.contains("ERROR: remap_drift_refused")
-                && snippet.contains("ReconcileError::RemapDriftConflictError"),
-            "Phase 1 remap capture must fail closed when old-root drift would otherwise be lost"
-        );
-    }
-
-    #[test]
-    fn capture_phase1_drift_source_logs_restore_capture_without_refusal() {
-        let source = production_reconciler_source();
-        let start = source.find("fn capture_phase1_drift(").unwrap();
-        let end = source[start..]
-            .find("fn run_phase2_stability_check")
-            .map(|offset| start + offset)
-            .unwrap();
-        let snippet = &source[start..end];
-
-        assert!(
-            snippet.contains("RestoreRemapOperation::Restore if summary.has_material_changes()")
-                && snippet.contains("WARN: restore_drift_captured"),
-            "Phase 1 restore capture must record the adopted drift without turning it into a remap-style refusal"
-        );
-    }
-
-    #[test]
-    fn authorize_full_hash_source_requires_active_lease_for_remap_modes() {
-        let source = production_reconciler_source();
-        let start = source.find("fn authorize_full_hash_reconcile(").unwrap();
-        let end = source[start..]
-            .find("fn require_persisted_full_hash_owner_match(")
-            .map(|offset| start + offset)
-            .unwrap();
-        let snippet = &source[start..end];
-
-        assert!(
-            snippet.contains("FullHashReconcileMode::RemapRoot,")
-                && snippet.contains("FullHashReconcileMode::RemapDriftCapture,")
-                && snippet.contains("FullHashReconcileAuthorization::ActiveLease { .. }"),
-            "both remap full-hash modes must stay bound to the active owner lease"
-        );
     }
 
     #[test]
@@ -5118,7 +4907,7 @@ mod tests {
             remaining_new: HashMap::from([
                 (native_to.clone(), stat.clone()),
                 (uuid_to.clone(), stat.clone()),
-                (hash_to.clone(), stat.clone()),
+                (hash_to.clone(), stat),
             ]),
             remaining_missing: HashSet::from([
                 native_from.clone(),
@@ -5139,7 +4928,7 @@ mod tests {
                 },
             ),
             (
-                uuid_from.clone(),
+                uuid_from,
                 MissingPageIdentity {
                     page_id: 2,
                     uuid: Some("uuid-match".to_owned()),
@@ -5149,7 +4938,7 @@ mod tests {
                 },
             ),
             (
-                hash_from.clone(),
+                hash_from,
                 MissingPageIdentity {
                     page_id: 3,
                     uuid: None,
@@ -5173,7 +4962,7 @@ mod tests {
             (
                 uuid_to.clone(),
                 NewTreeIdentity {
-                    relative_path: uuid_to.clone(),
+                    relative_path: uuid_to,
                     sha256: "uuid-hash".to_owned(),
                     uuid: Some("uuid-match".to_owned()),
                     body_size_bytes: 80,
@@ -5183,7 +4972,7 @@ mod tests {
             (
                 hash_to.clone(),
                 NewTreeIdentity {
-                    relative_path: hash_to.clone(),
+                    relative_path: hash_to,
                     sha256: "hash-match".to_owned(),
                     uuid: None,
                     body_size_bytes: 80,
@@ -5196,8 +4985,8 @@ mod tests {
             &mut resolution,
             &missing_identities,
             &[NativeRename {
-                from_path: native_from.clone(),
-                to_path: native_to.clone(),
+                from_path: native_from,
+                to_path: native_to,
             }],
             &new_identities,
         );
@@ -5222,68 +5011,6 @@ mod tests {
             .matches
             .iter()
             .any(|entry| entry.kind == RenameMatchKind::Hash));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn stat_diff_walk_classifies_new_modified_unchanged_and_missing_files() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        fs::create_dir_all(root.path().join("notes")).unwrap();
-        fs::write(root.path().join("notes").join("same.md"), "# same").unwrap();
-        fs::write(
-            root.path().join("notes").join("changed.md"),
-            "# changed on disk",
-        )
-        .unwrap();
-        fs::write(root.path().join("notes").join("new.md"), "# new").unwrap();
-        fs::write(root.path().join(".quaidignore"), "ignored/**\n").unwrap();
-        fs::create_dir_all(root.path().join("ignored")).unwrap();
-        fs::write(root.path().join("ignored").join("skip.md"), "# skip").unwrap();
-
-        let collection = insert_collection(&conn, root.path());
-        let same_stat = stat_for(root.path(), "notes/same.md");
-        seed_file_state(
-            &conn,
-            collection.id,
-            "notes/same",
-            "notes/same.md",
-            &same_stat,
-        );
-
-        let changed_stat = stat_for(root.path(), "notes/changed.md");
-        seed_file_state(
-            &conn,
-            collection.id,
-            "notes/changed",
-            "notes/changed.md",
-            &unique_old_stat(&changed_stat),
-        );
-
-        let missing_stat = FileStat {
-            mtime_ns: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or(Duration::from_secs(1))
-                .as_nanos() as i64,
-            ctime_ns: Some(1),
-            size_bytes: 12,
-            inode: Some(1),
-        };
-        seed_file_state(
-            &conn,
-            collection.id,
-            "notes/missing",
-            "notes/missing.md",
-            &missing_stat,
-        );
-
-        let diff = stat_diff(&conn, collection.id, root.path()).unwrap();
-
-        assert!(diff.unchanged.contains(Path::new("notes/same.md")));
-        assert!(diff.modified.contains_key(Path::new("notes/changed.md")));
-        assert!(diff.new.contains_key(Path::new("notes/new.md")));
-        assert!(diff.missing.contains(Path::new("notes/missing.md")));
-        assert!(!diff.new.contains_key(Path::new("ignored/skip.md")));
     }
 
     #[cfg(unix)]
@@ -5311,32 +5038,6 @@ mod tests {
         assert!(walked.files.contains_key(Path::new("notes/real.md")));
         assert!(!walked.files.contains_key(Path::new("notes/real-link.md")));
         assert!(!walked.files.contains_key(Path::new("linked-dir/inside.md")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_skips_symlinked_entries_at_the_reconciler_boundary() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        fs::create_dir_all(root.path().join("notes")).unwrap();
-        fs::write(root.path().join("notes").join("real.md"), "# real").unwrap();
-        symlink(
-            root.path().join("notes").join("real.md"),
-            root.path().join("notes").join("real-link.md"),
-        )
-        .unwrap();
-        fs::create_dir_all(root.path().join("actual")).unwrap();
-        fs::write(root.path().join("actual").join("inside.md"), "# hidden").unwrap();
-        symlink(root.path().join("actual"), root.path().join("linked-dir")).unwrap();
-
-        let collection = insert_collection(&conn, root.path());
-
-        let stats = reconcile(&conn, &collection).unwrap();
-
-        assert_eq!(stats.walked, 2);
-        assert_eq!(stats.new, 2);
-        assert_eq!(stats.modified, 0);
-        assert_eq!(stats.missing, 0);
     }
 
     #[cfg(unix)]
@@ -5580,141 +5281,6 @@ mod tests {
         assert!(rendered.contains("template.md"));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_halts_when_two_files_share_the_same_memory_id() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let uuid = "01969f11-9448-7d79-8d3f-c68f54769999";
-        let note_a = format!(
-            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is long enough to avoid the trivial-content path.\n"
-        );
-        let note_b = format!(
-            "---\nmemory_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis other body is also long enough to avoid the trivial-content path.\n"
-        );
-        fs::write(root.path().join("a.md"), note_a).unwrap();
-        fs::write(root.path().join("b.md"), note_b).unwrap();
-
-        let error = reconcile(&conn, &collection).unwrap_err().to_string();
-        let page_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pages WHERE collection_id = ?1",
-                [collection.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert!(error.contains("DuplicateUuidError"));
-        assert!(error.contains("a.md"));
-        assert!(error.contains("b.md"));
-        assert_eq!(
-            page_count, 0,
-            "duplicate uuid halt must abort before mutation"
-        );
-    }
-
-    fn insert_programmatic_link(conn: &Connection, page_a: i64, page_b: i64) {
-        conn.execute(
-            "INSERT INTO links (from_page_id, to_page_id, relationship, source_kind)
-             VALUES (?1, ?2, 'related', 'programmatic')",
-            rusqlite::params![page_a, page_b],
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn has_db_only_state_returns_true_for_programmatic_links_branch() {
-        let conn = open_test_db();
-        conn.execute(
-            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
-            [],
-        )
-        .unwrap();
-
-        let page_a = insert_page(&conn, 1, "notes/a");
-        let page_b = insert_page(&conn, 1, "notes/b");
-
-        insert_programmatic_link(&conn, page_a, page_b);
-        assert!(has_db_only_state(&conn, page_a).unwrap());
-    }
-
-    #[test]
-    fn has_db_only_state_returns_true_for_non_import_assertions_branch() {
-        let conn = open_test_db();
-        conn.execute(
-            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
-            [],
-        )
-        .unwrap();
-        let page_a = insert_page(&conn, 1, "notes/a");
-
-        conn.execute(
-            "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by)
-             VALUES (?1, 'A', 'knows', 'B', 'manual')",
-            rusqlite::params![page_a],
-        )
-        .unwrap();
-        assert!(has_db_only_state(&conn, page_a).unwrap());
-    }
-
-    #[test]
-    fn has_db_only_state_returns_true_for_raw_data_branch() {
-        let conn = open_test_db();
-        conn.execute(
-            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
-            [],
-        )
-        .unwrap();
-        let page_a = insert_page(&conn, 1, "notes/a");
-
-        conn.execute(
-            "INSERT INTO raw_data (page_id, source, data) VALUES (?1, 'api', '{}')",
-            rusqlite::params![page_a],
-        )
-        .unwrap();
-        assert!(has_db_only_state(&conn, page_a).unwrap());
-    }
-
-    #[test]
-    fn has_db_only_state_returns_true_for_contradictions_branch() {
-        let conn = open_test_db();
-        conn.execute(
-            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
-            [],
-        )
-        .unwrap();
-        let page_a = insert_page(&conn, 1, "notes/a");
-        let page_b = insert_page(&conn, 1, "notes/b");
-
-        conn.execute(
-            "INSERT INTO contradictions (page_id, other_page_id, type, description)
-             VALUES (?1, ?2, 'assertion_conflict', 'conflict')",
-            rusqlite::params![page_a, page_b],
-        )
-        .unwrap();
-        assert!(has_db_only_state(&conn, page_a).unwrap());
-    }
-
-    #[test]
-    fn has_db_only_state_returns_true_for_knowledge_gaps_branch() {
-        let conn = open_test_db();
-        conn.execute(
-            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
-            [],
-        )
-        .unwrap();
-        let page_a = insert_page(&conn, 1, "notes/a");
-
-        conn.execute(
-            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
-              VALUES (?1, 'gap-hash', 'context')",
-            rusqlite::params![page_a],
-        )
-        .unwrap();
-        assert!(has_db_only_state(&conn, page_a).unwrap());
-    }
-
     #[test]
     fn knowledge_gap_without_page_binding_does_not_preserve_missing_page() {
         let conn = open_test_db();
@@ -5775,122 +5341,6 @@ mod tests {
 
         assert_eq!(quarantined, 1);
         assert_eq!(hard_deleted, 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn full_hash_reconcile_aborts_before_mutation_when_a_page_has_zero_total_raw_import_rows() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        fs::write(root.path().join("note.md"), "# note").unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = stat_for(root.path(), "note.md");
-        let page_id = seed_file_state(&conn, collection.id, "notes/note", "note.md", &stat);
-
-        assert_eq!(active_raw_import_count(&conn, page_id), 0);
-
-        let err = full_hash_reconcile(&conn, collection.id)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("InvariantViolation"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn full_hash_reconcile_aborts_before_mutation_when_history_has_zero_active_raw_import_rows() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let content = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nUpdated body.\n";
-        fs::write(root.path().join("note.md"), content).unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = stat_for(root.path(), "note.md");
-        let sha256 = file_state::hash_file(&root.path().join("note.md")).unwrap();
-        let page_id = seed_page_with_identity(
-            &conn,
-            collection.id,
-            SeededPageIdentity {
-                slug: "notes/note",
-                uuid: "01969f11-9448-7d79-8d3f-c68f54761234",
-                relative_path: "note.md",
-                stat: &stat,
-                sha256: &sha256,
-                compiled_truth: "Updated body.",
-                timeline: "",
-            },
-        );
-        conn.execute(
-            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
-             VALUES (?1, ?2, 0, ?3, ?4)",
-            rusqlite::params![
-                page_id,
-                crate::core::page_uuid::generate_uuid_v7(),
-                b"stale",
-                "note.md"
-            ],
-        )
-        .unwrap();
-
-        let err = full_hash_reconcile(&conn, collection.id)
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("InvariantViolation"));
-        assert_eq!(active_raw_import_count(&conn, page_id), 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn full_hash_reconcile_unchanged_hash_updates_only_last_full_hash_at_without_rotation() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let content = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nStable body.\n";
-        fs::write(root.path().join("note.md"), content).unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = stat_for(root.path(), "note.md");
-        let sha256 = file_state::hash_file(&root.path().join("note.md")).unwrap();
-        let page_id = seed_page_with_identity(
-            &conn,
-            collection.id,
-            SeededPageIdentity {
-                slug: "notes/note",
-                uuid: "01969f11-9448-7d79-8d3f-c68f54761234",
-                relative_path: "note.md",
-                stat: &stat,
-                sha256: &sha256,
-                compiled_truth: "Stable body.",
-                timeline: "",
-            },
-        );
-        crate::core::raw_imports::rotate_active_raw_import(
-            &conn,
-            page_id,
-            "note.md",
-            content.as_bytes(),
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE file_state
-             SET last_full_hash_at = '2000-01-01T00:00:00Z'
-             WHERE collection_id = ?1 AND relative_path = 'note.md'",
-            [collection.id],
-        )
-        .unwrap();
-
-        let before_row = crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-            .unwrap()
-            .expect("file_state row should exist");
-
-        let stats = full_hash_reconcile(&conn, collection.id).unwrap();
-        let after_row = crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-            .unwrap()
-            .expect("file_state row should still exist");
-
-        assert_eq!(stats.unchanged, 1);
-        assert_eq!(stats.modified, 0);
-        assert_eq!(active_raw_import_count(&conn, page_id), 1);
-        assert_eq!(active_raw_import_bytes(&conn, page_id), content.as_bytes());
-        assert_eq!(after_row.sha256, before_row.sha256);
-        assert_ne!(after_row.last_full_hash_at, before_row.last_full_hash_at);
     }
 
     #[test]
@@ -6044,215 +5494,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn reconcile_hard_deletes_missing_pages_without_db_only_state() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = FileStat {
-            mtime_ns: 1,
-            ctime_ns: Some(1),
-            size_bytes: 10,
-            inode: Some(1),
-        };
-        let page_id = seed_file_state(&conn, collection.id, "notes/plain", "notes/plain.md", &stat);
-
-        let stats = reconcile(&conn, &collection).unwrap();
-        let page_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pages WHERE id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(stats.hard_deleted, 1);
-        assert_eq!(stats.quarantined_db_state, 0);
-        assert_eq!(page_count, 0);
-        assert!(
-            crate::core::file_state::get_file_state(&conn, collection.id, "notes/plain.md")
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_quarantines_missing_pages_with_db_only_state() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = FileStat {
-            mtime_ns: 1,
-            ctime_ns: Some(1),
-            size_bytes: 10,
-            inode: Some(1),
-        };
-        let page_id = seed_file_state(
-            &conn,
-            collection.id,
-            "notes/quarantined",
-            "notes/quarantined.md",
-            &stat,
-        );
-        let other_page = insert_page(&conn, collection.id, "notes/other");
-        insert_programmatic_link(&conn, page_id, other_page);
-
-        let stats = reconcile(&conn, &collection).unwrap();
-        let quarantined_at: Option<String> = conn
-            .query_row(
-                "SELECT quarantined_at FROM pages WHERE id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(stats.hard_deleted, 0);
-        assert_eq!(stats.quarantined_db_state, 1);
-        assert!(quarantined_at.is_some());
-        assert!(crate::core::file_state::get_file_state(
-            &conn,
-            collection.id,
-            "notes/quarantined.md"
-        )
-        .unwrap()
-        .is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_quarantines_missing_pages_for_each_db_only_state_branch() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-
-        let cases = [
-            ("programmatic-link", "missing/link.md"),
-            ("manual-assertion", "missing/assertion.md"),
-            ("raw-data", "missing/raw.md"),
-            ("contradiction", "missing/contradiction.md"),
-            ("knowledge-gap", "missing/gap.md"),
-        ];
-
-        for (index, (slug_suffix, relative_path)) in cases.iter().enumerate() {
-            let slug = format!("notes/{slug_suffix}");
-            let page_id = insert_page(&conn, collection.id, &slug);
-            let stat = FileStat {
-                mtime_ns: index as i64 + 1,
-                ctime_ns: Some(index as i64 + 1),
-                size_bytes: 10,
-                inode: Some(index as i64 + 1),
-            };
-            upsert_file_state(&conn, collection.id, relative_path, page_id, &stat, "hash").unwrap();
-
-            match *slug_suffix {
-                "programmatic-link" => {
-                    let other_page = insert_page(&conn, collection.id, "notes/other-link");
-                    conn.execute(
-                        "INSERT INTO links (from_page_id, to_page_id, relationship, source_kind)
-                         VALUES (?1, ?2, 'related', 'programmatic')",
-                        rusqlite::params![page_id, other_page],
-                    )
-                    .unwrap();
-                }
-                "manual-assertion" => {
-                    conn.execute(
-                        "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by)
-                         VALUES (?1, 'A', 'knows', 'B', 'manual')",
-                        rusqlite::params![page_id],
-                    )
-                    .unwrap();
-                }
-                "raw-data" => {
-                    conn.execute(
-                        "INSERT INTO raw_data (page_id, source, data) VALUES (?1, 'api', '{}')",
-                        rusqlite::params![page_id],
-                    )
-                    .unwrap();
-                }
-                "contradiction" => {
-                    let other_page = insert_page(&conn, collection.id, "notes/other-contradiction");
-                    conn.execute(
-                        "INSERT INTO contradictions (page_id, other_page_id, type, description)
-                         VALUES (?1, ?2, 'assertion_conflict', 'conflict')",
-                        rusqlite::params![page_id, other_page],
-                    )
-                    .unwrap();
-                }
-                "knowledge-gap" => {
-                    conn.execute(
-                        "INSERT INTO knowledge_gaps (page_id, query_hash, context)
-                         VALUES (?1, ?2, 'context')",
-                        rusqlite::params![page_id, format!("gap-hash-{index}")],
-                    )
-                    .unwrap();
-                }
-                _ => unreachable!(),
-            }
-        }
-
-        let stats = reconcile(&conn, &collection).unwrap();
-        assert_eq!(stats.quarantined_db_state, cases.len());
-        assert_eq!(stats.hard_deleted, 0);
-
-        for (slug_suffix, relative_path) in cases {
-            let quarantined_at: Option<String> = conn
-                .query_row(
-                    "SELECT quarantined_at FROM pages WHERE slug = ?1",
-                    [format!("notes/{slug_suffix}")],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert!(quarantined_at.is_some());
-            assert!(
-                crate::core::file_state::get_file_state(&conn, collection.id, relative_path)
-                    .unwrap()
-                    .is_none()
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_hard_deletes_missing_page_when_gap_is_not_attached_to_page() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let stat = FileStat {
-            mtime_ns: 1,
-            ctime_ns: Some(1),
-            size_bytes: 10,
-            inode: Some(1),
-        };
-        let page_id = seed_file_state(
-            &conn,
-            collection.id,
-            "notes/plain-gap",
-            "notes/plain-gap.md",
-            &stat,
-        );
-        conn.execute(
-            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
-             VALUES (NULL, 'orphan-gap', 'context')",
-            [],
-        )
-        .unwrap();
-
-        let stats = reconcile(&conn, &collection).unwrap();
-        let page_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pages WHERE id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(stats.hard_deleted, 1);
-        assert_eq!(stats.quarantined_db_state, 0);
-        assert_eq!(page_count, 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn reconcile_applies_hash_rename_and_rotates_raw_imports() {
         let conn = open_test_db();
         let root = TempDir::new().unwrap();
@@ -6311,346 +5552,6 @@ mod tests {
             1
         );
         assert_eq!(inactive_count, 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_changed_hash_modified_path_rotates_raw_imports_to_latest_bytes() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let original = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nOriginal body.\n";
-        fs::write(root.path().join("note.md"), original).unwrap();
-        let original_stat = stat_for(root.path(), "note.md");
-        let original_sha = file_state::hash_file(&root.path().join("note.md")).unwrap();
-        let page_id = seed_page_with_identity(
-            &conn,
-            collection.id,
-            SeededPageIdentity {
-                slug: "notes/note",
-                uuid: "01969f11-9448-7d79-8d3f-c68f54761234",
-                relative_path: "note.md",
-                stat: &original_stat,
-                sha256: &original_sha,
-                compiled_truth: "Original body.",
-                timeline: "",
-            },
-        );
-        crate::core::raw_imports::rotate_active_raw_import(
-            &conn,
-            page_id,
-            "note.md",
-            original.as_bytes(),
-        )
-        .unwrap();
-
-        let updated =
-            "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nUpdated body that is deliberately longer.\n";
-        fs::write(root.path().join("note.md"), updated).unwrap();
-
-        let stats = reconcile(&conn, &collection).unwrap();
-        let file_state_row =
-            crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-                .unwrap()
-                .expect("modified path should still be tracked");
-        let inactive_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1 AND is_active = 0",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let compiled_truth: String = conn
-            .query_row(
-                "SELECT compiled_truth FROM pages WHERE id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(stats.modified, 1);
-        assert_eq!(stats.unchanged, 0);
-        assert_eq!(
-            file_state_row.sha256,
-            file_state::hash_file(&root.path().join("note.md")).unwrap()
-        );
-        assert_eq!(active_raw_import_count(&conn, page_id), 1);
-        assert_eq!(active_raw_import_bytes(&conn, page_id), updated.as_bytes());
-        assert_eq!(inactive_count, 1);
-        assert_eq!(
-            compiled_truth.trim_end(),
-            "Updated body that is deliberately longer."
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_changed_hash_aborts_before_mutation_when_history_has_zero_active_raw_import_rows()
-    {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let original = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nOriginal body.\n";
-        fs::write(root.path().join("note.md"), original).unwrap();
-        let original_stat = stat_for(root.path(), "note.md");
-        let original_sha = file_state::hash_file(&root.path().join("note.md")).unwrap();
-        let page_id = seed_page_with_identity(
-            &conn,
-            collection.id,
-            SeededPageIdentity {
-                slug: "notes/note",
-                uuid: "01969f11-9448-7d79-8d3f-c68f54761234",
-                relative_path: "note.md",
-                stat: &original_stat,
-                sha256: &original_sha,
-                compiled_truth: "Original body.",
-                timeline: "",
-            },
-        );
-        conn.execute(
-            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
-             VALUES (?1, ?2, 0, ?3, ?4)",
-            rusqlite::params![
-                page_id,
-                crate::core::page_uuid::generate_uuid_v7(),
-                original.as_bytes(),
-                "note.md"
-            ],
-        )
-        .unwrap();
-        let before_row = crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-            .unwrap()
-            .expect("file_state row should exist");
-
-        let updated =
-            "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nUpdated body that is deliberately longer.\n";
-        fs::write(root.path().join("note.md"), updated).unwrap();
-
-        let error = reconcile(&conn, &collection).unwrap_err().to_string();
-        let after_row = crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-            .unwrap()
-            .expect("file_state row should still exist after abort");
-        let compiled_truth: String = conn
-            .query_row(
-                "SELECT compiled_truth FROM pages WHERE id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let raw_import_rows: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert!(error.contains("InvariantViolationError"));
-        assert_eq!(compiled_truth, "Original body.");
-        assert_eq!(after_row.sha256, before_row.sha256);
-        assert_eq!(active_raw_import_count(&conn, page_id), 0);
-        assert_eq!(raw_import_rows, 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn full_hash_reconcile_changed_hash_rotates_raw_imports_atomically() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let original = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nOriginal body.\n";
-        fs::write(root.path().join("note.md"), original).unwrap();
-        let original_stat = stat_for(root.path(), "note.md");
-        let original_sha = file_state::hash_file(&root.path().join("note.md")).unwrap();
-        let page_id = seed_page_with_identity(
-            &conn,
-            collection.id,
-            SeededPageIdentity {
-                slug: "notes/note",
-                uuid: "01969f11-9448-7d79-8d3f-c68f54761234",
-                relative_path: "note.md",
-                stat: &original_stat,
-                sha256: &original_sha,
-                compiled_truth: "Original body.",
-                timeline: "",
-            },
-        );
-        crate::core::raw_imports::rotate_active_raw_import(
-            &conn,
-            page_id,
-            "note.md",
-            original.as_bytes(),
-        )
-        .unwrap();
-
-        let updated =
-            "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nUpdated body that is deliberately longer.\n";
-        fs::write(root.path().join("note.md"), updated).unwrap();
-
-        let stats = full_hash_reconcile(&conn, collection.id).unwrap();
-        let file_state_row =
-            crate::core::file_state::get_file_state(&conn, collection.id, "note.md")
-                .unwrap()
-                .expect("file_state row should still exist");
-        let inactive_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1 AND is_active = 0",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(stats.modified, 1);
-        assert_eq!(active_raw_import_count(&conn, page_id), 1);
-        assert_eq!(active_raw_import_bytes(&conn, page_id), updated.as_bytes());
-        assert_eq!(inactive_count, 1);
-        assert_eq!(
-            file_state_row.sha256,
-            file_state::hash_file(&root.path().join("note.md")).unwrap()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_fails_closed_when_existing_page_has_zero_total_raw_imports_on_modified_path() {
-        // Nibbler adversarial seam: existing page on the stat-diff modified path with
-        // row_count == 0 must fail with InvariantViolationError, not silently bootstrap.
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-        let original = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nOriginal body.\n";
-        fs::write(root.path().join("note.md"), original).unwrap();
-        let original_stat = stat_for(root.path(), "note.md");
-        let original_sha = file_state::hash_file(&root.path().join("note.md")).unwrap();
-        let page_id = seed_page_with_identity(
-            &conn,
-            collection.id,
-            SeededPageIdentity {
-                slug: "notes/note",
-                uuid: "01969f11-9448-7d79-8d3f-c68f54761234",
-                relative_path: "note.md",
-                stat: &original_stat,
-                sha256: &original_sha,
-                compiled_truth: "Original body.",
-                timeline: "",
-            },
-        );
-        // Intentionally leave raw_imports empty (row_count == 0, not just active_count == 0).
-        let raw_import_rows_before: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(raw_import_rows_before, 0);
-
-        let updated = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nUpdated body.\n";
-        fs::write(root.path().join("note.md"), updated).unwrap();
-
-        let error = reconcile(&conn, &collection).unwrap_err().to_string();
-        let compiled_truth: String = conn
-            .query_row(
-                "SELECT compiled_truth FROM pages WHERE id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let raw_import_rows_after: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert!(error.contains("InvariantViolationError"));
-        assert_eq!(compiled_truth, "Original body.", "page must not be mutated");
-        assert_eq!(
-            raw_import_rows_after, 0,
-            "no raw_imports row must be bootstrapped"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_fails_closed_when_slug_matched_existing_page_has_zero_total_raw_imports() {
-        // Nibbler adversarial seam: existing page found via slug-match on the remaining_new
-        // path (existing_page_id = None at action construction time) must also fail closed
-        // when row_count == 0.
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-
-        // Insert page directly into pages with no file_state row — the stat-diff walk will
-        // never see it as modified/missing; it's invisible to rename resolution.
-        let page_id = insert_page(&conn, collection.id, "notes/note");
-        let raw_import_rows_before: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(raw_import_rows_before, 0);
-
-        // A new file appears with a slug that matches the existing DB page.
-        let content = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nNew path body.\n";
-        fs::write(root.path().join("new.md"), content).unwrap();
-
-        // reconcile: "new.md" is in remaining_new (no file_state entry),
-        // apply_reingest is called with existing_page_id = None,
-        // load_existing_page_identity finds the DB page by slug "notes/note",
-        // the zero-total-rows guard must fire before any mutation.
-        let error = reconcile(&conn, &collection).unwrap_err().to_string();
-        let raw_import_rows_after: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
-                [page_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert!(error.contains("InvariantViolationError"));
-        assert_eq!(
-            raw_import_rows_after, 0,
-            "no raw_imports row must be bootstrapped"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reconcile_commits_in_500_file_chunks() {
-        let conn = open_test_db();
-        let root = TempDir::new().unwrap();
-        let collection = insert_collection(&conn, root.path());
-
-        for index in 0..500 {
-            fs::write(
-                root.path().join(format!("note-{index:03}.md")),
-                format!(
-                    "---\nslug: notes/{index:03}\ntitle: Note {index}\ntype: concept\n---\nBody {index} with enough text to stay well formed.\n"
-                ),
-            )
-            .unwrap();
-        }
-        fs::write(
-            root.path().join("note-500.md"),
-            "---\nmemory_id: not-a-uuid\nslug: notes/500\ntitle: Broken\ntype: concept\n---\nBroken body.\n",
-        )
-        .unwrap();
-
-        let error = reconcile(&conn, &collection).unwrap_err().to_string();
-        let committed_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pages WHERE collection_id = ?1 AND slug LIKE 'notes/%'",
-                [collection.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert!(error.contains("invalid frontmatter uuid"));
-        assert_eq!(committed_count, 0);
     }
 
     // ── Coverage gap tests ────────────────────────────────────
@@ -6736,28 +5637,6 @@ mod tests {
         assert_eq!(left.pages_added, 22);
         assert_eq!(left.pages_quarantined, 33);
         assert_eq!(left.pages_deleted, 44);
-    }
-
-    #[test]
-    fn collection_dirty_status_is_dirty_when_only_sentinel_count_nonzero() {
-        let status = CollectionDirtyStatus {
-            needs_full_sync: false,
-            sentinel_count: 1,
-            recovery_in_progress: false,
-            last_sync_at: None,
-        };
-        assert!(status.is_dirty());
-    }
-
-    #[test]
-    fn collection_dirty_status_is_not_dirty_when_all_clear() {
-        let status = CollectionDirtyStatus {
-            needs_full_sync: false,
-            sentinel_count: 0,
-            recovery_in_progress: false,
-            last_sync_at: None,
-        };
-        assert!(!status.is_dirty());
     }
 
     #[test]
@@ -6906,9 +5785,9 @@ mod tests {
         let new_stat = stat_for(root.path(), "new.md");
 
         let walked_files = HashMap::from([
-            (PathBuf::from("unchanged.md"), unchanged_stat.clone()),
-            (PathBuf::from("modified.md"), modified_new_stat.clone()),
-            (PathBuf::from("new.md"), new_stat.clone()),
+            (PathBuf::from("unchanged.md"), unchanged_stat),
+            (PathBuf::from("modified.md"), modified_new_stat),
+            (PathBuf::from("new.md"), new_stat),
         ]);
 
         let plan = build_full_hash_plan(&conn, collection.id, root.path(), &walked_files).unwrap();
@@ -7060,68 +5939,6 @@ mod tests {
             RawImportInvariantPolicy::AllowRerenderOverride,
         );
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn reconcile_error_display_collection_lacks_writer_quiescence() {
-        let err = ReconcileError::CollectionLacksWriterQuiescenceError {
-            collection_name: "my-vault".to_owned(),
-            root_path: "/mnt/vault".to_owned(),
-        };
-        let s = err.to_string();
-        assert!(s.contains("CollectionLacksWriterQuiescenceError"));
-        assert!(s.contains("my-vault"));
-        assert!(s.contains("/mnt/vault"));
-    }
-
-    #[test]
-    fn reconcile_error_display_collection_dirty_error() {
-        let err = ReconcileError::CollectionDirtyError {
-            collection_name: "dirty-vault".to_owned(),
-            status: CollectionDirtyStatus {
-                needs_full_sync: true,
-                sentinel_count: 2,
-                recovery_in_progress: false,
-                last_sync_at: Some("2024-01-01T00:00:00Z".to_owned()),
-            },
-        };
-        let s = err.to_string();
-        assert!(s.contains("CollectionDirtyError"));
-        assert!(s.contains("dirty-vault"));
-        assert!(s.contains("needs_full_sync=true"));
-        assert!(s.contains("sentinel_count=2"));
-    }
-
-    #[test]
-    fn reconcile_error_display_remap_drift_conflict_error() {
-        let err = ReconcileError::RemapDriftConflictError {
-            collection_name: "remap-vault".to_owned(),
-            summary: DriftCaptureSummary {
-                pages_updated: 1,
-                pages_added: 2,
-                pages_quarantined: 0,
-                pages_deleted: 0,
-            },
-        };
-        let s = err.to_string();
-        assert!(s.contains("RemapDriftConflictError"));
-        assert!(s.contains("remap-vault"));
-        assert!(s.contains("pages_updated=1"));
-    }
-
-    #[test]
-    fn reconcile_error_display_collection_unstable_error() {
-        let err = ReconcileError::CollectionUnstableError {
-            collection_name: "unstable-vault".to_owned(),
-            operation: RestoreRemapOperation::Remap,
-            phase: "stability",
-            retries: 5,
-        };
-        let s = err.to_string();
-        assert!(s.contains("CollectionUnstableError"));
-        assert!(s.contains("unstable-vault"));
-        assert!(s.contains("operation=remap"));
-        assert!(s.contains("retries=5"));
     }
 
     #[test]

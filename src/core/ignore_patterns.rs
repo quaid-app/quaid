@@ -5,6 +5,11 @@
 // when the entire file is valid.
 
 #![allow(dead_code)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rusqlite::Connection;

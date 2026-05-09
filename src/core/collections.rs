@@ -4,6 +4,10 @@
 // ignore patterns, and write-target designation.
 
 #![allow(dead_code)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "addressed in remove-production-panic-paths"
+)]
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};

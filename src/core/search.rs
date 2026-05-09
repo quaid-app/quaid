@@ -16,7 +16,6 @@ use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 ///
 /// At most `limit` results are returned. The limit is pushed into the FTS5 query
 /// and applied after the merge step to cap memory usage.
-#[allow(dead_code)]
 pub fn hybrid_search(
     query: &str,
     wing: Option<&str>,
@@ -37,7 +36,6 @@ pub fn hybrid_search(
 }
 
 /// Namespace-aware variant of [`hybrid_search`].
-#[allow(dead_code)]
 pub fn hybrid_search_with_namespace(
     query: &str,
     wing: Option<&str>,
@@ -60,7 +58,6 @@ pub fn hybrid_search_with_namespace(
 }
 
 /// Hybrid search returning canonical `<collection>::<slug>` identifiers.
-#[allow(dead_code)]
 pub fn hybrid_search_canonical(
     query: &str,
     wing: Option<&str>,
@@ -102,7 +99,10 @@ pub fn hybrid_search_canonical_with_namespace(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal hybrid-search dispatcher binds the full search context (query, filters, namespace, conn, limit, canonical flag); the public wrappers are the right boundary for grouping and they call this directly"
+)]
 fn hybrid_search_impl(
     query: &str,
     wing: Option<&str>,

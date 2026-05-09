@@ -6,7 +6,18 @@
       "Bash(openspec status *)",
       "Bash(openspec instructions *)",
       "Bash(openspec --version)",
-      "Bash(openspec validate *)"
+      "Bash(openspec validate *)",
+      "Bash(awk *)",
+      "Read(//private/tmp/**)",
+      "Bash(cargo clippy *)",
+      "Bash(tee /tmp/clippy-after-purge.txt)",
+      "Read(//tmp/**)",
+      "Bash(grep *)",
+      "Skill(rust-best-practices)",
+      "Skill(rust-best-practices:*)",
+      "Bash(cargo test *)",
+      "Bash(cargo build *)",
+      "Bash(git add *)"
     ]
   }
 }

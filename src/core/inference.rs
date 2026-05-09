@@ -74,7 +74,6 @@ impl ModelConfig {
         &self.model_id
     }
 
-    #[allow(dead_code)]
     pub fn model_hint(&self) -> &str {
         if self.alias == "custom" {
             &self.model_id
@@ -83,7 +82,6 @@ impl ModelConfig {
         }
     }
 
-    #[allow(dead_code)]
     pub fn is_small(&self) -> bool {
         self.alias == "small" || self.model_id == "BAAI/bge-small-en-v1.5"
     }
@@ -192,7 +190,6 @@ pub fn resolve_model(input: &str) -> ModelConfig {
     }
 }
 
-#[allow(dead_code)]
 pub fn resolve_requested_model(input: Option<&str>) -> ModelConfig {
     let requested = resolve_model(input.unwrap_or(DEFAULT_MODEL_ALIAS));
     coerce_model_for_build(&requested)
@@ -256,7 +253,7 @@ fn model_runtime() -> &'static Mutex<ModelRuntime> {
 }
 
 pub fn configure_runtime_model(model: ModelConfig) {
-    let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    let mut runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
     if runtime.configured != model {
         runtime.configured = model;
         runtime.loaded = None;
@@ -270,7 +267,7 @@ pub fn set_model_config(model: ModelConfig) {
 fn runtime_model_config() -> ModelConfig {
     model_runtime()
         .lock()
-        .expect("model runtime lock poisoned")
+        .unwrap_or_else(|e| e.into_inner())
         .configured
         .clone()
 }
@@ -351,7 +348,10 @@ impl EmbeddingModel {
             return load_online_backend(config);
         }
 
-        #[allow(unreachable_code)]
+        #[expect(
+            unreachable_code,
+            reason = "either embedded-model or online-model feature returns above; this fallback only fires if neither is enabled at build time"
+        )]
         Err("no model channel enabled".to_owned())
     }
 
@@ -431,6 +431,10 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
         "bert" => {
             let config: BertConfig = serde_json::from_str(&config_text)
                 .map_err(|e| format!("parse config.json: {e}"))?;
+            #[expect(
+                unsafe_code,
+                reason = "candle's VarBuilder::from_mmaped_safetensors mmaps tensor data; safety hinges on the file not being mutated for the lifetime of the VarBuilder, which we uphold by reading from immutable on-disk model weights"
+            )]
             let vb = unsafe {
                 VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
                     .map_err(|e| format!("load model weights: {e}"))?
@@ -448,6 +452,10 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
             let max_len = read_max_position_embeddings_from_config(&config_path)?;
             let config: XLMRobertaConfig = serde_json::from_str(&config_text)
                 .map_err(|e| format!("parse config.json: {e}"))?;
+            #[expect(
+                unsafe_code,
+                reason = "candle's VarBuilder::from_mmaped_safetensors mmaps tensor data; safety hinges on the file not being mutated for the lifetime of the VarBuilder, which we uphold by reading from immutable on-disk model weights"
+            )]
             let vb = unsafe {
                 VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
                     .map_err(|e| format!("load model weights: {e}"))?
@@ -1031,7 +1039,7 @@ pub fn ensure_model() {
     // the expensive download/mmap so concurrent callers (e.g. `quaid serve`)
     // are not blocked for the full model-load duration.
     let needs_reload = {
-        let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+        let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
         runtime
             .loaded
             .as_ref()
@@ -1041,7 +1049,7 @@ pub fn ensure_model() {
 
     if needs_reload {
         let new_model = EmbeddingModel::new(configured.clone());
-        let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
+        let mut runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
         // Re-check in case another thread loaded the same model while we were
         // building it — avoid an unnecessary double-install.
         let still_needs_reload = runtime
@@ -1062,7 +1070,7 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
     }
 
     ensure_model();
-    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
     // Use `ok_or` rather than `expect` so a race between configure_runtime_model
     // (which sets loaded = None) and embed() returns an error instead of a panic.
     runtime
@@ -1076,7 +1084,7 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
 
 pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError> {
     ensure_model();
-    let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
     Ok(runtime
         .loaded
         .as_ref()
@@ -1086,7 +1094,6 @@ pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError
         .evidence_kind())
 }
 
-#[allow(dead_code)]
 pub fn search_vec(
     query: &str,
     k: usize,
@@ -1138,7 +1145,6 @@ pub fn search_vec_with_namespace_filtered(
     )
 }
 
-#[allow(dead_code)]
 pub fn search_vec_canonical(
     query: &str,
     k: usize,
@@ -1190,7 +1196,10 @@ pub fn search_vec_canonical_with_namespace_filtered(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal vector-search dispatcher binds the full search context (query, k, wing, collection, namespace, superseded flag, conn, canonical flag); the public wrappers are the right boundary for grouping"
+)]
 fn search_vec_internal(
     query: &str,
     k: usize,
@@ -1432,6 +1441,8 @@ fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use crate::core::db;
     use crate::core::types::Page;
@@ -1592,6 +1603,48 @@ mod tests {
     fn embed_hash_shim_uses_runtime_dimension() {
         let embedding = embed_hash_shim("test input", 1024).expect("hash shim");
         assert_eq!(embedding.len(), 1024);
+    }
+
+    #[test]
+    fn embed_recovers_from_poisoned_model_runtime_mutex() {
+        // Locks env_mutation_lock so we can safely toggle the hash-shim env
+        // var without racing other tests, mirroring the pattern at
+        // embed_returns_normalized_vector_of_expected_length.
+        let _env_guard = env_mutation_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _force_hash_shim = EnvVarGuard::set("QUAID_FORCE_HASH_SHIM", "1");
+
+        // Poison MODEL_RUNTIME by panicking inside its guard on a worker
+        // thread; .join() captures the panic so it does not propagate.
+        let join = std::thread::spawn(|| {
+            let _g = model_runtime().lock().unwrap();
+            panic!("intentional");
+        })
+        .join();
+        assert!(join.is_err(), "worker thread did not panic");
+
+        // After poisoning, both APIs that previously panicked on poisoned
+        // mutex acquisition must now recover and return Ok(_).
+        configure_runtime_model(default_model());
+        // Reset loaded so the env var is honored on the next embed call.
+        model_runtime()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .loaded = None;
+        let result = embed("recovery probe");
+        assert!(result.is_ok(), "embed failed after poison: {result:?}");
+
+        // Reset state so subsequent tests in the same process are not
+        // observably contaminated. clear_poison restores the mutex to a
+        // healthy state for sibling tests (e.g.
+        // embed_returns_normalized_vector_of_expected_length) that still
+        // call `.expect("lock")` on this same static mutex.
+        model_runtime()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .loaded = None;
+        model_runtime().clear_poison();
     }
 
     #[test]

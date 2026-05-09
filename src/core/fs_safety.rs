@@ -737,7 +737,7 @@ mod tests {
 
         let directory = FileStatNoFollow {
             mode_bits: 0o040755,
-            ..regular.clone()
+            ..regular
         };
         assert!(directory.is_directory());
         assert!(!directory.is_regular_file());
@@ -745,7 +745,7 @@ mod tests {
 
         let symlink = FileStatNoFollow {
             mode_bits: 0o120777,
-            ..regular.clone()
+            ..regular
         };
         assert!(symlink.is_symlink());
         assert!(!symlink.is_regular_file());

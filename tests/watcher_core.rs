@@ -1,3 +1,11 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
 #[cfg(unix)]
 mod watcher_core {
     use quaid::core::{db, fts, vault_sync};
@@ -43,6 +51,12 @@ mod watcher_core {
     }
 
     fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
+        // Canonicalize: macOS resolves /var → /private/var; FSEvents emits canonical
+        // paths. Storing a symlinked root_path makes the watcher's prefix-stripping
+        // miss every event. Match production behavior (add() canonicalizes via
+        // resolve_collection_root).
+        let root_path =
+            std::fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
         conn.execute(
             "INSERT INTO collections (name, root_path, state, writable, is_write_target)
              VALUES (?1, ?2, 'active', 1, 0)",

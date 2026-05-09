@@ -1,0 +1,444 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+)]
+
+//! Public-API integration tests for `quaid::mcp::server` covering the
+//! read-side tool surfaces — `memory_query`, `memory_search`, and
+//! `memory_list`. Exercises hybrid-search behavior, FTS5 sanitization,
+//! collection filtering and write-target defaults, the `auto`
+//! depth-expansion contract, and gap logging on weak results.
+
+#[path = "common/mcp_harness.rs"]
+mod harness;
+use harness::{
+    create_page, create_page_in_collection, extract_text, insert_collection, open_test_db,
+    set_collection_state,
+};
+use quaid::mcp::server::{
+    MemoryLinkInput, MemoryListInput, MemoryQueryInput, MemorySearchInput, QuaidServer,
+};
+use rmcp::model::ErrorCode;
+
+#[test]
+fn memory_query_auto_depth_expands_linked_results() {
+    let (_dir, conn) = open_test_db();
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "concepts/root",
+        "---\ntitle: Root\ntype: concept\n---\nalpha anchor\n",
+    );
+    create_page(
+        &server,
+        "concepts/child",
+        "---\ntitle: Child\ntype: concept\n---\nlinked expansion result\n",
+    );
+    server
+        .memory_link(MemoryLinkInput {
+            from_slug: "concepts/root".to_string(),
+            to_slug: "concepts/child".to_string(),
+            relationship: "related".to_string(),
+            valid_from: None,
+            valid_until: None,
+        })
+        .unwrap();
+
+    let result = server
+        .memory_query(MemoryQueryInput {
+            query: "alpha".to_string(),
+            collection: None,
+            namespace: None,
+            wing: None,
+            limit: Some(1),
+            depth: Some("auto".to_string()),
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert!(rows
+        .iter()
+        .any(|row| row["slug"] == "default::concepts/child"));
+}
+
+#[test]
+fn memory_query_auto_depth_does_not_expand_across_collections() {
+    let (_dir, conn) = open_test_db();
+    insert_collection(&conn, 2, "work", false);
+    let server = QuaidServer::new(conn);
+
+    // Anchor page in "default" — will match the query
+    create_page(
+        &server,
+        "concepts/anchor",
+        "---\ntitle: Anchor\ntype: concept\n---\ncross collection fence anchor\n",
+    );
+    // Outside page in "work" — linked from anchor but must NOT appear
+    create_page_in_collection(
+        &server,
+        "work",
+        "concepts/outside",
+        "---\ntitle: Outside\ntype: concept\n---\nshould not appear in filtered results\n",
+    );
+    // Cross-collection link: default::concepts/anchor -> work::concepts/outside
+    server
+        .memory_link(MemoryLinkInput {
+            from_slug: "default::concepts/anchor".to_string(),
+            to_slug: "work::concepts/outside".to_string(),
+            relationship: "related".to_string(),
+            valid_from: None,
+            valid_until: None,
+        })
+        .unwrap();
+
+    let result = server
+        .memory_query(MemoryQueryInput {
+            query: "cross collection fence anchor".to_string(),
+            collection: Some("default".to_string()),
+            namespace: None,
+            wing: None,
+            limit: Some(5),
+            depth: Some("auto".to_string()),
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row["slug"] == "work::concepts/outside"),
+        "depth=auto expansion must not cross into a different collection: got {rows:?}"
+    );
+}
+
+#[test]
+fn memory_query_explicit_collection_filter_returns_only_named_collection() {
+    let (_dir, conn) = open_test_db();
+    insert_collection(&conn, 2, "work", false);
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "notes/default-hit",
+        "---\ntitle: Default Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
+    );
+    create_page_in_collection(
+        &server,
+        "work",
+        "notes/work-hit",
+        "---\ntitle: Work Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
+    );
+
+    let result = server
+        .memory_query(MemoryQueryInput {
+            query: "robotics leadership".to_string(),
+            collection: Some("work".to_string()),
+            namespace: None,
+            wing: None,
+            limit: None,
+            depth: None,
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["slug"], "work::notes/work-hit");
+}
+
+#[test]
+fn memory_query_defaults_to_write_target_when_multiple_collections_are_active() {
+    let (_dir, conn) = open_test_db();
+    insert_collection(&conn, 2, "work", false);
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "notes/default-target",
+        "---\ntitle: Default Target\ntype: note\n---\nshared semantic marker\n",
+    );
+    create_page_in_collection(
+        &server,
+        "work",
+        "notes/work-target",
+        "---\ntitle: Work Target\ntype: note\n---\nshared semantic marker\n",
+    );
+
+    let result = server
+        .memory_query(MemoryQueryInput {
+            query: "shared semantic marker".to_string(),
+            collection: None,
+            namespace: None,
+            wing: None,
+            limit: None,
+            depth: None,
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["slug"], "default::notes/default-target");
+}
+
+#[test]
+fn memory_search_returns_matching_pages() {
+    let (_dir, conn) = open_test_db();
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "companies/acme",
+        "---\ntitle: Acme\ntype: company\n---\nAcme builds fundraising software.\n",
+    );
+
+    let result = server
+        .memory_search(MemorySearchInput {
+            query: "fundraising".to_string(),
+            collection: None,
+            namespace: None,
+            wing: None,
+            limit: None,
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows[0]["slug"], "default::companies/acme");
+}
+
+#[test]
+fn memory_search_natural_language_question_mark_returns_valid_response() {
+    let (_dir, conn) = open_test_db();
+    let server = QuaidServer::new(conn);
+
+    // '?' would be invalid FTS5 syntax if passed raw — memory_search must sanitize.
+    let result = server.memory_search(MemorySearchInput {
+        query: "what is CLARITY?".to_string(),
+        collection: None,
+        namespace: None,
+        wing: None,
+        limit: None,
+        include_superseded: None,
+    });
+
+    assert!(
+        result.is_ok(),
+        "memory_search with '?' must not return an MCP error: {result:?}"
+    );
+    // The response content must parse as a JSON array (empty or populated).
+    let text = extract_text(&result.unwrap());
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).expect("memory_search response must be valid JSON");
+    assert!(
+        parsed.is_array(),
+        "memory_search response must be a JSON array"
+    );
+}
+
+#[test]
+fn memory_search_explicit_collection_filter_returns_only_named_collection() {
+    let (_dir, conn) = open_test_db();
+    insert_collection(&conn, 2, "work", false);
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "notes/default-hit",
+        "---\ntitle: Default Hit\ntype: note\n---\nshared needle\n",
+    );
+    create_page_in_collection(
+        &server,
+        "work",
+        "notes/work-hit",
+        "---\ntitle: Work Hit\ntype: note\n---\nshared needle\n",
+    );
+
+    let result = server
+        .memory_search(MemorySearchInput {
+            query: "shared".to_string(),
+            collection: Some("work".to_string()),
+            namespace: None,
+            wing: None,
+            limit: None,
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["slug"], "work::notes/work-hit");
+}
+
+#[test]
+fn memory_search_defaults_to_single_active_collection() {
+    let (_dir, conn) = open_test_db();
+    insert_collection(&conn, 2, "work", false);
+    set_collection_state(&conn, "default", "detached");
+    let server = QuaidServer::new(conn);
+    create_page_in_collection(
+        &server,
+        "work",
+        "notes/only-active",
+        "---\ntitle: Only Active\ntype: note\n---\nsole active marker\n",
+    );
+
+    let result = server
+        .memory_search(MemorySearchInput {
+            query: "sole".to_string(),
+            collection: None,
+            namespace: None,
+            wing: None,
+            limit: None,
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["slug"], "work::notes/only-active");
+}
+
+#[test]
+fn memory_list_applies_wing_and_type_filters() {
+    let (_dir, conn) = open_test_db();
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "people/alice",
+        "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+    );
+    create_page(
+        &server,
+        "companies/acme",
+        "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+    );
+
+    let result = server
+        .memory_list(MemoryListInput {
+            collection: None,
+            namespace: None,
+            wing: Some("people".to_string()),
+            page_type: Some("person".to_string()),
+            limit: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["slug"], "default::people/alice");
+}
+
+#[test]
+fn memory_list_explicit_collection_filter_returns_only_named_collection() {
+    let (_dir, conn) = open_test_db();
+    insert_collection(&conn, 2, "work", false);
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "people/alice",
+        "---\ntitle: Alice Default\ntype: person\n---\nDefault Alice\n",
+    );
+    create_page_in_collection(
+        &server,
+        "work",
+        "people/alice",
+        "---\ntitle: Alice Work\ntype: person\n---\nWork Alice\n",
+    );
+
+    let result = server
+        .memory_list(MemoryListInput {
+            collection: Some("work".to_string()),
+            namespace: None,
+            wing: Some("people".to_string()),
+            page_type: Some("person".to_string()),
+            limit: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["slug"], "work::people/alice");
+}
+
+#[test]
+fn memory_list_defaults_to_write_target_when_multiple_collections_are_active() {
+    let (_dir, conn) = open_test_db();
+    insert_collection(&conn, 2, "work", false);
+    let server = QuaidServer::new(conn);
+    create_page(
+        &server,
+        "notes/default-target",
+        "---\ntitle: Default Target\ntype: note\n---\ndefault target body\n",
+    );
+    create_page_in_collection(
+        &server,
+        "work",
+        "notes/work-target",
+        "---\ntitle: Work Target\ntype: note\n---\nwork target body\n",
+    );
+
+    let result = server
+        .memory_list(MemoryListInput {
+            collection: None,
+            namespace: None,
+            wing: Some("notes".to_string()),
+            page_type: Some("note".to_string()),
+            limit: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["slug"], "default::notes/default-target");
+}
+
+#[test]
+fn read_tools_unknown_collection_filter_errors_clearly() {
+    let (_dir, conn) = open_test_db();
+    let server = QuaidServer::new(conn);
+
+    let query_error = server
+        .memory_query(MemoryQueryInput {
+            query: "anything".to_string(),
+            collection: Some("missing".to_string()),
+            namespace: None,
+            wing: None,
+            limit: None,
+            depth: None,
+            include_superseded: None,
+        })
+        .unwrap_err();
+    assert_eq!(query_error.code, ErrorCode(-32001));
+    assert!(query_error
+        .message
+        .contains("collection not found: missing"));
+
+    let search_error = server
+        .memory_search(MemorySearchInput {
+            query: "anything".to_string(),
+            collection: Some("missing".to_string()),
+            namespace: None,
+            wing: None,
+            limit: None,
+            include_superseded: None,
+        })
+        .unwrap_err();
+    assert_eq!(search_error.code, ErrorCode(-32001));
+    assert!(search_error
+        .message
+        .contains("collection not found: missing"));
+
+    let list_error = server
+        .memory_list(MemoryListInput {
+            collection: Some("missing".to_string()),
+            namespace: None,
+            wing: None,
+            page_type: None,
+            limit: None,
+        })
+        .unwrap_err();
+    assert_eq!(list_error.code, ErrorCode(-32001));
+    assert!(list_error.message.contains("collection not found: missing"));
+}

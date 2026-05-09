@@ -22,6 +22,8 @@ use crate::core::collections::CollectionError;
 use crate::core::reconciler::ReconcileError;
 
 #[cfg(unix)]
+use super::ipc::IpcError;
+#[cfg(unix)]
 use super::restore::ConflictError;
 use super::restore::RestoreError;
 #[cfg(unix)]
@@ -111,20 +113,4 @@ pub enum VaultSyncError {
 
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
-}
-
-#[cfg(unix)]
-#[derive(Debug, Error)]
-pub enum IpcError {
-    #[error("IpcDirectoryInsecureError: path={path} reason={reason}")]
-    IpcDirectoryInsecure { path: String, reason: String },
-
-    #[error("IpcSocketPermissionError: path={path} reason={reason}")]
-    IpcSocketPermission { path: String, reason: String },
-
-    #[error("IpcSocketCollisionError: path={path} reason={reason}")]
-    IpcSocketCollision { path: String, reason: String },
-
-    #[error("IpcPeerAuthFailedError: path={path} reason={reason}")]
-    IpcPeerAuthFailed { path: String, reason: String },
 }

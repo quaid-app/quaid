@@ -3,8 +3,6 @@ use std::fs;
 use std::io;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, BufWriter, Write};
-#[cfg(unix)]
-use std::mem::size_of;
 #[cfg(target_os = "linux")]
 use std::mem::zeroed;
 #[cfg(unix)]
@@ -172,6 +170,7 @@ pub struct RemapVerificationSummary {
 }
 
 mod error;
+mod ipc;
 mod ownership;
 #[cfg(unix)]
 mod precondition;
@@ -181,9 +180,21 @@ mod session;
 mod watcher;
 mod write_lock;
 
-#[cfg(unix)]
-pub use error::IpcError;
 pub use error::VaultSyncError;
+#[cfg(unix)]
+use ipc::socket::authorize_server_peer;
+#[cfg(unix)]
+pub(crate) use ipc::socket::{
+    authorize_client_peer, peer_credentials_for_stream, session_id_from_ipc_path,
+};
+#[cfg(unix)]
+pub use ipc::IpcError;
+#[cfg(all(test, unix))]
+pub(crate) use ipc::IpcPeerCredentials;
+#[cfg(unix)]
+pub(crate) use ipc::{IpcRequest, IpcResponse, LiveServeEndpoint};
+#[cfg(unix)]
+use ipc::{IpcSocketLocation, PublishedIpcSocket};
 pub use ownership::{
     acquire_owner_lease, ensure_no_live_serve_owner, ensure_no_live_serve_owner_for_root_path,
     live_collection_owner, owner_session_id, release_owner_lease, LiveCollectionOwner,
@@ -249,55 +260,6 @@ pub struct ServeRuntime {
     handle: Option<thread::JoinHandle<()>>,
     extractor_handle: Option<thread::JoinHandle<()>>,
     pub session_id: String,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IpcPeerCredentials {
-    pub pid: i32,
-    pub uid: u32,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Clone)]
-pub(crate) struct LiveServeEndpoint {
-    pub session_id: String,
-    pub pid: i64,
-    pub ipc_path: String,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum IpcRequest {
-    WhoAmI,
-    Put {
-        slug: String,
-        content: String,
-        expected_version: Option<i64>,
-    },
-}
-
-#[cfg(unix)]
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum IpcResponse {
-    WhoAmI { session_id: String },
-    PutOk { status: String },
-    Error { error: String },
-}
-
-#[cfg(unix)]
-struct PublishedIpcSocket {
-    listener: UnixListener,
-    path: PathBuf,
-}
-
-#[cfg(unix)]
-struct IpcSocketLocation {
-    runtime_root: PathBuf,
-    socket_dir: PathBuf,
-    create_runtime_root: bool,
 }
 
 impl Drop for ServeRuntime {
@@ -2947,157 +2909,6 @@ fn cleanup_published_ipc_socket(
         "UPDATE serve_sessions SET ipc_path = NULL WHERE session_id = ?1",
         [session_id],
     )?;
-    Ok(())
-}
-
-#[cfg(unix)]
-pub(crate) fn session_id_from_ipc_path(path: &Path) -> Option<String> {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(ToOwned::to_owned)
-}
-
-#[cfg(unix)]
-pub(crate) fn peer_credentials_for_stream(
-    stream: &UnixStream,
-) -> Result<IpcPeerCredentials, VaultSyncError> {
-    let fd = stream.as_raw_fd();
-    #[cfg(target_os = "linux")]
-    {
-        #[expect(
-            unsafe_code,
-            reason = "MaybeUninit-style zero-init of libc::ucred which is plain-old-data; subsequent getsockopt fills it in"
-        )]
-        let mut creds: libc::ucred = unsafe { zeroed() };
-        let mut len = size_of::<libc::ucred>() as libc::socklen_t;
-        #[expect(
-            unsafe_code,
-            reason = "POSIX getsockopt SO_PEERCRED is a syscall; we pass a valid fd, a stable libc::ucred buffer, and a matching length"
-        )]
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut creds as *mut libc::ucred).cast(),
-                &mut len,
-            )
-        };
-        if rc != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok(IpcPeerCredentials {
-            pid: creds.pid,
-            uid: creds.uid,
-        })
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut uid: libc::uid_t = 0;
-        let mut gid: libc::gid_t = 0;
-        #[expect(
-            unsafe_code,
-            reason = "POSIX getpeereid syscall; we pass a valid fd and stack-allocated outputs"
-        )]
-        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-        if rc != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        let mut pid: libc::pid_t = 0;
-        let mut len = size_of::<libc::pid_t>() as libc::socklen_t;
-        #[expect(
-            unsafe_code,
-            reason = "macOS LOCAL_PEERPID getsockopt syscall; we pass a valid fd, a stable pid_t buffer, and a matching length"
-        )]
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                0,
-                libc::LOCAL_PEERPID,
-                (&mut pid as *mut libc::pid_t).cast(),
-                &mut len,
-            )
-        };
-        if rc != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok(IpcPeerCredentials {
-            pid,
-            uid: uid as u32,
-        })
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        Err(VaultSyncError::InvariantViolation {
-            message: "peer credentials unsupported on this unix platform".to_owned(),
-        })
-    }
-}
-
-#[cfg(unix)]
-pub(crate) fn authorize_server_peer(
-    socket_path: &Path,
-    peer: &IpcPeerCredentials,
-) -> Result<(), VaultSyncError> {
-    if peer.uid != current_effective_uid() {
-        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "peer uid {} does not match current uid {}",
-                peer.uid,
-                current_effective_uid()
-            ),
-        }));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-pub(crate) fn authorize_client_peer(
-    socket_path: &Path,
-    path_session_id: &str,
-    owner_session_id: &str,
-    owner_pid: i64,
-    peer: &IpcPeerCredentials,
-    whoami_session_id: &str,
-) -> Result<(), VaultSyncError> {
-    if path_session_id != owner_session_id {
-        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "path session {} does not match owner session {}",
-                path_session_id, owner_session_id
-            ),
-        }));
-    }
-    if peer.uid != current_effective_uid() {
-        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "peer uid {} does not match current uid {}",
-                peer.uid,
-                current_effective_uid()
-            ),
-        }));
-    }
-    if i64::from(peer.pid) != owner_pid {
-        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "peer pid {} does not match owner pid {}",
-                peer.pid, owner_pid
-            ),
-        }));
-    }
-    if whoami_session_id != path_session_id {
-        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "whoami session {} does not match path session {}",
-                whoami_session_id, path_session_id
-            ),
-        }));
-    }
     Ok(())
 }
 

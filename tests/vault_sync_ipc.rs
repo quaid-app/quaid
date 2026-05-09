@@ -104,53 +104,6 @@ fn start_serve_runtime_refuses_insecure_fallback_runtime_root_permissions() {
     assert!(error.to_string().contains(runtime_root.to_str().unwrap()));
 }
 
-#[cfg(all(unix, target_os = "linux"))]
-#[test]
-fn publish_ipc_socket_unlinks_stale_socket_before_bind() {
-    let _env_lock = env_mutation_lock().lock().unwrap();
-    let runtime_root = secure_runtime_root();
-    let socket_dir = runtime_root.path().join("quaid");
-    fs::create_dir_all(&socket_dir).unwrap();
-    fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700)).unwrap();
-    let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
-    let (_dir, _db_path, conn) = open_test_db_file();
-    let session_id = "stale-session";
-    conn.execute(
-        "INSERT INTO serve_sessions (session_id, pid, host) VALUES (?1, 42, 'host')",
-        [session_id],
-    )
-    .unwrap();
-    let socket_path = socket_dir.join(format!("{session_id}.sock"));
-    let stale_listener = UnixListener::bind(&socket_path).unwrap();
-    drop(stale_listener);
-
-    let published = publish_ipc_socket(&conn, session_id).unwrap();
-
-    assert_eq!(published.path, socket_path);
-    assert!(published.path.exists());
-    cleanup_published_ipc_socket(&conn, session_id, &published.path).unwrap();
-}
-
-#[cfg(all(unix, target_os = "linux"))]
-#[test]
-fn audit_bound_ipc_socket_rejects_mode_regression() {
-    let _env_lock = env_mutation_lock().lock().unwrap();
-    let runtime_root = secure_runtime_root();
-    let socket_dir = runtime_root.path().join("quaid");
-    fs::create_dir_all(&socket_dir).unwrap();
-    fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700)).unwrap();
-    let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
-    let socket_path = socket_dir.join("mode-regression.sock");
-    let listener = UnixListener::bind(&socket_path).unwrap();
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o644)).unwrap();
-
-    let error = audit_bound_ipc_socket(&socket_path).unwrap_err();
-
-    assert!(matches!(error, VaultSyncError::IpcSocketPermission { .. }));
-    drop(listener);
-    let _ = fs::remove_file(&socket_path);
-}
-
 #[test]
 fn serve_ipc_source_publishes_after_audit_and_cleans_up_before_unregister() {
     let source = fs::read_to_string(

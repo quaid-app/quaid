@@ -87,10 +87,10 @@ const SELF_WRITE_DEDUP_SWEEP_SECS: u64 = 10;
 
 pub(super) struct RuntimeRegistries {
     supervisor_handles: Mutex<HashMap<i64, SupervisorHandle>>,
-    dedup: Mutex<HashSet<String>>,
+    pub(super) dedup: Mutex<HashSet<String>>,
     #[cfg(unix)]
     self_write_dedup: Mutex<HashMap<PathBuf, SelfWriteDedupEntry>>,
-    slug_writes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    pub(super) slug_writes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     pub(super) recovering_collections: Mutex<HashSet<i64>>,
 }
 
@@ -244,6 +244,7 @@ mod precondition;
 mod recovery;
 mod session;
 mod watcher;
+mod write_lock;
 
 #[cfg(unix)]
 pub use error::{ConflictError, IpcError};
@@ -277,6 +278,16 @@ use watcher::{
     WATCH_CHANNEL_CAPACITY,
 };
 pub use watcher::{WatcherHealthView, WatcherMode};
+#[cfg(all(test, unix))]
+pub use write_lock::has_write_dedup;
+pub use write_lock::with_write_slug_lock;
+#[cfg(unix)]
+pub use write_lock::{insert_write_dedup, remove_write_dedup};
+#[cfg(all(test, unix))]
+use write_lock::{
+    insert_writer_side_dedup_entry, remove_writer_side_dedup_entry, writer_side_dedup_contains,
+    writer_side_dedup_key,
+};
 
 pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError> {
     #[cfg(unix)]
@@ -968,72 +979,6 @@ pub fn mark_collection_needs_full_sync_via_fresh_connection(
     mark_collection_needs_full_sync(&fresh, collection_id)
 }
 
-#[cfg(unix)]
-pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    let inserted = registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .insert(key.to_owned());
-    if inserted {
-        Ok(())
-    } else {
-        Err(VaultSyncError::Watcher(WatcherError::DuplicateWriteDedup {
-            key: key.to_owned(),
-        }))
-    }
-}
-
-#[cfg(unix)]
-pub fn remove_write_dedup(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .remove(key);
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-pub fn has_write_dedup(key: &str) -> Result<bool, VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    Ok(registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .contains(key))
-}
-
-pub fn with_write_slug_lock<T, F>(
-    root_path: &str,
-    relative_path: &str,
-    action: F,
-) -> Result<T, VaultSyncError>
-where
-    F: FnOnce() -> T,
-{
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    let lock = {
-        let mut slug_writes =
-            registries
-                .slug_writes
-                .lock()
-                .map_err(|_| VaultSyncError::RegistryPoisoned {
-                    registry: "slug_writes",
-                })?;
-        slug_writes
-            .entry(format!("{root_path}:{relative_path}"))
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    };
-    let _guard = lock.lock().map_err(|_| VaultSyncError::RegistryPoisoned {
-        registry: "slug_write_guard",
-    })?;
-    Ok(action())
-}
-
 #[cfg(all(test, unix))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WriterSideSentinelCrashMode {
@@ -1057,43 +1002,6 @@ fn writer_side_tempfile_name(write_id: &str) -> String {
 #[cfg(all(test, unix))]
 fn writer_side_foreign_tempfile_name(write_id: &str) -> String {
     format!("{write_id}.foreign.tmp")
-}
-
-#[cfg(all(test, unix))]
-fn writer_side_dedup_key(target_path: &Path, bytes: &[u8]) -> String {
-    format!("{}::{}", target_path.display(), sha256_hex(bytes))
-}
-
-#[cfg(all(test, unix))]
-fn insert_writer_side_dedup_entry(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .insert(key.to_owned());
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-fn remove_writer_side_dedup_entry(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .remove(key);
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-fn writer_side_dedup_contains(key: &str) -> bool {
-    PROCESS_REGISTRIES
-        .get_or_init(RuntimeRegistries::new)
-        .dedup
-        .lock()
-        .unwrap()
-        .contains(key)
 }
 
 #[cfg(all(test, unix))]
@@ -5075,7 +4983,7 @@ fn samples_to_paths(samples: &[String]) -> Vec<PathBuf> {
     samples.iter().map(PathBuf::from).collect()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(digest.len() * 2);
     for byte in digest {

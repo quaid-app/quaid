@@ -42,9 +42,11 @@
   Confirm `passed >= baseline`, `failed == 0`. If not, stop and
   diagnose — do not commit. **passed=1357 failed=0 (matches
   baseline of 1357).**
-- [ ] 2.7 Commit with message body containing both pass counts and
+- [x] 2.7 Commit with message body containing both pass counts and
   the list of new `tests/db_*.rs` files. Do not include any other
-  changes in this commit.
+  changes in this commit. **Commit `f4b6c0a` records baseline=1357
+  and post-commit=1357 in its message body and lists the five new
+  `tests/db_*.rs` files.**
 
 ## 3. Migration: `src/commands/put.rs`
 
@@ -119,22 +121,39 @@
 
 ## 7. Migration: `src/core/vault_sync.rs` (largest, last)
 
-- [ ] 7.1 Apply scratch-file procedure to
+- [x] 7.1 Apply scratch-file procedure to
   [src/core/vault_sync.rs](../../../src/core/vault_sync.rs)'s `mod
   tests` at line 5909 (6,596-LOC block). Note: `vault_sync.rs` has
   five additional `#[cfg(test)]` markers earlier in the file (lines
   1001, 1026, 1250, 2568, 2572) — these are interleaved white-box
   helpers, not the bottom block, and are out of scope for this
-  migration. Do not touch them.
-- [ ] 7.2 Distribute moved tests across 6–10 `tests/vault_sync_*.rs`
+  migration. Do not touch them. **69 white-box tests stay inline
+  (67 fail to compile against the public API + 3 use private helpers
+  `startup_recovery_sentinel_count` / `include_str!("vault_sync.rs")`),
+  documented via a single module-level annotation listing the private
+  items used.**
+- [x] 7.2 Distribute moved tests across 6–10 `tests/vault_sync_*.rs`
   files (illustrative names from design.md §2: `vault_sync_ipc.rs`,
   `vault_sync_restore.rs`, `vault_sync_watcher.rs`,
   `vault_sync_session.rs`, `vault_sync_serialize.rs`,
-  `vault_sync_handshake.rs`). Each ≤ 1,500 LOC.
-- [ ] 7.3 Lift any newly-shared helpers to `tests/common/`.
-- [ ] 7.4 Run `cargo test`; confirm pass count match-or-grow vs the
+  `vault_sync_handshake.rs`). Each ≤ 1,500 LOC. **98 movable tests
+  across 8 files: `vault_sync_ipc.rs` (8), `vault_sync_runtime.rs`
+  (10), `vault_sync_handshake.rs` (13), `vault_sync_restore.rs` (24,
+  1003 LOC), `vault_sync_remap.rs` (23, 805 LOC), `vault_sync_watcher.rs`
+  (7), `vault_sync_audit.rs` (3), `vault_sync_misc.rs` (10). All ≤ 1500
+  LOC budget.**
+- [x] 7.3 Lift any newly-shared helpers to `tests/common/`.
+  **Added `tests/common/vault_sync_fixtures.rs` (254 LOC) with
+  `ENV_MUTATION_LOCK` + `env_mutation_lock`, `EnvVarGuard`,
+  `secure_runtime_root`, `open_test_db`, `open_test_db_file`,
+  `insert_collection`, `insert_collection_with_id`,
+  `insert_page_with_raw_import`, `write_restore_file`,
+  `production_vault_sync_source`, `manifest_json_for_directory`,
+  `wait_for_collection_update`, `create_startup_recovery_sentinel`,
+  `sha256_hex` — each used by ≥ 2 of the new files.**
+- [x] 7.4 Run `cargo test`; confirm pass count match-or-grow vs the
   prior commit; commit as a single atomic step with pass-count
-  evidence.
+  evidence. **passed=1357 failed=0 (matches baseline of 1357).**
 
 ## 8. Split: `tests/collection_cli_truth.rs` by command
 
@@ -158,13 +177,15 @@
   migration commits (db.rs, put.rs, collection.rs, mcp/server.rs,
   reconciler.rs, vault_sync.rs, collection_cli_truth.rs split). One
   optional eighth commit is allowed for an upfront `tests/common/`
-  helper, scheduled before §2 if needed. **6 migration commits on
-  branch (db, collection, reconciler, truth-split, mcp/server, put).
-  vault_sync.rs migration intentionally deferred to a later session
-  by the user; the seventh commit will arrive in that follow-up PR.**
+  helper, scheduled before §2 if needed. **All 7 migration commits
+  present: `f4b6c0a` (db), `5424cb1` (collection), `ab64567`
+  (reconciler), `f0e623e` (collection_cli_truth split), `c61a3db`
+  (put), `98866b4` (mcp/server), `fdf6a3c` (vault_sync). One
+  additional docs-only commit (`2370144`) records §9 verification
+  results.**
 - [x] 9.2 For each migration commit, confirm the commit body contains
   the before/after `passed=N` numbers per the test-organization spec.
-  **All 6 commits contain 2× `passed=` references each
+  **All 7 commits contain 2× `passed=` references each
   (baseline + this-commit), as expected.**
 - [x] 9.3 Spot-check 3 random commits with `git checkout <sha> &&
   cargo test`; each must build and pass independently (bisect
@@ -177,7 +198,7 @@
   numbers in the proposal's Impact section. **Reductions vs proposal
   baselines: db.rs 2028→1479 (-27%), put.rs 3246→2718 (-16%),
   collection.rs 4269→3368 (-21%), mcp/server.rs 5903→4022 (-32%),
-  reconciler.rs 7403→6220 (-16%). vault_sync.rs unchanged (deferred).
+  reconciler.rs 7403→6220 (-16%), vault_sync.rs 12504→8818 (-29%).
   None hit the literal "halved" target — the floor is set by the
   white-box residue (per spec: tests that touch private items stay
   inline, no visibility widening). The qualitative goal (production
@@ -190,10 +211,10 @@
   migrated source files is annotated per the test-organization spec
   (either per-test `// reason: white-box; needs ...` comments or a
   module-level annotation when ≥ 5 tests share the same reason).
-  **All 5 migrated source files (db.rs, put.rs, collection.rs,
-  mcp/server.rs, reconciler.rs) carry a module-level
+  **All 6 migrated source files (db.rs, put.rs, collection.rs,
+  mcp/server.rs, reconciler.rs, vault_sync.rs) carry a module-level
   `// reason: white-box; needs <list>` comment immediately above
-  `#[cfg(test)] mod tests`. vault_sync.rs unchanged (deferred).**
+  `#[cfg(test)] mod tests`.**
 
 ## 10. Wrap-up
 

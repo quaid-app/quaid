@@ -30,30 +30,16 @@ use crate::mcp::errors::{
     map_graph_error, map_namespace_error, map_search_error, map_turn_write_error,
     map_vault_sync_error, serialize_response,
 };
+use crate::mcp::validation::{
+    parse_temporal_filter, validate_close_action_status, validate_content, validate_relationship,
+    validate_slug, validate_tag_list, validate_temporal_value, validate_turn_timestamp,
+    MAX_GAP_CONTEXT_LEN, MAX_LIMIT, MAX_RAW_DATA_LEN,
+};
+#[cfg(test)]
+use crate::mcp::validation::{MAX_SLUG_LEN, MAX_TAGS_PER_REQUEST};
 
 type DbRef = Arc<Mutex<Connection>>;
 type SlmRef = Arc<dyn SlmClient + Send + Sync>;
-
-const MAX_SLUG_LEN: usize = 512;
-const MAX_CONTENT_LEN: usize = 1_048_576; // 1 MB
-const MAX_LIMIT: u32 = 1000;
-const MAX_RELATIONSHIP_LEN: usize = 64;
-const MAX_TAG_LEN: usize = 64;
-const MAX_TAGS_PER_REQUEST: usize = 100;
-const MAX_GAP_CONTEXT_LEN: usize = 500;
-const MAX_RAW_DATA_LEN: usize = 1_048_576; // 1 MB
-
-fn validate_slug(slug: &str) -> Result<(), rmcp::Error> {
-    if slug.is_empty() {
-        return Err(invalid_params("invalid slug: must not be empty"));
-    }
-    if slug.len() > MAX_SLUG_LEN {
-        return Err(invalid_params(format!(
-            "invalid slug: exceeds maximum length of {MAX_SLUG_LEN} characters"
-        )));
-    }
-    vault_sync::parse_slug_input(slug).map_err(|err| invalid_params(err.to_string()))
-}
 
 fn canonical_slug(collection_name: &str, slug: &str) -> String {
     format!("{collection_name}::{slug}")
@@ -136,25 +122,6 @@ fn canonicalize_page_for_mcp(
     rendered
 }
 
-fn validate_content(content: &str) -> Result<(), rmcp::Error> {
-    if content.len() > MAX_CONTENT_LEN {
-        return Err(invalid_params(format!(
-            "content too large: {} bytes exceeds maximum of {MAX_CONTENT_LEN} bytes",
-            content.len()
-        )));
-    }
-    Ok(())
-}
-
-fn validate_close_action_status(status: &str) -> Result<(), rmcp::Error> {
-    match status {
-        "done" | "cancelled" => Ok(()),
-        other => Err(invalid_params(format!(
-            "invalid status: expected 'done' or 'cancelled', got '{other}'"
-        ))),
-    }
-}
-
 fn append_note(body: &mut String, note: &str) {
     if note.trim().is_empty() {
         return;
@@ -170,135 +137,6 @@ fn append_note(body: &mut String, note: &str) {
     body.push_str(note);
 }
 
-fn validate_token(
-    value: &str,
-    field: &str,
-    max_len: usize,
-    allowed: fn(u8) -> bool,
-    allowed_hint: &str,
-) -> Result<(), rmcp::Error> {
-    if value.is_empty() {
-        return Err(invalid_params(format!(
-            "invalid {field}: must not be empty"
-        )));
-    }
-    if value.len() > max_len {
-        return Err(invalid_params(format!(
-            "invalid {field}: exceeds maximum length of {max_len} characters"
-        )));
-    }
-    if !value.bytes().all(allowed) {
-        return Err(invalid_params(format!(
-            "invalid {field}: allowed characters are {allowed_hint}"
-        )));
-    }
-    Ok(())
-}
-
-fn is_tag_byte(byte: u8) -> bool {
-    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
-}
-
-fn validate_relationship(relationship: &str) -> Result<(), rmcp::Error> {
-    validate_token(
-        relationship,
-        "relationship",
-        MAX_RELATIONSHIP_LEN,
-        is_tag_byte,
-        "[a-z0-9_-]",
-    )
-}
-
-fn validate_tag_list(tags: &[String], field: &str) -> Result<(), rmcp::Error> {
-    if tags.len() > MAX_TAGS_PER_REQUEST {
-        return Err(invalid_params(format!(
-            "invalid {field}: exceeds maximum of {MAX_TAGS_PER_REQUEST} tags"
-        )));
-    }
-    for tag in tags {
-        validate_token(tag, "tag", MAX_TAG_LEN, is_tag_byte, "[a-z0-9_-]")?;
-    }
-    Ok(())
-}
-
-fn parse_component(value: &str, start: usize, len: usize) -> Option<u32> {
-    value.get(start..start + len)?.parse().ok()
-}
-
-fn is_valid_temporal_value(value: &str) -> bool {
-    match value.len() {
-        7 => matches!(
-            (parse_component(value, 0, 4), value.as_bytes().get(4), parse_component(value, 5, 2)),
-            (Some(_year), Some(b'-'), Some(month)) if (1..=12).contains(&month)
-        ),
-        10 => matches!(
-            (
-                parse_component(value, 0, 4),
-                value.as_bytes().get(4),
-                parse_component(value, 5, 2),
-                value.as_bytes().get(7),
-                parse_component(value, 8, 2)
-            ),
-            (Some(_year), Some(b'-'), Some(month), Some(b'-'), Some(day))
-                if (1..=12).contains(&month) && (1..=31).contains(&day)
-        ),
-        20 => matches!(
-            (
-                parse_component(value, 0, 4),
-                value.as_bytes().get(4),
-                parse_component(value, 5, 2),
-                value.as_bytes().get(7),
-                parse_component(value, 8, 2),
-                value.as_bytes().get(10),
-                parse_component(value, 11, 2),
-                value.as_bytes().get(13),
-                parse_component(value, 14, 2),
-                value.as_bytes().get(16),
-                parse_component(value, 17, 2),
-                value.as_bytes().get(19)
-            ),
-            (
-                Some(_year),
-                Some(b'-'),
-                Some(month),
-                Some(b'-'),
-                Some(day),
-                Some(b'T'),
-                Some(hour),
-                Some(b':'),
-                Some(minute),
-                Some(b':'),
-                Some(second),
-                Some(b'Z')
-            ) if (1..=12).contains(&month)
-                && (1..=31).contains(&day)
-                && hour <= 23
-                && minute <= 59
-                && second <= 59
-        ),
-        _ => false,
-    }
-}
-
-fn validate_temporal_value(value: &str, field: &str) -> Result<(), rmcp::Error> {
-    if is_valid_temporal_value(value) {
-        Ok(())
-    } else {
-        Err(invalid_params(format!(
-            "invalid {field}: expected YYYY-MM, YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SSZ"
-        )))
-    }
-}
-
-fn validate_turn_timestamp(value: &str) -> Result<(), rmcp::Error> {
-    if value.len() == 20 && is_valid_temporal_value(value) {
-        Ok(())
-    } else {
-        Err(invalid_params(
-            "invalid timestamp: expected YYYY-MM-DDTHH:MM:SSZ".to_owned(),
-        ))
-    }
-}
 
 fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
     let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false").map_err(
@@ -326,18 +164,6 @@ fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
             None,
         )
     })
-}
-
-fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp::Error> {
-    match temporal.unwrap_or("active") {
-        "active" | "current" => Ok(TemporalFilter::Active),
-        "all" | "history" => Ok(TemporalFilter::All),
-        other => Err(rmcp::Error::new(
-            ErrorCode(-32602),
-            format!("invalid temporal filter: {other}"),
-            None,
-        )),
-    }
 }
 
 #[derive(Clone)]

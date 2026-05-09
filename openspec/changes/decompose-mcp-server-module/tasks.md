@@ -18,12 +18,12 @@
 
 ## 3. Commit 2: Extract `mcp/validation.rs`
 
-- [ ] 3.1 Create `src/mcp/validation.rs` with a `//!` paragraph.
-- [ ] 3.2 Cut the validators block (`server.rs:38–356`: `validate_slug`, `validate_token`, `validate_temporal_value`, plus any helpers they call that are not used elsewhere) verbatim into `src/mcp/validation.rs`.
-- [ ] 3.3 Update `src/mcp/mod.rs`: `pub mod validation;` and `pub use validation::{validate_slug, validate_token, validate_temporal_value};`.
-- [ ] 3.4 `cargo build && cargo test` MUST pass.
-- [ ] 3.5 `wc -l src/mcp/validation.rs` MUST be ≤ 800.
-- [ ] 3.6 Commit.
+- [x] 3.1 Create `src/mcp/validation.rs` with a `//!` paragraph.
+- [x] 3.2 Cut the validators block (`server.rs:38–356`: `validate_slug`, `validate_token`, `validate_temporal_value`, plus any helpers they call that are not used elsewhere) verbatim into `src/mcp/validation.rs`.
+- [x] 3.3 Update `src/mcp/mod.rs`: `pub mod validation;` and `pub use validation::{validate_slug, validate_token, validate_temporal_value};`.
+- [x] 3.4 `cargo build && cargo test` MUST pass.
+- [x] 3.5 `wc -l src/mcp/validation.rs` MUST be ≤ 800. (210 lines.)
+- [x] 3.6 Commit.
 
 ## 4. Commit 3: Error-mapping audit (§2.4)
 

@@ -33,9 +33,7 @@ use uuid::Uuid;
 
 use quaid::core::db;
 use quaid::core::markdown;
-use quaid::core::vault_sync::{
-    build_restore_manifest_for_directory, collection_recovery_dir,
-};
+use quaid::core::vault_sync::{build_restore_manifest_for_directory, collection_recovery_dir};
 
 pub static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 

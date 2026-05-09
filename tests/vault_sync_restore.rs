@@ -20,26 +20,26 @@ mod fixtures;
 use fixtures::*;
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
-use std::time::{Duration, Instant, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
 use quaid::core::collections::{Collection, CollectionState};
 use quaid::core::db;
+#[cfg(unix)]
+use quaid::core::file_state;
 use quaid::core::fs_safety;
 use quaid::core::markdown;
 use quaid::core::raw_imports;
-#[cfg(unix)]
-use quaid::core::file_state;
 use quaid::core::vault_sync::*;
 
 #[test]
@@ -602,8 +602,7 @@ fn complete_attach_source_is_reentry_guarded_by_needs_full_sync() {
     let snippet = &source[start..end];
 
     assert!(
-        snippet.contains("if !collection.needs_full_sync")
-            && snippet.contains("return Ok(false);"),
+        snippet.contains("if !collection.needs_full_sync") && snippet.contains("return Ok(false);"),
         "complete_attach must fail closed to a no-op when the write gate is already cleared"
     );
     assert!(

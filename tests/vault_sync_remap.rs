@@ -20,26 +20,26 @@ mod fixtures;
 use fixtures::*;
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
-use std::time::{Duration, Instant, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
 use quaid::core::collections::{Collection, CollectionState};
 use quaid::core::db;
+#[cfg(unix)]
+use quaid::core::file_state;
 use quaid::core::fs_safety;
 use quaid::core::markdown;
 use quaid::core::raw_imports;
-#[cfg(unix)]
-use quaid::core::file_state;
 use quaid::core::vault_sync::*;
 
 #[test]
@@ -84,9 +84,8 @@ fn remap_online_source_defers_attach_to_rcrt_and_remap_attach_reason_appears_onc
         .unwrap();
     let remap_source = &source[remap_start..remap_end];
     assert!(
-        remap_source.contains(
-            "wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?"
-        ),
+        remap_source
+            .contains("wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?"),
         "online remap must wait for the exact watcher ack before mutating DB state"
     );
     assert!(

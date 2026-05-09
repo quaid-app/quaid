@@ -20,26 +20,26 @@ mod fixtures;
 use fixtures::*;
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
-use std::time::{Duration, Instant, UNIX_EPOCH};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
 use quaid::core::collections::{Collection, CollectionState};
 use quaid::core::db;
+#[cfg(unix)]
+use quaid::core::file_state;
 use quaid::core::fs_safety;
 use quaid::core::markdown;
 use quaid::core::raw_imports;
-#[cfg(unix)]
-use quaid::core::file_state;
 use quaid::core::vault_sync::*;
 
 #[test]
@@ -61,8 +61,7 @@ fn sync_collection_watchers_production_logic_stays_active_only_and_generation_aw
         "watcher sync must only enumerate active collections: {snippet}"
     );
     assert!(
-        snippet
-            .contains("watchers.retain(|collection_id, _| active.contains_key(collection_id))"),
+        snippet.contains("watchers.retain(|collection_id, _| active.contains_key(collection_id))"),
         "watcher sync must drop watchers for non-active collections: {snippet}"
     );
     assert!(

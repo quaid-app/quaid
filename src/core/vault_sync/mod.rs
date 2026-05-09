@@ -242,6 +242,7 @@ mod ownership;
 #[cfg(unix)]
 mod precondition;
 mod recovery;
+mod session;
 mod watcher;
 
 #[cfg(unix)]
@@ -262,6 +263,10 @@ pub(crate) use recovery::set_collection_recovery_in_progress_for_test;
 use recovery::{bootstrap_recovery_directories, recovery_sentinel_paths, RecoveryInProgressGuard};
 pub use recovery::{
     collection_recovery_dir, collection_recovery_in_progress, recovery_root_for_db_path,
+};
+pub use session::{
+    heartbeat_session, register_cli_session, register_session, sweep_stale_sessions,
+    unregister_session,
 };
 #[cfg(unix)]
 pub use watcher::WatcherError;
@@ -1385,71 +1390,6 @@ pub(crate) fn resume_orphaned_embedding_jobs(conn: &Connection) -> Result<usize,
 pub fn database_path(conn: &Connection) -> Result<String, VaultSyncError> {
     conn.query_row("PRAGMA database_list", [], |row| row.get::<_, String>(2))
         .map_err(Into::into)
-}
-
-pub fn register_session(conn: &Connection) -> Result<String, VaultSyncError> {
-    let session_id = Uuid::now_v7().to_string();
-    conn.execute(
-        "INSERT INTO serve_sessions (session_id, pid, host) VALUES (?1, ?2, ?3)",
-        params![session_id, std::process::id() as i64, current_host()],
-    )?;
-    Ok(session_id)
-}
-
-pub fn register_cli_session(conn: &Connection) -> Result<String, VaultSyncError> {
-    let session_id = Uuid::now_v7().to_string();
-    conn.execute(
-        "INSERT INTO serve_sessions (session_id, pid, host, session_type) VALUES (?1, ?2, ?3, 'cli')",
-        params![session_id, std::process::id() as i64, current_host()],
-    )?;
-    Ok(session_id)
-}
-
-pub fn unregister_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM collection_owners WHERE session_id = ?1",
-        [session_id],
-    )?;
-    tx.execute(
-        "DELETE FROM serve_sessions WHERE session_id = ?1",
-        [session_id],
-    )?;
-    tx.execute(
-        "UPDATE collections
-         SET active_lease_session_id = CASE
-                 WHEN active_lease_session_id = ?1 THEN NULL
-                 ELSE active_lease_session_id
-             END,
-             restore_lease_session_id = CASE
-                 WHEN restore_lease_session_id = ?1 THEN NULL
-                 ELSE restore_lease_session_id
-             END,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE active_lease_session_id = ?1 OR restore_lease_session_id = ?1",
-        [session_id],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
-pub fn heartbeat_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
-    conn.execute(
-        "UPDATE serve_sessions
-         SET heartbeat_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE session_id = ?1",
-        [session_id],
-    )?;
-    Ok(())
-}
-
-pub fn sweep_stale_sessions(conn: &Connection) -> Result<usize, VaultSyncError> {
-    let removed = conn.execute(
-        "DELETE FROM serve_sessions
-         WHERE heartbeat_at < datetime('now', ?1)",
-        [format!("-{SESSION_LIVENESS_SECS} seconds")],
-    )?;
-    Ok(removed)
 }
 
 fn collection_ids_for_root_path(

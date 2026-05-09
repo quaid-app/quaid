@@ -1,3 +1,12 @@
+//! `QuaidServer` definition and bootstrap. Owns the struct, the input
+//! types every `#[tool]` method consumes (kept here so domain submodules
+//! don't have to circular-import each other), the small set of free
+//! helpers that resolve slugs and read configuration, the central
+//! `rmcp::tool_box!` registry listing every tool exposed by the MCP wire
+//! surface, and the `ServerHandler` impl that wires the registry into the
+//! `tools/list` and `tools/call` handlers. Tool method bodies themselves
+//! live under `crate::mcp::tools::*`.
+
 use std::sync::{Arc, Mutex};
 
 use rmcp::model::*;

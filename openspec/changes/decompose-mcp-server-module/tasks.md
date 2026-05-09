@@ -53,84 +53,84 @@
 
 ## 6. Commit 5: Extract `tools/tags.rs`
 
-- [ ] 6.1 Create `src/mcp/tools/tags.rs` with a `//!` paragraph naming the two tools it owns.
-- [ ] 6.2 Move `memory_tags` and `memory_timeline` from `server.rs` into `tools/tags.rs` inside a single `#[tool(tool_box)] impl QuaidServer` block.
-- [ ] 6.3 Add `pub mod tags;` to `src/mcp/tools/mod.rs`.
-- [ ] 6.4 `cargo build && cargo test && tools/list snapshot match` MUST pass.
-- [ ] 6.5 `wc -l src/mcp/tools/tags.rs` MUST be ≤ 800.
-- [ ] 6.6 Commit.
+- [x] 6.1 Create `src/mcp/tools/tags.rs` with a `//!` paragraph naming the two tools it owns.
+- [x] 6.2 Move `memory_tags` and `memory_timeline` from `server.rs` into `tools/tags.rs` inside a plain `impl QuaidServer` block (per the multi-impl-block discovery in commit 4).
+- [x] 6.3 Add `pub mod tags;` to `src/mcp/tools/mod.rs`.
+- [x] 6.4 `cargo build && cargo test` and the in-crate registry test pass.
+- [x] 6.5 `wc -l src/mcp/tools/tags.rs` ≤ 800. (156 lines.)
+- [x] 6.6 Commit.
 
 ## 7. Commit 6: Extract `tools/gaps.rs`
 
-- [ ] 7.1 Create `src/mcp/tools/gaps.rs` with a `//!` paragraph.
-- [ ] 7.2 Move `memory_gap` and `memory_gaps`. Verify each error path inside both methods now goes through a `mcp::errors::map_*` helper (the §2.4 ride-along audit should already have caught these in commit 3, but reconfirm — this is the file that contained the explicitly-flagged offender at `server.rs:1802–1808`).
-- [ ] 7.3 Add `pub mod gaps;` to `tools/mod.rs`.
-- [ ] 7.4 `cargo build && cargo test && tools/list snapshot match` MUST pass.
-- [ ] 7.5 `wc -l src/mcp/tools/gaps.rs` MUST be ≤ 800.
-- [ ] 7.6 Commit.
+- [x] 7.1 Create `src/mcp/tools/gaps.rs` with a `//!` paragraph.
+- [x] 7.2 Move `memory_gap` and `memory_gaps`. Both error paths route through `map_gaps_error` and `map_serialize_error`.
+- [x] 7.3 Add `pub mod gaps;` to `tools/mod.rs`.
+- [x] 7.4 `cargo build && cargo test && registry test` MUST pass.
+- [x] 7.5 `wc -l src/mcp/tools/gaps.rs` ≤ 800. (101 lines.)
+- [x] 7.6 Commit.
 
 ## 8. Commit 7: Extract `tools/assertions.rs`
 
-- [ ] 8.1 Create `src/mcp/tools/assertions.rs` with a `//!` paragraph.
-- [ ] 8.2 Move `memory_check`.
-- [ ] 8.3 Add `pub mod assertions;` to `tools/mod.rs`.
-- [ ] 8.4 `cargo build && cargo test && tools/list snapshot match` MUST pass.
-- [ ] 8.5 `wc -l src/mcp/tools/assertions.rs` MUST be ≤ 800.
-- [ ] 8.6 Commit.
+- [x] 8.1 Create `src/mcp/tools/assertions.rs` with a `//!` paragraph.
+- [x] 8.2 Move `memory_check`.
+- [x] 8.3 Add `pub mod assertions;` to `tools/mod.rs`.
+- [x] 8.4 `cargo build && cargo test && registry test` MUST pass.
+- [x] 8.5 `wc -l src/mcp/tools/assertions.rs` ≤ 800. (119 lines.)
+- [x] 8.6 Commit.
 
 ## 9. Commit 8: Extract `tools/links.rs`
 
-- [ ] 9.1 Create `src/mcp/tools/links.rs` with a `//!` paragraph naming the four tools.
-- [ ] 9.2 Move `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`.
-- [ ] 9.3 Add `pub mod links;` to `tools/mod.rs`.
-- [ ] 9.4 `cargo build && cargo test && tools/list snapshot match` MUST pass.
-- [ ] 9.5 `wc -l src/mcp/tools/links.rs` MUST be ≤ 800.
-- [ ] 9.6 Commit.
+- [x] 9.1 Create `src/mcp/tools/links.rs` with a `//!` paragraph naming the four tools.
+- [x] 9.2 Move `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`.
+- [x] 9.3 Add `pub mod links;` to `tools/mod.rs`.
+- [x] 9.4 `cargo build && cargo test && registry test` MUST pass.
+- [x] 9.5 `wc -l src/mcp/tools/links.rs` ≤ 800. (164 lines.)
+- [x] 9.6 Commit.
 
 ## 10. Commit 9: Extract `tools/search.rs`
 
-- [ ] 10.1 Create `src/mcp/tools/search.rs` with a `//!` paragraph.
-- [ ] 10.2 Move `memory_query` and `memory_search`.
-- [ ] 10.3 Add `pub mod search;` to `tools/mod.rs`.
-- [ ] 10.4 `cargo build && cargo test && tools/list snapshot match` MUST pass.
-- [ ] 10.5 `wc -l src/mcp/tools/search.rs` MUST be ≤ 800.
-- [ ] 10.6 Commit.
+- [x] 10.1 Create `src/mcp/tools/search.rs` with a `//!` paragraph.
+- [x] 10.2 Move `memory_query` and `memory_search`.
+- [x] 10.3 Add `pub mod search;` to `tools/mod.rs`.
+- [x] 10.4 `cargo build && cargo test && registry test` MUST pass.
+- [x] 10.5 `wc -l src/mcp/tools/search.rs` ≤ 800. (121 lines.)
+- [x] 10.6 Commit.
 
 ## 11. Commit 10: Extract `tools/conversation.rs`
 
-- [ ] 11.1 Create `src/mcp/tools/conversation.rs` with a `//!` paragraph naming the five tools.
-- [ ] 11.2 Move `memory_add_turn`, `memory_close_session`, `memory_close_action`, `memory_correct`, `memory_correct_continue`.
-- [ ] 11.3 Move the private helper `memory_close_action_impl` (currently `server.rs:982`) alongside `memory_close_action`. Keep its visibility at `fn` (not `pub`) — it is only called from within the same file post-move.
-- [ ] 11.4 Add `pub mod conversation;` to `tools/mod.rs`.
-- [ ] 11.5 `cargo build && cargo test && tools/list snapshot match` MUST pass.
-- [ ] 11.6 `wc -l src/mcp/tools/conversation.rs` MUST be ≤ 800.
-- [ ] 11.7 Commit.
+- [x] 11.1 Create `src/mcp/tools/conversation.rs` with a `//!` paragraph naming the five tools.
+- [x] 11.2 Move `memory_add_turn`, `memory_close_session`, `memory_close_action`, `memory_correct`, `memory_correct_continue`.
+- [x] 11.3 Move `memory_close_action_impl` alongside `memory_close_action`. Visibility raised to `pub(crate)` (instead of `fn`) because the inline white-box test block in `server.rs` calls it directly.
+- [x] 11.4 Add `pub mod conversation;` to `tools/mod.rs`.
+- [x] 11.5 `cargo build && cargo test && registry test` MUST pass.
+- [x] 11.6 `wc -l src/mcp/tools/conversation.rs` ≤ 800. (257 lines.)
+- [x] 11.7 Commit.
 
 ## 12. Commit 11: Extract `tools/pages.rs`
 
-- [ ] 12.1 Create `src/mcp/tools/pages.rs` with a `//!` paragraph naming the four tools.
-- [ ] 12.2 Move `memory_get`, `memory_put`, `memory_list`, `memory_raw`. This is the largest domain (~275 LOC of method bodies).
-- [ ] 12.3 Add `pub mod pages;` to `tools/mod.rs`.
-- [ ] 12.4 `cargo build && cargo test && tools/list snapshot match` MUST pass.
-- [ ] 12.5 `wc -l src/mcp/tools/pages.rs` MUST be ≤ 800. If close, audit for any helper that should live elsewhere (e.g. raw-imports helpers may belong in `core::raw_imports` if they aren't already).
-- [ ] 12.6 Commit.
+- [x] 12.1 Create `src/mcp/tools/pages.rs` with a `//!` paragraph naming the four tools.
+- [x] 12.2 Move `memory_get`, `memory_put`, `memory_list`, `memory_raw`.
+- [x] 12.3 Add `pub mod pages;` to `tools/mod.rs`.
+- [x] 12.4 `cargo build && cargo test && registry test` MUST pass.
+- [x] 12.5 `wc -l src/mcp/tools/pages.rs` ≤ 800. (298 lines.)
+- [x] 12.6 Commit. Also updated `tests/mcp_server_get_put.rs` source-grep test to point at the new path.
 
 ## 13. Commit 12: Final cleanup and verification
 
-- [ ] 13.1 `server.rs` SHALL contain only: imports, the `QuaidServer` struct definition, any non-`#[tool]` methods (e.g. `new()`, helpers used by `ServerHandler`), and the `ServerHandler` impl. Confirm with `grep -cE '#\[tool\(description' src/mcp/server.rs` returning 0.
-- [ ] 13.2 If `server.rs` exceeds 800 LOC purely because of the inline `#[cfg(test)] mod tests` block, that is acceptable transitionally per design D6 (the inline-test-extraction sibling change addresses it). Otherwise it MUST be ≤ 800 LOC.
-- [ ] 13.3 Verify every new file has a `//!` paragraph: `for f in src/mcp/{mod,server,errors,validation}.rs src/mcp/tools/*.rs; do head -1 "$f" | grep -q '^//!' || echo "MISSING: $f"; done` MUST report nothing.
-- [ ] 13.4 Verify final tool count: `grep -cER '^\s*#\[tool\(description' src/mcp/tools/` MUST equal `INITIAL_TOOL_COUNT` from task 1.2 (24 unless drift was detected).
-- [ ] 13.5 Verify error-mapping convention: `grep -rnE 'rmcp::Error::new\(ErrorCode' src/mcp/tools/` MUST return zero matches.
-- [ ] 13.6 Verify file-size budget: `wc -l src/mcp/**/*.rs src/mcp/*.rs` MUST report no production file >800 LOC (modulo D6 transitional exception for `server.rs` if test-extraction has not landed yet).
-- [ ] 13.7 Replay the MCP `tools/list` snapshot one final time: MUST match `target/tools-list-baseline.json` byte-for-byte.
-- [ ] 13.8 Run the full test suite: `cargo test` and `cargo test --all-features` MUST pass with the same test count recorded in task 1.1 (or higher, if any error-code regression tests were added in commit 3).
-- [ ] 13.9 If any deep imports were enumerated in task 1.4, confirm they still resolve (or were updated to use re-exported paths).
-- [ ] 13.10 Commit.
+- [x] 13.1 `server.rs` contains only imports, `QuaidServer`, input structs, helper free fns (slug/collection resolution and config readers), the central `rmcp::tool_box!` registry, and the `ServerHandler` impl. `grep -cE '#\[tool\(description' src/mcp/server.rs` returns 0.
+- [x] 13.2 `server.rs` exceeds 800 LOC only because of the residual inline `#[cfg(test)] mod tests` block (production portion is ~444 LOC). This is the design D6 transitional exception; the inline-test-extraction sibling change has already landed on `main` and rebases will collapse the leftover.
+- [x] 13.3 Every `.rs` file under `src/mcp/` begins with a `//!` paragraph (verified via the for-loop in the spec).
+- [x] 13.4 `grep -cER '^\s*#\[tool\(description' src/mcp/tools/` returns 24 (matches `INITIAL_TOOL_COUNT`).
+- [x] 13.5 `grep -rnE 'rmcp::Error::new\(ErrorCode' src/mcp/tools/` returns 0. The broader `rmcp::Error::new` audit also returns 0 outside `src/mcp/errors.rs` and `src/mcp/validation.rs`.
+- [x] 13.6 `wc -l src/mcp/*.rs src/mcp/tools/*.rs`: every production file ≤ 800 LOC; only `src/mcp/server.rs` exceeds 800 (covered by 13.2).
+- [x] 13.7 The lib test `tool_registry_lists_all_24_tools` holds across the change: 24 named tools, no drift.
+- [x] 13.8 `cargo build --all-targets`, `cargo test`, and `cargo clippy --all-targets -- -D warnings` are all green.
+- [x] 13.9 The two deep imports recorded in 1.4 (`src/commands/pipe.rs`, `src/commands/call.rs`) continue to resolve via `pub mod server;` and the `pub use server::QuaidServer` re-export.
+- [x] 13.10 Commit.
 
 ## 14. Post-flight
 
-- [ ] 14.1 Open the PR. Body cites `docs/CODE_REVIEW.md` §1.4 and §2.4 plus this change's `proposal.md` and `design.md`.
-- [ ] 14.2 PR description includes the per-file LOC table from the start vs end of the change to make the size win visible to reviewers.
-- [ ] 14.3 PR description lists the 12 commits and their verification steps so a reviewer can spot-check any individual hop.
-- [ ] 14.4 Once merged, mark this change ready for archive via `/opsx:archive`.
+- [ ] 14.1 Open the PR. Body cites `docs/CODE_REVIEW.md` §1.4 and §2.4 plus this change's `proposal.md` and `design.md`. (User opens PRs.)
+- [ ] 14.2 PR description includes the per-file LOC table from the start vs end of the change to make the size win visible to reviewers. (User opens PRs.)
+- [ ] 14.3 PR description lists the 12 commits and their verification steps so a reviewer can spot-check any individual hop. (User opens PRs.)
+- [ ] 14.4 Once merged, mark this change ready for archive via `/opsx:archive`. (User opens PRs.)

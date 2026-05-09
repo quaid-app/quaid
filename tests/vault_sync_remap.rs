@@ -106,7 +106,7 @@ fn remap_online_source_defers_attach_to_rcrt_and_remap_attach_reason_appears_onc
 
     let rcrt_start = source.find("pub fn run_rcrt_pass(").unwrap();
     let rcrt_end = source[rcrt_start..]
-        .find("fn embedding_drain_interval_secs(")
+        .find("\npub fn start_serve_runtime(")
         .map(|offset| rcrt_start + offset)
         .unwrap();
     let rcrt_source = &source[rcrt_start..rcrt_end];

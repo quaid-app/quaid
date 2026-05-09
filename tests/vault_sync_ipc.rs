@@ -170,9 +170,9 @@ fn serve_ipc_source_publishes_after_audit_and_cleans_up_before_unregister() {
         .find("pub fn start_serve_runtime(")
         .expect("serve runtime present");
     let runtime_end = mod_source[runtime_start..]
-        .find("\nfn run_extraction_worker(")
+        .find("\npub fn remap_collection(")
         .map(|offset| runtime_start + offset)
-        .expect("serve runtime boundary");
+        .expect("serve runtime boundary (next pub fn after run_supervisor_loop)");
     let runtime_source = &mod_source[runtime_start..runtime_end];
     let cleanup_idx = runtime_source
         .find("cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path)")

@@ -196,32 +196,52 @@ pub fn write_restore_file(root: &Path, relative_path: &str, bytes: &[u8]) {
 }
 
 pub fn production_vault_sync_source() -> String {
-    let mod_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+    // Concatenate the production halves of every .rs file under the
+    // vault_sync directory tree. Source-introspection tests (the
+    // `*_source_*` tests in tests/vault_sync_*.rs) call this helper
+    // because the items they grep for can land in any submodule —
+    // mod.rs, restore.rs, ipc/handler.rs, ipc/socket.rs,
+    // embedding.rs, watcher.rs, etc. The exact file does not matter
+    // for those tests; only that the function definition or call
+    // site is present somewhere in production source.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("core")
-        .join("vault_sync")
-        .join("mod.rs");
-    let mod_source = std::fs::read_to_string(mod_path).unwrap();
-    let mod_production = if let Some(test_module_start) = mod_source.rfind("#[cfg(test)]") {
-        &mod_source[..test_module_start]
-    } else {
-        mod_source.as_str()
-    };
-    let restore_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("core")
-        .join("vault_sync")
-        .join("restore.rs");
-    let restore_source = std::fs::read_to_string(restore_path).unwrap();
-    let restore_production = if let Some(test_module_start) = restore_source.rfind("#[cfg(test)]") {
-        &restore_source[..test_module_start]
-    } else {
-        restore_source.as_str()
-    };
-    let mut combined = String::with_capacity(mod_production.len() + restore_production.len());
-    combined.push_str(mod_production);
-    combined.push_str(restore_production);
+        .join("vault_sync");
+    let mut sources: Vec<(String, String)> = Vec::new();
+    visit_rs_files(&root, &mut sources);
+    // Sort by path so the concatenation order is deterministic
+    // across machines and the indices source-introspection tests
+    // compute via `.find()` are stable.
+    sources.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut combined = String::new();
+    for (_path, source) in sources {
+        let production = if let Some(test_module_start) = source.rfind("#[cfg(test)]") {
+            &source[..test_module_start]
+        } else {
+            source.as_str()
+        };
+        combined.push_str(production);
+        combined.push('\n');
+    }
     combined
+}
+
+fn visit_rs_files(dir: &Path, out: &mut Vec<(String, String)>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            visit_rs_files(&path, out);
+        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(source) = std::fs::read_to_string(&path) {
+                out.push((path.display().to_string(), source));
+            }
+        }
+    }
 }
 
 pub fn manifest_json_for_directory(root: &Path) -> String {

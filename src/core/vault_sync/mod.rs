@@ -31,8 +31,6 @@ use std::fs;
 use std::io;
 #[cfg(all(test, unix))]
 use std::io::Write;
-#[cfg(target_os = "linux")]
-use std::mem::zeroed;
 #[cfg(all(test, unix))]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -3111,6 +3109,8 @@ mod tests {
     use crate::core::db;
     use std::ffi::OsString;
     #[cfg(all(unix, target_os = "linux"))]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(all(unix, target_os = "linux"))]
     use std::os::unix::net::UnixListener;
 
     static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -3121,8 +3121,6 @@ mod tests {
 
     #[cfg(all(unix, target_os = "linux"))]
     fn secure_runtime_root() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = tempfile::TempDir::new().unwrap();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
         dir

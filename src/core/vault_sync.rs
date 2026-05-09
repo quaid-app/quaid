@@ -6291,16 +6291,6 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
-    fn production_vault_sync_source() -> String {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("core")
-            .join("vault_sync.rs");
-        let source = std::fs::read_to_string(path).unwrap();
-        let test_module_start = source.rfind("#[cfg(test)]").unwrap();
-        source[..test_module_start].to_owned()
-    }
-
     fn manifest_json_for_directory(root: &Path) -> String {
         serde_json::to_string(&build_restore_manifest_for_directory(root).unwrap()).unwrap()
     }

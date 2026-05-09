@@ -4,7 +4,8 @@
     clippy::panic,
     clippy::print_stdout,
     clippy::too_many_lines,
-    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
+    unused_imports,
+    reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites; unused_imports because the broad import header is shared across all vault_sync_*.rs files but each only consumes a subset"
 )]
 
 //! Full-hash audit batching and ttl tests.

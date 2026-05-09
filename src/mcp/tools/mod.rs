@@ -7,5 +7,6 @@
 //! exact tool-to-file allocation.
 
 pub mod admin;
+pub mod assertions;
 pub mod gaps;
 pub mod tags;

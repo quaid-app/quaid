@@ -67,7 +67,7 @@ use crate::core::reconciler::{
     RestoreRemapOperation, RestoreRemapSafetyRequest,
 };
 
-const SESSION_LIVENESS_SECS: i64 = 15;
+pub(super) const SESSION_LIVENESS_SECS: i64 = 15;
 const HANDSHAKE_POLL_MS: u64 = 100;
 const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -183,13 +183,6 @@ pub enum WriteBackOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveCollectionOwner {
-    pub session_id: String,
-    pub pid: i64,
-    pub host: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalizeCaller {
     RestoreOriginator { command_id: String },
     StartupRecovery { session_id: String },
@@ -245,6 +238,7 @@ pub struct RemapVerificationSummary {
 }
 
 mod error;
+mod ownership;
 #[cfg(unix)]
 mod precondition;
 mod recovery;
@@ -253,6 +247,10 @@ mod watcher;
 #[cfg(unix)]
 pub use error::{ConflictError, IpcError};
 pub use error::{RestoreError, VaultSyncError};
+pub use ownership::{
+    acquire_owner_lease, ensure_no_live_serve_owner, ensure_no_live_serve_owner_for_root_path,
+    live_collection_owner, owner_session_id, release_owner_lease, LiveCollectionOwner,
+};
 #[cfg(all(test, unix))]
 pub use precondition::check_fs_precondition;
 #[cfg(unix)]
@@ -1454,30 +1452,6 @@ pub fn sweep_stale_sessions(conn: &Connection) -> Result<usize, VaultSyncError> 
     Ok(removed)
 }
 
-pub fn live_collection_owner(
-    conn: &Connection,
-    collection_id: i64,
-) -> Result<Option<LiveCollectionOwner>, VaultSyncError> {
-    conn.query_row(
-        "SELECT o.session_id, s.pid, s.host
-         FROM collection_owners o
-         JOIN serve_sessions s ON s.session_id = o.session_id
-         WHERE o.collection_id = ?1
-           AND s.heartbeat_at >= datetime('now', ?2)
-           AND s.session_type = 'serve'",
-        params![collection_id, format!("-{SESSION_LIVENESS_SECS} seconds")],
-        |row| {
-            Ok(LiveCollectionOwner {
-                session_id: row.get(0)?,
-                pid: row.get(1)?,
-                host: row.get(2)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(Into::into)
-}
-
 fn collection_ids_for_root_path(
     conn: &Connection,
     root_path: &str,
@@ -1490,36 +1464,6 @@ fn collection_ids_for_root_path(
     )?;
     let rows = stmt.query_map([root_path], |row| row.get::<_, i64>(0))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-fn live_collection_owner_for_root_path(
-    conn: &Connection,
-    root_path: &str,
-) -> Result<Option<(String, LiveCollectionOwner)>, VaultSyncError> {
-    conn.query_row(
-        "SELECT c.name, o.session_id, s.pid, s.host
-         FROM collections c
-         JOIN collection_owners o ON o.collection_id = c.id
-         JOIN serve_sessions s ON s.session_id = o.session_id
-         WHERE c.root_path = ?1
-           AND s.heartbeat_at >= datetime('now', ?2)
-           AND s.session_type = 'serve'
-         ORDER BY c.id
-         LIMIT 1",
-        params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
-        |row| {
-            Ok((
-                row.get(0)?,
-                LiveCollectionOwner {
-                    session_id: row.get(1)?,
-                    pid: row.get(2)?,
-                    host: row.get(3)?,
-                },
-            ))
-        },
-    )
-    .optional()
-    .map_err(Into::into)
 }
 
 #[cfg(unix)]
@@ -1561,111 +1505,6 @@ pub(crate) fn live_serve_endpoint_for_root_path(
         // protect the collection.
         Some((_session_id, _pid, None)) => Ok(None),
     }
-}
-
-pub fn ensure_no_live_serve_owner(
-    conn: &Connection,
-    collection_id: i64,
-) -> Result<(), VaultSyncError> {
-    let collection = load_collection_by_id(conn, collection_id)?;
-    if let Some(owner) = live_collection_owner(conn, collection_id)? {
-        return Err(VaultSyncError::ServeOwnsCollectionError {
-            collection_name: collection.name,
-            owner_session_id: owner.session_id,
-            owner_pid: owner.pid,
-            owner_host: owner.host,
-        });
-    }
-    Ok(())
-}
-
-pub fn ensure_no_live_serve_owner_for_root_path(
-    conn: &Connection,
-    root_path: &str,
-) -> Result<(), VaultSyncError> {
-    if let Some((collection_name, owner)) = live_collection_owner_for_root_path(conn, root_path)? {
-        return Err(VaultSyncError::ServeOwnsCollectionError {
-            collection_name,
-            owner_session_id: owner.session_id,
-            owner_pid: owner.pid,
-            owner_host: owner.host,
-        });
-    }
-    Ok(())
-}
-
-pub fn owner_session_id(
-    conn: &Connection,
-    collection_id: i64,
-) -> Result<Option<String>, VaultSyncError> {
-    conn.query_row(
-        "SELECT session_id FROM collection_owners WHERE collection_id = ?1",
-        [collection_id],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(Into::into)
-}
-
-pub fn acquire_owner_lease(
-    conn: &Connection,
-    collection_id: i64,
-    session_id: &str,
-) -> Result<(), VaultSyncError> {
-    if let Some(owner) = live_collection_owner(conn, collection_id)? {
-        if owner.session_id != session_id {
-            let collection = load_collection_by_id(conn, collection_id)?;
-            return Err(VaultSyncError::ServeOwnsCollectionError {
-                collection_name: collection.name,
-                owner_session_id: owner.session_id,
-                owner_pid: owner.pid,
-                owner_host: owner.host,
-            });
-        }
-    }
-
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "INSERT INTO collection_owners (collection_id, session_id)
-         VALUES (?1, ?2)
-         ON CONFLICT(collection_id) DO UPDATE SET
-             session_id = excluded.session_id,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-        params![collection_id, session_id],
-    )?;
-    tx.execute(
-        "UPDATE collections
-         SET active_lease_session_id = ?2,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1",
-        params![collection_id, session_id],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
-pub fn release_owner_lease(
-    conn: &Connection,
-    collection_id: i64,
-    session_id: &str,
-) -> Result<(), VaultSyncError> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2",
-        params![collection_id, session_id],
-    )?;
-    tx.execute(
-        "UPDATE collections
-         SET active_lease_session_id = CASE
-                 WHEN active_lease_session_id = ?2 THEN NULL
-                 ELSE active_lease_session_id
-             END,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1",
-        params![collection_id, session_id],
-    )?;
-    tx.commit()?;
-    Ok(())
 }
 
 pub fn sync_collection(

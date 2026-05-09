@@ -8,6 +8,7 @@
 
 pub mod admin;
 pub mod assertions;
+pub mod conversation;
 pub mod gaps;
 pub mod links;
 pub mod search;

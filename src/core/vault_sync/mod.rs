@@ -4804,9 +4804,9 @@ pub fn verify_remap_root(
                 missing,
                 mismatched,
                 extra,
-                missing_samples: format_diff_samples(&page_matches.missing_pages),
-                mismatched_samples: format_diff_samples(&page_matches.mismatched_samples),
-                extra_samples: format_diff_samples(&page_matches.extra_files),
+                missing_samples: samples_to_paths(&page_matches.missing_pages),
+                mismatched_samples: samples_to_paths(&page_matches.mismatched_samples),
+                extra_samples: samples_to_paths(&page_matches.extra_files),
             },
         ));
     }
@@ -5647,12 +5647,8 @@ fn push_sample(samples: &mut Vec<String>, sample: String) {
     }
 }
 
-fn format_diff_samples(samples: &[String]) -> String {
-    if samples.is_empty() {
-        "-".to_owned()
-    } else {
-        samples.join(",")
-    }
+fn samples_to_paths(samples: &[String]) -> Vec<PathBuf> {
+    samples.iter().map(PathBuf::from).collect()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

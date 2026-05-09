@@ -15,6 +15,7 @@
 //! cross-cutting (e.g., `Sqlite`, `Io`).
 
 use std::io;
+use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -176,16 +177,19 @@ pub enum RestoreError {
     },
 
     #[error(
-        "NewRootVerificationFailedError: collection={collection_name} missing={missing} mismatched={mismatched} extra={extra} missing_samples={missing_samples} mismatched_samples={mismatched_samples} extra_samples={extra_samples}"
+        "NewRootVerificationFailedError: collection={collection_name} missing={missing} mismatched={mismatched} extra={extra} missing_samples={} mismatched_samples={} extra_samples={}",
+        fmt_paths(missing_samples),
+        fmt_paths(mismatched_samples),
+        fmt_paths(extra_samples)
     )]
     NewRootVerificationFailed {
         collection_name: String,
         missing: usize,
         mismatched: usize,
         extra: usize,
-        missing_samples: String,
-        mismatched_samples: String,
-        extra_samples: String,
+        missing_samples: Vec<PathBuf>,
+        mismatched_samples: Vec<PathBuf>,
+        extra_samples: Vec<PathBuf>,
     },
 
     #[error("NewRootUnstableError: collection={collection_name}")]
@@ -196,6 +200,22 @@ pub enum RestoreError {
         collection_name: String,
         outcome: &'static str,
     },
+}
+
+/// Joins path samples for the human-readable `Display` form used by
+/// `RestoreError::NewRootVerificationFailed`. Empty list renders as
+/// `-` to preserve byte-for-byte compatibility with the previous
+/// `String`-typed CSV field.
+fn fmt_paths(samples: &[PathBuf]) -> String {
+    if samples.is_empty() {
+        "-".to_owned()
+    } else {
+        samples
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 #[cfg(unix)]

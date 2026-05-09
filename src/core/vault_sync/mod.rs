@@ -89,17 +89,17 @@ const SELF_WRITE_DEDUP_TTL_SECS: u64 = 5;
 #[cfg(unix)]
 const SELF_WRITE_DEDUP_SWEEP_SECS: u64 = 10;
 
-struct RuntimeRegistries {
+pub(super) struct RuntimeRegistries {
     supervisor_handles: Mutex<HashMap<i64, SupervisorHandle>>,
     dedup: Mutex<HashSet<String>>,
     #[cfg(unix)]
     self_write_dedup: Mutex<HashMap<PathBuf, SelfWriteDedupEntry>>,
     slug_writes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    recovering_collections: Mutex<HashSet<i64>>,
+    pub(super) recovering_collections: Mutex<HashSet<i64>>,
 }
 
 impl RuntimeRegistries {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             supervisor_handles: Mutex::new(HashMap::new()),
             dedup: Mutex::new(HashSet::new()),
@@ -202,7 +202,7 @@ enum WatchEvent {
     IgnoreFileChanged,
 }
 
-static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
+pub(super) static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IgnoreParseErrorView {
@@ -328,6 +328,7 @@ pub struct RemapVerificationSummary {
 mod error;
 #[cfg(unix)]
 mod precondition;
+mod recovery;
 
 #[cfg(unix)]
 pub use error::{ConflictError, IpcError, WatcherError};
@@ -338,6 +339,12 @@ pub use precondition::check_fs_precondition;
 pub(crate) use precondition::check_fs_precondition_with_parent_fd;
 #[cfg(unix)]
 pub use precondition::FsPreconditionOutcome;
+#[cfg(test)]
+pub(crate) use recovery::set_collection_recovery_in_progress_for_test;
+use recovery::{bootstrap_recovery_directories, recovery_sentinel_paths, RecoveryInProgressGuard};
+pub use recovery::{
+    collection_recovery_dir, collection_recovery_in_progress, recovery_root_for_db_path,
+};
 
 pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError> {
     #[cfg(unix)]
@@ -518,56 +525,6 @@ fn with_supervisor_handles<T>(
                 registry: "supervisor_handles",
             })?;
     Ok(f(&mut handles))
-}
-
-fn with_recovering_collections<T>(
-    f: impl FnOnce(&mut HashSet<i64>) -> T,
-) -> Result<T, VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    let mut recovering =
-        registries
-            .recovering_collections
-            .lock()
-            .map_err(|_| VaultSyncError::RegistryPoisoned {
-                registry: "recovering_collections",
-            })?;
-    Ok(f(&mut recovering))
-}
-
-struct RecoveryInProgressGuard {
-    collection_id: i64,
-}
-
-impl RecoveryInProgressGuard {
-    fn enter(collection_id: i64) -> Result<Self, VaultSyncError> {
-        with_recovering_collections(|recovering| {
-            recovering.insert(collection_id);
-        })?;
-        Ok(Self { collection_id })
-    }
-}
-
-impl Drop for RecoveryInProgressGuard {
-    fn drop(&mut self) {
-        if let Some(registries) = PROCESS_REGISTRIES.get() {
-            if let Ok(mut recovering) = registries.recovering_collections.lock() {
-                recovering.remove(&self.collection_id);
-            }
-        }
-    }
-}
-
-pub fn collection_recovery_in_progress(collection_id: i64) -> bool {
-    PROCESS_REGISTRIES
-        .get()
-        .and_then(|registries| {
-            registries
-                .recovering_collections
-                .lock()
-                .ok()
-                .map(|recovering| recovering.contains(&collection_id))
-        })
-        .unwrap_or(false)
 }
 
 pub fn collection_watcher_health(collection_id: i64) -> Option<WatcherHealthView> {
@@ -834,17 +791,6 @@ pub fn list_memory_collections(
         .collect()
 }
 
-#[cfg(test)]
-pub(crate) fn set_collection_recovery_in_progress_for_test(collection_id: i64, in_progress: bool) {
-    let _ = with_recovering_collections(|recovering| {
-        if in_progress {
-            recovering.insert(collection_id);
-        } else {
-            recovering.remove(&collection_id);
-        }
-    });
-}
-
 fn has_supervisor_handle(collection_id: i64, session_id: &str) -> Result<bool, VaultSyncError> {
     with_supervisor_handles(|handles| {
         handles
@@ -941,58 +887,6 @@ fn claim_owned_collections(conn: &Connection, session_id: &str) -> Result<(), Va
         }
     }
     Ok(())
-}
-
-pub fn recovery_root_for_db_path(db_path: &Path) -> PathBuf {
-    db_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("recovery")
-}
-
-pub fn collection_recovery_dir(recovery_root: &Path, collection_id: i64) -> PathBuf {
-    recovery_root.join(collection_id.to_string())
-}
-
-fn bootstrap_recovery_directories(
-    conn: &Connection,
-    recovery_root: &Path,
-) -> Result<(), VaultSyncError> {
-    fs::create_dir_all(recovery_root)?;
-    let mut stmt = conn.prepare("SELECT id FROM collections")?;
-    let collection_ids = stmt
-        .query_map([], |row| row.get::<_, i64>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    for collection_id in collection_ids {
-        fs::create_dir_all(collection_recovery_dir(recovery_root, collection_id))?;
-    }
-    Ok(())
-}
-
-fn recovery_sentinel_paths(
-    recovery_root: &Path,
-    collection_id: i64,
-) -> Result<Vec<PathBuf>, VaultSyncError> {
-    let recovery_dir = collection_recovery_dir(recovery_root, collection_id);
-    if !recovery_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(recovery_dir)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_file()
-            && entry
-                .file_name()
-                .to_string_lossy()
-                .ends_with(".needs_full_sync")
-        {
-            paths.push(entry.path());
-        }
-    }
-    paths.sort();
-    Ok(paths)
 }
 
 fn mark_collection_needs_full_sync(

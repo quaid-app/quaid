@@ -168,7 +168,7 @@ fn rename_before_commit_source_keeps_fd_relative_ordering() {
 fn duplicate_dedup_source_is_fail_closed_without_clearing_preexisting_entry() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let vault_source =
-        stdfs::read_to_string(root.join("core").join("vault_sync").join("mod.rs")).unwrap();
+        stdfs::read_to_string(root.join("core").join("vault_sync").join("write_lock.rs")).unwrap();
     let insert_start = vault_source
         .find("pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {")
         .expect("insert_write_dedup production function");

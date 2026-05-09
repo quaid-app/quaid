@@ -29,16 +29,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
-#[cfg(unix)]
-use std::io::{BufRead, BufReader, BufWriter, Write};
+#[cfg(all(test, unix))]
+use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::mem::zeroed;
 #[cfg(unix)]
-use std::os::fd::AsRawFd;
-#[cfg(unix)]
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-#[cfg(unix)]
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::AtomicUsize;
@@ -209,8 +205,8 @@ mod watcher;
 mod write_lock;
 
 pub use error::VaultSyncError;
-#[cfg(unix)]
-use ipc::socket::authorize_server_peer;
+#[cfg(all(test, unix, target_os = "linux"))]
+use ipc::audit_bound_ipc_socket;
 #[cfg(unix)]
 pub(crate) use ipc::socket::{
     authorize_client_peer, peer_credentials_for_stream, session_id_from_ipc_path,
@@ -220,9 +216,13 @@ pub use ipc::IpcError;
 #[cfg(all(test, unix))]
 pub(crate) use ipc::IpcPeerCredentials;
 #[cfg(unix)]
-pub(crate) use ipc::{IpcRequest, IpcResponse, LiveServeEndpoint};
+use ipc::PublishedIpcSocket;
 #[cfg(unix)]
-use ipc::{IpcSocketLocation, PublishedIpcSocket};
+use ipc::{accept_ipc_clients, cleanup_published_ipc_socket, publish_ipc_socket};
+#[cfg(all(test, unix))]
+use ipc::{socket::authorize_server_peer, IpcHandlerGuard, IPC_HANDLER_LIMIT};
+#[cfg(unix)]
+pub(crate) use ipc::{IpcRequest, IpcResponse, LiveServeEndpoint};
 pub use ownership::{
     acquire_owner_lease, ensure_no_live_serve_owner, ensure_no_live_serve_owner_for_root_path,
     live_collection_owner, owner_session_id, release_owner_lease, LiveCollectionOwner,
@@ -2717,400 +2717,6 @@ pub fn run_rcrt_pass(
     Ok(actions)
 }
 
-#[cfg(unix)]
-fn publish_ipc_socket(
-    conn: &Connection,
-    session_id: &str,
-) -> Result<PublishedIpcSocket, VaultSyncError> {
-    let location = ipc_socket_location()?;
-    ensure_secure_ipc_directory(&location.runtime_root, location.create_runtime_root)?;
-    ensure_secure_ipc_directory(&location.socket_dir, true)?;
-    let socket_path = location.socket_dir.join(format!("{session_id}.sock"));
-    if socket_path.exists() {
-        clear_stale_ipc_socket(&socket_path)?;
-    }
-    let listener = UnixListener::bind(&socket_path)?;
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
-    listener.set_nonblocking(true)?;
-    listen_with_backlog(&listener)?;
-    audit_bound_ipc_socket(&socket_path)?;
-    conn.execute(
-        "UPDATE serve_sessions SET ipc_path = ?1 WHERE session_id = ?2",
-        params![socket_path.display().to_string(), session_id],
-    )?;
-    Ok(PublishedIpcSocket {
-        listener,
-        path: socket_path,
-    })
-}
-
-#[cfg(unix)]
-fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-            let runtime_root = PathBuf::from(runtime_dir);
-            return Ok(IpcSocketLocation {
-                socket_dir: runtime_root.join("quaid"),
-                runtime_root,
-                create_runtime_root: false,
-            });
-        }
-        dirs::home_dir()
-            .map(|home| {
-                let runtime_root = home.join(".cache").join("quaid");
-                IpcSocketLocation {
-                    socket_dir: runtime_root.join("run"),
-                    runtime_root,
-                    create_runtime_root: true,
-                }
-            })
-            .ok_or_else(|| VaultSyncError::InvariantViolation {
-                message: "unable to resolve HOME for IPC directory".to_owned(),
-            })
-    }
-    #[cfg(target_os = "macos")]
-    {
-        dirs::home_dir()
-            .map(|home| {
-                let runtime_root = home
-                    .join("Library")
-                    .join("Application Support")
-                    .join("quaid");
-                IpcSocketLocation {
-                    socket_dir: runtime_root.join("run"),
-                    runtime_root,
-                    create_runtime_root: true,
-                }
-            })
-            .ok_or_else(|| VaultSyncError::InvariantViolation {
-                message: "unable to resolve HOME for IPC directory".to_owned(),
-            })
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        dirs::home_dir()
-            .map(|home| {
-                let runtime_root = home.join(".cache").join("quaid");
-                IpcSocketLocation {
-                    socket_dir: runtime_root.join("run"),
-                    runtime_root,
-                    create_runtime_root: true,
-                }
-            })
-            .ok_or_else(|| VaultSyncError::InvariantViolation {
-                message: "unable to resolve HOME for IPC directory".to_owned(),
-            })
-    }
-}
-
-#[cfg(unix)]
-fn ensure_secure_ipc_directory(path: &Path, create_if_missing: bool) -> Result<(), VaultSyncError> {
-    if !path.exists() {
-        if !create_if_missing {
-            return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
-                path: path.display().to_string(),
-                reason: "path does not exist".to_owned(),
-            }));
-        }
-        fs::create_dir_all(path)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    let metadata = fs::symlink_metadata(path)?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_dir() {
-        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
-            path: path.display().to_string(),
-            reason: "path is not a directory".to_owned(),
-        }));
-    }
-    if metadata.uid() != current_effective_uid() {
-        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
-            path: path.display().to_string(),
-            reason: format!(
-                "owner uid {} does not match current uid {}",
-                metadata.uid(),
-                current_effective_uid()
-            ),
-        }));
-    }
-    if mode != 0o700 {
-        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
-            path: path.display().to_string(),
-            reason: format!("mode {:o} is not 700", mode),
-        }));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_socket() {
-        return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
-            path: path.display().to_string(),
-            reason: "existing path is not a unix socket".to_owned(),
-        }));
-    }
-    match UnixStream::connect(path) {
-        Ok(stream) => {
-            let creds = peer_credentials_for_stream(&stream)?;
-            return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
-                path: path.display().to_string(),
-                reason: format!("live listener already bound by pid {}", creds.pid),
-            }));
-        }
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::ConnectionRefused
-                    | io::ErrorKind::NotFound
-                    | io::ErrorKind::TimedOut
-                    | io::ErrorKind::ConnectionAborted
-            ) =>
-        {
-            fs::remove_file(path)?;
-        }
-        Err(error) => {
-            return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
-                path: path.display().to_string(),
-                reason: error.to_string(),
-            }));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn listen_with_backlog(listener: &UnixListener) -> Result<(), VaultSyncError> {
-    #[expect(
-        unsafe_code,
-        reason = "POSIX listen() is a syscall; we pass a valid file descriptor obtained from UnixListener::as_raw_fd"
-    )]
-    let rc = unsafe { libc::listen(listener.as_raw_fd(), 16) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error().into())
-    }
-}
-
-#[cfg(unix)]
-fn audit_bound_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
-    let metadata = fs::symlink_metadata(path)?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_socket() {
-        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
-            path: path.display().to_string(),
-            reason: "bound path is not a unix socket".to_owned(),
-        }));
-    }
-    if metadata.uid() != current_effective_uid() {
-        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
-            path: path.display().to_string(),
-            reason: format!(
-                "owner uid {} does not match current uid {}",
-                metadata.uid(),
-                current_effective_uid()
-            ),
-        }));
-    }
-    if mode != 0o600 {
-        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
-            path: path.display().to_string(),
-            reason: format!("mode {:o} is not 600", mode),
-        }));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn cleanup_published_ipc_socket(
-    conn: &Connection,
-    session_id: &str,
-    socket_path: &Path,
-) -> Result<(), VaultSyncError> {
-    if socket_path.exists() {
-        let _ = fs::remove_file(socket_path);
-    }
-    conn.execute(
-        "UPDATE serve_sessions SET ipc_path = NULL WHERE session_id = ?1",
-        [session_id],
-    )?;
-    Ok(())
-}
-
-/// Maximum concurrent in-flight IPC handler threads.  Connections that arrive
-/// when this cap is reached are immediately closed so a rogue same-UID caller
-/// cannot exhaust OS thread resources and impact serve liveness.
-#[cfg(unix)]
-const IPC_HANDLER_LIMIT: usize = 8;
-
-/// RAII guard: decrements the in-flight counter when dropped so the slot is
-/// always released even if the handler returns early or panics.
-#[cfg(unix)]
-struct IpcHandlerGuard(Arc<AtomicUsize>);
-
-#[cfg(unix)]
-impl Drop for IpcHandlerGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-#[cfg(unix)]
-fn accept_ipc_clients(
-    listener: &UnixListener,
-    socket_path: &Path,
-    db_path: &str,
-    session_id: &str,
-    in_flight: &Arc<AtomicUsize>,
-) {
-    loop {
-        match listener.accept() {
-            Ok((stream, _addr)) => {
-                // Enforce the in-flight cap before spawning.  fetch_add is atomic
-                // so concurrent accept calls on the same listener are race-free.
-                if in_flight.fetch_add(1, Ordering::AcqRel) >= IPC_HANDLER_LIMIT {
-                    // Already at or over the cap: roll back and discard the stream.
-                    in_flight.fetch_sub(1, Ordering::AcqRel);
-                    eprintln!(
-                        "WARN: ipc_handler_limit_reached path={} limit={} connection_closed",
-                        socket_path.display(),
-                        IPC_HANDLER_LIMIT,
-                    );
-                    // `stream` is dropped here, closing the connection immediately.
-                    // Break (not continue) so a same-UID flood at saturation cannot
-                    // drain the kernel accept queue indefinitely and starve heartbeats
-                    // and watchers in the main serve loop.  At most one connection is
-                    // discarded per tick before we return control to the serve loop.
-                    break;
-                }
-                // Offload each client to its own thread so that blocking reads/writes
-                // (up to 5 s per IPC timeout) cannot stall the main serve loop and
-                // cause a false-dead live-owner verdict.
-                // `guard` is moved into the closure and drops when the thread exits,
-                // decrementing the in-flight counter even on panic or early return.
-                let guard = IpcHandlerGuard(Arc::clone(in_flight));
-                let socket_path_owned = socket_path.to_path_buf();
-                let db_path_owned = db_path.to_owned();
-                let session_id_owned = session_id.to_owned();
-                thread::spawn(move || {
-                    let _guard = guard;
-                    if let Err(error) = handle_ipc_client(
-                        stream,
-                        &socket_path_owned,
-                        &db_path_owned,
-                        &session_id_owned,
-                    ) {
-                        eprintln!(
-                            "WARN: ipc_client_failed path={} error={}",
-                            socket_path_owned.display(),
-                            error
-                        );
-                    }
-                });
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-            Err(error) => {
-                eprintln!(
-                    "WARN: ipc_accept_failed path={} error={}",
-                    socket_path.display(),
-                    error
-                );
-                break;
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn handle_ipc_client(
-    stream: UnixStream,
-    socket_path: &Path,
-    db_path: &str,
-    session_id: &str,
-) -> Result<(), VaultSyncError> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let peer = peer_credentials_for_stream(&stream)?;
-    authorize_server_peer(socket_path, &peer)?;
-    eprintln!(
-        "INFO: ipc_peer_authenticated session_id={} peer_pid={} peer_uid={}",
-        session_id, peer.pid, peer.uid
-    );
-
-    let read_stream = stream.try_clone()?;
-    let mut reader = BufReader::new(read_stream);
-    let mut writer = BufWriter::new(stream);
-    loop {
-        let mut line = String::new();
-        let bytes_read = reader.read_line(&mut line)?;
-        if bytes_read == 0 {
-            break;
-        }
-        let request = match serde_json::from_str::<IpcRequest>(line.trim_end()) {
-            Ok(request) => request,
-            Err(error) => {
-                write_ipc_response(
-                    &mut writer,
-                    &IpcResponse::Error {
-                        error: format!("invalid ipc request: {error}"),
-                    },
-                )?;
-                break;
-            }
-        };
-        match request {
-            IpcRequest::WhoAmI => {
-                write_ipc_response(
-                    &mut writer,
-                    &IpcResponse::WhoAmI {
-                        session_id: session_id.to_owned(),
-                    },
-                )?;
-            }
-            IpcRequest::Put {
-                slug,
-                content,
-                expected_version,
-            } => {
-                let conn = Connection::open(db_path)?;
-                match put::put_from_string_status(&conn, &slug, &content, expected_version) {
-                    Ok(status) => {
-                        write_ipc_response(&mut writer, &IpcResponse::PutOk { status })?;
-                    }
-                    Err(error) => {
-                        write_ipc_response(
-                            &mut writer,
-                            &IpcResponse::Error {
-                                error: error.to_string(),
-                            },
-                        )?;
-                    }
-                }
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn write_ipc_response(
-    writer: &mut BufWriter<UnixStream>,
-    response: &IpcResponse,
-) -> Result<(), VaultSyncError> {
-    serde_json::to_writer(&mut *writer, response).map_err(|error| {
-        VaultSyncError::InvariantViolation {
-            message: format!("failed to serialize ipc response: {error}"),
-        }
-    })?;
-    writer.write_all(b"\n")?;
-    writer.flush()?;
-    Ok(())
-}
-
 pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
     let conn = Connection::open(&db_path)?;
@@ -4926,6 +4532,8 @@ mod tests {
     use super::*;
     use crate::core::db;
     use std::ffi::OsString;
+    #[cfg(all(unix, target_os = "linux"))]
+    use std::os::unix::net::UnixListener;
 
     static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 

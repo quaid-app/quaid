@@ -115,22 +115,23 @@ fn start_serve_runtime_refuses_insecure_fallback_runtime_root_permissions() {
 
 #[test]
 fn serve_ipc_source_publishes_after_audit_and_cleans_up_before_unregister() {
-    let source = fs::read_to_string(
+    let socket_source = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("core")
             .join("vault_sync")
-            .join("mod.rs"),
+            .join("ipc")
+            .join("socket.rs"),
     )
     .unwrap();
-    let publish_start = source
+    let publish_start = socket_source
         .find("fn publish_ipc_socket(")
         .expect("publish helper present");
-    let publish_end = source[publish_start..]
-        .find("pub fn start_serve_runtime(")
+    let publish_end = socket_source[publish_start..]
+        .find("fn cleanup_published_ipc_socket(")
         .map(|offset| publish_start + offset)
         .expect("publish helper boundary");
-    let publish_source = &source[publish_start..publish_end];
+    let publish_source = &socket_source[publish_start..publish_end];
     let runtime_root_idx = publish_source
         .find("ensure_secure_ipc_directory(&location.runtime_root")
         .expect("secure runtime root check");
@@ -157,14 +158,22 @@ fn serve_ipc_source_publishes_after_audit_and_cleans_up_before_unregister() {
             && audit_idx < publish_idx
     );
 
-    let runtime_start = source
+    let mod_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("core")
+            .join("vault_sync")
+            .join("mod.rs"),
+    )
+    .unwrap();
+    let runtime_start = mod_source
         .find("pub fn start_serve_runtime(")
         .expect("serve runtime present");
-    let runtime_end = source[runtime_start..]
-        .find("#[derive(Debug, Clone)]")
+    let runtime_end = mod_source[runtime_start..]
+        .find("\nfn run_extraction_worker(")
         .map(|offset| runtime_start + offset)
         .expect("serve runtime boundary");
-    let runtime_source = &source[runtime_start..runtime_end];
+    let runtime_source = &mod_source[runtime_start..runtime_end];
     let cleanup_idx = runtime_source
         .find("cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path)")
         .expect("ipc cleanup call");
@@ -181,7 +190,8 @@ fn serve_ipc_source_refuses_cross_uid_peer_before_request_dispatch() {
             .join("src")
             .join("core")
             .join("vault_sync")
-            .join("mod.rs"),
+            .join("ipc")
+            .join("handler.rs"),
     )
     .unwrap();
     let handler_start = source
@@ -215,7 +225,8 @@ fn accept_ipc_clients_offloads_each_client_to_its_own_thread() {
             .join("src")
             .join("core")
             .join("vault_sync")
-            .join("mod.rs"),
+            .join("ipc")
+            .join("handler.rs"),
     )
     .unwrap();
     let fn_start = source

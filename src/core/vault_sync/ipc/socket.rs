@@ -1,5 +1,5 @@
-//! Peer-credential and per-session authorisation for the IPC
-//! socket (`cfg(unix)` only).
+//! Peer-credential / per-session authorisation and socket
+//! placement helpers for the IPC channel (`cfg(unix)` only).
 //!
 //! `peer_credentials_for_stream` reads the kernel-recorded
 //! `(pid, uid)` of the connected peer via SO_PEERCRED on Linux
@@ -16,19 +16,34 @@
 //! name (`<session-id>.sock`) into the session id the path
 //! advertises; it is the authoritative source for the
 //! "expected session id" on the client side.
+//!
+//! [`publish_ipc_socket`] places the per-session socket on
+//! disk under the platform's runtime root, locks down its
+//! directory and file modes (700/600), and stamps the path
+//! into `serve_sessions`. [`cleanup_published_ipc_socket`]
+//! reverses that on shutdown or failure. The supporting
+//! helpers (`ipc_socket_location`, `ensure_secure_ipc_directory`,
+//! `clear_stale_ipc_socket`, `listen_with_backlog`,
+//! `audit_bound_ipc_socket`) are private to this file.
 
 #![cfg(unix)]
 
+use std::fs;
 use std::io;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::mem::size_of;
 #[cfg(target_os = "linux")]
 use std::mem::zeroed;
 use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
-use super::{IpcError, IpcPeerCredentials};
+use rusqlite::{params, Connection};
+
+use super::{IpcError, IpcPeerCredentials, IpcSocketLocation, PublishedIpcSocket};
 use crate::core::vault_sync::{current_effective_uid, VaultSyncError};
 
 pub(crate) fn session_id_from_ipc_path(path: &Path) -> Option<String> {
@@ -173,6 +188,224 @@ pub(crate) fn authorize_client_peer(
                 "whoami session {} does not match path session {}",
                 whoami_session_id, path_session_id
             ),
+        }));
+    }
+    Ok(())
+}
+
+pub(in crate::core::vault_sync) fn publish_ipc_socket(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<PublishedIpcSocket, VaultSyncError> {
+    let location = ipc_socket_location()?;
+    ensure_secure_ipc_directory(&location.runtime_root, location.create_runtime_root)?;
+    ensure_secure_ipc_directory(&location.socket_dir, true)?;
+    let socket_path = location.socket_dir.join(format!("{session_id}.sock"));
+    if socket_path.exists() {
+        clear_stale_ipc_socket(&socket_path)?;
+    }
+    let listener = UnixListener::bind(&socket_path)?;
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
+    listener.set_nonblocking(true)?;
+    listen_with_backlog(&listener)?;
+    audit_bound_ipc_socket(&socket_path)?;
+    conn.execute(
+        "UPDATE serve_sessions SET ipc_path = ?1 WHERE session_id = ?2",
+        params![socket_path.display().to_string(), session_id],
+    )?;
+    Ok(PublishedIpcSocket {
+        listener,
+        path: socket_path,
+    })
+}
+
+pub(in crate::core::vault_sync) fn cleanup_published_ipc_socket(
+    conn: &Connection,
+    session_id: &str,
+    socket_path: &Path,
+) -> Result<(), VaultSyncError> {
+    if socket_path.exists() {
+        let _ = fs::remove_file(socket_path);
+    }
+    conn.execute(
+        "UPDATE serve_sessions SET ipc_path = NULL WHERE session_id = ?1",
+        [session_id],
+    )?;
+    Ok(())
+}
+
+fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let runtime_root = PathBuf::from(runtime_dir);
+            return Ok(IpcSocketLocation {
+                socket_dir: runtime_root.join("quaid"),
+                runtime_root,
+                create_runtime_root: false,
+            });
+        }
+        dirs::home_dir()
+            .map(|home| {
+                let runtime_root = home.join(".cache").join("quaid");
+                IpcSocketLocation {
+                    socket_dir: runtime_root.join("run"),
+                    runtime_root,
+                    create_runtime_root: true,
+                }
+            })
+            .ok_or_else(|| VaultSyncError::InvariantViolation {
+                message: "unable to resolve HOME for IPC directory".to_owned(),
+            })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir()
+            .map(|home| {
+                let runtime_root = home
+                    .join("Library")
+                    .join("Application Support")
+                    .join("quaid");
+                IpcSocketLocation {
+                    socket_dir: runtime_root.join("run"),
+                    runtime_root,
+                    create_runtime_root: true,
+                }
+            })
+            .ok_or_else(|| VaultSyncError::InvariantViolation {
+                message: "unable to resolve HOME for IPC directory".to_owned(),
+            })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        dirs::home_dir()
+            .map(|home| {
+                let runtime_root = home.join(".cache").join("quaid");
+                IpcSocketLocation {
+                    socket_dir: runtime_root.join("run"),
+                    runtime_root,
+                    create_runtime_root: true,
+                }
+            })
+            .ok_or_else(|| VaultSyncError::InvariantViolation {
+                message: "unable to resolve HOME for IPC directory".to_owned(),
+            })
+    }
+}
+
+fn ensure_secure_ipc_directory(path: &Path, create_if_missing: bool) -> Result<(), VaultSyncError> {
+    if !path.exists() {
+        if !create_if_missing {
+            return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
+                path: path.display().to_string(),
+                reason: "path does not exist".to_owned(),
+            }));
+        }
+        fs::create_dir_all(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    let mode = metadata.mode() & 0o777;
+    if !metadata.file_type().is_dir() {
+        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
+            path: path.display().to_string(),
+            reason: "path is not a directory".to_owned(),
+        }));
+    }
+    if metadata.uid() != current_effective_uid() {
+        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
+            path: path.display().to_string(),
+            reason: format!(
+                "owner uid {} does not match current uid {}",
+                metadata.uid(),
+                current_effective_uid()
+            ),
+        }));
+    }
+    if mode != 0o700 {
+        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
+            path: path.display().to_string(),
+            reason: format!("mode {:o} is not 700", mode),
+        }));
+    }
+    Ok(())
+}
+
+fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_socket() {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
+            path: path.display().to_string(),
+            reason: "existing path is not a unix socket".to_owned(),
+        }));
+    }
+    match UnixStream::connect(path) {
+        Ok(stream) => {
+            let creds = peer_credentials_for_stream(&stream)?;
+            return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
+                path: path.display().to_string(),
+                reason: format!("live listener already bound by pid {}", creds.pid),
+            }));
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::NotFound
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::ConnectionAborted
+            ) =>
+        {
+            fs::remove_file(path)?;
+        }
+        Err(error) => {
+            return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
+                path: path.display().to_string(),
+                reason: error.to_string(),
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn listen_with_backlog(listener: &UnixListener) -> Result<(), VaultSyncError> {
+    #[expect(
+        unsafe_code,
+        reason = "POSIX listen() is a syscall; we pass a valid file descriptor obtained from UnixListener::as_raw_fd"
+    )]
+    let rc = unsafe { libc::listen(listener.as_raw_fd(), 16) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error().into())
+    }
+}
+
+pub(in crate::core::vault_sync) fn audit_bound_ipc_socket(
+    path: &Path,
+) -> Result<(), VaultSyncError> {
+    let metadata = fs::symlink_metadata(path)?;
+    let mode = metadata.mode() & 0o777;
+    if !metadata.file_type().is_socket() {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
+            path: path.display().to_string(),
+            reason: "bound path is not a unix socket".to_owned(),
+        }));
+    }
+    if metadata.uid() != current_effective_uid() {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
+            path: path.display().to_string(),
+            reason: format!(
+                "owner uid {} does not match current uid {}",
+                metadata.uid(),
+                current_effective_uid()
+            ),
+        }));
+    }
+    if mode != 0o600 {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
+            path: path.display().to_string(),
+            reason: format!("mode {:o} is not 600", mode),
         }));
     }
     Ok(())

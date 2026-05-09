@@ -22,18 +22,26 @@
 //!
 //! `IpcSocketLocation` and `PublishedIpcSocket` are the on-disk
 //! placement and the bound listener; they are private to
-//! `vault_sync` and only used by the runtime helpers in
-//! `vault_sync::mod` that bind / publish the socket.
+//! `vault_sync` and only used by the socket helpers in
+//! [`socket`] that bind / publish the socket.
 //!
-//! The connection accept loop (`accept_ipc_clients`) and per-stream
-//! request handler (`handle_ipc_client`) still live in
-//! `vault_sync::mod` because they reach into `start_serve_runtime`'s
-//! private state (PROCESS_REGISTRIES.dedup,
-//! IpcHandlerGuard, IPC_HANDLER_LIMIT, the per-session reload
-//! generation counter, etc.). They will move to
-//! `ipc::handler` in a follow-up commit.
+//! The connection accept loop ([`handler::accept_ipc_clients`])
+//! and per-stream request handler live in
+//! [`handler`]. The supervisor in `vault_sync::mod` calls
+//! `accept_ipc_clients` each tick and the handler runs per
+//! connection on its own thread.
 
+pub(super) mod handler;
 pub(super) mod socket;
+
+#[cfg(unix)]
+pub(super) use handler::accept_ipc_clients;
+#[cfg(all(test, unix))]
+pub(super) use handler::{IpcHandlerGuard, IPC_HANDLER_LIMIT};
+#[cfg(all(test, unix, target_os = "linux"))]
+pub(super) use socket::audit_bound_ipc_socket;
+#[cfg(unix)]
+pub(super) use socket::{cleanup_published_ipc_socket, publish_ipc_socket};
 
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;

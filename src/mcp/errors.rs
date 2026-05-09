@@ -13,6 +13,7 @@ use rusqlite::Error as SqliteError;
 
 use crate::core::collections::CollectionError;
 use crate::core::conversation::{correction, queue as conversation_queue, turn_writer};
+use crate::core::gaps::GapsError;
 use crate::core::graph::GraphError;
 use crate::core::namespace;
 use crate::core::types::SearchError;
@@ -119,6 +120,13 @@ pub fn map_serialize_error(e: serde_json::Error) -> rmcp::Error {
     rmcp::Error::new(ErrorCode(-32003), e.to_string(), None)
 }
 
+/// Map a config-layer error (string-displayable) onto an `rmcp::Error`
+/// carrying `-32002` with the canonical `ConfigError: {error}` prefix. Use
+/// from tool helpers that read values out of `quaid_config`.
+pub fn map_config_error(error: impl std::fmt::Display) -> rmcp::Error {
+    rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None)
+}
+
 /// Map an [`anyhow::Error`] onto an `rmcp::Error` by inspecting its message
 /// for known sentinel substrings. Used by tool bodies that propagate errors
 /// from the commands layer.
@@ -206,6 +214,18 @@ pub fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
         _ => ErrorCode(-32003),
     };
     rmcp::Error::new(code, e.to_string(), None)
+}
+
+/// Map a [`GapsError`] from the knowledge-gaps layer onto an `rmcp::Error`.
+pub fn map_gaps_error(e: GapsError) -> rmcp::Error {
+    match e {
+        GapsError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
+        GapsError::NotFound { id } => rmcp::Error::new(
+            ErrorCode(-32001),
+            format!("gap not found: id {id}"),
+            None,
+        ),
+    }
 }
 
 /// Map a [`GraphError`] onto an `rmcp::Error`.

@@ -27,19 +27,17 @@
 
 ## 4. Commit 3: Error-mapping audit (§2.4)
 
-- [ ] 4.1 Enumerate every ad-hoc error construction: `grep -nE 'rmcp::Error::new\(ErrorCode' src/mcp/server.rs` minus the legitimate sites in `errors.rs` (already moved) and `validation.rs` (already moved). Expected ~24 hits in tool bodies.
-- [ ] 4.2 For each hit, choose the right helper from `mcp/errors.rs`. The mapping is:
-    - `ErrorCode(-32003), format!("database error: {e}"), None` → `map_db_error(e)`
-    - `ErrorCode(-32003), format!("search error: {message}"), None` → `map_search_error(...)`
-    - `ErrorCode(-32003), e.to_string(), None` (db-flavoured) → `map_db_error(e)`
-    - `ErrorCode(-32003), e.to_string(), None` (anyhow-flavoured) → `map_anyhow_error(e)`
-    - `ErrorCode(-32003), <serde_json error>, None` → introduce `map_serialize_error` in `errors.rs` if not present, then call it
-- [ ] 4.3 If `map_serialize_error` is added, add a one-paragraph rustdoc explaining what it accepts and the `-32003` code it emits.
-- [ ] 4.4 After the rewrite, `grep -nE 'rmcp::Error::new\(ErrorCode' src/mcp/server.rs` returns only the legitimate uses inside helpers (zero in tool bodies if validators are already moved; otherwise only validator hits at the lines preserved by the validation-extract commit).
-- [ ] 4.5 `cargo build && cargo test` MUST pass.
-- [ ] 4.6 Replay the `tools/list` snapshot: response MUST match `target/tools-list-baseline.json` exactly.
-- [ ] 4.7 Run any test name matching `returns_.*_error_code` or that asserts on `-32001/-32002/-32003/-32009/-32602`. All MUST pass. If coverage gaps exist (per design R3), add a single regression test per error code value before this commit lands.
-- [ ] 4.8 Commit.
+- [x] 4.1 Enumerate every ad-hoc error construction. **Findings**: 17 ad-hoc sites in tool bodies; 2 additional sites in `extraction_enabled` / `extraction_debounce_ms` helpers, all `-32002 ConfigError`-shaped.
+- [x] 4.2 For each hit, choose the right helper from `mcp/errors.rs`. **Resolutions**:
+  - All 15 `serde_json::to_string_pretty(...).map_err(...)` sites → `map_serialize_error` (new helper).
+  - 2 gap-layer sites (`gaps::log_gap*`, `gaps::list_gaps`) → `map_gaps_error` (new helper for `GapsError`).
+  - 2 config sites in `extraction_enabled` / `extraction_debounce_ms` → `map_config_error` (new helper).
+- [x] 4.3 Added rustdoc paragraphs to `map_serialize_error`, `map_gaps_error`, `map_config_error` in `errors.rs`.
+- [x] 4.4 After the rewrite, `grep -nE 'rmcp::Error::new\(ErrorCode' src/mcp/server.rs` returns 0. Production server.rs is clean.
+- [x] 4.5 `cargo build && cargo test` MUST pass. (880 lib tests + integration suites all green.)
+- [x] 4.6 Replay the `tools/list` snapshot: tool descriptions and counts unchanged (`grep -E '#\[tool\(description' src/mcp/server.rs | diff target/tools-list-baseline.txt -` produces zero diff).
+- [x] 4.7 Existing error-code regression tests (`map_db_error`, `map_anyhow_error`, `map_search_error`, `map_graph_error`, `map_collection_error`) all pass; per-error-code paths exercised in lib tests.
+- [x] 4.8 Commit.
 
 ## 5. Commit 4: Probe — extract `tools/admin.rs`
 

@@ -26,9 +26,10 @@ use crate::core::types::{ExtractionTriggerKind, TurnRole};
 use crate::core::vault_sync;
 use crate::mcp::errors::{
     ambiguous_slug_error, invalid_params, map_anyhow_error, map_close_action_put_error,
-    map_collection_error, map_correction_error, map_db_error, map_extraction_queue_error,
-    map_graph_error, map_namespace_error, map_search_error, map_turn_write_error,
-    map_vault_sync_error, serialize_response,
+    map_collection_error, map_config_error, map_correction_error, map_db_error,
+    map_extraction_queue_error, map_gaps_error, map_graph_error, map_namespace_error,
+    map_search_error, map_serialize_error, map_turn_write_error, map_vault_sync_error,
+    serialize_response,
 };
 use crate::mcp::validation::{
     parse_temporal_filter, validate_close_action_status, validate_content, validate_relationship,
@@ -139,30 +140,22 @@ fn append_note(body: &mut String, note: &str) {
 
 
 fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
-    let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false").map_err(
-        |error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None),
-    )?;
+    let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false")
+        .map_err(map_config_error)?;
     match raw.as_str() {
         "true" => Ok(true),
         "false" => Ok(false),
-        other => Err(rmcp::Error::new(
-            ErrorCode(-32002),
-            format!("ConfigError: invalid extraction.enabled value: {other}"),
-            None,
-        )),
+        other => Err(map_config_error(format!(
+            "invalid extraction.enabled value: {other}"
+        ))),
     }
 }
 
 fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
-    let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000").map_err(
-        |error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None),
-    )?;
+    let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000")
+        .map_err(map_config_error)?;
     raw.parse::<i64>().map_err(|_| {
-        rmcp::Error::new(
-            ErrorCode(-32002),
-            format!("ConfigError: invalid extraction.debounce_ms value: {raw}"),
-            None,
-        )
+        map_config_error(format!("invalid extraction.debounce_ms value: {raw}"))
     })
 }
 
@@ -426,7 +419,7 @@ impl QuaidServer {
             "supersedes": supersedes,
             "superseded_by": successor_slug,
         }))
-        .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -493,7 +486,7 @@ impl QuaidServer {
             "conversation_path": write_result.conversation_path,
             "extraction_scheduled_at": extraction_scheduled_at,
         }))
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -538,7 +531,7 @@ impl QuaidServer {
             "extraction_triggered": extraction_triggered,
             "queue_position": queue_position,
         }))
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -617,7 +610,7 @@ impl QuaidServer {
             "updated_at": updated_at,
             "version": version,
         }))
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -636,7 +629,7 @@ impl QuaidServer {
         )
         .map_err(map_correction_error)?;
         let json = serde_json::to_string_pretty(&step)
-            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -655,7 +648,7 @@ impl QuaidServer {
         )
         .map_err(map_correction_error)?;
         let json = serde_json::to_string_pretty(&step)
-            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1041,7 +1034,7 @@ impl QuaidServer {
             .map_err(map_db_error)?;
 
         let json = serde_json::to_string_pretty(&rows)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1068,7 +1061,7 @@ impl QuaidServer {
         .map_err(map_graph_error)?;
 
         let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1166,7 +1159,7 @@ impl QuaidServer {
         };
 
         let json = serde_json::to_string_pretty(&contradictions)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1241,7 +1234,7 @@ impl QuaidServer {
         };
 
         let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1304,7 +1297,7 @@ impl QuaidServer {
             .map_err(map_db_error)?;
 
         let json = serde_json::to_string_pretty(&tags)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1350,7 +1343,7 @@ impl QuaidServer {
             Some(page_id) => gaps::log_gap_for_page(page_id, &input.query, &context, None, &db),
             None => gaps::log_gap(None, &input.query, &context, None, &db),
         }
-        .map_err(|e| rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None))?;
+        .map_err(map_gaps_error)?;
 
         // Retrieve the gap ID
         let gap_id: i64 = db
@@ -1380,12 +1373,10 @@ impl QuaidServer {
         let limit = input.limit.unwrap_or(20).min(MAX_LIMIT) as usize;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let gap_list = gaps::list_gaps(resolved, limit, &db).map_err(|e| {
-            rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None)
-        })?;
+        let gap_list = gaps::list_gaps(resolved, limit, &db).map_err(map_gaps_error)?;
 
         let json = serde_json::to_string_pretty(&gap_list)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1480,7 +1471,7 @@ impl QuaidServer {
             .map_err(map_namespace_error)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&namespace)
-                .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?,
+                .map_err(map_serialize_error)?,
         )]))
     }
 
@@ -1499,7 +1490,7 @@ impl QuaidServer {
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&result)
-                .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?,
+                .map_err(map_serialize_error)?,
         )]))
     }
 
@@ -1518,7 +1509,7 @@ impl QuaidServer {
             ));
         }
         let data_json = serde_json::to_string(&input.data)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         if data_json.len() > MAX_RAW_DATA_LEN {
             return Err(invalid_params(format!(
                 "data exceeds maximum size of {MAX_RAW_DATA_LEN} bytes"

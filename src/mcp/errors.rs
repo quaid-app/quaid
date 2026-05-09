@@ -24,6 +24,34 @@ pub fn invalid_params(message: impl Into<String>) -> rmcp::Error {
     rmcp::Error::new(ErrorCode(-32602), message.into(), None)
 }
 
+/// Construct a JSON-RPC `-32001` not-found error for the given slug.
+pub fn page_not_found(slug: impl std::fmt::Display) -> rmcp::Error {
+    rmcp::Error::new(ErrorCode(-32001), format!("page not found: {slug}"), None)
+}
+
+/// Construct a JSON-RPC `-32002` config-shaped error for use when a tool
+/// rejects a request because a page is the wrong kind for the operation
+/// (e.g. `memory_close_action` on a non-`action_item` page).
+pub fn kind_error(message: impl Into<String>) -> rmcp::Error {
+    rmcp::Error::new(ErrorCode(-32002), message.into(), None)
+}
+
+/// Construct a JSON-RPC `-32009` conflict error with optional structured
+/// metadata (typically `{ "current_version": ... }`).
+pub fn conflict_error(
+    message: impl Into<String>,
+    data: Option<serde_json::Value>,
+) -> rmcp::Error {
+    rmcp::Error::new(ErrorCode(-32009), message.into(), data)
+}
+
+/// Construct a JSON-RPC `-32003` internal-error for tool-body conditions
+/// that don't map onto any of the typed `map_*_error` helpers — for
+/// example, a precondition like "raw data already exists, set overwrite".
+pub fn tool_error(message: impl Into<String>) -> rmcp::Error {
+    rmcp::Error::new(ErrorCode(-32003), message.into(), None)
+}
+
 /// Construct a JSON-RPC `-32002` ambiguous-slug error with structured
 /// candidate metadata.
 pub fn ambiguous_slug_error(slug: &str, candidates: Vec<String>) -> rmcp::Error {

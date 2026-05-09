@@ -25,11 +25,11 @@ use crate::core::supersede;
 use crate::core::types::{ExtractionTriggerKind, TurnRole};
 use crate::core::vault_sync;
 use crate::mcp::errors::{
-    ambiguous_slug_error, invalid_params, map_anyhow_error, map_close_action_put_error,
-    map_collection_error, map_config_error, map_correction_error, map_db_error,
-    map_extraction_queue_error, map_gaps_error, map_graph_error, map_namespace_error,
-    map_search_error, map_serialize_error, map_turn_write_error, map_vault_sync_error,
-    serialize_response,
+    ambiguous_slug_error, conflict_error, invalid_params, kind_error, map_anyhow_error,
+    map_close_action_put_error, map_collection_error, map_config_error, map_correction_error,
+    map_db_error, map_extraction_queue_error, map_gaps_error, map_graph_error,
+    map_namespace_error, map_search_error, map_serialize_error, map_turn_write_error,
+    map_vault_sync_error, page_not_found, serialize_response, tool_error,
 };
 use crate::mcp::validation::{
     parse_temporal_filter, validate_close_action_status, validate_content, validate_relationship,
@@ -61,11 +61,7 @@ fn resolve_slug_for_mcp(
             collection_name,
             slug,
         }),
-        SlugResolution::NotFound { slug } => Err(rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("page not found: {slug}"),
-            None,
-        )),
+        SlugResolution::NotFound { slug } => Err(page_not_found(slug)),
         SlugResolution::Ambiguous { slug, candidates } => Err(ambiguous_slug_error(
             &slug,
             candidates
@@ -93,14 +89,9 @@ fn page_id_for_resolved(
         |row| row.get(0),
     )
     .map_err(|error| match error {
-        rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!(
-                "page not found: {}",
-                canonical_slug(&resolved.collection_name, &resolved.slug)
-            ),
-            None,
-        ),
+        rusqlite::Error::QueryReturnedNoRows => {
+            page_not_found(canonical_slug(&resolved.collection_name, &resolved.slug))
+        }
         other => map_db_error(other),
     })
 }
@@ -576,15 +567,11 @@ impl QuaidServer {
         let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
             .map_err(map_anyhow_error)?;
         if page.page_type != "action_item" {
-            return Err(rmcp::Error::new(
-                ErrorCode(-32002),
-                format!(
-                    "KindError: page `{}` is `{}` not `action_item`",
-                    canonical_slug(&resolved.collection_name, &resolved.slug),
-                    page.page_type
-                ),
-                None,
-            ));
+            return Err(kind_error(format!(
+                "KindError: page `{}` is `{}` not `action_item`",
+                canonical_slug(&resolved.collection_name, &resolved.slug),
+                page.page_type
+            )));
         }
 
         let mut updated_page = page.clone();
@@ -701,15 +688,13 @@ impl QuaidServer {
             .map_err(map_db_error)?;
         match (existing_version, input.expected_version) {
             (None, Some(expected)) => {
-                return Err(rmcp::Error::new(
-                    ErrorCode(-32009),
+                return Err(conflict_error(
                     format!("conflict: page does not exist at version {expected}"),
                     Some(serde_json::json!({ "current_version": null })),
                 ));
             }
             (Some(current), None) => {
-                return Err(rmcp::Error::new(
-                    ErrorCode(-32009),
+                return Err(conflict_error(
                     format!(
                         "conflict: page already exists (current version: {current}). Provide expected_version to update."
                     ),
@@ -728,8 +713,7 @@ impl QuaidServer {
         .map_err(|err| {
             let message = err.to_string();
             if message.contains("Conflict:") {
-                rmcp::Error::new(
-                    ErrorCode(-32009),
+                conflict_error(
                     message.replace("Conflict: ", "conflict: "),
                     Some(serde_json::json!({ "current_version": existing_version })),
                 )
@@ -823,7 +807,7 @@ impl QuaidServer {
         };
 
         let json = serde_json::to_string_pretty(&results)
-            .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -857,7 +841,7 @@ impl QuaidServer {
         .map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
-            .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -934,7 +918,7 @@ impl QuaidServer {
         }
 
         let json = serde_json::to_string_pretty(&entries)
-            .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
+            .map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1274,11 +1258,7 @@ impl QuaidServer {
                 |row| row.get(0),
             )
             .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
-                    ErrorCode(-32001),
-                    format!("page not found: {}", input.slug),
-                    None,
-                ),
+                rusqlite::Error::QueryReturnedNoRows => page_not_found(&input.slug),
                 other => map_db_error(other),
             })?;
 
@@ -1432,14 +1412,10 @@ impl QuaidServer {
             .map_err(map_db_error)?;
 
         if existing.is_some() && !overwrite {
-            return Err(rmcp::Error::new(
-                ErrorCode(-32003),
-                format!(
-                    "raw data for source '{}' already exists on '{}'; set overwrite=true to replace",
-                    input.source, canonical_page_slug
-                ),
-                None,
-            ));
+            return Err(tool_error(format!(
+                "raw data for source '{}' already exists on '{}'; set overwrite=true to replace",
+                input.source, canonical_page_slug
+            )));
         }
 
         db.execute(

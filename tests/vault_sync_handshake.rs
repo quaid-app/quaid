@@ -153,7 +153,7 @@ fn wait_for_exact_ack_short_circuits_when_live_owner_disappears() {
 
     assert!(matches!(
         error,
-        VaultSyncError::ServeDiedDuringHandshake { .. }
+        VaultSyncError::Restore(RestoreError::ServeDiedDuringHandshake { .. })
     ));
     assert!(
         started.elapsed() < Duration::from_secs(1),
@@ -379,11 +379,11 @@ fn wait_for_exact_ack_reports_when_serve_ownership_changes_mid_handshake() {
     .unwrap();
 
     match wait_for_exact_ack(&conn, collection_id, "serve-1", 2) {
-        Err(VaultSyncError::ServeOwnershipChanged {
+        Err(VaultSyncError::Restore(RestoreError::ServeOwnershipChanged {
             collection_name,
             expected_session_id,
             actual_session_id,
-        }) => {
+        })) => {
             assert_eq!(collection_name, "work");
             assert_eq!(expected_session_id, "serve-1");
             assert_eq!(actual_session_id, "serve-2");

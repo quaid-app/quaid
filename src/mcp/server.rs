@@ -437,22 +437,50 @@ fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
         vault_sync::VaultSyncError::AmbiguousSlug { .. }
         | vault_sync::VaultSyncError::CollectionRestoring { .. }
         | vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }
-        | vault_sync::VaultSyncError::RestoreInProgress { .. }
-        | vault_sync::VaultSyncError::RestorePendingFinalize { .. }
-        | vault_sync::VaultSyncError::RestoreIntegrityBlocked { .. }
-        | vault_sync::VaultSyncError::RestoreNonEmptyTarget { .. }
-        | vault_sync::VaultSyncError::ServeDiedDuringHandshake { .. }
-        | vault_sync::VaultSyncError::HandshakeTimeout { .. }
-        | vault_sync::VaultSyncError::NewRootVerificationFailed { .. }
-        | vault_sync::VaultSyncError::NewRootUnstable { .. }
+        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestoreInProgress {
+            ..
+        })
+        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestorePendingFinalize {
+            ..
+        })
+        | vault_sync::VaultSyncError::Restore(
+            vault_sync::RestoreError::RestoreIntegrityBlocked { .. },
+        )
+        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestoreNonEmptyTarget {
+            ..
+        })
+        | vault_sync::VaultSyncError::Restore(
+            vault_sync::RestoreError::ServeDiedDuringHandshake { .. },
+        )
+        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::HandshakeTimeout {
+            ..
+        })
+        | vault_sync::VaultSyncError::Restore(
+            vault_sync::RestoreError::NewRootVerificationFailed { .. },
+        )
+        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::NewRootUnstable {
+            ..
+        })
         | vault_sync::VaultSyncError::ReconcileHalted { .. } => ErrorCode(-32002),
         #[cfg(unix)]
-        vault_sync::VaultSyncError::MissingExpectedVersion { .. }
-        | vault_sync::VaultSyncError::StaleExpectedVersion { .. }
-        | vault_sync::VaultSyncError::ExternalDelete { .. }
-        | vault_sync::VaultSyncError::ExternalCreate { .. }
-        | vault_sync::VaultSyncError::HashMismatch { .. }
-        | vault_sync::VaultSyncError::ConcurrentRename { .. } => ErrorCode(-32009),
+        vault_sync::VaultSyncError::Conflict(
+            vault_sync::ConflictError::MissingExpectedVersion { .. },
+        )
+        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::StaleExpectedVersion {
+            ..
+        })
+        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ExternalDelete {
+            ..
+        })
+        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ExternalCreate {
+            ..
+        })
+        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::HashMismatch {
+            ..
+        })
+        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ConcurrentRename {
+            ..
+        }) => ErrorCode(-32009),
         _ => ErrorCode(-32003),
     };
     rmcp::Error::new(code, e.to_string(), None)

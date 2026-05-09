@@ -133,7 +133,7 @@ fn watcher_supervisor_production_logic_tracks_crash_state_and_backoff() {
     let source = production_vault_sync_source();
     let start = source.find("fn mark_watcher_crashed(").unwrap();
     let end = source[start..]
-        .find("fn publish_watcher_health(")
+        .find("fn reconcile_halt_details(")
         .map(|offset| start + offset)
         .unwrap();
     let snippet = &source[start..end];

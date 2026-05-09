@@ -261,7 +261,8 @@ fn run_full_hash_audit_pass_batches_due_rows_instead_of_inline_full_vault_reconc
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("core")
-            .join("vault_sync.rs"),
+            .join("vault_sync")
+            .join("mod.rs"),
     )
     .unwrap();
     let fn_start = source

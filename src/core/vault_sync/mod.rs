@@ -1,18 +1,38 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+//! Vault-sync module root.
+//!
+//! `vault_sync` is the subsystem that keeps the SQLite-backed page
+//! state and the on-disk vault directory in sync, plus the IPC,
+//! restore, and recovery flows that live alongside that contract.
+//! This file (`mod.rs`) hosts the cross-cutting helpers — process
+//! registries, IPC accept loop, supervisor handle map,
+//! `start_serve_runtime`, `begin_restore`, `remap_collection`,
+//! reconcile-error conversion — and re-exports the focused
+//! submodules that own the rest:
+//!
+//! - [`error`] — parent `VaultSyncError`
+//! - [`precondition`] — fs precondition checks before a write
+//! - [`recovery`] — recovery-in-progress guard + sentinel paths
+//! - [`watcher`] — watcher state types and `WatcherError`
+//! - [`ownership`] — live owner / lease helpers
+//! - [`session`] — serve / cli session lifecycle
+//! - [`write_lock`] — slug locking + write-dedup helpers
+//! - [`restore`] — restore-flow types, `RestoreError`,
+//!   `ConflictError`
+//! - [`ipc`] — IPC datagram types, `IpcError`, socket auth
+//!
+//! Items reachable as `crate::core::vault_sync::Foo` before the
+//! split remain reachable at the same path via re-exports declared
+//! near the top of this file. New code that extends `vault_sync`
+//! should land in the submodule whose concern matches; if no
+//! submodule fits, add a new one rather than overloading `mod.rs`.
+
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-#[cfg(unix)]
-use std::io::{BufRead, BufReader, BufWriter, Write};
-#[cfg(unix)]
-use std::mem::size_of;
-#[cfg(target_os = "linux")]
-use std::mem::zeroed;
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
-#[cfg(unix)]
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-#[cfg(unix)]
-use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(all(test, unix))]
+use std::io::Write;
+#[cfg(all(test, unix))]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::AtomicUsize;
@@ -21,57 +41,47 @@ use std::sync::{
     Arc, Mutex, OnceLock,
 };
 use std::thread;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
+#[cfg(test)]
 use uuid::Uuid;
 
+#[cfg(all(test, unix))]
+use notify::{event::ModifyKind, Event as NotifyEvent, EventKind as NotifyEventKind};
 #[cfg(unix)]
-use notify::{
-    event::ModifyKind, Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind,
-    PollWatcher, RecommendedWatcher, RecursiveMode, Watcher,
-};
-#[cfg(unix)]
-use rustix::fd::AsFd;
+use notify::{Config as NotifyConfig, PollWatcher, RecursiveMode, Watcher};
 #[cfg(all(test, unix))]
 use rustix::fs::fsync;
+
+#[cfg(all(test, unix))]
+use crate::core::fs_safety;
 #[cfg(unix)]
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
 use crate::commands::{get::get_page_by_key, put};
-use crate::core::collections::{
-    self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
-};
-use crate::core::conversation::extractor::Worker;
-#[cfg(unix)]
-use crate::core::conversation::file_edit::is_history_sidecar_path;
+use crate::core::collections::{self, Collection, CollectionState, OpKind, SlugResolution};
 use crate::core::conversation::idle_close;
 use crate::core::conversation::janitor;
-use crate::core::conversation::slm::LazySlmRunner;
-use crate::core::conversation::supersede::ResolvingFactWriter;
 #[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
 use crate::core::file_state;
-#[cfg(unix)]
-use crate::core::fs_safety;
-use crate::core::ignore_patterns;
 use crate::core::markdown;
 use crate::core::page_uuid;
 use crate::core::quarantine;
 use crate::core::raw_imports;
 use crate::core::reconciler::{
-    fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, is_markdown_file,
-    reconcile, resolve_page_identity, run_restore_remap_safety_pipeline_without_mount_check,
-    scheduled_full_hash_audit_authorized, CanonicalIdentityRecord, FullHashReconcileAuthorization,
-    FullHashReconcileMode, PageIdentityResolution, ReconcileError, ReconcileStats,
-    RestoreRemapOperation, RestoreRemapSafetyRequest,
+    fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, reconcile,
+    scheduled_full_hash_audit_authorized, FullHashReconcileAuthorization, FullHashReconcileMode,
+    ReconcileError, ReconcileStats,
 };
 
-const SESSION_LIVENESS_SECS: i64 = 15;
+pub(super) const SESSION_LIVENESS_SECS: i64 = 15;
 const HANDSHAKE_POLL_MS: u64 = 100;
 const HANDSHAKE_TIMEOUT_SECS: u64 = 30;
 const HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -79,31 +89,26 @@ const DEFERRED_RETRY_SECS: u64 = 1;
 const IDLE_CLOSE_SWEEP_INTERVAL_SECS: u64 = 10;
 const JANITOR_SWEEP_INTERVAL_SECS: u64 = 60 * 60;
 const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
-const REMAP_VERIFICATION_SAMPLE_LIMIT: usize = 5;
 const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const DEFAULT_FULL_HASH_AUDIT_DAYS: i64 = 7;
 #[cfg(unix)]
-const WATCH_CHANNEL_CAPACITY: usize = 4096;
-#[cfg(unix)]
-const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 1500;
-#[cfg(unix)]
 const SELF_WRITE_DEDUP_TTL_SECS: u64 = 5;
 #[cfg(unix)]
 const SELF_WRITE_DEDUP_SWEEP_SECS: u64 = 10;
 
-struct RuntimeRegistries {
+pub(super) struct RuntimeRegistries {
     supervisor_handles: Mutex<HashMap<i64, SupervisorHandle>>,
-    dedup: Mutex<HashSet<String>>,
+    pub(super) dedup: Mutex<HashSet<String>>,
     #[cfg(unix)]
     self_write_dedup: Mutex<HashMap<PathBuf, SelfWriteDedupEntry>>,
-    slug_writes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    recovering_collections: Mutex<HashSet<i64>>,
+    pub(super) slug_writes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    pub(super) recovering_collections: Mutex<HashSet<i64>>,
 }
 
 impl RuntimeRegistries {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             supervisor_handles: Mutex::new(HashMap::new()),
             dedup: Mutex::new(HashSet::new()),
@@ -129,84 +134,7 @@ struct SelfWriteDedupEntry {
     inserted_at: Instant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WatcherMode {
-    Native,
-    Poll,
-    Crashed,
-}
-
-impl WatcherMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::Poll => "poll",
-            Self::Crashed => "crashed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WatcherHealthSnapshot {
-    mode: WatcherMode,
-    last_event_at: Option<String>,
-    channel_depth: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WatcherHealthView {
-    pub mode: String,
-    pub last_event_at: Option<String>,
-    pub channel_depth: i64,
-}
-
-#[cfg(unix)]
-enum WatcherHandle {
-    // Fields are held for Drop semantics (keeping the watcher alive), not read directly.
-    #[expect(
-        dead_code,
-        reason = "field is owned for Drop semantics (keeps the underlying notify watcher alive); not read directly"
-    )]
-    Native(RecommendedWatcher),
-    #[expect(
-        dead_code,
-        reason = "field is owned for Drop semantics (keeps the underlying poll watcher alive); not read directly"
-    )]
-    Poll(PollWatcher),
-}
-
-#[cfg(unix)]
-struct CollectionWatcherState {
-    root_path: PathBuf,
-    generation: i64,
-    receiver: mpsc::Receiver<WatchEvent>,
-    watcher: Option<WatcherHandle>,
-    buffer: WatchBatchBuffer,
-    mode: WatcherMode,
-    last_event_at: Option<String>,
-    last_watcher_error: Option<Instant>,
-    backoff_until: Option<Instant>,
-    consecutive_failures: u32,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Default)]
-struct WatchBatchBuffer {
-    dirty_paths: HashSet<PathBuf>,
-    native_renames: Vec<crate::core::reconciler::NativeRename>,
-    ignore_file_changed: bool,
-    debounce_deadline: Option<Instant>,
-}
-
-#[cfg(unix)]
-#[derive(Debug, PartialEq, Eq)]
-enum WatchEvent {
-    DirtyPath(PathBuf),
-    NativeRename(crate::core::reconciler::NativeRename),
-    IgnoreFileChanged,
-}
-
-static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
+pub(super) static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IgnoreParseErrorView {
@@ -248,79 +176,6 @@ impl ResolvedSlug {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RestoreManifestEntry {
-    pub relative_path: String,
-    pub sha256: String,
-    pub size_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RestoreManifest {
-    pub entries: Vec<RestoreManifestEntry>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteBackOutcome {
-    Migrated,
-    SkippedReadOnly,
-    AlreadyHadUuid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveCollectionOwner {
-    pub session_id: String,
-    pub pid: i64,
-    pub host: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeCaller {
-    RestoreOriginator { command_id: String },
-    StartupRecovery { session_id: String },
-    ExternalFinalize { session_id: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeOutcome {
-    Finalized,
-    Deferred,
-    ManifestIncomplete,
-    IntegrityFailed,
-    OrphanRecovered,
-    Aborted,
-    NoPendingWork,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeCliOutcome {
-    Attached,
-    OrphanRecovered,
-    Deferred,
-    ManifestIncomplete,
-    IntegrityFailed,
-    Aborted,
-    NoPendingWork,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttachReason {
-    RestorePostFinalize,
-    RemapPostReconcile,
-}
-
-fn finalize_outcome_label(outcome: &FinalizeOutcome) -> &'static str {
-    match outcome {
-        FinalizeOutcome::Finalized => "Finalized",
-        FinalizeOutcome::Deferred => "Deferred",
-        FinalizeOutcome::ManifestIncomplete => "ManifestIncomplete",
-        FinalizeOutcome::IntegrityFailed => "IntegrityFailed",
-        FinalizeOutcome::OrphanRecovered => "OrphanRecovered",
-        FinalizeOutcome::Aborted => "Aborted",
-        FinalizeOutcome::NoPendingWork => "NoPendingWork",
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemapVerificationSummary {
     pub resolved_pages: usize,
@@ -329,258 +184,106 @@ pub struct RemapVerificationSummary {
     pub extra_files: usize,
 }
 
-#[derive(Debug, Error)]
-pub enum VaultSyncError {
-    #[error("collection not found: {name}")]
-    CollectionNotFound { name: String },
+mod embedding;
+mod error;
+mod ipc;
+mod ownership;
+#[cfg(unix)]
+mod precondition;
+mod recovery;
+mod remap;
+mod restore;
+mod session;
+mod watcher;
+mod write_lock;
 
-    #[error("ambiguous slug: {slug} ({candidates})")]
-    AmbiguousSlug { slug: String, candidates: String },
-
-    #[error("page not found: {slug}")]
-    PageNotFound { slug: String },
-
-    #[error(
-        "CollectionRestoringError: collection={collection_name} state={state} needs_full_sync={needs_full_sync}"
-    )]
-    CollectionRestoring {
-        collection_name: String,
-        state: String,
-        needs_full_sync: bool,
-    },
-
-    #[error("CollectionReadOnlyError: collection={collection_name}")]
-    CollectionReadOnly { collection_name: String },
-
-    #[error(
-        "ServeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id} owner_pid={owner_pid} owner_host={owner_host}"
-    )]
-    ServeOwnsCollectionError {
-        collection_name: String,
-        owner_session_id: String,
-        owner_pid: i64,
-        owner_host: String,
-    },
-
-    #[cfg(unix)]
-    #[error("IpcDirectoryInsecureError: path={path} reason={reason}")]
-    IpcDirectoryInsecure { path: String, reason: String },
-
-    #[cfg(unix)]
-    #[error("IpcSocketPermissionError: path={path} reason={reason}")]
-    IpcSocketPermission { path: String, reason: String },
-
-    #[cfg(unix)]
-    #[error("IpcSocketCollisionError: path={path} reason={reason}")]
-    IpcSocketCollision { path: String, reason: String },
-
-    #[cfg(unix)]
-    #[error("IpcPeerAuthFailedError: path={path} reason={reason}")]
-    IpcPeerAuthFailed { path: String, reason: String },
-
-    #[error("RestoreInProgressError: collection={collection_name}")]
-    RestoreInProgress { collection_name: String },
-
-    #[error("RestorePendingFinalizeError: collection={collection_name} pending_root_path={pending_root_path}")]
-    RestorePendingFinalize {
-        collection_name: String,
-        pending_root_path: String,
-    },
-
-    #[error("RestoreIntegrityBlockedError: collection={collection_name} blocking_column={blocking_column}")]
-    RestoreIntegrityBlocked {
-        collection_name: String,
-        blocking_column: &'static str,
-    },
-
-    #[error("RestoreResetBlockedError: collection={collection_name} reason={reason}")]
-    RestoreResetBlocked {
-        collection_name: String,
-        reason: &'static str,
-    },
-
-    #[error("RestoreNonEmptyTargetError: target={target}")]
-    RestoreNonEmptyTarget { target: String },
-
-    #[error(
-        "ServeDiedDuringHandshakeError: collection={collection_name} expected_session_id={expected_session_id}"
-    )]
-    ServeDiedDuringHandshake {
-        collection_name: String,
-        expected_session_id: String,
-    },
-
-    #[error(
-        "ServeOwnershipChangedError: collection={collection_name} expected_session_id={expected_session_id} actual_session_id={actual_session_id}"
-    )]
-    ServeOwnershipChanged {
-        collection_name: String,
-        expected_session_id: String,
-        actual_session_id: String,
-    },
-
-    #[error(
-        "HandshakeTimeoutError: collection={collection_name} expected_session_id={expected_session_id} reload_generation={reload_generation}"
-    )]
-    HandshakeTimeout {
-        collection_name: String,
-        expected_session_id: String,
-        reload_generation: i64,
-    },
-
-    #[error(
-        "NewRootVerificationFailedError: collection={collection_name} missing={missing} mismatched={mismatched} extra={extra} missing_samples={missing_samples} mismatched_samples={mismatched_samples} extra_samples={extra_samples}"
-    )]
-    NewRootVerificationFailed {
-        collection_name: String,
-        missing: usize,
-        mismatched: usize,
-        extra: usize,
-        missing_samples: String,
-        mismatched_samples: String,
-        extra_samples: String,
-    },
-
-    #[error("NewRootUnstableError: collection={collection_name}")]
-    NewRootUnstable { collection_name: String },
-
-    #[error("InvariantViolationError: {message}")]
-    InvariantViolation { message: String },
-
-    #[error("RestoreCommandBlockedError: collection={collection_name} outcome={outcome}")]
-    RestoreCommandBlocked {
-        collection_name: String,
-        outcome: &'static str,
-    },
-
-    #[error("ReconcileHaltedError: collection={collection_name} reason={reason}")]
-    ReconcileHalted {
-        collection_name: String,
-        reason: String,
-    },
-
-    #[error("PlainSyncActiveRootRequiredError: collection={collection_name} state={state}")]
-    PlainSyncActiveRootRequired {
-        collection_name: String,
-        state: String,
-    },
-
-    #[error("RegistryPoisonedError: registry={registry}")]
-    RegistryPoisoned { registry: &'static str },
-
-    #[cfg(unix)]
-    #[error("DuplicateWriteDedupError: key={key}")]
-    DuplicateWriteDedup { key: String },
-
-    #[cfg(unix)]
-    #[error(
-        "RecoverySentinelError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} reason={reason}"
-    )]
-    RecoverySentinel {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-        reason: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConcurrentRenameError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path}"
-    )]
-    ConcurrentRename {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-    },
-
-    #[cfg(all(test, unix))]
-    #[error("DurabilityError: collection_id={collection_id} relative_path={relative_path}")]
-    Durability {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "PostRenameRecoveryPendingError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} stage={stage} reason={reason}"
-    )]
-    PostRenameRecoveryPending {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-        stage: &'static str,
-        reason: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=MissingExpectedVersion current_version={current_version}"
-    )]
-    MissingExpectedVersion {
-        collection_id: i64,
-        relative_path: String,
-        current_version: i64,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "Conflict: ConflictError StaleExpectedVersion collection_id={collection_id} relative_path={relative_path} expected_version={expected_version} current version: {current_version}"
-    )]
-    StaleExpectedVersion {
-        collection_id: i64,
-        relative_path: String,
-        expected_version: i64,
-        current_version: i64,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=ExternalDelete"
-    )]
-    ExternalDelete {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=ExternalCreate"
-    )]
-    ExternalCreate {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=HashMismatch stored_sha256={stored_sha256} actual_sha256={actual_sha256}"
-    )]
-    HashMismatch {
-        collection_id: i64,
-        relative_path: String,
-        stored_sha256: String,
-        actual_sha256: String,
-    },
-
-    #[cfg(not(unix))]
-    #[error("UnsupportedPlatformError: command={command} requires=unix")]
-    UnsupportedPlatform { command: &'static str },
-
-    #[error(transparent)]
-    Sqlite(#[from] rusqlite::Error),
-
-    #[error(transparent)]
-    Io(#[from] io::Error),
-
-    #[error(transparent)]
-    Collections(#[from] CollectionError),
-
-    #[error(transparent)]
-    Reconcile(#[from] ReconcileError),
-
-    #[error(transparent)]
-    Serde(#[from] serde_json::Error),
-}
+pub use embedding::drain_embedding_queue;
+pub(crate) use embedding::resume_orphaned_embedding_jobs;
+#[cfg(test)]
+use embedding::{
+    configured_concurrency_for_test as configured_embedding_concurrency,
+    process_embedding_job_on_connection,
+};
+pub use error::VaultSyncError;
+#[cfg(all(test, unix, target_os = "linux"))]
+use ipc::audit_bound_ipc_socket;
+#[cfg(unix)]
+pub(crate) use ipc::socket::{
+    authorize_client_peer, peer_credentials_for_stream, session_id_from_ipc_path,
+};
+#[cfg(unix)]
+pub use ipc::IpcError;
+#[cfg(all(test, unix))]
+pub(crate) use ipc::IpcPeerCredentials;
+#[cfg(unix)]
+use ipc::PublishedIpcSocket;
+#[cfg(unix)]
+use ipc::{accept_ipc_clients, cleanup_published_ipc_socket, publish_ipc_socket};
+#[cfg(all(test, unix))]
+use ipc::{socket::authorize_server_peer, IpcHandlerGuard, IPC_HANDLER_LIMIT};
+#[cfg(unix)]
+pub(crate) use ipc::{IpcRequest, IpcResponse, LiveServeEndpoint};
+pub use ownership::{
+    acquire_owner_lease, ensure_no_live_serve_owner, ensure_no_live_serve_owner_for_root_path,
+    live_collection_owner, owner_session_id, release_owner_lease, LiveCollectionOwner,
+};
+#[cfg(all(test, unix))]
+pub use precondition::check_fs_precondition;
+#[cfg(unix)]
+pub(crate) use precondition::check_fs_precondition_with_parent_fd;
+#[cfg(unix)]
+pub use precondition::FsPreconditionOutcome;
+#[cfg(test)]
+pub(crate) use recovery::set_collection_recovery_in_progress_for_test;
+use recovery::{bootstrap_recovery_directories, recovery_sentinel_paths, RecoveryInProgressGuard};
+pub use recovery::{
+    collection_recovery_dir, collection_recovery_in_progress, recovery_root_for_db_path,
+};
+#[cfg(test)]
+use remap::take_tree_fence_for_test as take_tree_fence;
+use remap::{compare_manifest, path_string, walk_tree, ManifestComparison};
+pub use remap::{reconcile_reset, remap_collection, restore_reset, verify_remap_root};
+#[cfg(test)]
+use restore::finalize_outcome_label;
+#[cfg(unix)]
+pub use restore::ConflictError;
+pub use restore::{
+    begin_restore, AttachReason, FinalizeCaller, FinalizeCliOutcome, FinalizeOutcome, RestoreError,
+    RestoreManifest, RestoreManifestEntry, WriteBackOutcome,
+};
+#[cfg(test)]
+use restore::{
+    ensure_restore_not_blocked, ensure_restore_target_is_empty, infer_restore_relative_path,
+    materialize_collection_to_path,
+};
+pub use session::{
+    heartbeat_session, register_cli_session, register_session, sweep_stale_sessions,
+    unregister_session,
+};
+#[cfg(unix)]
+pub use watcher::WatcherError;
+use watcher::WatcherHealthSnapshot;
+#[cfg(all(test, unix))]
+use watcher::{
+    classify_watch_event, relative_markdown_path, set_force_native_watcher_init_failure,
+    FORCE_NATIVE_WATCHER_INIT_FAILURE,
+};
+#[cfg(unix)]
+use watcher::{
+    mark_watcher_crashed, reconcile_halt_details, watch_callback, watch_debounce_duration,
+    CollectionWatcherState, WatchBatchBuffer, WatchEvent, WatcherHandle, WATCH_CHANNEL_CAPACITY,
+};
+pub use watcher::{WatcherHealthView, WatcherMode};
+#[cfg(all(test, unix))]
+pub use write_lock::has_write_dedup;
+pub use write_lock::with_write_slug_lock;
+#[cfg(unix)]
+pub use write_lock::{insert_write_dedup, remove_write_dedup};
+#[cfg(all(test, unix))]
+use write_lock::{
+    insert_writer_side_dedup_entry, remove_writer_side_dedup_entry, writer_side_dedup_contains,
+    writer_side_dedup_key,
+};
 
 pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError> {
     #[cfg(unix)]
@@ -595,77 +298,11 @@ pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError>
     }
 }
 
-#[cfg(unix)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FsPreconditionOutcome {
-    FastPath,
-    SlowPathSelfHeal,
-    FreshCreate,
-}
-
-#[cfg(unix)]
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone)]
-struct FsPreconditionInspection {
-    outcome: FsPreconditionOutcome,
-    current_stat: Option<file_state::FileStat>,
-    stored_row: Option<file_state::FileStateRow>,
-}
-
 pub struct ServeRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     extractor_handle: Option<thread::JoinHandle<()>>,
     pub session_id: String,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IpcPeerCredentials {
-    pub pid: i32,
-    pub uid: u32,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Clone)]
-pub(crate) struct LiveServeEndpoint {
-    pub session_id: String,
-    pub pid: i64,
-    pub ipc_path: String,
-}
-
-#[cfg(unix)]
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum IpcRequest {
-    WhoAmI,
-    Put {
-        slug: String,
-        content: String,
-        expected_version: Option<i64>,
-    },
-}
-
-#[cfg(unix)]
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum IpcResponse {
-    WhoAmI { session_id: String },
-    PutOk { status: String },
-    Error { error: String },
-}
-
-#[cfg(unix)]
-struct PublishedIpcSocket {
-    listener: UnixListener,
-    path: PathBuf,
-}
-
-#[cfg(unix)]
-struct IpcSocketLocation {
-    runtime_root: PathBuf,
-    socket_dir: PathBuf,
-    create_runtime_root: bool,
 }
 
 impl Drop for ServeRuntime {
@@ -706,189 +343,25 @@ pub fn check_update_expected_version(
     expected_version: Option<i64>,
 ) -> Result<(), VaultSyncError> {
     match (current_version, expected_version) {
-        (Some(current_version), None) => Err(VaultSyncError::MissingExpectedVersion {
-            collection_id,
-            relative_path: relative_path.to_owned(),
-            current_version,
-        }),
-        (Some(current_version), Some(expected_version)) if current_version != expected_version => {
-            Err(VaultSyncError::StaleExpectedVersion {
+        (Some(current_version), None) => Err(VaultSyncError::Conflict(
+            ConflictError::MissingExpectedVersion {
                 collection_id,
                 relative_path: relative_path.to_owned(),
-                expected_version,
                 current_version,
-            })
+            },
+        )),
+        (Some(current_version), Some(expected_version)) if current_version != expected_version => {
+            Err(VaultSyncError::Conflict(
+                ConflictError::StaleExpectedVersion {
+                    collection_id,
+                    relative_path: relative_path.to_owned(),
+                    expected_version,
+                    current_version,
+                },
+            ))
         }
         _ => Ok(()),
     }
-}
-
-#[cfg(unix)]
-fn inspect_fs_precondition(
-    conn: &Connection,
-    collection_id: i64,
-    root_path: &Path,
-    relative_path: &Path,
-) -> Result<FsPreconditionInspection, VaultSyncError> {
-    let relative_path_str = relative_path.to_string_lossy().into_owned();
-    let stored_row = file_state::get_file_state(conn, collection_id, &relative_path_str)?;
-    let root_fd = fs_safety::open_root_fd(root_path)?;
-    let parent_fd = match fs_safety::walk_to_parent(&root_fd, relative_path) {
-        Ok(parent_fd) => Some(parent_fd),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
-
-    inspect_fs_precondition_with_parent_fd(
-        conn,
-        collection_id,
-        root_path,
-        relative_path,
-        parent_fd.as_ref(),
-        stored_row,
-    )
-}
-
-#[cfg(unix)]
-fn inspect_fs_precondition_with_parent_fd<Fd: AsFd>(
-    _conn: &Connection,
-    collection_id: i64,
-    root_path: &Path,
-    relative_path: &Path,
-    parent_fd: Option<&Fd>,
-    stored_row: Option<file_state::FileStateRow>,
-) -> Result<FsPreconditionInspection, VaultSyncError> {
-    let relative_path_str = relative_path.to_string_lossy().into_owned();
-    let target_name =
-        relative_path
-            .file_name()
-            .ok_or_else(|| VaultSyncError::InvariantViolation {
-                message: format!(
-                    "relative path has no terminal component: {}",
-                    relative_path.display()
-                ),
-            })?;
-
-    let current_stat = match parent_fd {
-        Some(parent_fd) => match fs_safety::stat_at_nofollow(parent_fd, Path::new(target_name)) {
-            Ok(stat) => {
-                if stat.is_symlink() {
-                    return Err(io::Error::other("target path is a symlink").into());
-                }
-                Some(file_state::FileStat {
-                    mtime_ns: stat.mtime_ns,
-                    ctime_ns: Some(stat.ctime_ns),
-                    size_bytes: stat.size_bytes,
-                    inode: Some(stat.inode),
-                })
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        },
-        None => None,
-    };
-
-    match (stored_row, current_stat) {
-        (None, None) => Ok(FsPreconditionInspection {
-            outcome: FsPreconditionOutcome::FreshCreate,
-            current_stat: None,
-            stored_row: None,
-        }),
-        (Some(_), None) => Err(VaultSyncError::ExternalDelete {
-            collection_id,
-            relative_path: relative_path_str,
-        }),
-        (None, Some(_)) => Err(VaultSyncError::ExternalCreate {
-            collection_id,
-            relative_path: relative_path_str,
-        }),
-        (Some(stored_row), Some(current_stat)) => {
-            if !file_state::needs_rehash(&current_stat, &stored_row) {
-                return Ok(FsPreconditionInspection {
-                    outcome: FsPreconditionOutcome::FastPath,
-                    current_stat: Some(current_stat),
-                    stored_row: Some(stored_row),
-                });
-            }
-
-            let actual_sha256 = file_state::hash_file(&root_path.join(relative_path))?;
-            if actual_sha256 == stored_row.sha256 {
-                Ok(FsPreconditionInspection {
-                    outcome: FsPreconditionOutcome::SlowPathSelfHeal,
-                    current_stat: Some(current_stat),
-                    stored_row: Some(stored_row),
-                })
-            } else {
-                Err(VaultSyncError::HashMismatch {
-                    collection_id,
-                    relative_path: relative_path_str,
-                    stored_sha256: stored_row.sha256,
-                    actual_sha256,
-                })
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-#[expect(
-    dead_code,
-    reason = "addressed in decompose-vault-sync-module — pre-sentinel fs-precondition check helper kept for proposal #4's split"
-)]
-pub(crate) fn check_fs_precondition_before_sentinel(
-    conn: &Connection,
-    collection_id: i64,
-    root_path: &Path,
-    relative_path: &Path,
-) -> Result<FsPreconditionOutcome, VaultSyncError> {
-    Ok(inspect_fs_precondition(conn, collection_id, root_path, relative_path)?.outcome)
-}
-
-#[cfg(unix)]
-pub(crate) fn check_fs_precondition_with_parent_fd<Fd: AsFd>(
-    conn: &Connection,
-    collection_id: i64,
-    root_path: &Path,
-    relative_path: &Path,
-    parent_fd: &Fd,
-) -> Result<FsPreconditionOutcome, VaultSyncError> {
-    let stored_row =
-        file_state::get_file_state(conn, collection_id, &relative_path.to_string_lossy())?;
-    Ok(inspect_fs_precondition_with_parent_fd(
-        conn,
-        collection_id,
-        root_path,
-        relative_path,
-        Some(parent_fd),
-        stored_row,
-    )?
-    .outcome)
-}
-
-#[cfg(all(test, unix))]
-pub fn check_fs_precondition(
-    conn: &Connection,
-    collection_id: i64,
-    root_path: &Path,
-    relative_path: &Path,
-) -> Result<FsPreconditionOutcome, VaultSyncError> {
-    let inspection = inspect_fs_precondition(conn, collection_id, root_path, relative_path)?;
-    if inspection.outcome == FsPreconditionOutcome::SlowPathSelfHeal {
-        if let (Some(current_stat), Some(stored_row)) = (
-            inspection.current_stat.as_ref(),
-            inspection.stored_row.as_ref(),
-        ) {
-            file_state::upsert_file_state(
-                conn,
-                collection_id,
-                &stored_row.relative_path,
-                stored_row.page_id,
-                current_stat,
-                &stored_row.sha256,
-            )?;
-        }
-    }
-    Ok(inspection.outcome)
 }
 
 fn init_process_registries() -> Result<&'static RuntimeRegistries, VaultSyncError> {
@@ -942,56 +415,6 @@ fn with_supervisor_handles<T>(
                 registry: "supervisor_handles",
             })?;
     Ok(f(&mut handles))
-}
-
-fn with_recovering_collections<T>(
-    f: impl FnOnce(&mut HashSet<i64>) -> T,
-) -> Result<T, VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    let mut recovering =
-        registries
-            .recovering_collections
-            .lock()
-            .map_err(|_| VaultSyncError::RegistryPoisoned {
-                registry: "recovering_collections",
-            })?;
-    Ok(f(&mut recovering))
-}
-
-struct RecoveryInProgressGuard {
-    collection_id: i64,
-}
-
-impl RecoveryInProgressGuard {
-    fn enter(collection_id: i64) -> Result<Self, VaultSyncError> {
-        with_recovering_collections(|recovering| {
-            recovering.insert(collection_id);
-        })?;
-        Ok(Self { collection_id })
-    }
-}
-
-impl Drop for RecoveryInProgressGuard {
-    fn drop(&mut self) {
-        if let Some(registries) = PROCESS_REGISTRIES.get() {
-            if let Ok(mut recovering) = registries.recovering_collections.lock() {
-                recovering.remove(&self.collection_id);
-            }
-        }
-    }
-}
-
-pub fn collection_recovery_in_progress(collection_id: i64) -> bool {
-    PROCESS_REGISTRIES
-        .get()
-        .and_then(|registries| {
-            registries
-                .recovering_collections
-                .lock()
-                .ok()
-                .map(|recovering| recovering.contains(&collection_id))
-        })
-        .unwrap_or(false)
 }
 
 pub fn collection_watcher_health(collection_id: i64) -> Option<WatcherHealthView> {
@@ -1258,17 +681,6 @@ pub fn list_memory_collections(
         .collect()
 }
 
-#[cfg(test)]
-pub(crate) fn set_collection_recovery_in_progress_for_test(collection_id: i64, in_progress: bool) {
-    let _ = with_recovering_collections(|recovering| {
-        if in_progress {
-            recovering.insert(collection_id);
-        } else {
-            recovering.remove(&collection_id);
-        }
-    });
-}
-
 fn has_supervisor_handle(collection_id: i64, session_id: &str) -> Result<bool, VaultSyncError> {
     with_supervisor_handles(|handles| {
         handles
@@ -1367,59 +779,7 @@ fn claim_owned_collections(conn: &Connection, session_id: &str) -> Result<(), Va
     Ok(())
 }
 
-pub fn recovery_root_for_db_path(db_path: &Path) -> PathBuf {
-    db_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("recovery")
-}
-
-pub fn collection_recovery_dir(recovery_root: &Path, collection_id: i64) -> PathBuf {
-    recovery_root.join(collection_id.to_string())
-}
-
-fn bootstrap_recovery_directories(
-    conn: &Connection,
-    recovery_root: &Path,
-) -> Result<(), VaultSyncError> {
-    fs::create_dir_all(recovery_root)?;
-    let mut stmt = conn.prepare("SELECT id FROM collections")?;
-    let collection_ids = stmt
-        .query_map([], |row| row.get::<_, i64>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    for collection_id in collection_ids {
-        fs::create_dir_all(collection_recovery_dir(recovery_root, collection_id))?;
-    }
-    Ok(())
-}
-
-fn recovery_sentinel_paths(
-    recovery_root: &Path,
-    collection_id: i64,
-) -> Result<Vec<PathBuf>, VaultSyncError> {
-    let recovery_dir = collection_recovery_dir(recovery_root, collection_id);
-    if !recovery_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(recovery_dir)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_file()
-            && entry
-                .file_name()
-                .to_string_lossy()
-                .ends_with(".needs_full_sync")
-        {
-            paths.push(entry.path());
-        }
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-fn mark_collection_needs_full_sync(
+pub(in crate::core::vault_sync) fn mark_collection_needs_full_sync(
     conn: &Connection,
     collection_id: i64,
 ) -> Result<(), VaultSyncError> {
@@ -1431,22 +791,6 @@ fn mark_collection_needs_full_sync(
         [collection_id],
     )?;
     Ok(())
-}
-
-#[cfg(unix)]
-fn watch_debounce_duration() -> Duration {
-    std::env::var("QUAID_WATCH_DEBOUNCE_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_millis(DEFAULT_WATCH_DEBOUNCE_MS))
-}
-
-#[cfg(unix)]
-fn watcher_backoff_duration(consecutive_failures: u32) -> Duration {
-    let shift = consecutive_failures.saturating_sub(1).min(6);
-    Duration::from_secs((1_u64 << shift).min(60))
 }
 
 #[cfg(unix)]
@@ -1539,7 +883,9 @@ fn sweep_expired_self_write_entries_at(now: Instant) -> Result<usize, VaultSyncE
 }
 
 #[cfg(unix)]
-fn maybe_suppress_self_write_event(path: &Path) -> Result<bool, VaultSyncError> {
+pub(in crate::core::vault_sync) fn maybe_suppress_self_write_event(
+    path: &Path,
+) -> Result<bool, VaultSyncError> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -1566,72 +912,6 @@ pub fn mark_collection_needs_full_sync_via_fresh_connection(
     mark_collection_needs_full_sync(&fresh, collection_id)
 }
 
-#[cfg(unix)]
-pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    let inserted = registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .insert(key.to_owned());
-    if inserted {
-        Ok(())
-    } else {
-        Err(VaultSyncError::DuplicateWriteDedup {
-            key: key.to_owned(),
-        })
-    }
-}
-
-#[cfg(unix)]
-pub fn remove_write_dedup(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .remove(key);
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-pub fn has_write_dedup(key: &str) -> Result<bool, VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    Ok(registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .contains(key))
-}
-
-pub fn with_write_slug_lock<T, F>(
-    root_path: &str,
-    relative_path: &str,
-    action: F,
-) -> Result<T, VaultSyncError>
-where
-    F: FnOnce() -> T,
-{
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    let lock = {
-        let mut slug_writes =
-            registries
-                .slug_writes
-                .lock()
-                .map_err(|_| VaultSyncError::RegistryPoisoned {
-                    registry: "slug_writes",
-                })?;
-        slug_writes
-            .entry(format!("{root_path}:{relative_path}"))
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    };
-    let _guard = lock.lock().map_err(|_| VaultSyncError::RegistryPoisoned {
-        registry: "slug_write_guard",
-    })?;
-    Ok(action())
-}
-
 #[cfg(all(test, unix))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WriterSideSentinelCrashMode {
@@ -1655,43 +935,6 @@ fn writer_side_tempfile_name(write_id: &str) -> String {
 #[cfg(all(test, unix))]
 fn writer_side_foreign_tempfile_name(write_id: &str) -> String {
     format!("{write_id}.foreign.tmp")
-}
-
-#[cfg(all(test, unix))]
-fn writer_side_dedup_key(target_path: &Path, bytes: &[u8]) -> String {
-    format!("{}::{}", target_path.display(), sha256_hex(bytes))
-}
-
-#[cfg(all(test, unix))]
-fn insert_writer_side_dedup_entry(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .insert(key.to_owned());
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-fn remove_writer_side_dedup_entry(key: &str) -> Result<(), VaultSyncError> {
-    let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    registries
-        .dedup
-        .lock()
-        .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
-        .remove(key);
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-fn writer_side_dedup_contains(key: &str) -> bool {
-    PROCESS_REGISTRIES
-        .get_or_init(RuntimeRegistries::new)
-        .dedup
-        .lock()
-        .unwrap()
-        .contains(key)
 }
 
 #[cfg(all(test, unix))]
@@ -1761,12 +1004,12 @@ fn exercise_writer_side_sentinel_crash_core(
     let dedup_key = writer_side_dedup_key(&target_path, bytes);
 
     if matches!(mode, WriterSideSentinelCrashMode::SentinelCreateFail) {
-        return Err(VaultSyncError::RecoverySentinel {
+        return Err(VaultSyncError::Watcher(WatcherError::RecoverySentinel {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: "injected sentinel create failure".to_owned(),
-        });
+        }));
     }
 
     let recovery_dir =
@@ -1775,13 +1018,14 @@ fn exercise_writer_side_sentinel_crash_core(
             .ok_or_else(|| VaultSyncError::InvariantViolation {
                 message: format!("sentinel path has no parent: {}", sentinel_path.display()),
             })?;
-    let recovery_dir_fd =
-        fs_safety::open_root_fd(recovery_dir).map_err(|err| VaultSyncError::RecoverySentinel {
+    let recovery_dir_fd = fs_safety::open_root_fd(recovery_dir).map_err(|err| {
+        VaultSyncError::Watcher(WatcherError::RecoverySentinel {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: err.to_string(),
-        })?;
+        })
+    })?;
     let sentinel_name =
         Path::new(
             sentinel_path
@@ -1794,18 +1038,20 @@ fn exercise_writer_side_sentinel_crash_core(
                 })?,
         );
     fs_safety::openat_create_excl(&recovery_dir_fd, sentinel_name).map_err(|err| {
-        VaultSyncError::RecoverySentinel {
+        VaultSyncError::Watcher(WatcherError::RecoverySentinel {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: err.to_string(),
-        }
+        })
     })?;
-    fsync(&recovery_dir_fd).map_err(|err| VaultSyncError::RecoverySentinel {
-        collection_id,
-        relative_path: relative_path.display().to_string(),
-        sentinel_path: sentinel_path.display().to_string(),
-        reason: err.to_string(),
+    fsync(&recovery_dir_fd).map_err(|err| {
+        VaultSyncError::Watcher(WatcherError::RecoverySentinel {
+            collection_id,
+            relative_path: relative_path.display().to_string(),
+            sentinel_path: sentinel_path.display().to_string(),
+            reason: err.to_string(),
+        })
     })?;
 
     let root_fd = fs_safety::open_root_fd(&root_path)?;
@@ -1868,10 +1114,10 @@ fn exercise_writer_side_sentinel_crash_core(
 
     if matches!(mode, WriterSideSentinelCrashMode::FsyncParentFail) {
         cleanup_post_rename_writer_side_abort(conn, collection_id, &dedup_key);
-        return Err(VaultSyncError::Durability {
+        return Err(VaultSyncError::Watcher(WatcherError::Durability {
             collection_id,
             relative_path: relative_path.display().to_string(),
-        });
+        }));
     }
     fsync(&parent_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
 
@@ -1888,11 +1134,11 @@ fn exercise_writer_side_sentinel_crash_core(
     let target_stat = fs_safety::stat_at_nofollow(&parent_fd, Path::new(target_name))?;
     if target_stat.inode != tempfile_inode {
         cleanup_post_rename_writer_side_abort(conn, collection_id, &dedup_key);
-        return Err(VaultSyncError::ConcurrentRename {
+        return Err(VaultSyncError::Conflict(ConflictError::ConcurrentRename {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
-        });
+        }));
     }
 
     cleanup_post_rename_writer_side_abort(conn, collection_id, &dedup_key);
@@ -1971,109 +1217,9 @@ fn run_startup_sequence(
     Ok(())
 }
 
-pub(crate) fn resume_orphaned_embedding_jobs(conn: &Connection) -> Result<usize, VaultSyncError> {
-    conn.execute(
-        "UPDATE embedding_jobs
-         SET job_state = 'pending',
-             started_at = NULL
-         WHERE job_state = 'running'",
-        [],
-    )
-    .map_err(Into::into)
-}
-
 pub fn database_path(conn: &Connection) -> Result<String, VaultSyncError> {
     conn.query_row("PRAGMA database_list", [], |row| row.get::<_, String>(2))
         .map_err(Into::into)
-}
-
-pub fn register_session(conn: &Connection) -> Result<String, VaultSyncError> {
-    let session_id = Uuid::now_v7().to_string();
-    conn.execute(
-        "INSERT INTO serve_sessions (session_id, pid, host) VALUES (?1, ?2, ?3)",
-        params![session_id, std::process::id() as i64, current_host()],
-    )?;
-    Ok(session_id)
-}
-
-pub fn register_cli_session(conn: &Connection) -> Result<String, VaultSyncError> {
-    let session_id = Uuid::now_v7().to_string();
-    conn.execute(
-        "INSERT INTO serve_sessions (session_id, pid, host, session_type) VALUES (?1, ?2, ?3, 'cli')",
-        params![session_id, std::process::id() as i64, current_host()],
-    )?;
-    Ok(session_id)
-}
-
-pub fn unregister_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM collection_owners WHERE session_id = ?1",
-        [session_id],
-    )?;
-    tx.execute(
-        "DELETE FROM serve_sessions WHERE session_id = ?1",
-        [session_id],
-    )?;
-    tx.execute(
-        "UPDATE collections
-         SET active_lease_session_id = CASE
-                 WHEN active_lease_session_id = ?1 THEN NULL
-                 ELSE active_lease_session_id
-             END,
-             restore_lease_session_id = CASE
-                 WHEN restore_lease_session_id = ?1 THEN NULL
-                 ELSE restore_lease_session_id
-             END,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE active_lease_session_id = ?1 OR restore_lease_session_id = ?1",
-        [session_id],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
-pub fn heartbeat_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
-    conn.execute(
-        "UPDATE serve_sessions
-         SET heartbeat_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE session_id = ?1",
-        [session_id],
-    )?;
-    Ok(())
-}
-
-pub fn sweep_stale_sessions(conn: &Connection) -> Result<usize, VaultSyncError> {
-    let removed = conn.execute(
-        "DELETE FROM serve_sessions
-         WHERE heartbeat_at < datetime('now', ?1)",
-        [format!("-{SESSION_LIVENESS_SECS} seconds")],
-    )?;
-    Ok(removed)
-}
-
-pub fn live_collection_owner(
-    conn: &Connection,
-    collection_id: i64,
-) -> Result<Option<LiveCollectionOwner>, VaultSyncError> {
-    conn.query_row(
-        "SELECT o.session_id, s.pid, s.host
-         FROM collection_owners o
-         JOIN serve_sessions s ON s.session_id = o.session_id
-         WHERE o.collection_id = ?1
-           AND s.heartbeat_at >= datetime('now', ?2)
-           AND s.session_type = 'serve'",
-        params![collection_id, format!("-{SESSION_LIVENESS_SECS} seconds")],
-        |row| {
-            Ok(LiveCollectionOwner {
-                session_id: row.get(0)?,
-                pid: row.get(1)?,
-                host: row.get(2)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(Into::into)
 }
 
 fn collection_ids_for_root_path(
@@ -2088,36 +1234,6 @@ fn collection_ids_for_root_path(
     )?;
     let rows = stmt.query_map([root_path], |row| row.get::<_, i64>(0))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-fn live_collection_owner_for_root_path(
-    conn: &Connection,
-    root_path: &str,
-) -> Result<Option<(String, LiveCollectionOwner)>, VaultSyncError> {
-    conn.query_row(
-        "SELECT c.name, o.session_id, s.pid, s.host
-         FROM collections c
-         JOIN collection_owners o ON o.collection_id = c.id
-         JOIN serve_sessions s ON s.session_id = o.session_id
-         WHERE c.root_path = ?1
-           AND s.heartbeat_at >= datetime('now', ?2)
-           AND s.session_type = 'serve'
-         ORDER BY c.id
-         LIMIT 1",
-        params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
-        |row| {
-            Ok((
-                row.get(0)?,
-                LiveCollectionOwner {
-                    session_id: row.get(1)?,
-                    pid: row.get(2)?,
-                    host: row.get(3)?,
-                },
-            ))
-        },
-    )
-    .optional()
-    .map_err(Into::into)
 }
 
 #[cfg(unix)]
@@ -2159,111 +1275,6 @@ pub(crate) fn live_serve_endpoint_for_root_path(
         // protect the collection.
         Some((_session_id, _pid, None)) => Ok(None),
     }
-}
-
-pub fn ensure_no_live_serve_owner(
-    conn: &Connection,
-    collection_id: i64,
-) -> Result<(), VaultSyncError> {
-    let collection = load_collection_by_id(conn, collection_id)?;
-    if let Some(owner) = live_collection_owner(conn, collection_id)? {
-        return Err(VaultSyncError::ServeOwnsCollectionError {
-            collection_name: collection.name,
-            owner_session_id: owner.session_id,
-            owner_pid: owner.pid,
-            owner_host: owner.host,
-        });
-    }
-    Ok(())
-}
-
-pub fn ensure_no_live_serve_owner_for_root_path(
-    conn: &Connection,
-    root_path: &str,
-) -> Result<(), VaultSyncError> {
-    if let Some((collection_name, owner)) = live_collection_owner_for_root_path(conn, root_path)? {
-        return Err(VaultSyncError::ServeOwnsCollectionError {
-            collection_name,
-            owner_session_id: owner.session_id,
-            owner_pid: owner.pid,
-            owner_host: owner.host,
-        });
-    }
-    Ok(())
-}
-
-pub fn owner_session_id(
-    conn: &Connection,
-    collection_id: i64,
-) -> Result<Option<String>, VaultSyncError> {
-    conn.query_row(
-        "SELECT session_id FROM collection_owners WHERE collection_id = ?1",
-        [collection_id],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(Into::into)
-}
-
-pub fn acquire_owner_lease(
-    conn: &Connection,
-    collection_id: i64,
-    session_id: &str,
-) -> Result<(), VaultSyncError> {
-    if let Some(owner) = live_collection_owner(conn, collection_id)? {
-        if owner.session_id != session_id {
-            let collection = load_collection_by_id(conn, collection_id)?;
-            return Err(VaultSyncError::ServeOwnsCollectionError {
-                collection_name: collection.name,
-                owner_session_id: owner.session_id,
-                owner_pid: owner.pid,
-                owner_host: owner.host,
-            });
-        }
-    }
-
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "INSERT INTO collection_owners (collection_id, session_id)
-         VALUES (?1, ?2)
-         ON CONFLICT(collection_id) DO UPDATE SET
-             session_id = excluded.session_id,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-        params![collection_id, session_id],
-    )?;
-    tx.execute(
-        "UPDATE collections
-         SET active_lease_session_id = ?2,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1",
-        params![collection_id, session_id],
-    )?;
-    tx.commit()?;
-    Ok(())
-}
-
-pub fn release_owner_lease(
-    conn: &Connection,
-    collection_id: i64,
-    session_id: &str,
-) -> Result<(), VaultSyncError> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2",
-        params![collection_id, session_id],
-    )?;
-    tx.execute(
-        "UPDATE collections
-         SET active_lease_session_id = CASE
-                 WHEN active_lease_session_id = ?2 THEN NULL
-                 ELSE active_lease_session_id
-             END,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1",
-        params![collection_id, session_id],
-    )?;
-    tx.commit()?;
-    Ok(())
 }
 
 pub fn sync_collection(
@@ -2399,30 +1410,36 @@ fn ensure_plain_sync_allowed(collection: &Collection) -> Result<(), VaultSyncErr
         });
     }
     if collection.integrity_failed_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "integrity_failed_at",
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::RestoreIntegrityBlocked {
+                collection_name: collection.name.clone(),
+                blocking_column: "integrity_failed_at",
+            },
+        ));
     }
     if collection.pending_manifest_incomplete_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "pending_manifest_incomplete_at",
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::RestoreIntegrityBlocked {
+                collection_name: collection.name.clone(),
+                blocking_column: "pending_manifest_incomplete_at",
+            },
+        ));
     }
 
     match collection.state {
         CollectionState::Active => Ok(()),
         CollectionState::Restoring => {
             if let Some(pending_root_path) = collection.pending_root_path.clone() {
-                return Err(VaultSyncError::RestorePendingFinalize {
-                    collection_name: collection.name.clone(),
-                    pending_root_path,
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::RestorePendingFinalize {
+                        collection_name: collection.name.clone(),
+                        pending_root_path,
+                    },
+                ));
             }
-            Err(VaultSyncError::RestoreInProgress {
+            Err(VaultSyncError::Restore(RestoreError::RestoreInProgress {
                 collection_name: collection.name.clone(),
-            })
+            }))
         }
         CollectionState::Detached => Err(VaultSyncError::PlainSyncActiveRootRequired {
             collection_name: collection.name.clone(),
@@ -2431,7 +1448,7 @@ fn ensure_plain_sync_allowed(collection: &Collection) -> Result<(), VaultSyncErr
     }
 }
 
-fn convert_reconcile_error(
+pub(in crate::core::vault_sync) fn convert_reconcile_error(
     conn: &Connection,
     collection_id: i64,
     collection_name: &str,
@@ -2452,131 +1469,6 @@ fn convert_reconcile_error(
         collection_name: collection_name.to_owned(),
         reason: rendered_reason,
     })
-}
-
-#[cfg(unix)]
-fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
-    let relative = path.strip_prefix(root_path).ok()?;
-    (is_markdown_file(relative) && !is_history_sidecar_path(relative))
-        .then(|| relative.to_path_buf())
-}
-
-#[cfg(unix)]
-fn is_root_ignore_path(root_path: &Path, path: &Path) -> bool {
-    path.strip_prefix(root_path)
-        .ok()
-        .is_some_and(|relative| relative == Path::new(".quaidignore"))
-}
-
-#[cfg(unix)]
-fn should_suppress_self_write_rename(
-    root_path: &Path,
-    event_paths: &[PathBuf],
-) -> Result<bool, VaultSyncError> {
-    let Some(target_path) = event_paths.get(1) else {
-        return Ok(false);
-    };
-    if !maybe_suppress_self_write_event(target_path)? {
-        return Ok(false);
-    }
-    let Some(source_path) = event_paths.first() else {
-        return Ok(true);
-    };
-    if relative_markdown_path(root_path, source_path).is_none() {
-        return Ok(true);
-    }
-    maybe_suppress_self_write_event(source_path)
-}
-
-#[cfg(unix)]
-fn classify_watch_event(
-    root_path: &Path,
-    event: NotifyEvent,
-) -> Result<Vec<WatchEvent>, VaultSyncError> {
-    let mut actions = Vec::new();
-    let ignore_file_changed = event
-        .paths
-        .iter()
-        .any(|path| is_root_ignore_path(root_path, path));
-    if ignore_file_changed {
-        actions.push(WatchEvent::IgnoreFileChanged);
-    }
-    if matches!(event.kind, NotifyEventKind::Modify(ModifyKind::Name(_))) && event.paths.len() >= 2
-    {
-        let from_path = relative_markdown_path(root_path, &event.paths[0]);
-        let to_path = relative_markdown_path(root_path, &event.paths[1]);
-        if should_suppress_self_write_rename(root_path, &event.paths)? {
-            return Ok(actions);
-        }
-        if let (Some(from_path), Some(to_path)) = (from_path, to_path) {
-            actions.push(WatchEvent::NativeRename(
-                crate::core::reconciler::NativeRename {
-                    from_path: from_path.clone(),
-                    to_path: to_path.clone(),
-                },
-            ));
-            actions.push(WatchEvent::DirtyPath(from_path));
-            actions.push(WatchEvent::DirtyPath(to_path));
-            return Ok(actions);
-        }
-    }
-
-    for full_path in event.paths {
-        if is_root_ignore_path(root_path, &full_path) {
-            continue;
-        }
-        let Some(relative_path) = relative_markdown_path(root_path, &full_path) else {
-            continue;
-        };
-        if maybe_suppress_self_write_event(&full_path)? {
-            continue;
-        }
-        actions.push(WatchEvent::DirtyPath(relative_path));
-    }
-    Ok(actions)
-}
-
-#[cfg(unix)]
-fn watch_callback(
-    collection_id: i64,
-    callback_root: PathBuf,
-    db_path: String,
-    sender: mpsc::Sender<WatchEvent>,
-) -> impl FnMut(notify::Result<NotifyEvent>) + Send + 'static {
-    move |result: notify::Result<NotifyEvent>| {
-        let Ok(event) = result else {
-            return;
-        };
-        let Ok(actions) = classify_watch_event(&callback_root, event) else {
-            return;
-        };
-        for action in actions {
-            match sender.try_send(action) {
-                Ok(()) => {}
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    if let Ok(conn) = Connection::open(&db_path) {
-                        let _ = mark_collection_needs_full_sync(&conn, collection_id);
-                    }
-                    eprintln!(
-                        "WARN: watch_channel_full collection_id={} root={}",
-                        collection_id,
-                        callback_root.display()
-                    );
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-#[cfg(test)]
-static FORCE_NATIVE_WATCHER_INIT_FAILURE: AtomicBool = AtomicBool::new(false);
-
-#[cfg(unix)]
-#[cfg(test)]
-fn set_force_native_watcher_init_failure(enabled: bool) {
-    FORCE_NATIVE_WATCHER_INIT_FAILURE.store(enabled, Ordering::SeqCst);
 }
 
 #[cfg(unix)]
@@ -2865,24 +1757,6 @@ fn poll_collection_watcher(
 }
 
 #[cfg(unix)]
-fn mark_watcher_crashed(collection_id: i64, state: &mut CollectionWatcherState) -> Duration {
-    let now = Instant::now();
-    state.mode = WatcherMode::Crashed;
-    state.watcher = None;
-    state.buffer = WatchBatchBuffer::default();
-    state.last_watcher_error = Some(now);
-    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
-    let backoff = watcher_backoff_duration(state.consecutive_failures);
-    state.backoff_until = Some(now + backoff);
-    eprintln!(
-        "WARN: watcher_crashed collection_id={} backoff_secs={}",
-        collection_id,
-        backoff.as_secs()
-    );
-    backoff
-}
-
-#[cfg(unix)]
 fn publish_watcher_health(
     session_id: &str,
     watchers: &HashMap<i64, CollectionWatcherState>,
@@ -2975,33 +1849,6 @@ fn run_overflow_recovery_pass(
         }
     }
     Ok(actions)
-}
-
-fn reconcile_halt_details(err: &ReconcileError) -> Option<(&'static str, String)> {
-    match err {
-        ReconcileError::DuplicateUuidError { uuid, paths } => Some((
-            "duplicate_uuid",
-            format!(
-                "DuplicateUuidError: uuid={} paths={}",
-                uuid,
-                paths.join(",")
-            ),
-        )),
-        ReconcileError::UnresolvableTrivialContentError {
-            missing_path,
-            candidate_paths,
-            reason,
-        } => Some((
-            "unresolvable_trivial_content",
-            format!(
-                "UnresolvableTrivialContentError: missing={} candidates={} reason={}",
-                missing_path,
-                candidate_paths.join(","),
-                reason
-            ),
-        )),
-        _ => None,
-    }
 }
 
 pub fn ensure_all_collections_write_allowed(conn: &Connection) -> Result<(), VaultSyncError> {
@@ -3155,17 +2002,21 @@ pub fn wait_for_exact_ack(
         // mid-handshake (design.md §404-408 do-not-impersonate rule).
         match live_collection_owner(conn, collection_id)? {
             None => {
-                return Err(VaultSyncError::ServeDiedDuringHandshake {
-                    collection_name: collection.name,
-                    expected_session_id: expected_session_id.to_owned(),
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::ServeDiedDuringHandshake {
+                        collection_name: collection.name,
+                        expected_session_id: expected_session_id.to_owned(),
+                    },
+                ));
             }
             Some(ref owner) if owner.session_id != expected_session_id => {
-                return Err(VaultSyncError::ServeOwnershipChanged {
-                    collection_name: collection.name,
-                    expected_session_id: expected_session_id.to_owned(),
-                    actual_session_id: owner.session_id.clone(),
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::ServeOwnershipChanged {
+                        collection_name: collection.name,
+                        expected_session_id: expected_session_id.to_owned(),
+                        actual_session_id: owner.session_id.clone(),
+                    },
+                ));
             }
             Some(_) => {}
         }
@@ -3176,11 +2027,11 @@ pub fn wait_for_exact_ack(
             return Ok(());
         }
         if started.elapsed() >= Duration::from_secs(HANDSHAKE_TIMEOUT_SECS) {
-            return Err(VaultSyncError::HandshakeTimeout {
+            return Err(VaultSyncError::Restore(RestoreError::HandshakeTimeout {
                 collection_name: collection.name,
                 expected_session_id: expected_session_id.to_owned(),
                 reload_generation,
-            });
+            }));
         }
         thread::sleep(Duration::from_millis(HANDSHAKE_POLL_MS));
     }
@@ -3553,7 +2404,7 @@ pub fn finalize_pending_restore_via_cli(
     Ok(FinalizeCliOutcome::NoPendingWork)
 }
 
-fn complete_attach(
+pub(in crate::core::vault_sync) fn complete_attach(
     conn: &Connection,
     collection_id: i64,
     session_id: &str,
@@ -3686,583 +2537,32 @@ pub fn run_rcrt_pass(
     Ok(actions)
 }
 
-#[cfg(unix)]
-fn publish_ipc_socket(
-    conn: &Connection,
-    session_id: &str,
-) -> Result<PublishedIpcSocket, VaultSyncError> {
-    let location = ipc_socket_location()?;
-    ensure_secure_ipc_directory(&location.runtime_root, location.create_runtime_root)?;
-    ensure_secure_ipc_directory(&location.socket_dir, true)?;
-    let socket_path = location.socket_dir.join(format!("{session_id}.sock"));
-    if socket_path.exists() {
-        clear_stale_ipc_socket(&socket_path)?;
-    }
-    let listener = UnixListener::bind(&socket_path)?;
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
-    listener.set_nonblocking(true)?;
-    listen_with_backlog(&listener)?;
-    audit_bound_ipc_socket(&socket_path)?;
-    conn.execute(
-        "UPDATE serve_sessions SET ipc_path = ?1 WHERE session_id = ?2",
-        params![socket_path.display().to_string(), session_id],
-    )?;
-    Ok(PublishedIpcSocket {
-        listener,
-        path: socket_path,
-    })
-}
-
-#[cfg(unix)]
-fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-            let runtime_root = PathBuf::from(runtime_dir);
-            return Ok(IpcSocketLocation {
-                socket_dir: runtime_root.join("quaid"),
-                runtime_root,
-                create_runtime_root: false,
-            });
-        }
-        dirs::home_dir()
-            .map(|home| {
-                let runtime_root = home.join(".cache").join("quaid");
-                IpcSocketLocation {
-                    socket_dir: runtime_root.join("run"),
-                    runtime_root,
-                    create_runtime_root: true,
-                }
-            })
-            .ok_or_else(|| VaultSyncError::InvariantViolation {
-                message: "unable to resolve HOME for IPC directory".to_owned(),
-            })
-    }
-    #[cfg(target_os = "macos")]
-    {
-        dirs::home_dir()
-            .map(|home| {
-                let runtime_root = home
-                    .join("Library")
-                    .join("Application Support")
-                    .join("quaid");
-                IpcSocketLocation {
-                    socket_dir: runtime_root.join("run"),
-                    runtime_root,
-                    create_runtime_root: true,
-                }
-            })
-            .ok_or_else(|| VaultSyncError::InvariantViolation {
-                message: "unable to resolve HOME for IPC directory".to_owned(),
-            })
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        dirs::home_dir()
-            .map(|home| {
-                let runtime_root = home.join(".cache").join("quaid");
-                IpcSocketLocation {
-                    socket_dir: runtime_root.join("run"),
-                    runtime_root,
-                    create_runtime_root: true,
-                }
-            })
-            .ok_or_else(|| VaultSyncError::InvariantViolation {
-                message: "unable to resolve HOME for IPC directory".to_owned(),
-            })
-    }
-}
-
-#[cfg(unix)]
-fn ensure_secure_ipc_directory(path: &Path, create_if_missing: bool) -> Result<(), VaultSyncError> {
-    if !path.exists() {
-        if !create_if_missing {
-            return Err(VaultSyncError::IpcDirectoryInsecure {
-                path: path.display().to_string(),
-                reason: "path does not exist".to_owned(),
-            });
-        }
-        fs::create_dir_all(path)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    let metadata = fs::symlink_metadata(path)?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_dir() {
-        return Err(VaultSyncError::IpcDirectoryInsecure {
-            path: path.display().to_string(),
-            reason: "path is not a directory".to_owned(),
-        });
-    }
-    if metadata.uid() != current_effective_uid() {
-        return Err(VaultSyncError::IpcDirectoryInsecure {
-            path: path.display().to_string(),
-            reason: format!(
-                "owner uid {} does not match current uid {}",
-                metadata.uid(),
-                current_effective_uid()
-            ),
-        });
-    }
-    if mode != 0o700 {
-        return Err(VaultSyncError::IpcDirectoryInsecure {
-            path: path.display().to_string(),
-            reason: format!("mode {:o} is not 700", mode),
-        });
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_socket() {
-        return Err(VaultSyncError::IpcSocketCollision {
-            path: path.display().to_string(),
-            reason: "existing path is not a unix socket".to_owned(),
-        });
-    }
-    match UnixStream::connect(path) {
-        Ok(stream) => {
-            let creds = peer_credentials_for_stream(&stream)?;
-            return Err(VaultSyncError::IpcSocketCollision {
-                path: path.display().to_string(),
-                reason: format!("live listener already bound by pid {}", creds.pid),
-            });
-        }
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::ConnectionRefused
-                    | io::ErrorKind::NotFound
-                    | io::ErrorKind::TimedOut
-                    | io::ErrorKind::ConnectionAborted
-            ) =>
-        {
-            fs::remove_file(path)?;
-        }
-        Err(error) => {
-            return Err(VaultSyncError::IpcSocketCollision {
-                path: path.display().to_string(),
-                reason: error.to_string(),
-            });
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn listen_with_backlog(listener: &UnixListener) -> Result<(), VaultSyncError> {
-    #[expect(
-        unsafe_code,
-        reason = "POSIX listen() is a syscall; we pass a valid file descriptor obtained from UnixListener::as_raw_fd"
-    )]
-    let rc = unsafe { libc::listen(listener.as_raw_fd(), 16) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error().into())
-    }
-}
-
-#[cfg(unix)]
-fn audit_bound_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
-    let metadata = fs::symlink_metadata(path)?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_socket() {
-        return Err(VaultSyncError::IpcSocketPermission {
-            path: path.display().to_string(),
-            reason: "bound path is not a unix socket".to_owned(),
-        });
-    }
-    if metadata.uid() != current_effective_uid() {
-        return Err(VaultSyncError::IpcSocketPermission {
-            path: path.display().to_string(),
-            reason: format!(
-                "owner uid {} does not match current uid {}",
-                metadata.uid(),
-                current_effective_uid()
-            ),
-        });
-    }
-    if mode != 0o600 {
-        return Err(VaultSyncError::IpcSocketPermission {
-            path: path.display().to_string(),
-            reason: format!("mode {:o} is not 600", mode),
-        });
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn cleanup_published_ipc_socket(
-    conn: &Connection,
-    session_id: &str,
-    socket_path: &Path,
-) -> Result<(), VaultSyncError> {
-    if socket_path.exists() {
-        let _ = fs::remove_file(socket_path);
-    }
-    conn.execute(
-        "UPDATE serve_sessions SET ipc_path = NULL WHERE session_id = ?1",
-        [session_id],
-    )?;
-    Ok(())
-}
-
-#[cfg(unix)]
-pub(crate) fn session_id_from_ipc_path(path: &Path) -> Option<String> {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(ToOwned::to_owned)
-}
-
-#[cfg(unix)]
-pub(crate) fn peer_credentials_for_stream(
-    stream: &UnixStream,
-) -> Result<IpcPeerCredentials, VaultSyncError> {
-    let fd = stream.as_raw_fd();
-    #[cfg(target_os = "linux")]
-    {
-        #[expect(
-            unsafe_code,
-            reason = "MaybeUninit-style zero-init of libc::ucred which is plain-old-data; subsequent getsockopt fills it in"
-        )]
-        let mut creds: libc::ucred = unsafe { zeroed() };
-        let mut len = size_of::<libc::ucred>() as libc::socklen_t;
-        #[expect(
-            unsafe_code,
-            reason = "POSIX getsockopt SO_PEERCRED is a syscall; we pass a valid fd, a stable libc::ucred buffer, and a matching length"
-        )]
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut creds as *mut libc::ucred).cast(),
-                &mut len,
-            )
-        };
-        if rc != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok(IpcPeerCredentials {
-            pid: creds.pid,
-            uid: creds.uid,
-        })
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut uid: libc::uid_t = 0;
-        let mut gid: libc::gid_t = 0;
-        #[expect(
-            unsafe_code,
-            reason = "POSIX getpeereid syscall; we pass a valid fd and stack-allocated outputs"
-        )]
-        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-        if rc != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        let mut pid: libc::pid_t = 0;
-        let mut len = size_of::<libc::pid_t>() as libc::socklen_t;
-        #[expect(
-            unsafe_code,
-            reason = "macOS LOCAL_PEERPID getsockopt syscall; we pass a valid fd, a stable pid_t buffer, and a matching length"
-        )]
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                0,
-                libc::LOCAL_PEERPID,
-                (&mut pid as *mut libc::pid_t).cast(),
-                &mut len,
-            )
-        };
-        if rc != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok(IpcPeerCredentials {
-            pid,
-            uid: uid as u32,
-        })
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        Err(VaultSyncError::InvariantViolation {
-            message: "peer credentials unsupported on this unix platform".to_owned(),
-        })
-    }
-}
-
-#[cfg(unix)]
-pub(crate) fn authorize_server_peer(
-    socket_path: &Path,
-    peer: &IpcPeerCredentials,
-) -> Result<(), VaultSyncError> {
-    if peer.uid != current_effective_uid() {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "peer uid {} does not match current uid {}",
-                peer.uid,
-                current_effective_uid()
-            ),
-        });
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-pub(crate) fn authorize_client_peer(
-    socket_path: &Path,
-    path_session_id: &str,
-    owner_session_id: &str,
-    owner_pid: i64,
-    peer: &IpcPeerCredentials,
-    whoami_session_id: &str,
-) -> Result<(), VaultSyncError> {
-    if path_session_id != owner_session_id {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "path session {} does not match owner session {}",
-                path_session_id, owner_session_id
-            ),
-        });
-    }
-    if peer.uid != current_effective_uid() {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "peer uid {} does not match current uid {}",
-                peer.uid,
-                current_effective_uid()
-            ),
-        });
-    }
-    if i64::from(peer.pid) != owner_pid {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "peer pid {} does not match owner pid {}",
-                peer.pid, owner_pid
-            ),
-        });
-    }
-    if whoami_session_id != path_session_id {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!(
-                "whoami session {} does not match path session {}",
-                whoami_session_id, path_session_id
-            ),
-        });
-    }
-    Ok(())
-}
-
-/// Maximum concurrent in-flight IPC handler threads.  Connections that arrive
-/// when this cap is reached are immediately closed so a rogue same-UID caller
-/// cannot exhaust OS thread resources and impact serve liveness.
-#[cfg(unix)]
-const IPC_HANDLER_LIMIT: usize = 8;
-
-/// RAII guard: decrements the in-flight counter when dropped so the slot is
-/// always released even if the handler returns early or panics.
-#[cfg(unix)]
-struct IpcHandlerGuard(Arc<AtomicUsize>);
-
-#[cfg(unix)]
-impl Drop for IpcHandlerGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-#[cfg(unix)]
-fn accept_ipc_clients(
-    listener: &UnixListener,
-    socket_path: &Path,
-    db_path: &str,
-    session_id: &str,
-    in_flight: &Arc<AtomicUsize>,
-) {
-    loop {
-        match listener.accept() {
-            Ok((stream, _addr)) => {
-                // Enforce the in-flight cap before spawning.  fetch_add is atomic
-                // so concurrent accept calls on the same listener are race-free.
-                if in_flight.fetch_add(1, Ordering::AcqRel) >= IPC_HANDLER_LIMIT {
-                    // Already at or over the cap: roll back and discard the stream.
-                    in_flight.fetch_sub(1, Ordering::AcqRel);
-                    eprintln!(
-                        "WARN: ipc_handler_limit_reached path={} limit={} connection_closed",
-                        socket_path.display(),
-                        IPC_HANDLER_LIMIT,
-                    );
-                    // `stream` is dropped here, closing the connection immediately.
-                    // Break (not continue) so a same-UID flood at saturation cannot
-                    // drain the kernel accept queue indefinitely and starve heartbeats
-                    // and watchers in the main serve loop.  At most one connection is
-                    // discarded per tick before we return control to the serve loop.
-                    break;
-                }
-                // Offload each client to its own thread so that blocking reads/writes
-                // (up to 5 s per IPC timeout) cannot stall the main serve loop and
-                // cause a false-dead live-owner verdict.
-                // `guard` is moved into the closure and drops when the thread exits,
-                // decrementing the in-flight counter even on panic or early return.
-                let guard = IpcHandlerGuard(Arc::clone(in_flight));
-                let socket_path_owned = socket_path.to_path_buf();
-                let db_path_owned = db_path.to_owned();
-                let session_id_owned = session_id.to_owned();
-                thread::spawn(move || {
-                    let _guard = guard;
-                    if let Err(error) = handle_ipc_client(
-                        stream,
-                        &socket_path_owned,
-                        &db_path_owned,
-                        &session_id_owned,
-                    ) {
-                        eprintln!(
-                            "WARN: ipc_client_failed path={} error={}",
-                            socket_path_owned.display(),
-                            error
-                        );
-                    }
-                });
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-            Err(error) => {
-                eprintln!(
-                    "WARN: ipc_accept_failed path={} error={}",
-                    socket_path.display(),
-                    error
-                );
-                break;
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-fn handle_ipc_client(
-    stream: UnixStream,
-    socket_path: &Path,
-    db_path: &str,
-    session_id: &str,
-) -> Result<(), VaultSyncError> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let peer = peer_credentials_for_stream(&stream)?;
-    authorize_server_peer(socket_path, &peer)?;
-    eprintln!(
-        "INFO: ipc_peer_authenticated session_id={} peer_pid={} peer_uid={}",
-        session_id, peer.pid, peer.uid
-    );
-
-    let read_stream = stream.try_clone()?;
-    let mut reader = BufReader::new(read_stream);
-    let mut writer = BufWriter::new(stream);
-    loop {
-        let mut line = String::new();
-        let bytes_read = reader.read_line(&mut line)?;
-        if bytes_read == 0 {
-            break;
-        }
-        let request = match serde_json::from_str::<IpcRequest>(line.trim_end()) {
-            Ok(request) => request,
-            Err(error) => {
-                write_ipc_response(
-                    &mut writer,
-                    &IpcResponse::Error {
-                        error: format!("invalid ipc request: {error}"),
-                    },
-                )?;
-                break;
-            }
-        };
-        match request {
-            IpcRequest::WhoAmI => {
-                write_ipc_response(
-                    &mut writer,
-                    &IpcResponse::WhoAmI {
-                        session_id: session_id.to_owned(),
-                    },
-                )?;
-            }
-            IpcRequest::Put {
-                slug,
-                content,
-                expected_version,
-            } => {
-                let conn = Connection::open(db_path)?;
-                match put::put_from_string_status(&conn, &slug, &content, expected_version) {
-                    Ok(status) => {
-                        write_ipc_response(&mut writer, &IpcResponse::PutOk { status })?;
-                    }
-                    Err(error) => {
-                        write_ipc_response(
-                            &mut writer,
-                            &IpcResponse::Error {
-                                error: error.to_string(),
-                            },
-                        )?;
-                    }
-                }
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn write_ipc_response(
-    writer: &mut BufWriter<UnixStream>,
-    response: &IpcResponse,
-) -> Result<(), VaultSyncError> {
-    serde_json::to_writer(&mut *writer, response).map_err(|error| {
-        VaultSyncError::InvariantViolation {
-            message: format!("failed to serialize ipc response: {error}"),
-        }
-    })?;
-    writer.write_all(b"\n")?;
-    writer.flush()?;
-    Ok(())
-}
-
 pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
     let conn = Connection::open(&db_path)?;
     sweep_stale_sessions(&conn)?;
     let session_id = register_session(&conn)?;
+
     #[cfg(unix)]
-    let published_ipc = match publish_ipc_socket(&conn, &session_id) {
-        Ok(published) => published,
-        Err(error) => {
-            let _ = unregister_session(&conn, &session_id);
-            return Err(error);
-        }
-    };
+    let published_ipc = bind_socket(&conn, &session_id)?;
+
     if let Err(error) = run_startup_sequence(&conn, Path::new(&db_path), &session_id) {
         #[cfg(unix)]
         let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
         let _ = unregister_session(&conn, &session_id);
         return Err(error);
     }
+
     #[cfg(unix)]
-    let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
-    #[cfg(unix)]
-    if let Err(error) = sync_collection_watchers(&conn, &db_path, &mut watchers) {
-        let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
-        let _ = unregister_session(&conn, &session_id);
-        return Err(error);
-    }
-    let mut stmt = conn.prepare("SELECT id, reload_generation FROM collections")?;
-    let initial_generations = stmt
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
-        .collect::<Result<HashMap<_, _>, _>>()?;
-    drop(stmt);
+    let watchers = match spawn_watcher(&conn, &db_path) {
+        Ok(watchers) => watchers,
+        Err(error) => {
+            let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
+            let _ = unregister_session(&conn, &session_id);
+            return Err(error);
+        }
+    };
+    let initial_generations = load_initial_generations(&conn)?;
     drop(conn);
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -4273,182 +2573,24 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let extractor_session_id = session_id.clone();
     #[cfg(unix)]
     let ipc_in_flight = Arc::new(AtomicUsize::new(0));
+
     let handle = thread::spawn(move || {
-        #[cfg(unix)]
-        let published_ipc = published_ipc;
-        #[cfg(unix)]
-        let ipc_in_flight = ipc_in_flight;
-        let mut last_heartbeat = Instant::now();
-        let mut last_idle_close_sweep =
-            Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
-        let mut last_janitor_sweep =
-            Instant::now() - Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS);
-        let mut last_quarantine_sweep = Instant::now();
-        let mut last_generations = initial_generations;
-        #[cfg(unix)]
-        let mut watchers = watchers;
-        #[cfg(unix)]
-        let mut last_dedup_sweep = Instant::now();
-        #[cfg(unix)]
-        let mut last_overflow_recovery = Instant::now();
-        let mut last_full_hash_audit =
-            Instant::now() - Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS);
-        let mut last_raw_import_ttl_sweep =
-            Instant::now() - Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS);
-        let mut last_embedding_drain =
-            Instant::now() - Duration::from_secs(embedding_drain_interval_secs());
-        while !stop_signal.load(Ordering::SeqCst) {
-            if let Ok(conn) = Connection::open(&db_path) {
-                if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
-                    let _ = sweep_stale_sessions(&conn);
-                    let _ = heartbeat_session(&conn, &session_id_for_thread);
-                    last_heartbeat = Instant::now();
-                }
-                if last_idle_close_sweep.elapsed()
-                    >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = idle_close::scan_due_sessions(&conn, &db_path) {
-                        eprintln!(
-                            "WARN: idle_close_sweep_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_idle_close_sweep = Instant::now();
-                }
-                if last_quarantine_sweep.elapsed()
-                    >= Duration::from_secs(QUARANTINE_SWEEP_INTERVAL_SECS)
-                {
-                    let _ = quarantine::sweep_expired_quarantined_pages(&conn);
-                    last_quarantine_sweep = Instant::now();
-                }
-                if last_janitor_sweep.elapsed() >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = janitor::run_tick(&conn) {
-                        eprintln!(
-                            "WARN: janitor_sweep_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_janitor_sweep = Instant::now();
-                }
-                #[cfg(unix)]
-                {
-                    accept_ipc_clients(
-                        &published_ipc.listener,
-                        &published_ipc.path,
-                        &db_path,
-                        &session_id_for_thread,
-                        &ipc_in_flight,
-                    );
-                    let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
-                    for (collection_id, state) in &mut watchers {
-                        if let Err(error) = poll_collection_watcher(&conn, *collection_id, state) {
-                            if matches!(error, VaultSyncError::InvariantViolation { .. }) {
-                                let _ = mark_watcher_crashed(*collection_id, state);
-                            } else {
-                                eprintln!(
-                                    "WARN: watcher_poll_failed collection_id={} error={}",
-                                    collection_id, error
-                                );
-                            }
-                        }
-                    }
-                    if last_dedup_sweep.elapsed() >= self_write_dedup_sweep_interval() {
-                        let _ = sweep_expired_self_write_entries_at(Instant::now());
-                        last_dedup_sweep = Instant::now();
-                    }
-                }
-                if let Ok(mut stmt) = conn.prepare("SELECT id, reload_generation FROM collections")
-                {
-                    if let Ok(rows) = stmt
-                        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
-                        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
-                    {
-                        for (collection_id, generation) in rows {
-                            let _ =
-                                acquire_owner_lease(&conn, collection_id, &session_id_for_thread);
-                            let supervisor_generation = with_supervisor_handles(|handles| {
-                                handles.get(&collection_id).and_then(|handle| {
-                                    (handle.session_id == session_id_for_thread)
-                                        .then_some(handle.generation)
-                                })
-                            })
-                            .ok()
-                            .flatten();
-                            let previous_generation = last_generations
-                                .get(&collection_id)
-                                .copied()
-                                .unwrap_or(generation);
-                            if generation > previous_generation
-                                && supervisor_generation
-                                    .map(|tracked_generation| tracked_generation < generation)
-                                    .unwrap_or(false)
-                            {
-                                let _ = write_supervisor_ack_if_needed(
-                                    &conn,
-                                    collection_id,
-                                    &session_id_for_thread,
-                                    generation,
-                                );
-                                let _ =
-                                    remove_supervisor_handle(collection_id, &session_id_for_thread);
-                            }
-                            last_generations.insert(collection_id, generation);
-                        }
-                    }
-                }
-                if last_full_hash_audit.elapsed()
-                    >= Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread) {
-                        eprintln!(
-                            "WARN: scheduled_full_hash_audit_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_full_hash_audit = Instant::now();
-                }
-                if last_raw_import_ttl_sweep.elapsed()
-                    >= Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS)
-                {
-                    if let Err(error) = sweep_raw_import_ttl(&conn) {
-                        eprintln!(
-                            "WARN: raw_import_ttl_sweep_failed session_id={} error={}",
-                            session_id_for_thread, error
-                        );
-                    }
-                    last_raw_import_ttl_sweep = Instant::now();
-                }
-                let _ = run_rcrt_pass(&conn, &session_id_for_thread);
-                let _ = sync_supervisor_handles(&conn, &session_id_for_thread);
-                if last_embedding_drain.elapsed()
-                    >= Duration::from_secs(embedding_drain_interval_secs())
-                {
-                    let _ = drain_embedding_queue(&conn);
-                    last_embedding_drain = Instant::now();
-                }
-                #[cfg(unix)]
-                {
-                    let _ = publish_watcher_health(&session_id_for_thread, &watchers);
-                    if last_overflow_recovery.elapsed() >= Duration::from_millis(500) {
-                        let _ = run_overflow_recovery_pass(&conn, &session_id_for_thread);
-                        last_overflow_recovery = Instant::now();
-                    }
-                }
-            }
-            thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
-        }
-        if let Ok(conn) = Connection::open(&db_path) {
+        run_supervisor_loop(
+            db_path,
+            session_id_for_thread,
+            stop_signal,
+            initial_generations,
             #[cfg(unix)]
-            let _ =
-                cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path);
-            let _ = clear_supervisor_handles_for_session(&session_id_for_thread);
-            let _ = unregister_session(&conn, &session_id_for_thread);
-        }
+            published_ipc,
+            #[cfg(unix)]
+            ipc_in_flight,
+            #[cfg(unix)]
+            watchers,
+        );
     });
 
     let extractor_handle = thread::spawn(move || {
-        run_extraction_worker(extractor_db_path, extractor_stop, extractor_session_id);
+        embedding::run_extraction_worker(extractor_db_path, extractor_stop, extractor_session_id);
     });
 
     Ok(ServeRuntime {
@@ -4459,653 +2601,200 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     })
 }
 
-fn run_extraction_worker(db_path: String, stop: Arc<AtomicBool>, session_id: String) {
-    let conn = match Connection::open(&db_path) {
-        Ok(conn) => conn,
-        Err(error) => {
-            eprintln!(
-                "WARN: extraction_worker_db_open_failed session_id={} error={}",
-                session_id, error
-            );
-            return;
-        }
-    };
-    let worker = match Worker::new(&conn, LazySlmRunner::new(), ResolvingFactWriter) {
-        Ok(worker) => worker,
-        Err(error) => {
-            eprintln!(
-                "WARN: extraction_worker_init_failed session_id={} error={}",
-                session_id, error
-            );
-            return;
-        }
-    };
-    while !stop.load(Ordering::SeqCst) {
-        if let Err(error) = worker.run_once() {
-            eprintln!(
-                "WARN: extraction_worker_run_failed session_id={} error={}",
-                session_id, error
-            );
-            thread::sleep(Duration::from_secs(1));
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct EmbeddingJobClaim {
-    id: i64,
-    page_id: i64,
-    attempt_count: i64,
-}
-
-fn embedding_drain_interval_secs() -> u64 {
-    2
-}
-
-fn configured_embedding_concurrency() -> usize {
-    std::env::var("QUAID_EMBEDDING_CONCURRENCY")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or_else(|| {
-            thread::available_parallelism()
-                .map(usize::from)
-                .unwrap_or(1)
-                .min(4)
-        })
-}
-
-fn embedding_backoff_secs(attempt_count: i64) -> i64 {
-    match attempt_count {
-        count if count <= 0 => 0,
-        count => 1_i64 << ((count - 1).min(4) as u32),
-    }
-}
-
-/// (id, page_id, job_state, attempt_count, last_attempt_epoch)
-type EmbeddingJobRow = (i64, i64, String, i64, i64);
-
-fn load_embedding_job_candidates(
-    conn: &Connection,
-) -> Result<Vec<EmbeddingJobRow>, VaultSyncError> {
-    let mut stmt = conn.prepare(
-        "SELECT id,
-                page_id,
-                job_state,
-                attempt_count,
-                COALESCE(
-                    CAST(strftime('%s', started_at) AS INTEGER),
-                    CAST(strftime('%s', enqueued_at) AS INTEGER),
-                    0
-                ) AS last_attempt_epoch
-         FROM embedding_jobs
-         WHERE job_state IN ('pending', 'failed')
-           AND attempt_count < 5
-         ORDER BY priority DESC, enqueued_at ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, i64>(4)?,
-        ))
-    })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-fn claim_embedding_jobs(conn: &Connection) -> Result<Vec<EmbeddingJobClaim>, VaultSyncError> {
-    let now_epoch = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or_default();
-    let limit = configured_embedding_concurrency();
-    let candidates = load_embedding_job_candidates(conn)?;
-    let ready = candidates
-        .into_iter()
-        .filter(|(_, _, state, attempt_count, last_attempt_epoch)| {
-            state == "pending"
-                || now_epoch - *last_attempt_epoch >= embedding_backoff_secs(*attempt_count)
-        })
-        .take(limit)
-        .collect::<Vec<_>>();
-
-    if ready.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let tx = conn.unchecked_transaction()?;
-    let mut claimed = Vec::new();
-    for (id, page_id, _state, _attempt_count, _last_attempt_epoch) in ready {
-        let updated = tx.execute(
-            "UPDATE embedding_jobs
-             SET job_state = 'running',
-                 started_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-                 attempt_count = attempt_count + 1,
-                 last_error = NULL
-             WHERE id = ?1
-               AND job_state IN ('pending', 'failed')
-               AND attempt_count < 5",
-            [id],
-        )?;
-        if updated == 1 {
-            let attempt_count = tx.query_row(
-                "SELECT attempt_count FROM embedding_jobs WHERE id = ?1",
-                [id],
-                |row| row.get(0),
-            )?;
-            claimed.push(EmbeddingJobClaim {
-                id,
-                page_id,
-                attempt_count,
-            });
-        }
-    }
-    tx.commit()?;
-    Ok(claimed)
-}
-
-fn load_page_for_embedding_job(
-    conn: &Connection,
-    page_id: i64,
-) -> Result<Option<crate::core::types::Page>, VaultSyncError> {
-    let row = conn
-        .query_row(
-            "SELECT collection_id, slug FROM pages WHERE id = ?1",
-            [page_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()?;
-    let Some((collection_id, slug)) = row else {
-        return Ok(None);
-    };
-    get_page_by_key(conn, collection_id, &slug)
-        .map(Some)
-        .map_err(|error| VaultSyncError::InvariantViolation {
-            message: error.to_string(),
-        })
-}
-
-fn process_embedding_job_on_connection(
-    conn: &Connection,
-    job_id: i64,
-    page_id: i64,
-) -> Result<(), VaultSyncError> {
-    let Some(page) = load_page_for_embedding_job(conn, page_id)? else {
-        conn.execute("DELETE FROM embedding_jobs WHERE id = ?1", [job_id])?;
-        return Ok(());
-    };
-
-    crate::core::inference::refresh_page_embeddings(conn, page_id, &page).map_err(|err| {
-        VaultSyncError::InvariantViolation {
-            message: format!("embedding refresh failed for page_id={page_id}: {err}"),
-        }
-    })?;
-    conn.execute("DELETE FROM embedding_jobs WHERE id = ?1", [job_id])?;
-    Ok(())
-}
-
-fn mark_embedding_job_failed(
-    conn: &Connection,
-    job_id: i64,
-    error: &VaultSyncError,
-) -> Result<(), VaultSyncError> {
-    conn.execute(
-        "UPDATE embedding_jobs
-         SET job_state = 'failed',
-             last_error = ?2
-         WHERE id = ?1",
-        params![job_id, error.to_string()],
-    )?;
-    Ok(())
-}
-
-pub fn drain_embedding_queue(conn: &Connection) -> Result<(), VaultSyncError> {
-    let claimed = claim_embedding_jobs(conn)?;
-    if claimed.is_empty() {
-        return Ok(());
-    }
-
-    let db_path = database_path(conn).unwrap_or_default();
-    if db_path.is_empty() || db_path == ":memory:" || claimed.len() == 1 {
-        for job in claimed {
-            if let Err(error) = process_embedding_job_on_connection(conn, job.id, job.page_id) {
-                mark_embedding_job_failed(conn, job.id, &error)?;
-                if job.attempt_count >= 5 {
-                    eprintln!(
-                        "WARN: embedding_job_failed_permanently job_id={} page_id={} error={}",
-                        job.id, job.page_id, error
-                    );
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    let mut handles = Vec::new();
-    for job in claimed {
-        let path = db_path.clone();
-        handles.push(thread::spawn(move || {
-            let conn = crate::core::db::open(&path).map_err(|error| {
-                VaultSyncError::InvariantViolation {
-                    message: format!("embedding worker failed to open database: {error}"),
-                }
-            })?;
-            let result = process_embedding_job_on_connection(&conn, job.id, job.page_id);
-            if let Err(ref error) = result {
-                let _ = mark_embedding_job_failed(&conn, job.id, error);
-            }
-            result.map(|_| (job.id, job.page_id, job.attempt_count))
-        }));
-    }
-
-    for handle in handles {
-        match handle.join() {
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => {
-                eprintln!("WARN: embedding_job_failed error={error}");
-            }
-            Err(_) => {
-                eprintln!("WARN: embedding_worker_thread_panicked");
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub fn begin_restore(
-    conn: &Connection,
-    collection_name: &str,
-    target_path: &Path,
-    online: bool,
-) -> Result<String, VaultSyncError> {
-    let collection = collections::get_by_name(conn, collection_name)?.ok_or_else(|| {
-        VaultSyncError::CollectionNotFound {
-            name: collection_name.to_owned(),
-        }
-    })?;
-    ensure_restore_not_blocked(&collection)?;
-    ensure_restore_target_is_empty(target_path)?;
-    let db_path = PathBuf::from(database_path(conn)?);
-    let recovery_root = recovery_root_for_db_path(&db_path);
-    bootstrap_recovery_directories(conn, &recovery_root)?;
-
-    if online {
-        let (_, expected_session_id, generation) =
-            mark_collection_restoring_for_handshake(conn, collection.id)?;
-        wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?;
-        conn.execute(
-            "UPDATE collections
-             SET restore_lease_session_id = ?2,
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-             WHERE id = ?1",
-            params![collection.id, expected_session_id],
-        )?;
-        #[cfg(unix)]
-        {
-            let request = RestoreRemapSafetyRequest {
-                collection_id: collection.id,
-                db_path: &db_path,
-                recovery_root: &recovery_root,
-                operation: RestoreRemapOperation::Restore,
-                authorization: FullHashReconcileAuthorization::RestoreLease {
-                    lease_session_id: expected_session_id.clone(),
-                },
-                allow_finalize_pending: false,
-                stability_max_iters: 0,
-            };
-            if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request)
-            {
-                return Err(convert_reconcile_error(
-                    conn,
-                    collection.id,
-                    &collection.name,
-                    err,
-                )?);
-            }
-        }
-        let command_id = Uuid::now_v7().to_string();
-        let staging_path = staging_path_for_target(target_path);
-        if staging_path.exists() {
-            let _ = fs::remove_dir_all(&staging_path);
-        }
-        materialize_collection_to_path(conn, &collection, &staging_path)?;
-        let manifest = build_restore_manifest_for_directory(&staging_path)?;
-        let manifest_json = serde_json::to_string(&manifest)?;
-        conn.execute(
-            "UPDATE collections
-             SET pending_root_path = ?2,
-                 pending_restore_manifest = ?3,
-                 restore_command_id = ?4,
-                 restore_command_pid = ?5,
-                 restore_command_host = ?6,
-                 pending_command_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-                 restore_lease_session_id = ?7,
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-             WHERE id = ?1",
-            params![
-                collection.id,
-                target_path.display().to_string(),
-                manifest_json,
-                command_id,
-                std::process::id() as i64,
-                current_host(),
-                expected_session_id
-            ],
-        )?;
-        remove_empty_target_then_rename(&staging_path, target_path)?;
-        let _ = finalize_pending_restore(
-            conn,
-            collection.id,
-            FinalizeCaller::RestoreOriginator {
-                command_id: command_id.clone(),
-            },
-        )?;
-        Ok(command_id)
-    } else {
-        let lease = start_short_lived_owner_lease(conn, collection.id)?;
-        conn.execute(
-            "UPDATE collections
-             SET state = 'restoring',
-                  restore_lease_session_id = ?2,
-                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-              WHERE id = ?1",
-            params![collection.id, lease.session_id.clone()],
-        )?;
-        #[cfg(unix)]
-        {
-            let request = RestoreRemapSafetyRequest {
-                collection_id: collection.id,
-                db_path: &db_path,
-                recovery_root: &recovery_root,
-                operation: RestoreRemapOperation::Restore,
-                authorization: FullHashReconcileAuthorization::RestoreLease {
-                    lease_session_id: lease.session_id.clone(),
-                },
-                allow_finalize_pending: false,
-                stability_max_iters: 0,
-            };
-            if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request)
-            {
-                return Err(convert_reconcile_error(
-                    conn,
-                    collection.id,
-                    &collection.name,
-                    err,
-                )?);
-            }
-        }
-        let command_id = Uuid::now_v7().to_string();
-        let staging_path = staging_path_for_target(target_path);
-        if staging_path.exists() {
-            let _ = fs::remove_dir_all(&staging_path);
-        }
-        materialize_collection_to_path(conn, &collection, &staging_path)?;
-        let manifest = build_restore_manifest_for_directory(&staging_path)?;
-        conn.execute(
-            "UPDATE collections
-             SET pending_root_path = ?2,
-                  pending_restore_manifest = ?3,
-                  restore_command_id = ?4,
-                  restore_command_pid = ?5,
-                  restore_command_host = ?6,
-                  pending_command_heartbeat_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-              WHERE id = ?1",
-            params![
-                collection.id,
-                target_path.display().to_string(),
-                serde_json::to_string(&manifest)?,
-                command_id,
-                std::process::id() as i64,
-                current_host()
-            ],
-        )?;
-        remove_empty_target_then_rename(&staging_path, target_path)?;
-        match finalize_pending_restore(
-            conn,
-            collection.id,
-            FinalizeCaller::RestoreOriginator {
-                command_id: command_id.clone(),
-            },
-        )? {
-            FinalizeOutcome::Finalized => {}
-            outcome => {
-                return Err(VaultSyncError::RestoreCommandBlocked {
-                    collection_name: collection.name,
-                    outcome: finalize_outcome_label(&outcome),
-                })
-            }
-        }
-        let attached = complete_attach(
-            conn,
-            collection.id,
-            &lease.session_id,
-            AttachReason::RestorePostFinalize,
-        )?;
-        if !attached {
-            return Err(VaultSyncError::InvariantViolation {
-                message: format!(
-                    "collection={} restore offline path did not complete attach",
-                    collection.name
-                ),
-            });
-        }
-        Ok(command_id)
-    }
-}
-
-pub fn remap_collection(
-    conn: &Connection,
-    collection_name: &str,
-    new_root: &Path,
-    online: bool,
-) -> Result<RemapVerificationSummary, VaultSyncError> {
-    let collection = collections::get_by_name(conn, collection_name)?.ok_or_else(|| {
-        VaultSyncError::CollectionNotFound {
-            name: collection_name.to_owned(),
-        }
-    })?;
-    ensure_restore_not_blocked(&collection)?;
-    let db_path = PathBuf::from(database_path(conn)?);
-    let recovery_root = recovery_root_for_db_path(&db_path);
-    bootstrap_recovery_directories(conn, &recovery_root)?;
-
-    if online {
-        let (_, expected_session_id, generation) =
-            mark_collection_restoring_for_handshake(conn, collection.id)?;
-        wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?;
-        let request = RestoreRemapSafetyRequest {
-            collection_id: collection.id,
-            db_path: &db_path,
-            recovery_root: &recovery_root,
-            operation: RestoreRemapOperation::Remap,
-            authorization: FullHashReconcileAuthorization::ActiveLease {
-                lease_session_id: expected_session_id,
-            },
-            allow_finalize_pending: false,
-            stability_max_iters: 0,
-        };
-        if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request) {
-            return Err(convert_reconcile_error(
-                conn,
-                collection.id,
-                &collection.name,
-                err,
-            )?);
-        }
-        let summary = verify_remap_root(conn, &collection, new_root)?;
-        conn.execute(
-            "UPDATE collections
-             SET root_path = ?2,
-                 state = 'restoring',
-                 reload_generation = reload_generation + 1,
-                 watcher_released_session_id = NULL,
-                 watcher_released_generation = NULL,
-                 watcher_released_at = NULL,
-                 pending_command_heartbeat_at = NULL,
-                 needs_full_sync = 1,
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-             WHERE id = ?1",
-            params![collection.id, new_root.display().to_string()],
-        )?;
-        conn.execute(
-            "DELETE FROM file_state WHERE collection_id = ?1",
-            [collection.id],
-        )?;
-        Ok(summary)
-    } else {
-        let lease = start_short_lived_owner_lease(conn, collection.id)?;
-        let request = RestoreRemapSafetyRequest {
-            collection_id: collection.id,
-            db_path: &db_path,
-            recovery_root: &recovery_root,
-            operation: RestoreRemapOperation::Remap,
-            authorization: FullHashReconcileAuthorization::ActiveLease {
-                lease_session_id: lease.session_id.clone(),
-            },
-            allow_finalize_pending: false,
-            stability_max_iters: 0,
-        };
-        if let Err(err) = run_restore_remap_safety_pipeline_without_mount_check(conn, &request) {
-            return Err(convert_reconcile_error(
-                conn,
-                collection.id,
-                &collection.name,
-                err,
-            )?);
-        }
-        let summary = verify_remap_root(conn, &collection, new_root)?;
-        conn.execute(
-            "UPDATE collections
-             SET root_path = ?2,
-                  state = 'restoring',
-                  needs_full_sync = 1,
-                  restore_lease_session_id = NULL,
-                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-             WHERE id = ?1",
-            params![collection.id, new_root.display().to_string()],
-        )?;
-        conn.execute(
-            "DELETE FROM file_state WHERE collection_id = ?1",
-            [collection.id],
-        )?;
-        let attached = complete_attach(
-            conn,
-            collection.id,
-            &lease.session_id,
-            AttachReason::RemapPostReconcile,
-        )?;
-        if !attached {
-            return Err(VaultSyncError::InvariantViolation {
-                message: format!(
-                    "collection={} remap offline path did not complete attach",
-                    collection.name
-                ),
-            });
-        }
-        Ok(summary)
-    }
-}
-
-pub fn verify_remap_root(
-    conn: &Connection,
-    collection: &Collection,
-    new_root: &Path,
-) -> Result<RemapVerificationSummary, VaultSyncError> {
-    let before = take_tree_fence(new_root)?;
-    let page_rows = load_remap_page_rows(conn, collection.id)?;
-    let file_rows = load_new_root_files(new_root)?;
-    let page_matches = resolve_page_matches(&page_rows, &file_rows);
-    let after = take_tree_fence(new_root)?;
-    if before != after {
-        return Err(VaultSyncError::NewRootUnstable {
-            collection_name: collection.name.clone(),
-        });
-    }
-    let missing = page_matches.missing_count;
-    let mismatched = page_matches.mismatched_pages;
-    let extra = page_matches.extra_count;
-    if missing != 0 || mismatched != 0 || extra != 0 {
-        return Err(VaultSyncError::NewRootVerificationFailed {
-            collection_name: collection.name.clone(),
-            missing,
-            mismatched,
-            extra,
-            missing_samples: format_diff_samples(&page_matches.missing_pages),
-            mismatched_samples: format_diff_samples(&page_matches.mismatched_samples),
-            extra_samples: format_diff_samples(&page_matches.extra_files),
-        });
-    }
-    Ok(RemapVerificationSummary {
-        resolved_pages: page_matches.resolved_page_ids.len(),
-        missing_pages: missing,
-        mismatched_pages: mismatched,
-        extra_files: extra,
+#[cfg(unix)]
+fn bind_socket(conn: &Connection, session_id: &str) -> Result<PublishedIpcSocket, VaultSyncError> {
+    publish_ipc_socket(conn, session_id).inspect_err(|_| {
+        let _ = unregister_session(conn, session_id);
     })
 }
 
-pub fn restore_reset(conn: &Connection, collection_name: &str) -> Result<(), VaultSyncError> {
-    let collection = collections::get_by_name(conn, collection_name)?.ok_or_else(|| {
-        VaultSyncError::CollectionNotFound {
-            name: collection_name.to_owned(),
-        }
-    })?;
-    if collection.integrity_failed_at.is_none() {
-        let reason = if collection.pending_manifest_incomplete_at.is_some() {
-            "manifest_incomplete_retryable"
-        } else if collection.pending_root_path.is_some() {
-            "pending_finalize"
-        } else if collection.state == CollectionState::Restoring || collection.needs_full_sync {
-            "restore_in_progress"
-        } else {
-            "no_integrity_failure"
-        };
-        return Err(VaultSyncError::RestoreResetBlocked {
-            collection_name: collection.name,
-            reason,
-        });
-    }
-    conn.execute(
-        "UPDATE collections
-         SET state = CASE WHEN root_path = '' THEN 'detached' ELSE 'active' END,
-              pending_root_path = NULL,
-              pending_restore_manifest = NULL,
-              restore_command_id = NULL,
-              restore_command_pid = NULL,
-              restore_command_host = NULL,
-              restore_lease_session_id = NULL,
-              pending_command_heartbeat_at = NULL,
-              watcher_released_session_id = NULL,
-              watcher_released_generation = NULL,
-              watcher_released_at = NULL,
-              integrity_failed_at = NULL,
-             pending_manifest_incomplete_at = NULL,
-             needs_full_sync = 0,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1",
-        [collection.id],
-    )?;
-    Ok(())
+#[cfg(unix)]
+fn spawn_watcher(
+    conn: &Connection,
+    db_path: &str,
+) -> Result<HashMap<i64, CollectionWatcherState>, VaultSyncError> {
+    let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
+    sync_collection_watchers(conn, db_path, &mut watchers)?;
+    Ok(watchers)
 }
 
-pub fn reconcile_reset(conn: &Connection, collection_name: &str) -> Result<(), VaultSyncError> {
-    let collection = collections::get_by_name(conn, collection_name)?.ok_or_else(|| {
-        VaultSyncError::CollectionNotFound {
-            name: collection_name.to_owned(),
+fn load_initial_generations(conn: &Connection) -> Result<HashMap<i64, i64>, VaultSyncError> {
+    let mut stmt = conn.prepare("SELECT id, reload_generation FROM collections")?;
+    let generations = stmt
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(generations)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_supervisor_loop(
+    db_path: String,
+    session_id_for_thread: String,
+    stop_signal: Arc<AtomicBool>,
+    initial_generations: HashMap<i64, i64>,
+    #[cfg(unix)] published_ipc: PublishedIpcSocket,
+    #[cfg(unix)] ipc_in_flight: Arc<AtomicUsize>,
+    #[cfg(unix)] mut watchers: HashMap<i64, CollectionWatcherState>,
+) {
+    let mut last_heartbeat = Instant::now();
+    let mut last_idle_close_sweep =
+        Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
+    let mut last_janitor_sweep = Instant::now() - Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS);
+    let mut last_quarantine_sweep = Instant::now();
+    let mut last_generations = initial_generations;
+    #[cfg(unix)]
+    let mut last_dedup_sweep = Instant::now();
+    #[cfg(unix)]
+    let mut last_overflow_recovery = Instant::now();
+    let mut last_full_hash_audit =
+        Instant::now() - Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS);
+    let mut last_raw_import_ttl_sweep =
+        Instant::now() - Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS);
+    let mut last_embedding_drain =
+        Instant::now() - Duration::from_secs(embedding::drain_interval_secs());
+    while !stop_signal.load(Ordering::SeqCst) {
+        if let Ok(conn) = Connection::open(&db_path) {
+            if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
+                let _ = sweep_stale_sessions(&conn);
+                let _ = heartbeat_session(&conn, &session_id_for_thread);
+                last_heartbeat = Instant::now();
+            }
+            if last_idle_close_sweep.elapsed()
+                >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
+            {
+                if let Err(error) = idle_close::scan_due_sessions(&conn, &db_path) {
+                    eprintln!(
+                        "WARN: idle_close_sweep_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_idle_close_sweep = Instant::now();
+            }
+            if last_quarantine_sweep.elapsed()
+                >= Duration::from_secs(QUARANTINE_SWEEP_INTERVAL_SECS)
+            {
+                let _ = quarantine::sweep_expired_quarantined_pages(&conn);
+                last_quarantine_sweep = Instant::now();
+            }
+            if last_janitor_sweep.elapsed() >= Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS) {
+                if let Err(error) = janitor::run_tick(&conn) {
+                    eprintln!(
+                        "WARN: janitor_sweep_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_janitor_sweep = Instant::now();
+            }
+            #[cfg(unix)]
+            {
+                accept_ipc_clients(
+                    &published_ipc.listener,
+                    &published_ipc.path,
+                    &db_path,
+                    &session_id_for_thread,
+                    &ipc_in_flight,
+                );
+                let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
+                for (collection_id, state) in &mut watchers {
+                    if let Err(error) = poll_collection_watcher(&conn, *collection_id, state) {
+                        if matches!(error, VaultSyncError::InvariantViolation { .. }) {
+                            let _ = mark_watcher_crashed(*collection_id, state);
+                        } else {
+                            eprintln!(
+                                "WARN: watcher_poll_failed collection_id={} error={}",
+                                collection_id, error
+                            );
+                        }
+                    }
+                }
+                if last_dedup_sweep.elapsed() >= self_write_dedup_sweep_interval() {
+                    let _ = sweep_expired_self_write_entries_at(Instant::now());
+                    last_dedup_sweep = Instant::now();
+                }
+            }
+            if let Ok(mut stmt) = conn.prepare("SELECT id, reload_generation FROM collections") {
+                if let Ok(rows) = stmt
+                    .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+                    .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+                {
+                    for (collection_id, generation) in rows {
+                        let _ = acquire_owner_lease(&conn, collection_id, &session_id_for_thread);
+                        let supervisor_generation = with_supervisor_handles(|handles| {
+                            handles.get(&collection_id).and_then(|handle| {
+                                (handle.session_id == session_id_for_thread)
+                                    .then_some(handle.generation)
+                            })
+                        })
+                        .ok()
+                        .flatten();
+                        let previous_generation = last_generations
+                            .get(&collection_id)
+                            .copied()
+                            .unwrap_or(generation);
+                        if generation > previous_generation
+                            && supervisor_generation
+                                .map(|tracked_generation| tracked_generation < generation)
+                                .unwrap_or(false)
+                        {
+                            let _ = write_supervisor_ack_if_needed(
+                                &conn,
+                                collection_id,
+                                &session_id_for_thread,
+                                generation,
+                            );
+                            let _ = remove_supervisor_handle(collection_id, &session_id_for_thread);
+                        }
+                        last_generations.insert(collection_id, generation);
+                    }
+                }
+            }
+            if last_full_hash_audit.elapsed()
+                >= Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS)
+            {
+                if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread) {
+                    eprintln!(
+                        "WARN: scheduled_full_hash_audit_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_full_hash_audit = Instant::now();
+            }
+            if last_raw_import_ttl_sweep.elapsed()
+                >= Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS)
+            {
+                if let Err(error) = sweep_raw_import_ttl(&conn) {
+                    eprintln!(
+                        "WARN: raw_import_ttl_sweep_failed session_id_for_thread={} error={}",
+                        session_id_for_thread, error
+                    );
+                }
+                last_raw_import_ttl_sweep = Instant::now();
+            }
+            let _ = run_rcrt_pass(&conn, &session_id_for_thread);
+            let _ = sync_supervisor_handles(&conn, &session_id_for_thread);
+            if last_embedding_drain.elapsed()
+                >= Duration::from_secs(embedding::drain_interval_secs())
+            {
+                let _ = drain_embedding_queue(&conn);
+                last_embedding_drain = Instant::now();
+            }
+            #[cfg(unix)]
+            {
+                let _ = publish_watcher_health(&session_id_for_thread, &watchers);
+                if last_overflow_recovery.elapsed() >= Duration::from_millis(500) {
+                    let _ = run_overflow_recovery_pass(&conn, &session_id_for_thread);
+                    last_overflow_recovery = Instant::now();
+                }
+            }
         }
-    })?;
-    conn.execute(
-        "UPDATE collections
-         SET reconcile_halted_at = NULL,
-             reconcile_halt_reason = NULL,
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1",
-        [collection.id],
-    )?;
-    Ok(())
+        thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
+    }
+    if let Ok(conn) = Connection::open(&db_path) {
+        #[cfg(unix)]
+        let _ = cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path);
+        let _ = clear_supervisor_handles_for_session(&session_id_for_thread);
+        let _ = unregister_session(&conn, &session_id_for_thread);
+    }
 }
 
 pub fn fresh_attach_collection(
@@ -5229,162 +2918,6 @@ fn start_short_lived_owner_leases_with_interval(
     })
 }
 
-fn ensure_restore_not_blocked(collection: &Collection) -> Result<(), VaultSyncError> {
-    if collection.state == CollectionState::Restoring {
-        if let Some(pending_root_path) = collection.pending_root_path.clone() {
-            if collection.integrity_failed_at.is_some() {
-                return Err(VaultSyncError::RestoreIntegrityBlocked {
-                    collection_name: collection.name.clone(),
-                    blocking_column: "integrity_failed_at",
-                });
-            }
-            if collection.pending_manifest_incomplete_at.is_some() {
-                return Err(VaultSyncError::RestoreIntegrityBlocked {
-                    collection_name: collection.name.clone(),
-                    blocking_column: "pending_manifest_incomplete_at",
-                });
-            }
-            return Err(VaultSyncError::RestorePendingFinalize {
-                collection_name: collection.name.clone(),
-                pending_root_path,
-            });
-        }
-        return Err(VaultSyncError::RestoreInProgress {
-            collection_name: collection.name.clone(),
-        });
-    }
-    if collection.integrity_failed_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "integrity_failed_at",
-        });
-    }
-    if collection.pending_manifest_incomplete_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "pending_manifest_incomplete_at",
-        });
-    }
-    Ok(())
-}
-
-fn ensure_restore_target_is_empty(target_path: &Path) -> Result<(), VaultSyncError> {
-    if !target_path.exists() {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(target_path)?;
-    if metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(VaultSyncError::RestoreNonEmptyTarget {
-            target: target_path.display().to_string(),
-        });
-    }
-    if metadata.is_dir() && fs::read_dir(target_path)?.next().is_none() {
-        return Ok(());
-    }
-    Err(VaultSyncError::RestoreNonEmptyTarget {
-        target: target_path.display().to_string(),
-    })
-}
-
-fn remove_empty_target_then_rename(
-    staging_path: &Path,
-    target_path: &Path,
-) -> Result<(), VaultSyncError> {
-    if target_path.exists() {
-        fs::remove_dir(target_path)?;
-    }
-    fs::rename(staging_path, target_path)?;
-    Ok(())
-}
-
-fn staging_path_for_target(target_path: &Path) -> PathBuf {
-    let name = format!(
-        "{}.quaid-restoring-{}",
-        target_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("target"),
-        Uuid::now_v7()
-    );
-    target_path.with_file_name(name)
-}
-
-fn materialize_collection_to_path(
-    conn: &Connection,
-    collection: &Collection,
-    path: &Path,
-) -> Result<(), VaultSyncError> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
-    }
-    fs::create_dir_all(path)?;
-
-    let mut stmt = conn.prepare(
-        "SELECT p.id, p.slug, ri.raw_bytes, ri.file_path, fs.relative_path
-         FROM pages p
-         LEFT JOIN raw_imports ri
-           ON ri.page_id = p.id AND ri.is_active = 1
-         LEFT JOIN file_state fs
-           ON fs.page_id = p.id AND fs.collection_id = p.collection_id
-         WHERE p.collection_id = ?1 AND p.quarantined_at IS NULL
-         ORDER BY p.slug",
-    )?;
-    let rows = stmt.query_map([collection.id], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<Vec<u8>>>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, Option<String>>(4)?,
-        ))
-    })?;
-    for row in rows {
-        let (page_id, slug, raw_bytes, raw_path, relative_path) = row?;
-        let raw_bytes = raw_bytes.ok_or_else(|| VaultSyncError::InvariantViolation {
-            message: format!(
-                "collection={} slug={} page_id={} missing active raw_imports",
-                collection.name, slug, page_id
-            ),
-        })?;
-        let relative_path = infer_restore_relative_path(
-            collection,
-            &slug,
-            raw_path.as_deref(),
-            relative_path.as_deref(),
-        );
-        let output_path = path.join(&relative_path);
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(output_path, raw_bytes)?;
-    }
-    Ok(())
-}
-
-fn infer_restore_relative_path(
-    collection: &Collection,
-    slug: &str,
-    raw_path: Option<&str>,
-    relative_path: Option<&str>,
-) -> PathBuf {
-    if let Some(relative_path) = relative_path {
-        return PathBuf::from(relative_path);
-    }
-    if let Some(raw_path) = raw_path {
-        let raw_path = PathBuf::from(raw_path);
-        if raw_path.is_relative() {
-            return raw_path;
-        }
-        let root_path = PathBuf::from(&collection.root_path);
-        if !collection.root_path.is_empty() {
-            if let Ok(relative) = raw_path.strip_prefix(root_path) {
-                return relative.to_path_buf();
-            }
-        }
-    }
-    PathBuf::from(format!("{slug}.md"))
-}
-
 fn has_fresh_command_heartbeat(
     conn: &Connection,
     collection: &Collection,
@@ -5473,404 +3006,7 @@ fn revert_aborted_restore(
     Ok(())
 }
 
-enum ManifestComparison {
-    Matches,
-    MissingFiles,
-    Mismatch,
-}
-
-fn compare_manifest(
-    path: &Path,
-    manifest: &RestoreManifest,
-) -> Result<ManifestComparison, VaultSyncError> {
-    let mut actual = build_restore_manifest_for_directory(path)?;
-    actual
-        .entries
-        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    if actual.entries.len() != manifest.entries.len() {
-        let actual_paths: HashSet<_> = actual
-            .entries
-            .iter()
-            .map(|entry| entry.relative_path.as_str())
-            .collect();
-        let manifest_paths: HashSet<_> = manifest
-            .entries
-            .iter()
-            .map(|entry| entry.relative_path.as_str())
-            .collect();
-        if manifest_paths.difference(&actual_paths).next().is_some() {
-            return Ok(ManifestComparison::MissingFiles);
-        }
-        return Ok(ManifestComparison::Mismatch);
-    }
-    for (expected, actual) in manifest.entries.iter().zip(actual.entries.iter()) {
-        if expected.relative_path != actual.relative_path {
-            return Ok(ManifestComparison::Mismatch);
-        }
-        if expected.sha256 != actual.sha256 || expected.size_bytes != actual.size_bytes {
-            return Ok(ManifestComparison::Mismatch);
-        }
-    }
-    Ok(ManifestComparison::Matches)
-}
-
-#[derive(Debug, Clone)]
-struct RemapPageRow {
-    page_id: i64,
-    slug: String,
-    uuid: Option<String>,
-    sha256: String,
-    body_size_bytes: i64,
-    has_nonempty_body: bool,
-}
-
-#[derive(Debug, Clone)]
-struct NewRootFileRow {
-    relative_path: PathBuf,
-    uuid: Option<String>,
-    sha256: String,
-    body_size_bytes: i64,
-    has_nonempty_body: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TreeFenceEntry {
-    mtime_ns: i64,
-    ctime_ns: i64,
-    size_bytes: u64,
-    inode: u64,
-    quaidignore_sha256: Option<String>,
-}
-
-struct PageMatchResolution {
-    resolved_page_ids: HashSet<i64>,
-    mismatched_pages: usize,
-    mismatched_samples: Vec<String>,
-    missing_count: usize,
-    missing_pages: Vec<String>,
-    extra_count: usize,
-    extra_files: Vec<String>,
-}
-
-fn load_remap_page_rows(
-    conn: &Connection,
-    collection_id: i64,
-) -> Result<Vec<RemapPageRow>, VaultSyncError> {
-    let mut stmt = conn.prepare(
-        "SELECT p.id, p.slug, p.uuid, p.compiled_truth, p.timeline, ri.raw_bytes
-         FROM pages p
-         JOIN raw_imports ri
-           ON ri.page_id = p.id AND ri.is_active = 1
-         WHERE p.collection_id = ?1 AND p.quarantined_at IS NULL
-         ORDER BY p.slug",
-    )?;
-    let rows = stmt
-        .query_map([collection_id], |row| {
-            let compiled_truth: String = row.get(3)?;
-            let timeline: String = row.get(4)?;
-            let raw_bytes: Vec<u8> = row.get(5)?;
-            let body = format!("{compiled_truth}\n{timeline}");
-            Ok(RemapPageRow {
-                page_id: row.get(0)?,
-                slug: row.get(1)?,
-                uuid: row.get(2)?,
-                sha256: sha256_hex(&raw_bytes),
-                body_size_bytes: body.trim().len() as i64,
-                has_nonempty_body: !body.trim().is_empty(),
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
-fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncError> {
-    let ignore_globset = build_new_root_ignore_globset(root)?;
-    let walked = walk_tree(root)?;
-    let mut rows = Vec::new();
-    for relative_path in walked.keys() {
-        if relative_path == Path::new(".quaidignore") {
-            continue;
-        }
-        if !is_markdown_file(relative_path) {
-            continue;
-        }
-        if ignore_globset.is_match(relative_path) {
-            continue;
-        }
-        let bytes = fs::read(root.join(relative_path))?;
-        let text = String::from_utf8_lossy(&bytes);
-        let (frontmatter, body) = markdown::parse_frontmatter(&text);
-        let (compiled_truth, timeline) = markdown::split_content(&body);
-        let trimmed_ct = compiled_truth.trim();
-        let trimmed_tl = timeline.trim();
-        rows.push(NewRootFileRow {
-            relative_path: relative_path.clone(),
-            uuid: page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|error| {
-                VaultSyncError::InvariantViolation {
-                    message: error.to_string(),
-                }
-            })?,
-            sha256: sha256_hex(&bytes),
-            body_size_bytes: (trimmed_ct.len() + trimmed_tl.len()) as i64,
-            has_nonempty_body: !(trimmed_ct.is_empty() && trimmed_tl.is_empty()),
-        });
-    }
-    Ok(rows)
-}
-
-fn build_new_root_ignore_globset(root: &Path) -> Result<globset::GlobSet, VaultSyncError> {
-    let ignore_path = root.join(".quaidignore");
-    let user_patterns_json = if ignore_path.exists() {
-        let content = fs::read_to_string(&ignore_path)?;
-        match ignore_patterns::parse_ignore_file(&content) {
-            ignore_patterns::ParseResult::Valid(patterns) => {
-                Some(serde_json::to_string(&patterns).map_err(|e| {
-                    VaultSyncError::InvariantViolation {
-                        message: format!(
-                            "failed to serialize validated .quaidignore patterns: {e}"
-                        ),
-                    }
-                })?)
-            }
-            ignore_patterns::ParseResult::Invalid(errors) => {
-                let message = match errors.first() {
-                    Some(first) => format!(
-                        "invalid .quaidignore in remap root at line {}: {}",
-                        first.line, first.message
-                    ),
-                    None => "invalid .quaidignore in remap root (no error details)".to_owned(),
-                };
-                return Err(VaultSyncError::InvariantViolation { message });
-            }
-        }
-    } else {
-        None
-    };
-    ignore_patterns::build_globset_from_patterns(user_patterns_json.as_deref()).map_err(|message| {
-        VaultSyncError::InvariantViolation {
-            message: format!("failed to build remap ignore matcher: {message}"),
-        }
-    })
-}
-
-fn resolve_page_matches(pages: &[RemapPageRow], files: &[NewRootFileRow]) -> PageMatchResolution {
-    let file_records = files
-        .iter()
-        .map(|file| CanonicalIdentityRecord {
-            key: file.relative_path.clone(),
-            label: path_string(&file.relative_path),
-            uuid: file.uuid.clone(),
-            sha256: file.sha256.clone(),
-            body_size_bytes: file.body_size_bytes,
-            has_nonempty_body: file.has_nonempty_body,
-        })
-        .collect::<Vec<_>>();
-    let file_lookup = files
-        .iter()
-        .map(|file| (file.relative_path.clone(), file))
-        .collect::<HashMap<_, _>>();
-    let mut page_hash_counts = HashMap::new();
-    for page in pages {
-        *page_hash_counts
-            .entry(page.sha256.as_str())
-            .or_insert(0usize) += 1;
-    }
-    let mut resolved_page_ids = HashSet::new();
-    let mut accounted_page_ids = HashSet::new();
-    let mut accounted_file_paths = HashSet::new();
-    let mut mismatched_pages = 0;
-    let mut mismatched_samples = Vec::new();
-
-    for page in pages {
-        let page_record = CanonicalIdentityRecord {
-            key: (),
-            label: page.slug.clone(),
-            uuid: page.uuid.clone(),
-            sha256: page.sha256.clone(),
-            body_size_bytes: page.body_size_bytes,
-            has_nonempty_body: page.has_nonempty_body,
-        };
-        match resolve_page_identity(
-            &page_record,
-            page_hash_counts
-                .get(page.sha256.as_str())
-                .copied()
-                .unwrap_or(0),
-            &file_records,
-        ) {
-            PageIdentityResolution::Matched(relative_path) => {
-                let Some(file) = file_lookup.get(&relative_path) else {
-                    continue;
-                };
-                accounted_page_ids.insert(page.page_id);
-                accounted_file_paths.insert(relative_path.clone());
-                if file.sha256 == page.sha256 {
-                    resolved_page_ids.insert(page.page_id);
-                } else {
-                    mismatched_pages += 1;
-                    push_sample(
-                        &mut mismatched_samples,
-                        format!(
-                            "{} -> {} sha256_mismatch",
-                            page.slug,
-                            path_string(&relative_path)
-                        ),
-                    );
-                }
-            }
-            PageIdentityResolution::DuplicateUuid { candidate_labels } => {
-                mismatched_pages += 1;
-                push_sample(
-                    &mut mismatched_samples,
-                    format!("{} -> {}", page.slug, candidate_labels.join("|")),
-                );
-            }
-            PageIdentityResolution::Missing
-            | PageIdentityResolution::AmbiguousHash
-            | PageIdentityResolution::TrivialHashRefusal { .. } => {}
-        }
-    }
-
-    let missing_count = pages
-        .iter()
-        .filter(|page| !accounted_page_ids.contains(&page.page_id))
-        .count();
-    let missing_pages = pages
-        .iter()
-        .filter(|page| !accounted_page_ids.contains(&page.page_id))
-        .map(|page| page.slug.clone())
-        .take(REMAP_VERIFICATION_SAMPLE_LIMIT)
-        .collect::<Vec<_>>();
-    let extra_count = files
-        .iter()
-        .filter(|file| !accounted_file_paths.contains(&file.relative_path))
-        .count();
-    let extra_files = files
-        .iter()
-        .filter(|file| !accounted_file_paths.contains(&file.relative_path))
-        .map(|file| path_string(&file.relative_path))
-        .take(REMAP_VERIFICATION_SAMPLE_LIMIT)
-        .collect::<Vec<_>>();
-
-    PageMatchResolution {
-        resolved_page_ids,
-        mismatched_pages,
-        mismatched_samples,
-        missing_count,
-        missing_pages,
-        extra_count,
-        extra_files,
-    }
-}
-
-#[cfg(unix)]
-fn metadata_timestamp_ns(seconds: i64, nanos: i64) -> i64 {
-    seconds.saturating_mul(1_000_000_000).saturating_add(nanos)
-}
-
-#[cfg(unix)]
-fn metadata_fence_tuple(metadata: &fs::Metadata) -> (i64, i64, u64) {
-    (
-        metadata_timestamp_ns(metadata.mtime(), metadata.mtime_nsec()),
-        metadata_timestamp_ns(metadata.ctime(), metadata.ctime_nsec()),
-        metadata.ino(),
-    )
-}
-
-#[cfg(not(unix))]
-fn metadata_fence_tuple(metadata: &fs::Metadata) -> (i64, i64, u64) {
-    let mtime_ns = metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .and_then(|value| i64::try_from(value.as_nanos()).ok())
-        .unwrap_or_default();
-    (mtime_ns, 0, 0)
-}
-
-fn take_tree_fence(root: &Path) -> Result<BTreeMap<String, TreeFenceEntry>, VaultSyncError> {
-    let mut fence = BTreeMap::new();
-    for (relative_path, metadata) in walk_tree(root)? {
-        let (mtime_ns, ctime_ns, inode) = metadata_fence_tuple(&metadata);
-        let quaidignore_sha256 = if relative_path == Path::new(".quaidignore") {
-            Some(sha256_hex(&fs::read(root.join(&relative_path))?))
-        } else {
-            None
-        };
-        fence.insert(
-            path_string(&relative_path),
-            TreeFenceEntry {
-                mtime_ns,
-                ctime_ns,
-                size_bytes: metadata.len(),
-                inode,
-                quaidignore_sha256,
-            },
-        );
-    }
-    Ok(fence)
-}
-
-fn walk_tree(root: &Path) -> Result<BTreeMap<PathBuf, fs::Metadata>, VaultSyncError> {
-    fn walk_dir(
-        root: &Path,
-        current: &Path,
-        output: &mut BTreeMap<PathBuf, fs::Metadata>,
-    ) -> Result<(), VaultSyncError> {
-        for entry in fs::read_dir(current)? {
-            let entry = entry?;
-            let path = entry.path();
-            let relative = path
-                .strip_prefix(root)
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|_| path.clone());
-            let file_type = entry.file_type()?;
-            if file_type.is_symlink() {
-                eprintln!("WARN: skipping symlinked entry {}", relative.display());
-                continue;
-            }
-            if file_type.is_dir() {
-                walk_dir(root, &path, output)?;
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let metadata = entry.metadata()?;
-            output.insert(relative, metadata);
-        }
-        Ok(())
-    }
-
-    let mut output = BTreeMap::new();
-    if root.exists() {
-        walk_dir(root, root, &mut output)?;
-    }
-    Ok(output)
-}
-
-fn path_string(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn push_sample(samples: &mut Vec<String>, sample: String) {
-    if samples.len() < REMAP_VERIFICATION_SAMPLE_LIMIT {
-        samples.push(sample);
-    }
-}
-
-fn format_diff_samples(samples: &[String]) -> String {
-    if samples.is_empty() {
-        "-".to_owned()
-    } else {
-        samples.join(",")
-    }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(digest.len() * 2);
     for byte in digest {
@@ -5962,7 +3098,7 @@ pub fn get_page_by_input(
 // `writer_side_dedup_key`, `writer_side_dedup_contains`,
 // `writer_side_sentinel_name`, `writer_side_tempfile_name`,
 // `exercise_writer_side_sentinel_crash_core`, the `#[cfg(test)] fn`
-// `startup_recovery_sentinel_count`, plus the `include_str!("vault_sync.rs")`
+// `startup_recovery_sentinel_count`, plus the `include_str!("mod.rs")`
 // path-relative source-introspection. Public-API tests live in
 // `tests/vault_sync_*.rs`.
 #[cfg(test)]
@@ -5972,6 +3108,10 @@ mod tests {
     use super::*;
     use crate::core::db;
     use std::ffi::OsString;
+    #[cfg(all(unix, target_os = "linux"))]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(all(unix, target_os = "linux"))]
+    use std::os::unix::net::UnixListener;
 
     static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -5981,8 +3121,6 @@ mod tests {
 
     #[cfg(all(unix, target_os = "linux"))]
     fn secure_runtime_root() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = tempfile::TempDir::new().unwrap();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
         dir
@@ -6167,7 +3305,10 @@ mod tests {
 
         let error = audit_bound_ipc_socket(&socket_path).unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::IpcSocketPermission { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Ipc(IpcError::IpcSocketPermission { .. })
+        ));
         drop(listener);
         let _ = fs::remove_file(&socket_path);
     }
@@ -6183,7 +3324,10 @@ mod tests {
 
         let error = authorize_server_peer(socket_path, &peer).unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::IpcPeerAuthFailed { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed { .. })
+        ));
         assert!(error.to_string().contains("IpcPeerAuthFailedError"));
     }
 
@@ -6206,7 +3350,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::IpcPeerAuthFailed { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed { .. })
+        ));
         assert!(error.to_string().contains("IpcPeerAuthFailedError"));
     }
 
@@ -6691,10 +3838,10 @@ mod tests {
         integrity_blocked.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&integrity_blocked).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "integrity_failed_at",
                 ..
-            }
+            })
         ));
 
         let mut manifest_blocked = base.clone();
@@ -6703,10 +3850,10 @@ mod tests {
         manifest_blocked.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&manifest_blocked).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "pending_manifest_incomplete_at",
                 ..
-            }
+            })
         ));
 
         let mut pending_finalize = base.clone();
@@ -6729,20 +3876,20 @@ mod tests {
         active_integrity.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&active_integrity).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "integrity_failed_at",
                 ..
-            }
+            })
         ));
 
         let mut active_manifest = base.clone();
         active_manifest.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&active_manifest).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "pending_manifest_incomplete_at",
                 ..
-            }
+            })
         ));
 
         assert!(ensure_restore_not_blocked(&base).is_ok());
@@ -7049,7 +4196,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::HashMismatch { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Conflict(ConflictError::HashMismatch { .. })
+        ));
     }
 
     #[cfg(unix)]
@@ -7096,7 +4246,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::HashMismatch { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Conflict(ConflictError::HashMismatch { .. })
+        ));
     }
 
     #[cfg(unix)]
@@ -7124,7 +4277,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::RecoverySentinel { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Watcher(WatcherError::RecoverySentinel { .. })
+        ));
         assert!(!sentinel_path.exists());
         assert!(!tempfile_path.exists());
         assert!(!root.path().join(relative_path).exists());
@@ -7263,7 +4419,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::Durability { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Watcher(WatcherError::Durability { .. })
+        ));
         assert!(sentinel_path.exists());
         assert!(!tempfile_path.exists());
         assert_eq!(fs::read(&target_path).unwrap(), bytes);
@@ -7301,7 +4460,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            VaultSyncError::DuplicateWriteDedup { key: duplicate } if duplicate == key
+            VaultSyncError::Watcher(WatcherError::DuplicateWriteDedup{ key: duplicate }) if duplicate == key
         ));
         assert!(has_write_dedup(&key).unwrap());
         remove_write_dedup(&key).unwrap();
@@ -7901,7 +5060,7 @@ mod tests {
 
     #[test]
     fn handshake_functions_use_typed_live_collection_owner_not_untyped_pair() {
-        let src = include_str!("vault_sync.rs");
+        let src = include_str!("mod.rs");
         // Locate the mark_collection_restoring_for_handshake body (up to its closing
         // brace) and the wait_for_exact_ack body, and assert they call
         // live_collection_owner rather than the untyped owner_session_id / session_is_live.
@@ -8469,7 +5628,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::ConcurrentRename { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Conflict(ConflictError::ConcurrentRename { .. })
+        ));
         assert!(sentinel_path.exists());
         assert!(!writer_side_dedup_contains(&dedup_key));
         assert_eq!(

@@ -106,7 +106,7 @@ fn remap_online_source_defers_attach_to_rcrt_and_remap_attach_reason_appears_onc
 
     let rcrt_start = source.find("pub fn run_rcrt_pass(").unwrap();
     let rcrt_end = source[rcrt_start..]
-        .find("fn embedding_drain_interval_secs(")
+        .find("\npub fn start_serve_runtime(")
         .map(|offset| rcrt_start + offset)
         .unwrap();
     let rcrt_source = &source[rcrt_start..rcrt_end];
@@ -445,12 +445,12 @@ fn verify_remap_root_does_not_use_hash_fallback_for_short_body() {
 
     assert!(matches!(
         error,
-        VaultSyncError::NewRootVerificationFailed {
+        VaultSyncError::Restore(RestoreError::NewRootVerificationFailed {
             missing: 1,
             mismatched: 0,
             extra: 1,
             ..
-        }
+        })
     ));
 }
 
@@ -479,12 +479,12 @@ fn verify_remap_root_rejects_duplicate_hash_candidates_without_uuid_match() {
 
     assert!(matches!(
         error,
-        VaultSyncError::NewRootVerificationFailed {
+        VaultSyncError::Restore(RestoreError::NewRootVerificationFailed {
             missing: 1,
             mismatched: 0,
             extra: 2,
             ..
-        }
+        })
     ));
 }
 
@@ -528,12 +528,12 @@ fn verify_remap_root_reports_missing_and_extra_counts() {
     let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
     assert!(matches!(
         error,
-        VaultSyncError::NewRootVerificationFailed {
+        VaultSyncError::Restore(RestoreError::NewRootVerificationFailed {
             missing: 1,
             mismatched: 0,
             extra: 1,
             ..
-        }
+        })
     ));
 }
 
@@ -613,12 +613,12 @@ fn verify_remap_root_reports_mismatched_count_for_duplicate_uuid_candidates() {
     let error = verify_remap_root(&conn, &collection, new_root.path()).unwrap_err();
     assert!(matches!(
         error,
-        VaultSyncError::NewRootVerificationFailed {
+        VaultSyncError::Restore(RestoreError::NewRootVerificationFailed {
             missing: 1,
             mismatched: 1,
             extra: 2,
             ..
-        }
+        })
     ));
 }
 
@@ -638,7 +638,7 @@ fn verify_remap_root_source_uses_before_and_after_tree_fences() {
         "verify_remap_root must fence the tree before and after matching to catch mid-flight drift"
     );
     assert!(
-        snippet.contains("return Err(VaultSyncError::NewRootUnstable"),
+        snippet.contains("return Err(VaultSyncError::Restore(RestoreError::NewRootUnstable"),
         "verify_remap_root must fail closed with NewRootUnstableError when the fence changes"
     );
 }

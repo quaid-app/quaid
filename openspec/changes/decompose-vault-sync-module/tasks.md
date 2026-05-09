@@ -43,23 +43,23 @@ Each task in this group is its own commit. Within a commit, only one submodule i
 
 ## 5. Decompose start_serve_runtime (Commit 11)
 
-- [ ] 5.1 Identify the three logical phases inside `start_serve_runtime` (socket binding, session registration, watcher spawn) and confirm each is ≤ 100 lines after extraction
-- [ ] 5.2 Extract `bind_socket(&args) -> Result<…, IpcError>` in `ipc/socket.rs` (or `ipc/mod.rs` if signature crosses sub-files)
-- [ ] 5.3 Extract `register_session(&db, &socket) -> Result<…, VaultSyncError>` in `session.rs`
-- [ ] 5.4 Extract `spawn_watcher(&db, &session) -> Result<…, WatcherError>` in `watcher.rs`
-- [ ] 5.5 Reduce `start_serve_runtime` body to a short orchestrator that calls the three phases in order and assembles `ServeRuntime`
-- [ ] 5.6 Verify the public signature of `start_serve_runtime` is unchanged
-- [ ] 5.7 `cargo build` clean; `cargo test --test 'vault_sync_*'` passes; commit
+- [x] 5.1 Identify the three logical phases inside `start_serve_runtime` (socket binding, session registration, watcher spawn) and confirm each is ≤ 100 lines after extraction
+- [x] 5.2 Extract `bind_socket(&args) -> Result<…, IpcError>` in `ipc/socket.rs` (or `ipc/mod.rs` if signature crosses sub-files) — placed in mod.rs alongside `start_serve_runtime` since it returns `PublishedIpcSocket` (a `pub(super)` ipc/ type) and runs the cleanup-on-error pattern that's coupled to `unregister_session`; signature crosses both ipc and session.
+- [x] 5.3 Extract `register_session(&db, &socket) -> Result<…, VaultSyncError>` in `session.rs` — already exists in session.rs as `pub fn register_session(conn) -> Result<String, VaultSyncError>`; the orchestrator calls it directly.
+- [x] 5.4 Extract `spawn_watcher(&db, &session) -> Result<…, WatcherError>` in `watcher.rs` — placed in mod.rs alongside `sync_collection_watchers` and `start_serve_runtime`; returns `HashMap<i64, CollectionWatcherState>` and reaches into the watcher state types defined in watcher.rs.
+- [x] 5.5 Reduce `start_serve_runtime` body to a short orchestrator that calls the three phases in order and assembles `ServeRuntime` (now 63 lines, plus a `run_supervisor_loop` private helper that holds the per-tick body)
+- [x] 5.6 Verify the public signature of `start_serve_runtime` is unchanged
+- [x] 5.7 `cargo build` clean; `cargo test --test 'vault_sync_*'` passes; commit
 
 ## 6. Decompose begin_restore (Commit 12)
 
-- [ ] 6.1 Identify the three logical phases inside `begin_restore` (target validation, pending staging, manifest registration) and confirm each is ≤ 100 lines after extraction
-- [ ] 6.2 Extract `validate_target(&args) -> Result<…, RestoreError>` in `restore.rs`
-- [ ] 6.3 Extract `stage_pending(&db, &target) -> Result<…, RestoreError>` in `restore.rs`
-- [ ] 6.4 Extract `register_manifest(&db, &staged) -> Result<…, RestoreError>` in `restore.rs`
-- [ ] 6.5 Reduce `begin_restore` body to a short orchestrator that calls the three phases in order
-- [ ] 6.6 Verify the public signature of `begin_restore` is unchanged
-- [ ] 6.7 `cargo build` clean; `cargo test --test 'vault_sync_*'` passes; commit
+- [x] 6.1 Identify the three logical phases inside `begin_restore` (target validation, pending staging, manifest registration) and confirm each is ≤ 100 lines after extraction (validate_target=51, stage_pending=81, register_manifest=45)
+- [x] 6.2 Extract `validate_target(&args) -> Result<…, RestoreError>` in `restore.rs` — placed in mod.rs because it acquires the lease (online handshake or short-lived owner lease) and writes the initial collections-table UPDATE; both reach into mod.rs-private helpers (mark_collection_restoring_for_handshake, wait_for_exact_ack, start_short_lived_owner_lease)
+- [x] 6.3 Extract `stage_pending(&db, &target) -> Result<…, RestoreError>` in `restore.rs` — placed in mod.rs for the same reason (materialize_collection_to_path, build_restore_manifest_for_directory, remove_empty_target_then_rename, run_restore_remap_safety_pipeline_without_mount_check, convert_reconcile_error)
+- [x] 6.4 Extract `register_manifest(&db, &staged) -> Result<…, RestoreError>` in `restore.rs` — placed in mod.rs (calls finalize_pending_restore + complete_attach, both mod.rs-private)
+- [x] 6.5 Reduce `begin_restore` body to a short orchestrator that calls the three phases in order (now 11 lines)
+- [x] 6.6 Verify the public signature of `begin_restore` is unchanged
+- [x] 6.7 `cargo build` clean; `cargo test --test 'vault_sync_*'` passes; commit
 
 ## 7. Re-export and surface verification
 

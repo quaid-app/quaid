@@ -26,7 +26,6 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
 use uuid::Uuid;
 
 #[cfg(unix)]
@@ -42,9 +41,7 @@ use rustix::fs::fsync;
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
 use crate::commands::{get::get_page_by_key, put};
-use crate::core::collections::{
-    self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
-};
+use crate::core::collections::{self, Collection, CollectionState, OpKind, SlugResolution};
 use crate::core::conversation::extractor::Worker;
 #[cfg(unix)]
 use crate::core::conversation::file_edit::is_history_sidecar_path;
@@ -329,258 +326,11 @@ pub struct RemapVerificationSummary {
     pub extra_files: usize,
 }
 
-#[derive(Debug, Error)]
-pub enum VaultSyncError {
-    #[error("collection not found: {name}")]
-    CollectionNotFound { name: String },
+mod error;
 
-    #[error("ambiguous slug: {slug} ({candidates})")]
-    AmbiguousSlug { slug: String, candidates: String },
-
-    #[error("page not found: {slug}")]
-    PageNotFound { slug: String },
-
-    #[error(
-        "CollectionRestoringError: collection={collection_name} state={state} needs_full_sync={needs_full_sync}"
-    )]
-    CollectionRestoring {
-        collection_name: String,
-        state: String,
-        needs_full_sync: bool,
-    },
-
-    #[error("CollectionReadOnlyError: collection={collection_name}")]
-    CollectionReadOnly { collection_name: String },
-
-    #[error(
-        "ServeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id} owner_pid={owner_pid} owner_host={owner_host}"
-    )]
-    ServeOwnsCollectionError {
-        collection_name: String,
-        owner_session_id: String,
-        owner_pid: i64,
-        owner_host: String,
-    },
-
-    #[cfg(unix)]
-    #[error("IpcDirectoryInsecureError: path={path} reason={reason}")]
-    IpcDirectoryInsecure { path: String, reason: String },
-
-    #[cfg(unix)]
-    #[error("IpcSocketPermissionError: path={path} reason={reason}")]
-    IpcSocketPermission { path: String, reason: String },
-
-    #[cfg(unix)]
-    #[error("IpcSocketCollisionError: path={path} reason={reason}")]
-    IpcSocketCollision { path: String, reason: String },
-
-    #[cfg(unix)]
-    #[error("IpcPeerAuthFailedError: path={path} reason={reason}")]
-    IpcPeerAuthFailed { path: String, reason: String },
-
-    #[error("RestoreInProgressError: collection={collection_name}")]
-    RestoreInProgress { collection_name: String },
-
-    #[error("RestorePendingFinalizeError: collection={collection_name} pending_root_path={pending_root_path}")]
-    RestorePendingFinalize {
-        collection_name: String,
-        pending_root_path: String,
-    },
-
-    #[error("RestoreIntegrityBlockedError: collection={collection_name} blocking_column={blocking_column}")]
-    RestoreIntegrityBlocked {
-        collection_name: String,
-        blocking_column: &'static str,
-    },
-
-    #[error("RestoreResetBlockedError: collection={collection_name} reason={reason}")]
-    RestoreResetBlocked {
-        collection_name: String,
-        reason: &'static str,
-    },
-
-    #[error("RestoreNonEmptyTargetError: target={target}")]
-    RestoreNonEmptyTarget { target: String },
-
-    #[error(
-        "ServeDiedDuringHandshakeError: collection={collection_name} expected_session_id={expected_session_id}"
-    )]
-    ServeDiedDuringHandshake {
-        collection_name: String,
-        expected_session_id: String,
-    },
-
-    #[error(
-        "ServeOwnershipChangedError: collection={collection_name} expected_session_id={expected_session_id} actual_session_id={actual_session_id}"
-    )]
-    ServeOwnershipChanged {
-        collection_name: String,
-        expected_session_id: String,
-        actual_session_id: String,
-    },
-
-    #[error(
-        "HandshakeTimeoutError: collection={collection_name} expected_session_id={expected_session_id} reload_generation={reload_generation}"
-    )]
-    HandshakeTimeout {
-        collection_name: String,
-        expected_session_id: String,
-        reload_generation: i64,
-    },
-
-    #[error(
-        "NewRootVerificationFailedError: collection={collection_name} missing={missing} mismatched={mismatched} extra={extra} missing_samples={missing_samples} mismatched_samples={mismatched_samples} extra_samples={extra_samples}"
-    )]
-    NewRootVerificationFailed {
-        collection_name: String,
-        missing: usize,
-        mismatched: usize,
-        extra: usize,
-        missing_samples: String,
-        mismatched_samples: String,
-        extra_samples: String,
-    },
-
-    #[error("NewRootUnstableError: collection={collection_name}")]
-    NewRootUnstable { collection_name: String },
-
-    #[error("InvariantViolationError: {message}")]
-    InvariantViolation { message: String },
-
-    #[error("RestoreCommandBlockedError: collection={collection_name} outcome={outcome}")]
-    RestoreCommandBlocked {
-        collection_name: String,
-        outcome: &'static str,
-    },
-
-    #[error("ReconcileHaltedError: collection={collection_name} reason={reason}")]
-    ReconcileHalted {
-        collection_name: String,
-        reason: String,
-    },
-
-    #[error("PlainSyncActiveRootRequiredError: collection={collection_name} state={state}")]
-    PlainSyncActiveRootRequired {
-        collection_name: String,
-        state: String,
-    },
-
-    #[error("RegistryPoisonedError: registry={registry}")]
-    RegistryPoisoned { registry: &'static str },
-
-    #[cfg(unix)]
-    #[error("DuplicateWriteDedupError: key={key}")]
-    DuplicateWriteDedup { key: String },
-
-    #[cfg(unix)]
-    #[error(
-        "RecoverySentinelError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} reason={reason}"
-    )]
-    RecoverySentinel {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-        reason: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConcurrentRenameError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path}"
-    )]
-    ConcurrentRename {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-    },
-
-    #[cfg(all(test, unix))]
-    #[error("DurabilityError: collection_id={collection_id} relative_path={relative_path}")]
-    Durability {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "PostRenameRecoveryPendingError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} stage={stage} reason={reason}"
-    )]
-    PostRenameRecoveryPending {
-        collection_id: i64,
-        relative_path: String,
-        sentinel_path: String,
-        stage: &'static str,
-        reason: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=MissingExpectedVersion current_version={current_version}"
-    )]
-    MissingExpectedVersion {
-        collection_id: i64,
-        relative_path: String,
-        current_version: i64,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "Conflict: ConflictError StaleExpectedVersion collection_id={collection_id} relative_path={relative_path} expected_version={expected_version} current version: {current_version}"
-    )]
-    StaleExpectedVersion {
-        collection_id: i64,
-        relative_path: String,
-        expected_version: i64,
-        current_version: i64,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=ExternalDelete"
-    )]
-    ExternalDelete {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=ExternalCreate"
-    )]
-    ExternalCreate {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[cfg(unix)]
-    #[error(
-        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=HashMismatch stored_sha256={stored_sha256} actual_sha256={actual_sha256}"
-    )]
-    HashMismatch {
-        collection_id: i64,
-        relative_path: String,
-        stored_sha256: String,
-        actual_sha256: String,
-    },
-
-    #[cfg(not(unix))]
-    #[error("UnsupportedPlatformError: command={command} requires=unix")]
-    UnsupportedPlatform { command: &'static str },
-
-    #[error(transparent)]
-    Sqlite(#[from] rusqlite::Error),
-
-    #[error(transparent)]
-    Io(#[from] io::Error),
-
-    #[error(transparent)]
-    Collections(#[from] CollectionError),
-
-    #[error(transparent)]
-    Reconcile(#[from] ReconcileError),
-
-    #[error(transparent)]
-    Serde(#[from] serde_json::Error),
-}
+#[cfg(unix)]
+pub use error::{ConflictError, IpcError, WatcherError};
+pub use error::{RestoreError, VaultSyncError};
 
 pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError> {
     #[cfg(unix)]
@@ -706,18 +456,22 @@ pub fn check_update_expected_version(
     expected_version: Option<i64>,
 ) -> Result<(), VaultSyncError> {
     match (current_version, expected_version) {
-        (Some(current_version), None) => Err(VaultSyncError::MissingExpectedVersion {
-            collection_id,
-            relative_path: relative_path.to_owned(),
-            current_version,
-        }),
-        (Some(current_version), Some(expected_version)) if current_version != expected_version => {
-            Err(VaultSyncError::StaleExpectedVersion {
+        (Some(current_version), None) => Err(VaultSyncError::Conflict(
+            ConflictError::MissingExpectedVersion {
                 collection_id,
                 relative_path: relative_path.to_owned(),
-                expected_version,
                 current_version,
-            })
+            },
+        )),
+        (Some(current_version), Some(expected_version)) if current_version != expected_version => {
+            Err(VaultSyncError::Conflict(
+                ConflictError::StaleExpectedVersion {
+                    collection_id,
+                    relative_path: relative_path.to_owned(),
+                    expected_version,
+                    current_version,
+                },
+            ))
         }
         _ => Ok(()),
     }
@@ -794,14 +548,14 @@ fn inspect_fs_precondition_with_parent_fd<Fd: AsFd>(
             current_stat: None,
             stored_row: None,
         }),
-        (Some(_), None) => Err(VaultSyncError::ExternalDelete {
+        (Some(_), None) => Err(VaultSyncError::Conflict(ConflictError::ExternalDelete {
             collection_id,
             relative_path: relative_path_str,
-        }),
-        (None, Some(_)) => Err(VaultSyncError::ExternalCreate {
+        })),
+        (None, Some(_)) => Err(VaultSyncError::Conflict(ConflictError::ExternalCreate {
             collection_id,
             relative_path: relative_path_str,
-        }),
+        })),
         (Some(stored_row), Some(current_stat)) => {
             if !file_state::needs_rehash(&current_stat, &stored_row) {
                 return Ok(FsPreconditionInspection {
@@ -819,12 +573,12 @@ fn inspect_fs_precondition_with_parent_fd<Fd: AsFd>(
                     stored_row: Some(stored_row),
                 })
             } else {
-                Err(VaultSyncError::HashMismatch {
+                Err(VaultSyncError::Conflict(ConflictError::HashMismatch {
                     collection_id,
                     relative_path: relative_path_str,
                     stored_sha256: stored_row.sha256,
                     actual_sha256,
-                })
+                }))
             }
         }
     }
@@ -1577,9 +1331,9 @@ pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     if inserted {
         Ok(())
     } else {
-        Err(VaultSyncError::DuplicateWriteDedup {
+        Err(VaultSyncError::Watcher(WatcherError::DuplicateWriteDedup {
             key: key.to_owned(),
-        })
+        }))
     }
 }
 
@@ -1761,12 +1515,12 @@ fn exercise_writer_side_sentinel_crash_core(
     let dedup_key = writer_side_dedup_key(&target_path, bytes);
 
     if matches!(mode, WriterSideSentinelCrashMode::SentinelCreateFail) {
-        return Err(VaultSyncError::RecoverySentinel {
+        return Err(VaultSyncError::Watcher(WatcherError::RecoverySentinel {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: "injected sentinel create failure".to_owned(),
-        });
+        }));
     }
 
     let recovery_dir =
@@ -1775,13 +1529,14 @@ fn exercise_writer_side_sentinel_crash_core(
             .ok_or_else(|| VaultSyncError::InvariantViolation {
                 message: format!("sentinel path has no parent: {}", sentinel_path.display()),
             })?;
-    let recovery_dir_fd =
-        fs_safety::open_root_fd(recovery_dir).map_err(|err| VaultSyncError::RecoverySentinel {
+    let recovery_dir_fd = fs_safety::open_root_fd(recovery_dir).map_err(|err| {
+        VaultSyncError::Watcher(WatcherError::RecoverySentinel {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: err.to_string(),
-        })?;
+        })
+    })?;
     let sentinel_name =
         Path::new(
             sentinel_path
@@ -1794,18 +1549,20 @@ fn exercise_writer_side_sentinel_crash_core(
                 })?,
         );
     fs_safety::openat_create_excl(&recovery_dir_fd, sentinel_name).map_err(|err| {
-        VaultSyncError::RecoverySentinel {
+        VaultSyncError::Watcher(WatcherError::RecoverySentinel {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: err.to_string(),
-        }
+        })
     })?;
-    fsync(&recovery_dir_fd).map_err(|err| VaultSyncError::RecoverySentinel {
-        collection_id,
-        relative_path: relative_path.display().to_string(),
-        sentinel_path: sentinel_path.display().to_string(),
-        reason: err.to_string(),
+    fsync(&recovery_dir_fd).map_err(|err| {
+        VaultSyncError::Watcher(WatcherError::RecoverySentinel {
+            collection_id,
+            relative_path: relative_path.display().to_string(),
+            sentinel_path: sentinel_path.display().to_string(),
+            reason: err.to_string(),
+        })
     })?;
 
     let root_fd = fs_safety::open_root_fd(&root_path)?;
@@ -1868,10 +1625,10 @@ fn exercise_writer_side_sentinel_crash_core(
 
     if matches!(mode, WriterSideSentinelCrashMode::FsyncParentFail) {
         cleanup_post_rename_writer_side_abort(conn, collection_id, &dedup_key);
-        return Err(VaultSyncError::Durability {
+        return Err(VaultSyncError::Watcher(WatcherError::Durability {
             collection_id,
             relative_path: relative_path.display().to_string(),
-        });
+        }));
     }
     fsync(&parent_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
 
@@ -1888,11 +1645,11 @@ fn exercise_writer_side_sentinel_crash_core(
     let target_stat = fs_safety::stat_at_nofollow(&parent_fd, Path::new(target_name))?;
     if target_stat.inode != tempfile_inode {
         cleanup_post_rename_writer_side_abort(conn, collection_id, &dedup_key);
-        return Err(VaultSyncError::ConcurrentRename {
+        return Err(VaultSyncError::Conflict(ConflictError::ConcurrentRename {
             collection_id,
             relative_path: relative_path.display().to_string(),
             sentinel_path: sentinel_path.display().to_string(),
-        });
+        }));
     }
 
     cleanup_post_rename_writer_side_abort(conn, collection_id, &dedup_key);
@@ -2399,30 +2156,36 @@ fn ensure_plain_sync_allowed(collection: &Collection) -> Result<(), VaultSyncErr
         });
     }
     if collection.integrity_failed_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "integrity_failed_at",
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::RestoreIntegrityBlocked {
+                collection_name: collection.name.clone(),
+                blocking_column: "integrity_failed_at",
+            },
+        ));
     }
     if collection.pending_manifest_incomplete_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "pending_manifest_incomplete_at",
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::RestoreIntegrityBlocked {
+                collection_name: collection.name.clone(),
+                blocking_column: "pending_manifest_incomplete_at",
+            },
+        ));
     }
 
     match collection.state {
         CollectionState::Active => Ok(()),
         CollectionState::Restoring => {
             if let Some(pending_root_path) = collection.pending_root_path.clone() {
-                return Err(VaultSyncError::RestorePendingFinalize {
-                    collection_name: collection.name.clone(),
-                    pending_root_path,
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::RestorePendingFinalize {
+                        collection_name: collection.name.clone(),
+                        pending_root_path,
+                    },
+                ));
             }
-            Err(VaultSyncError::RestoreInProgress {
+            Err(VaultSyncError::Restore(RestoreError::RestoreInProgress {
                 collection_name: collection.name.clone(),
-            })
+            }))
         }
         CollectionState::Detached => Err(VaultSyncError::PlainSyncActiveRootRequired {
             collection_name: collection.name.clone(),
@@ -3155,17 +2918,21 @@ pub fn wait_for_exact_ack(
         // mid-handshake (design.md §404-408 do-not-impersonate rule).
         match live_collection_owner(conn, collection_id)? {
             None => {
-                return Err(VaultSyncError::ServeDiedDuringHandshake {
-                    collection_name: collection.name,
-                    expected_session_id: expected_session_id.to_owned(),
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::ServeDiedDuringHandshake {
+                        collection_name: collection.name,
+                        expected_session_id: expected_session_id.to_owned(),
+                    },
+                ));
             }
             Some(ref owner) if owner.session_id != expected_session_id => {
-                return Err(VaultSyncError::ServeOwnershipChanged {
-                    collection_name: collection.name,
-                    expected_session_id: expected_session_id.to_owned(),
-                    actual_session_id: owner.session_id.clone(),
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::ServeOwnershipChanged {
+                        collection_name: collection.name,
+                        expected_session_id: expected_session_id.to_owned(),
+                        actual_session_id: owner.session_id.clone(),
+                    },
+                ));
             }
             Some(_) => {}
         }
@@ -3176,11 +2943,11 @@ pub fn wait_for_exact_ack(
             return Ok(());
         }
         if started.elapsed() >= Duration::from_secs(HANDSHAKE_TIMEOUT_SECS) {
-            return Err(VaultSyncError::HandshakeTimeout {
+            return Err(VaultSyncError::Restore(RestoreError::HandshakeTimeout {
                 collection_name: collection.name,
                 expected_session_id: expected_session_id.to_owned(),
                 reload_generation,
-            });
+            }));
         }
         thread::sleep(Duration::from_millis(HANDSHAKE_POLL_MS));
     }
@@ -3777,10 +3544,10 @@ fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
 fn ensure_secure_ipc_directory(path: &Path, create_if_missing: bool) -> Result<(), VaultSyncError> {
     if !path.exists() {
         if !create_if_missing {
-            return Err(VaultSyncError::IpcDirectoryInsecure {
+            return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
                 path: path.display().to_string(),
                 reason: "path does not exist".to_owned(),
-            });
+            }));
         }
         fs::create_dir_all(path)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
@@ -3788,26 +3555,26 @@ fn ensure_secure_ipc_directory(path: &Path, create_if_missing: bool) -> Result<(
     let metadata = fs::symlink_metadata(path)?;
     let mode = metadata.mode() & 0o777;
     if !metadata.file_type().is_dir() {
-        return Err(VaultSyncError::IpcDirectoryInsecure {
+        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
             path: path.display().to_string(),
             reason: "path is not a directory".to_owned(),
-        });
+        }));
     }
     if metadata.uid() != current_effective_uid() {
-        return Err(VaultSyncError::IpcDirectoryInsecure {
+        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
             path: path.display().to_string(),
             reason: format!(
                 "owner uid {} does not match current uid {}",
                 metadata.uid(),
                 current_effective_uid()
             ),
-        });
+        }));
     }
     if mode != 0o700 {
-        return Err(VaultSyncError::IpcDirectoryInsecure {
+        return Err(VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure {
             path: path.display().to_string(),
             reason: format!("mode {:o} is not 700", mode),
-        });
+        }));
     }
     Ok(())
 }
@@ -3816,18 +3583,18 @@ fn ensure_secure_ipc_directory(path: &Path, create_if_missing: bool) -> Result<(
 fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.file_type().is_socket() {
-        return Err(VaultSyncError::IpcSocketCollision {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
             path: path.display().to_string(),
             reason: "existing path is not a unix socket".to_owned(),
-        });
+        }));
     }
     match UnixStream::connect(path) {
         Ok(stream) => {
             let creds = peer_credentials_for_stream(&stream)?;
-            return Err(VaultSyncError::IpcSocketCollision {
+            return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
                 path: path.display().to_string(),
                 reason: format!("live listener already bound by pid {}", creds.pid),
-            });
+            }));
         }
         Err(error)
             if matches!(
@@ -3841,10 +3608,10 @@ fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
             fs::remove_file(path)?;
         }
         Err(error) => {
-            return Err(VaultSyncError::IpcSocketCollision {
+            return Err(VaultSyncError::Ipc(IpcError::IpcSocketCollision {
                 path: path.display().to_string(),
                 reason: error.to_string(),
-            });
+            }));
         }
     }
     Ok(())
@@ -3869,26 +3636,26 @@ fn audit_bound_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
     let metadata = fs::symlink_metadata(path)?;
     let mode = metadata.mode() & 0o777;
     if !metadata.file_type().is_socket() {
-        return Err(VaultSyncError::IpcSocketPermission {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
             path: path.display().to_string(),
             reason: "bound path is not a unix socket".to_owned(),
-        });
+        }));
     }
     if metadata.uid() != current_effective_uid() {
-        return Err(VaultSyncError::IpcSocketPermission {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
             path: path.display().to_string(),
             reason: format!(
                 "owner uid {} does not match current uid {}",
                 metadata.uid(),
                 current_effective_uid()
             ),
-        });
+        }));
     }
     if mode != 0o600 {
-        return Err(VaultSyncError::IpcSocketPermission {
+        return Err(VaultSyncError::Ipc(IpcError::IpcSocketPermission {
             path: path.display().to_string(),
             reason: format!("mode {:o} is not 600", mode),
-        });
+        }));
     }
     Ok(())
 }
@@ -3999,14 +3766,14 @@ pub(crate) fn authorize_server_peer(
     peer: &IpcPeerCredentials,
 ) -> Result<(), VaultSyncError> {
     if peer.uid != current_effective_uid() {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
+        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
             path: socket_path.display().to_string(),
             reason: format!(
                 "peer uid {} does not match current uid {}",
                 peer.uid,
                 current_effective_uid()
             ),
-        });
+        }));
     }
     Ok(())
 }
@@ -4021,41 +3788,41 @@ pub(crate) fn authorize_client_peer(
     whoami_session_id: &str,
 ) -> Result<(), VaultSyncError> {
     if path_session_id != owner_session_id {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
+        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
             path: socket_path.display().to_string(),
             reason: format!(
                 "path session {} does not match owner session {}",
                 path_session_id, owner_session_id
             ),
-        });
+        }));
     }
     if peer.uid != current_effective_uid() {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
+        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
             path: socket_path.display().to_string(),
             reason: format!(
                 "peer uid {} does not match current uid {}",
                 peer.uid,
                 current_effective_uid()
             ),
-        });
+        }));
     }
     if i64::from(peer.pid) != owner_pid {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
+        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
             path: socket_path.display().to_string(),
             reason: format!(
                 "peer pid {} does not match owner pid {}",
                 peer.pid, owner_pid
             ),
-        });
+        }));
     }
     if whoami_session_id != path_session_id {
-        return Err(VaultSyncError::IpcPeerAuthFailed {
+        return Err(VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed {
             path: socket_path.display().to_string(),
             reason: format!(
                 "whoami session {} does not match path session {}",
                 whoami_session_id, path_session_id
             ),
-        });
+        }));
     }
     Ok(())
 }
@@ -4873,10 +4640,12 @@ pub fn begin_restore(
         )? {
             FinalizeOutcome::Finalized => {}
             outcome => {
-                return Err(VaultSyncError::RestoreCommandBlocked {
-                    collection_name: collection.name,
-                    outcome: finalize_outcome_label(&outcome),
-                })
+                return Err(VaultSyncError::Restore(
+                    RestoreError::RestoreCommandBlocked {
+                        collection_name: collection.name,
+                        outcome: finalize_outcome_label(&outcome),
+                    },
+                ))
             }
         }
         let attached = complete_attach(
@@ -5021,23 +4790,25 @@ pub fn verify_remap_root(
     let page_matches = resolve_page_matches(&page_rows, &file_rows);
     let after = take_tree_fence(new_root)?;
     if before != after {
-        return Err(VaultSyncError::NewRootUnstable {
+        return Err(VaultSyncError::Restore(RestoreError::NewRootUnstable {
             collection_name: collection.name.clone(),
-        });
+        }));
     }
     let missing = page_matches.missing_count;
     let mismatched = page_matches.mismatched_pages;
     let extra = page_matches.extra_count;
     if missing != 0 || mismatched != 0 || extra != 0 {
-        return Err(VaultSyncError::NewRootVerificationFailed {
-            collection_name: collection.name.clone(),
-            missing,
-            mismatched,
-            extra,
-            missing_samples: format_diff_samples(&page_matches.missing_pages),
-            mismatched_samples: format_diff_samples(&page_matches.mismatched_samples),
-            extra_samples: format_diff_samples(&page_matches.extra_files),
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::NewRootVerificationFailed {
+                collection_name: collection.name.clone(),
+                missing,
+                mismatched,
+                extra,
+                missing_samples: format_diff_samples(&page_matches.missing_pages),
+                mismatched_samples: format_diff_samples(&page_matches.mismatched_samples),
+                extra_samples: format_diff_samples(&page_matches.extra_files),
+            },
+        ));
     }
     Ok(RemapVerificationSummary {
         resolved_pages: page_matches.resolved_page_ids.len(),
@@ -5063,10 +4834,10 @@ pub fn restore_reset(conn: &Connection, collection_name: &str) -> Result<(), Vau
         } else {
             "no_integrity_failure"
         };
-        return Err(VaultSyncError::RestoreResetBlocked {
+        return Err(VaultSyncError::Restore(RestoreError::RestoreResetBlocked {
             collection_name: collection.name,
             reason,
-        });
+        }));
     }
     conn.execute(
         "UPDATE collections
@@ -5233,37 +5004,47 @@ fn ensure_restore_not_blocked(collection: &Collection) -> Result<(), VaultSyncEr
     if collection.state == CollectionState::Restoring {
         if let Some(pending_root_path) = collection.pending_root_path.clone() {
             if collection.integrity_failed_at.is_some() {
-                return Err(VaultSyncError::RestoreIntegrityBlocked {
-                    collection_name: collection.name.clone(),
-                    blocking_column: "integrity_failed_at",
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::RestoreIntegrityBlocked {
+                        collection_name: collection.name.clone(),
+                        blocking_column: "integrity_failed_at",
+                    },
+                ));
             }
             if collection.pending_manifest_incomplete_at.is_some() {
-                return Err(VaultSyncError::RestoreIntegrityBlocked {
-                    collection_name: collection.name.clone(),
-                    blocking_column: "pending_manifest_incomplete_at",
-                });
+                return Err(VaultSyncError::Restore(
+                    RestoreError::RestoreIntegrityBlocked {
+                        collection_name: collection.name.clone(),
+                        blocking_column: "pending_manifest_incomplete_at",
+                    },
+                ));
             }
-            return Err(VaultSyncError::RestorePendingFinalize {
-                collection_name: collection.name.clone(),
-                pending_root_path,
-            });
+            return Err(VaultSyncError::Restore(
+                RestoreError::RestorePendingFinalize {
+                    collection_name: collection.name.clone(),
+                    pending_root_path,
+                },
+            ));
         }
-        return Err(VaultSyncError::RestoreInProgress {
+        return Err(VaultSyncError::Restore(RestoreError::RestoreInProgress {
             collection_name: collection.name.clone(),
-        });
+        }));
     }
     if collection.integrity_failed_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "integrity_failed_at",
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::RestoreIntegrityBlocked {
+                collection_name: collection.name.clone(),
+                blocking_column: "integrity_failed_at",
+            },
+        ));
     }
     if collection.pending_manifest_incomplete_at.is_some() {
-        return Err(VaultSyncError::RestoreIntegrityBlocked {
-            collection_name: collection.name.clone(),
-            blocking_column: "pending_manifest_incomplete_at",
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::RestoreIntegrityBlocked {
+                collection_name: collection.name.clone(),
+                blocking_column: "pending_manifest_incomplete_at",
+            },
+        ));
     }
     Ok(())
 }
@@ -5274,16 +5055,20 @@ fn ensure_restore_target_is_empty(target_path: &Path) -> Result<(), VaultSyncErr
     }
     let metadata = fs::symlink_metadata(target_path)?;
     if metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(VaultSyncError::RestoreNonEmptyTarget {
-            target: target_path.display().to_string(),
-        });
+        return Err(VaultSyncError::Restore(
+            RestoreError::RestoreNonEmptyTarget {
+                target: target_path.display().to_string(),
+            },
+        ));
     }
     if metadata.is_dir() && fs::read_dir(target_path)?.next().is_none() {
         return Ok(());
     }
-    Err(VaultSyncError::RestoreNonEmptyTarget {
-        target: target_path.display().to_string(),
-    })
+    Err(VaultSyncError::Restore(
+        RestoreError::RestoreNonEmptyTarget {
+            target: target_path.display().to_string(),
+        },
+    ))
 }
 
 fn remove_empty_target_then_rename(
@@ -5962,7 +5747,7 @@ pub fn get_page_by_input(
 // `writer_side_dedup_key`, `writer_side_dedup_contains`,
 // `writer_side_sentinel_name`, `writer_side_tempfile_name`,
 // `exercise_writer_side_sentinel_crash_core`, the `#[cfg(test)] fn`
-// `startup_recovery_sentinel_count`, plus the `include_str!("vault_sync.rs")`
+// `startup_recovery_sentinel_count`, plus the `include_str!("mod.rs")`
 // path-relative source-introspection. Public-API tests live in
 // `tests/vault_sync_*.rs`.
 #[cfg(test)]
@@ -6167,7 +5952,10 @@ mod tests {
 
         let error = audit_bound_ipc_socket(&socket_path).unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::IpcSocketPermission { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Ipc(IpcError::IpcSocketPermission { .. })
+        ));
         drop(listener);
         let _ = fs::remove_file(&socket_path);
     }
@@ -6183,7 +5971,10 @@ mod tests {
 
         let error = authorize_server_peer(socket_path, &peer).unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::IpcPeerAuthFailed { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed { .. })
+        ));
         assert!(error.to_string().contains("IpcPeerAuthFailedError"));
     }
 
@@ -6206,7 +5997,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::IpcPeerAuthFailed { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Ipc(IpcError::IpcPeerAuthFailed { .. })
+        ));
         assert!(error.to_string().contains("IpcPeerAuthFailedError"));
     }
 
@@ -6691,10 +6485,10 @@ mod tests {
         integrity_blocked.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&integrity_blocked).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "integrity_failed_at",
                 ..
-            }
+            })
         ));
 
         let mut manifest_blocked = base.clone();
@@ -6703,10 +6497,10 @@ mod tests {
         manifest_blocked.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&manifest_blocked).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "pending_manifest_incomplete_at",
                 ..
-            }
+            })
         ));
 
         let mut pending_finalize = base.clone();
@@ -6729,20 +6523,20 @@ mod tests {
         active_integrity.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&active_integrity).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "integrity_failed_at",
                 ..
-            }
+            })
         ));
 
         let mut active_manifest = base.clone();
         active_manifest.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
         assert!(matches!(
             ensure_restore_not_blocked(&active_manifest).unwrap_err(),
-            VaultSyncError::RestoreIntegrityBlocked {
+            VaultSyncError::Restore(RestoreError::RestoreIntegrityBlocked {
                 blocking_column: "pending_manifest_incomplete_at",
                 ..
-            }
+            })
         ));
 
         assert!(ensure_restore_not_blocked(&base).is_ok());
@@ -7049,7 +6843,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::HashMismatch { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Conflict(ConflictError::HashMismatch { .. })
+        ));
     }
 
     #[cfg(unix)]
@@ -7096,7 +6893,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::HashMismatch { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Conflict(ConflictError::HashMismatch { .. })
+        ));
     }
 
     #[cfg(unix)]
@@ -7124,7 +6924,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::RecoverySentinel { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Watcher(WatcherError::RecoverySentinel { .. })
+        ));
         assert!(!sentinel_path.exists());
         assert!(!tempfile_path.exists());
         assert!(!root.path().join(relative_path).exists());
@@ -7263,7 +7066,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::Durability { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Watcher(WatcherError::Durability { .. })
+        ));
         assert!(sentinel_path.exists());
         assert!(!tempfile_path.exists());
         assert_eq!(fs::read(&target_path).unwrap(), bytes);
@@ -7301,7 +7107,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            VaultSyncError::DuplicateWriteDedup { key: duplicate } if duplicate == key
+            VaultSyncError::Watcher(WatcherError::DuplicateWriteDedup{ key: duplicate }) if duplicate == key
         ));
         assert!(has_write_dedup(&key).unwrap());
         remove_write_dedup(&key).unwrap();
@@ -7901,7 +7707,7 @@ mod tests {
 
     #[test]
     fn handshake_functions_use_typed_live_collection_owner_not_untyped_pair() {
-        let src = include_str!("vault_sync.rs");
+        let src = include_str!("mod.rs");
         // Locate the mark_collection_restoring_for_handshake body (up to its closing
         // brace) and the wait_for_exact_ack body, and assert they call
         // live_collection_owner rather than the untyped owner_session_id / session_is_live.
@@ -8469,7 +8275,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, VaultSyncError::ConcurrentRename { .. }));
+        assert!(matches!(
+            error,
+            VaultSyncError::Conflict(ConflictError::ConcurrentRename { .. })
+        ));
         assert!(sentinel_path.exists());
         assert!(!writer_side_dedup_contains(&dedup_key));
         assert_eq!(

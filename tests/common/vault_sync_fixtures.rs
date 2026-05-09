@@ -199,10 +199,14 @@ pub fn production_vault_sync_source() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("core")
-        .join("vault_sync.rs");
+        .join("vault_sync")
+        .join("mod.rs");
     let source = std::fs::read_to_string(path).unwrap();
-    let test_module_start = source.rfind("#[cfg(test)]").unwrap();
-    source[..test_module_start].to_owned()
+    if let Some(test_module_start) = source.rfind("#[cfg(test)]") {
+        source[..test_module_start].to_owned()
+    } else {
+        source
+    }
 }
 
 pub fn manifest_json_for_directory(root: &Path) -> String {

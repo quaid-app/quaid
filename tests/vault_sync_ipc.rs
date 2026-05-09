@@ -59,7 +59,10 @@ fn start_serve_runtime_refuses_insecure_ipc_directory_permissions() {
         Err(error) => error,
     };
 
-    assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
+    assert!(matches!(
+        error,
+        VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure { .. })
+    ));
     assert!(error.to_string().contains("IpcDirectoryInsecureError"));
 }
 
@@ -77,7 +80,10 @@ fn start_serve_runtime_refuses_insecure_xdg_runtime_root_permissions() {
         Err(error) => error,
     };
 
-    assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
+    assert!(matches!(
+        error,
+        VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure { .. })
+    ));
     assert!(error.to_string().contains("IpcDirectoryInsecureError"));
     assert!(error.to_string().contains("mode 755 is not 700"));
 }
@@ -99,7 +105,10 @@ fn start_serve_runtime_refuses_insecure_fallback_runtime_root_permissions() {
         Err(error) => error,
     };
 
-    assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
+    assert!(matches!(
+        error,
+        VaultSyncError::Ipc(IpcError::IpcDirectoryInsecure { .. })
+    ));
     assert!(error.to_string().contains("IpcDirectoryInsecureError"));
     assert!(error.to_string().contains(runtime_root.to_str().unwrap()));
 }
@@ -110,7 +119,8 @@ fn serve_ipc_source_publishes_after_audit_and_cleans_up_before_unregister() {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("core")
-            .join("vault_sync.rs"),
+            .join("vault_sync")
+            .join("mod.rs"),
     )
     .unwrap();
     let publish_start = source
@@ -170,7 +180,8 @@ fn serve_ipc_source_refuses_cross_uid_peer_before_request_dispatch() {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("core")
-            .join("vault_sync.rs"),
+            .join("vault_sync")
+            .join("mod.rs"),
     )
     .unwrap();
     let handler_start = source
@@ -203,7 +214,8 @@ fn accept_ipc_clients_offloads_each_client_to_its_own_thread() {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("core")
-            .join("vault_sync.rs"),
+            .join("vault_sync")
+            .join("mod.rs"),
     )
     .unwrap();
     let fn_start = source

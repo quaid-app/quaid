@@ -167,7 +167,8 @@ fn rename_before_commit_source_keeps_fd_relative_ordering() {
 #[test]
 fn duplicate_dedup_source_is_fail_closed_without_clearing_preexisting_entry() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let vault_source = stdfs::read_to_string(root.join("core").join("vault_sync.rs")).unwrap();
+    let vault_source =
+        stdfs::read_to_string(root.join("core").join("vault_sync").join("mod.rs")).unwrap();
     let insert_start = vault_source
         .find("pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {")
         .expect("insert_write_dedup production function");
@@ -177,7 +178,7 @@ fn duplicate_dedup_source_is_fail_closed_without_clearing_preexisting_entry() {
         .expect("remove_write_dedup after insert_write_dedup");
     let insert_fn = &vault_source[insert_start..insert_end];
     assert!(
-        insert_fn.contains("Err(VaultSyncError::DuplicateWriteDedup"),
+        insert_fn.contains("Err(VaultSyncError::Watcher(WatcherError::DuplicateWriteDedup"),
         "duplicate write-dedup entries must fail closed with an explicit typed error"
     );
     assert!(

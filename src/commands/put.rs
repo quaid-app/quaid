@@ -362,23 +362,25 @@ fn proxy_put_via_live_serve(
 ) -> anyhow::Result<String> {
     let socket_path = Path::new(&endpoint.ipc_path);
     let metadata = fs::symlink_metadata(socket_path).map_err(|error| {
-        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
-            path: endpoint.ipc_path.clone(),
-            reason: error.to_string(),
-        })
+        anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: error.to_string(),
+            },
+        ))
     })?;
     let mode = metadata.mode() & 0o777;
     if !metadata.file_type().is_socket() {
-        return Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: endpoint.ipc_path.clone(),
                 reason: "path is not a unix socket".to_owned(),
             },
-        ));
+        )));
     }
     if metadata.uid() != vault_sync::current_effective_uid() {
-        return Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: endpoint.ipc_path.clone(),
                 reason: format!(
                     "socket uid {} does not match current uid {}",
@@ -386,28 +388,32 @@ fn proxy_put_via_live_serve(
                     vault_sync::current_effective_uid()
                 ),
             },
-        ));
+        )));
     }
     if mode != 0o600 {
-        return Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: endpoint.ipc_path.clone(),
                 reason: format!("socket mode {:o} is not 600", mode),
             },
-        ));
+        )));
     }
     let path_session_id = vault_sync::session_id_from_ipc_path(socket_path).ok_or_else(|| {
-        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
-            path: endpoint.ipc_path.clone(),
-            reason: "socket path does not embed a session id".to_owned(),
-        })
+        anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: "socket path does not embed a session id".to_owned(),
+            },
+        ))
     })?;
 
     let mut stream = UnixStream::connect(socket_path).map_err(|error| {
-        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
-            path: endpoint.ipc_path.clone(),
-            reason: error.to_string(),
-        })
+        anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
+                path: endpoint.ipc_path.clone(),
+                reason: error.to_string(),
+            },
+        ))
     })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -417,19 +423,19 @@ fn proxy_put_via_live_serve(
         .map_err(anyhow::Error::new)?;
     let peer = vault_sync::peer_credentials_for_stream(&stream).map_err(anyhow::Error::new)?;
     if path_session_id != endpoint.session_id {
-        return Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: endpoint.ipc_path.clone(),
                 reason: format!(
                     "path session {} does not match owner session {}",
                     path_session_id, endpoint.session_id
                 ),
             },
-        ));
+        )));
     }
     if peer.uid != vault_sync::current_effective_uid() {
-        return Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: endpoint.ipc_path.clone(),
                 reason: format!(
                     "peer uid {} does not match current uid {}",
@@ -437,18 +443,18 @@ fn proxy_put_via_live_serve(
                     vault_sync::current_effective_uid()
                 ),
             },
-        ));
+        )));
     }
     if i64::from(peer.pid) != endpoint.pid {
-        return Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: endpoint.ipc_path.clone(),
                 reason: format!(
                     "peer pid {} does not match owner pid {}",
                     peer.pid, endpoint.pid
                 ),
             },
-        ));
+        )));
     }
 
     let read_stream = stream.try_clone()?;
@@ -458,20 +464,20 @@ fn proxy_put_via_live_serve(
     let whoami_session_id = match whoami {
         vault_sync::IpcResponse::WhoAmI { session_id } => session_id,
         vault_sync::IpcResponse::Error { error } => {
-            return Err(anyhow::Error::new(
-                vault_sync::VaultSyncError::IpcPeerAuthFailed {
+            return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+                vault_sync::IpcError::IpcPeerAuthFailed {
                     path: endpoint.ipc_path.clone(),
                     reason: error,
                 },
-            ));
+            )));
         }
         other => {
-            return Err(anyhow::Error::new(
-                vault_sync::VaultSyncError::IpcPeerAuthFailed {
+            return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+                vault_sync::IpcError::IpcPeerAuthFailed {
                     path: endpoint.ipc_path.clone(),
                     reason: format!("unexpected whoami response: {other:?}"),
                 },
-            ));
+            )));
         }
     };
 
@@ -496,12 +502,12 @@ fn proxy_put_via_live_serve(
     match read_ipc_response(&mut reader, socket_path)? {
         vault_sync::IpcResponse::PutOk { status } => Ok(status),
         vault_sync::IpcResponse::Error { error } => Err(anyhow::anyhow!("{error}")),
-        other => Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        other => Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: endpoint.ipc_path.clone(),
                 reason: format!("unexpected put response: {other:?}"),
             },
-        )),
+        ))),
     }
 }
 
@@ -524,18 +530,20 @@ fn read_ipc_response(
     let mut line = String::new();
     let bytes_read = reader.read_line(&mut line)?;
     if bytes_read == 0 {
-        return Err(anyhow::Error::new(
-            vault_sync::VaultSyncError::IpcPeerAuthFailed {
+        return Err(anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
                 path: socket_path.display().to_string(),
                 reason: "connection closed before response".to_owned(),
             },
-        ));
+        )));
     }
     serde_json::from_str(line.trim_end()).map_err(|error| {
-        anyhow::Error::new(vault_sync::VaultSyncError::IpcPeerAuthFailed {
-            path: socket_path.display().to_string(),
-            reason: format!("invalid ipc response: {error}"),
-        })
+        anyhow::Error::new(vault_sync::VaultSyncError::Ipc(
+            vault_sync::IpcError::IpcPeerAuthFailed {
+                path: socket_path.display().to_string(),
+                reason: format!("invalid ipc response: {error}"),
+            },
+        ))
     })
 }
 
@@ -991,11 +999,13 @@ fn persist_with_vault_write(
         let _ = tx.rollback();
         clear_failure_tracking(&target_path, &dedup_key);
         let _ = maybe_mark_collection_needs_full_sync(db, prepared.collection_id);
-        return Err(vault_sync::VaultSyncError::ConcurrentRename {
-            collection_id: prepared.collection_id,
-            relative_path: relative_path.to_owned(),
-            sentinel_path: sentinel_path.display().to_string(),
-        });
+        return Err(vault_sync::VaultSyncError::Conflict(
+            vault_sync::ConflictError::ConcurrentRename {
+                collection_id: prepared.collection_id,
+                relative_path: relative_path.to_owned(),
+                sentinel_path: sentinel_path.display().to_string(),
+            },
+        ));
     }
 
     if matches!(hooks.as_ref(), Some(hook) if hook.fail_commit) {
@@ -1080,37 +1090,39 @@ fn create_recovery_sentinel(
 ) -> Result<(), vault_sync::VaultSyncError> {
     let sentinel_path = recovery_dir.join(sentinel_name);
     if hooks.is_some_and(|hook| hook.fail_sentinel_create) {
-        return Err(vault_sync::VaultSyncError::RecoverySentinel {
-            collection_id: prepared.collection_id,
-            relative_path: prepared.slug.clone(),
-            sentinel_path: sentinel_path.display().to_string(),
-            reason: "injected sentinel creation failure".to_string(),
-        });
+        return Err(vault_sync::VaultSyncError::Watcher(
+            vault_sync::WatcherError::RecoverySentinel {
+                collection_id: prepared.collection_id,
+                relative_path: prepared.slug.clone(),
+                sentinel_path: sentinel_path.display().to_string(),
+                reason: "injected sentinel creation failure".to_string(),
+            },
+        ));
     }
     fs::create_dir_all(recovery_dir).map_err(|error| {
-        vault_sync::VaultSyncError::RecoverySentinel {
+        vault_sync::VaultSyncError::Watcher(vault_sync::WatcherError::RecoverySentinel {
             collection_id: prepared.collection_id,
             relative_path: prepared.slug.clone(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: error.to_string(),
-        }
+        })
     })?;
     let recovery_fd = fs_safety::open_root_fd(recovery_dir).map_err(|error| {
-        vault_sync::VaultSyncError::RecoverySentinel {
+        vault_sync::VaultSyncError::Watcher(vault_sync::WatcherError::RecoverySentinel {
             collection_id: prepared.collection_id,
             relative_path: prepared.slug.clone(),
             sentinel_path: sentinel_path.display().to_string(),
             reason: error.to_string(),
-        }
+        })
     })?;
     let mut sentinel_file = File::from(
         fs_safety::openat_create_excl(&recovery_fd, Path::new(sentinel_name)).map_err(|error| {
-            vault_sync::VaultSyncError::RecoverySentinel {
+            vault_sync::VaultSyncError::Watcher(vault_sync::WatcherError::RecoverySentinel {
                 collection_id: prepared.collection_id,
                 relative_path: prepared.slug.clone(),
                 sentinel_path: sentinel_path.display().to_string(),
                 reason: error.to_string(),
-            }
+            })
         })?,
     );
     if let Err(error) = sentinel_file
@@ -1120,12 +1132,14 @@ fn create_recovery_sentinel(
     {
         let _ = fs_safety::unlinkat_parent_fd(&recovery_fd, Path::new(sentinel_name));
         let _ = sync_fd(&recovery_fd);
-        return Err(vault_sync::VaultSyncError::RecoverySentinel {
-            collection_id: prepared.collection_id,
-            relative_path: prepared.slug.clone(),
-            sentinel_path: sentinel_path.display().to_string(),
-            reason: error.to_string(),
-        });
+        return Err(vault_sync::VaultSyncError::Watcher(
+            vault_sync::WatcherError::RecoverySentinel {
+                collection_id: prepared.collection_id,
+                relative_path: prepared.slug.clone(),
+                sentinel_path: sentinel_path.display().to_string(),
+                reason: error.to_string(),
+            },
+        ));
     }
     Ok(())
 }
@@ -1196,13 +1210,13 @@ fn handle_post_rename_failure(
 ) -> vault_sync::VaultSyncError {
     clear_failure_tracking(target_path, dedup_key);
     let _ = maybe_mark_collection_needs_full_sync(db, prepared.collection_id);
-    vault_sync::VaultSyncError::PostRenameRecoveryPending {
+    vault_sync::VaultSyncError::Watcher(vault_sync::WatcherError::PostRenameRecoveryPending {
         collection_id: prepared.collection_id,
         relative_path: relative_path.to_owned(),
         sentinel_path: sentinel_path.display().to_string(),
         stage,
         reason,
-    }
+    })
 }
 
 #[cfg(unix)]

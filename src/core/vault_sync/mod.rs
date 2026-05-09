@@ -163,72 +163,6 @@ impl ResolvedSlug {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RestoreManifestEntry {
-    pub relative_path: String,
-    pub sha256: String,
-    pub size_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RestoreManifest {
-    pub entries: Vec<RestoreManifestEntry>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteBackOutcome {
-    Migrated,
-    SkippedReadOnly,
-    AlreadyHadUuid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeCaller {
-    RestoreOriginator { command_id: String },
-    StartupRecovery { session_id: String },
-    ExternalFinalize { session_id: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeOutcome {
-    Finalized,
-    Deferred,
-    ManifestIncomplete,
-    IntegrityFailed,
-    OrphanRecovered,
-    Aborted,
-    NoPendingWork,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeCliOutcome {
-    Attached,
-    OrphanRecovered,
-    Deferred,
-    ManifestIncomplete,
-    IntegrityFailed,
-    Aborted,
-    NoPendingWork,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttachReason {
-    RestorePostFinalize,
-    RemapPostReconcile,
-}
-
-fn finalize_outcome_label(outcome: &FinalizeOutcome) -> &'static str {
-    match outcome {
-        FinalizeOutcome::Finalized => "Finalized",
-        FinalizeOutcome::Deferred => "Deferred",
-        FinalizeOutcome::ManifestIncomplete => "ManifestIncomplete",
-        FinalizeOutcome::IntegrityFailed => "IntegrityFailed",
-        FinalizeOutcome::OrphanRecovered => "OrphanRecovered",
-        FinalizeOutcome::Aborted => "Aborted",
-        FinalizeOutcome::NoPendingWork => "NoPendingWork",
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemapVerificationSummary {
     pub resolved_pages: usize,
@@ -242,13 +176,14 @@ mod ownership;
 #[cfg(unix)]
 mod precondition;
 mod recovery;
+mod restore;
 mod session;
 mod watcher;
 mod write_lock;
 
 #[cfg(unix)]
-pub use error::{ConflictError, IpcError};
-pub use error::{RestoreError, VaultSyncError};
+pub use error::IpcError;
+pub use error::VaultSyncError;
 pub use ownership::{
     acquire_owner_lease, ensure_no_live_serve_owner, ensure_no_live_serve_owner_for_root_path,
     live_collection_owner, owner_session_id, release_owner_lease, LiveCollectionOwner,
@@ -264,6 +199,13 @@ pub(crate) use recovery::set_collection_recovery_in_progress_for_test;
 use recovery::{bootstrap_recovery_directories, recovery_sentinel_paths, RecoveryInProgressGuard};
 pub use recovery::{
     collection_recovery_dir, collection_recovery_in_progress, recovery_root_for_db_path,
+};
+use restore::finalize_outcome_label;
+#[cfg(unix)]
+pub use restore::ConflictError;
+pub use restore::{
+    AttachReason, FinalizeCaller, FinalizeCliOutcome, FinalizeOutcome, RestoreError,
+    RestoreManifest, RestoreManifestEntry, WriteBackOutcome,
 };
 pub use session::{
     heartbeat_session, register_cli_session, register_session, sweep_stale_sessions,

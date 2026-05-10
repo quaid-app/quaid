@@ -6,10 +6,7 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::core::fts::{
-    sanitize_fts_query, search_fts_canonical_tiered_with_namespace_filtered,
-    search_fts_canonical_with_namespace_filtered,
-};
+use crate::core::fts::{sanitize_fts_query, search_fts, search_fts_tiered, FtsQuery};
 
 #[expect(
     clippy::too_many_arguments,
@@ -33,26 +30,19 @@ pub fn run(
     } else {
         sanitize_fts_query(query)
     };
+    let fts_query = FtsQuery {
+        query: &effective_query,
+        wing: wing.as_deref(),
+        namespace,
+        include_superseded,
+        canonical: true,
+        limit: limit as usize,
+        ..Default::default()
+    };
     let results = if raw {
-        search_fts_canonical_with_namespace_filtered(
-            &effective_query,
-            wing.as_deref(),
-            None,
-            namespace,
-            include_superseded,
-            db,
-            limit as usize,
-        )
+        search_fts(db, fts_query)
     } else {
-        search_fts_canonical_tiered_with_namespace_filtered(
-            &effective_query,
-            wing.as_deref(),
-            None,
-            namespace,
-            include_superseded,
-            db,
-            limit as usize,
-        )
+        search_fts_tiered(db, fts_query)
     };
 
     let results = match results {

@@ -18,7 +18,7 @@ use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
-use crate::core::search::hybrid_search_canonical_with_namespace;
+use crate::core::search::{hybrid_search, HybridSearch};
 use crate::core::supersede;
 use crate::core::types::{ExtractionTriggerKind, SearchError, TurnRole};
 use crate::core::vault_sync;
@@ -1227,14 +1227,17 @@ impl QuaidServer {
         let include_superseded = input.include_superseded.unwrap_or(false);
 
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
-        let results = hybrid_search_canonical_with_namespace(
-            &input.query,
-            input.wing.as_deref(),
-            collection_filter.as_ref().map(|collection| collection.id),
-            namespace_filter,
-            include_superseded,
+        let results = hybrid_search(
             &db,
-            limit,
+            HybridSearch {
+                query: &input.query,
+                wing: input.wing.as_deref(),
+                collection: collection_filter.as_ref().map(|collection| collection.id),
+                namespace: namespace_filter,
+                include_superseded,
+                canonical: true,
+                limit,
+            },
         )
         .map_err(map_search_error)?;
 
@@ -1295,14 +1298,17 @@ impl QuaidServer {
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         let safe_query = sanitize_fts_query(&input.query);
-        let results = crate::core::fts::search_fts_canonical_with_namespace_filtered(
-            &safe_query,
-            input.wing.as_deref(),
-            collection_filter.as_ref().map(|collection| collection.id),
-            namespace_filter,
-            include_superseded,
+        let results = crate::core::fts::search_fts(
             &db,
-            limit,
+            crate::core::fts::FtsQuery {
+                query: &safe_query,
+                wing: input.wing.as_deref(),
+                collection: collection_filter.as_ref().map(|collection| collection.id),
+                namespace: namespace_filter,
+                include_superseded,
+                canonical: true,
+                limit,
+            },
         )
         .map_err(map_search_error)?;
 
@@ -2634,7 +2640,15 @@ mod tests {
             .unwrap();
         assert_eq!(queued_jobs, 1);
 
-        let fts_results = crate::core::fts::search_fts("omega", None, None, &db, 10).unwrap();
+        let fts_results = crate::core::fts::search_fts(
+            &db,
+            crate::core::fts::FtsQuery {
+                query: "omega",
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(fts_results
             .iter()
             .any(|result| result.slug == "notes/stampede"));

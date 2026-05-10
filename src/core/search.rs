@@ -3,117 +3,65 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 
 use super::collections::{self, OpKind, SlugResolution};
-use super::fts::{
-    sanitize_fts_query, search_fts_canonical_tiered_with_namespace_filtered,
-    search_fts_tiered_with_namespace_filtered,
-};
+use super::fts::{sanitize_fts_query, search_fts_tiered, FtsQuery};
 use super::inference::{
     search_vec_canonical_with_namespace_filtered, search_vec_with_namespace_filtered,
 };
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
+/// Per-call options for [`hybrid_search`].
+///
+/// The `Default` impl gives every field its zero value (empty `&str`, `None`
+/// for filters, `false` for booleans, `0` for `limit`). The canonical
+/// call-site idiom names only the fields that diverge from `Default`:
+///
+/// ```ignore
+/// HybridSearch {
+///     query: "AI founder",
+///     namespace: Some("test-ns"),
+///     canonical: true,
+///     limit: 10,
+///     ..Default::default()
+/// }
+/// ```
+///
+/// New filters (e.g. `min_score`, additional facets) SHALL be added here as
+/// new fields with sensible defaults rather than as a sibling
+/// `_with_<flag>` function variant.
+///
+/// Field semantics:
+/// - `query`: the natural-language input. `hybrid_search` short-circuits on
+///   exact-slug matches and otherwise sanitizes before FTS5/vector search.
+/// - `wing`: optional wing prefix filter.
+/// - `collection`: optional collection-id filter.
+/// - `namespace`: optional namespace filter; `Some("foo")` matches both
+///   the `foo` namespace and the global `""` namespace.
+/// - `include_superseded`: when `false`, hides pages with non-NULL
+///   `superseded_by`.
+/// - `canonical`: when `true`, results return slugs in
+///   `<collection>::<slug>` form.
+/// - `limit`: maximum number of rows to return after merge.
+#[derive(Default, Clone)]
+pub struct HybridSearch<'a> {
+    pub query: &'a str,
+    pub wing: Option<&'a str>,
+    pub collection: Option<i64>,
+    pub namespace: Option<&'a str>,
+    pub include_superseded: bool,
+    pub canonical: bool,
+    pub limit: usize,
+}
+
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
 ///
-/// At most `limit` results are returned. The limit is pushed into the FTS5 query
-/// and applied after the merge step to cap memory usage.
+/// At most `q.limit` results are returned. The limit is pushed into the FTS5
+/// query and applied after the merge step to cap memory usage. See
+/// [`HybridSearch`] for per-field documentation.
 pub fn hybrid_search(
-    query: &str,
-    wing: Option<&str>,
-    collection_filter: Option<i64>,
-    include_superseded: bool,
     conn: &Connection,
-    limit: usize,
+    q: HybridSearch<'_>,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_with_namespace(
-        query,
-        wing,
-        collection_filter,
-        None,
-        include_superseded,
-        conn,
-        limit,
-    )
-}
-
-/// Namespace-aware variant of [`hybrid_search`].
-pub fn hybrid_search_with_namespace(
-    query: &str,
-    wing: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    include_superseded: bool,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(
-        query,
-        wing,
-        collection_filter,
-        namespace_filter,
-        include_superseded,
-        conn,
-        limit,
-        false,
-    )
-}
-
-/// Hybrid search returning canonical `<collection>::<slug>` identifiers.
-pub fn hybrid_search_canonical(
-    query: &str,
-    wing: Option<&str>,
-    collection_filter: Option<i64>,
-    include_superseded: bool,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_canonical_with_namespace(
-        query,
-        wing,
-        collection_filter,
-        None,
-        include_superseded,
-        conn,
-        limit,
-    )
-}
-
-/// Namespace-aware canonical-slug variant of [`hybrid_search`].
-pub fn hybrid_search_canonical_with_namespace(
-    query: &str,
-    wing: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    include_superseded: bool,
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(
-        query,
-        wing,
-        collection_filter,
-        namespace_filter,
-        include_superseded,
-        conn,
-        limit,
-        true,
-    )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "internal hybrid-search dispatcher binds the full search context (query, filters, namespace, conn, limit, canonical flag); the public wrappers are the right boundary for grouping and they call this directly"
-)]
-fn hybrid_search_impl(
-    query: &str,
-    wing: Option<&str>,
-    collection_filter: Option<i64>,
-    namespace_filter: Option<&str>,
-    include_superseded: bool,
-    conn: &Connection,
-    limit: usize,
-    canonical_slug: bool,
-) -> Result<Vec<SearchResult>, SearchError> {
-    let trimmed = query.trim();
+    let trimmed = q.query.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
@@ -121,12 +69,12 @@ fn hybrid_search_impl(
     if let Some(slug) = exact_slug_query(trimmed) {
         if let Some(result) = exact_slug_result_with_namespace(
             slug,
-            wing,
-            collection_filter,
-            namespace_filter,
-            include_superseded,
+            q.wing,
+            q.collection,
+            q.namespace,
+            q.include_superseded,
             conn,
-            canonical_slug,
+            q.canonical,
         )? {
             return Ok(vec![result]);
         }
@@ -137,45 +85,36 @@ fn hybrid_search_impl(
         return Ok(Vec::new());
     }
 
-    let fts_results = if canonical_slug {
-        search_fts_canonical_tiered_with_namespace_filtered(
-            &fts_safe,
-            wing,
-            collection_filter,
-            namespace_filter,
-            include_superseded,
-            conn,
-            limit,
-        )?
-    } else {
-        search_fts_tiered_with_namespace_filtered(
-            &fts_safe,
-            wing,
-            collection_filter,
-            namespace_filter,
-            include_superseded,
-            conn,
-            limit,
-        )?
-    };
-    let vec_results = if canonical_slug {
+    let fts_results = search_fts_tiered(
+        conn,
+        FtsQuery {
+            query: &fts_safe,
+            wing: q.wing,
+            collection: q.collection,
+            namespace: q.namespace,
+            include_superseded: q.include_superseded,
+            canonical: q.canonical,
+            limit: q.limit,
+        },
+    )?;
+    let vec_results = if q.canonical {
         search_vec_canonical_with_namespace_filtered(
             trimmed,
             10,
-            wing,
-            collection_filter,
-            namespace_filter,
-            include_superseded,
+            q.wing,
+            q.collection,
+            q.namespace,
+            q.include_superseded,
             conn,
         )?
     } else {
         search_vec_with_namespace_filtered(
             trimmed,
             10,
-            wing,
-            collection_filter,
-            namespace_filter,
-            include_superseded,
+            q.wing,
+            q.collection,
+            q.namespace,
+            q.include_superseded,
             conn,
         )?
     };
@@ -184,7 +123,7 @@ fn hybrid_search_impl(
         SearchMergeStrategy::SetUnion => merge_set_union(&fts_results, &vec_results),
         SearchMergeStrategy::Rrf => merge_rrf(&fts_results, &vec_results),
     };
-    merged.truncate(limit);
+    merged.truncate(q.limit);
     Ok(merged)
 }
 
@@ -606,7 +545,7 @@ mod tests {
     use super::*;
     use crate::commands::embed;
     use crate::core::db;
-    use crate::core::fts::{sanitize_fts_query, search_fts};
+    use crate::core::fts::{sanitize_fts_query, search_fts, FtsQuery};
     use crate::core::inference::{search_vec, search_vec_canonical};
 
     fn open_test_db() -> Connection {
@@ -727,7 +666,15 @@ mod tests {
     fn hybrid_search_returns_empty_for_blank_query() {
         let conn = open_test_db();
 
-        let results = hybrid_search("   ", None, None, false, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "   ",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search");
 
         assert!(results.is_empty());
     }
@@ -744,8 +691,15 @@ mod tests {
             "people",
         );
 
-        let results =
-            hybrid_search("people/alice", None, None, false, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "people/alice",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -763,8 +717,15 @@ mod tests {
             "people",
         );
 
-        let results = hybrid_search("[[people/alice]]", None, None, false, &conn, 1000)
-            .expect("hybrid search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "[[people/alice]]",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -814,8 +775,15 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results =
-            hybrid_search("AI founder", None, None, false, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "AI founder",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search");
         let slugs: Vec<_> = results.iter().map(|result| result.slug.as_str()).collect();
 
         assert!(slugs.contains(&"people/alice"));
@@ -844,9 +812,16 @@ mod tests {
 
         let sanitized = sanitize_fts_query("neural network inference");
         assert!(
-            search_fts(&sanitized, None, None, &conn, 1000)
-                .expect("AND-only FTS query")
-                .is_empty(),
+            search_fts(
+                &conn,
+                FtsQuery {
+                    query: &sanitized,
+                    limit: 1000,
+                    ..Default::default()
+                }
+            )
+            .expect("AND-only FTS query")
+            .is_empty(),
             "the deterministic proof corpus must force the implicit-AND FTS pass to miss"
         );
         assert!(
@@ -856,8 +831,15 @@ mod tests {
             "no embeddings are written in this proof, so vector recall must stay empty"
         );
 
-        let results = hybrid_search("neural network inference", None, None, false, &conn, 1000)
-            .expect("hybrid search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "neural network inference",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search");
 
         assert_eq!(
             results
@@ -899,9 +881,16 @@ mod tests {
             "canonical hybrid proof must not depend on vector quality"
         );
 
-        let results =
-            hybrid_search_canonical("neural network inference", None, None, false, &conn, 1000)
-                .expect("canonical hybrid search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "neural network inference",
+                canonical: true,
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("canonical hybrid search");
 
         assert_eq!(
             results
@@ -970,8 +959,16 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("AI founder", Some("people"), None, false, &conn, 1000)
-            .expect("hybrid search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "AI founder",
+                wing: Some("people"),
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search");
 
         assert!(!results.is_empty());
         assert!(results.iter().all(|result| result.wing == "people"));
@@ -996,24 +993,26 @@ mod tests {
         )
         .expect("insert namespaced page");
 
-        let namespaced = hybrid_search_canonical_with_namespace(
-            "sharedtoken privatetoken",
-            None,
-            None,
-            Some("test-ns"),
-            false,
+        let namespaced = hybrid_search(
             &conn,
-            10,
+            HybridSearch {
+                query: "sharedtoken privatetoken",
+                namespace: Some("test-ns"),
+                canonical: true,
+                limit: 10,
+                ..Default::default()
+            },
         )
         .expect("namespaced query");
-        let global_only = hybrid_search_canonical_with_namespace(
-            "privatetoken",
-            None,
-            None,
-            Some(""),
-            false,
+        let global_only = hybrid_search(
             &conn,
-            10,
+            HybridSearch {
+                query: "privatetoken",
+                namespace: Some(""),
+                canonical: true,
+                limit: 10,
+                ..Default::default()
+            },
         )
         .expect("global query");
 
@@ -1078,8 +1077,15 @@ mod tests {
         )
         .expect("insert config");
 
-        let results =
-            hybrid_search("systems language", None, None, false, &conn, 1).expect("rrf search");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "systems language",
+                limit: 1,
+                ..Default::default()
+            },
+        )
+        .expect("rrf search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "concepts/rust");
@@ -1164,8 +1170,16 @@ mod tests {
             "people",
         );
 
-        let err = hybrid_search_canonical("people/alice", None, None, false, &conn, 10)
-            .expect_err("ambiguous canonical search should fail");
+        let err = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "people/alice",
+                canonical: true,
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .expect_err("ambiguous canonical search should fail");
 
         assert!(matches!(
             err,
@@ -1337,8 +1351,15 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("what is rust?", None, None, false, &conn, 1000)
-            .expect("hybrid search with ?");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "what is rust?",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search with ?");
         assert!(!results.is_empty());
     }
 
@@ -1357,8 +1378,15 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results =
-            hybrid_search("AND?", None, None, false, &conn, 1000).expect("hybrid search with AND?");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "AND?",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search with AND?");
         assert!(results.is_empty());
     }
 
@@ -1375,8 +1403,15 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("???***", None, None, false, &conn, 1000)
-            .expect("hybrid search with punctuation only");
+        let results = hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "???***",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .expect("hybrid search with punctuation only");
         assert!(results.is_empty());
     }
 
@@ -1396,7 +1431,15 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("hello, world.", None, None, false, &conn, 1000).is_ok());
+        assert!(hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "hello, world.",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1412,9 +1455,15 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(
-            hybrid_search("what's rust's type system?", None, None, false, &conn, 1000).is_ok()
-        );
+        assert!(hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "what's rust's type system?",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1430,7 +1479,15 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("path/to/thing key=value", None, None, false, &conn, 1000).is_ok());
+        assert!(hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "path/to/thing key=value",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1446,6 +1503,14 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("memory; safety", None, None, false, &conn, 1000).is_ok());
+        assert!(hybrid_search(
+            &conn,
+            HybridSearch {
+                query: "memory; safety",
+                limit: 1000,
+                ..Default::default()
+            },
+        )
+        .is_ok());
     }
 }

@@ -9,7 +9,7 @@ use crate::core::types::SearchResult;
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::core::search::hybrid_search_canonical_with_namespace;
+use crate::core::search::{hybrid_search, HybridSearch};
 
 /// Read `default_token_budget` from the config table, falling back to 4000.
 fn read_token_budget(db: &Connection) -> usize {
@@ -41,14 +41,17 @@ pub async fn run(
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let namespace = namespace.or(Some(""));
-    let results = hybrid_search_canonical_with_namespace(
-        query,
-        wing.as_deref(),
-        None,
-        namespace,
-        include_superseded,
+    let results = hybrid_search(
         db,
-        limit as usize,
+        HybridSearch {
+            query,
+            wing: wing.as_deref(),
+            namespace,
+            include_superseded,
+            canonical: true,
+            limit: limit as usize,
+            ..Default::default()
+        },
     )?;
 
     // Auto-log knowledge gap on weak results

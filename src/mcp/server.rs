@@ -125,7 +125,6 @@ pub(crate) fn append_note(body: &mut String, note: &str) {
     body.push_str(note);
 }
 
-
 pub(crate) fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
     let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false")
         .map_err(map_config_error)?;
@@ -141,9 +140,8 @@ pub(crate) fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
 pub(crate) fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
     let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000")
         .map_err(map_config_error)?;
-    raw.parse::<i64>().map_err(|_| {
-        map_config_error(format!("invalid extraction.debounce_ms value: {raw}"))
-    })
+    raw.parse::<i64>()
+        .map_err(|_| map_config_error(format!("invalid extraction.debounce_ms value: {raw}")))
 }
 
 #[derive(Clone)]
@@ -379,7 +377,6 @@ pub struct MemoryRawInput {
     /// Set to true to overwrite an existing row for (slug, source). Default: false.
     pub overwrite: Option<bool>,
 }
-
 
 // Central registry: every `#[tool]` method exposed by `QuaidServer`,
 // regardless of which file in `crate::mcp::tools::*` defines it, must be

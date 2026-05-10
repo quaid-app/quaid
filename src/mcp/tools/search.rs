@@ -14,9 +14,7 @@ use crate::core::gaps;
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::search::{hybrid_search, HybridSearch};
-use crate::mcp::errors::{
-    map_namespace_error, map_search_error, map_serialize_error,
-};
+use crate::mcp::errors::{map_namespace_error, map_search_error, map_serialize_error};
 use crate::mcp::server::{
     resolve_read_collection_filter_for_mcp, MemoryQueryInput, MemorySearchInput, QuaidServer,
 };

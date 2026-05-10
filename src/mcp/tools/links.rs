@@ -12,16 +12,13 @@ use serde::Serialize;
 use crate::commands::link;
 use crate::core::collections::OpKind;
 use crate::core::graph::{self, TemporalFilter};
-use crate::mcp::errors::{
-    map_anyhow_error, map_db_error, map_graph_error, map_serialize_error,
-};
+use crate::mcp::errors::{map_anyhow_error, map_db_error, map_graph_error, map_serialize_error};
 use crate::mcp::server::{
     canonical_slug, page_id_for_resolved, resolve_slug_for_mcp, MemoryBacklinksInput,
     MemoryGraphInput, MemoryLinkCloseInput, MemoryLinkInput, QuaidServer,
 };
 use crate::mcp::validation::{
-    parse_temporal_filter, validate_relationship, validate_slug, validate_temporal_value,
-    MAX_LIMIT,
+    parse_temporal_filter, validate_relationship, validate_slug, validate_temporal_value, MAX_LIMIT,
 };
 
 impl QuaidServer {

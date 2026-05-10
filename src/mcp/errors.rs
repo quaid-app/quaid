@@ -38,10 +38,7 @@ pub fn kind_error(message: impl Into<String>) -> rmcp::Error {
 
 /// Construct a JSON-RPC `-32009` conflict error with optional structured
 /// metadata (typically `{ "current_version": ... }`).
-pub fn conflict_error(
-    message: impl Into<String>,
-    data: Option<serde_json::Value>,
-) -> rmcp::Error {
+pub fn conflict_error(message: impl Into<String>, data: Option<serde_json::Value>) -> rmcp::Error {
     rmcp::Error::new(ErrorCode(-32009), message.into(), data)
 }
 
@@ -248,11 +245,9 @@ pub fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
 pub fn map_gaps_error(e: GapsError) -> rmcp::Error {
     match e {
         GapsError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-        GapsError::NotFound { id } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("gap not found: id {id}"),
-            None,
-        ),
+        GapsError::NotFound { id } => {
+            rmcp::Error::new(ErrorCode(-32001), format!("gap not found: id {id}"), None)
+        }
     }
 }
 
@@ -309,9 +304,7 @@ pub fn map_turn_write_error(e: turn_writer::TurnWriteError) -> rmcp::Error {
 }
 
 /// Map a [`conversation_queue::ExtractionQueueError`] onto an `rmcp::Error`.
-pub fn map_extraction_queue_error(
-    e: conversation_queue::ExtractionQueueError,
-) -> rmcp::Error {
+pub fn map_extraction_queue_error(e: conversation_queue::ExtractionQueueError) -> rmcp::Error {
     match e {
         conversation_queue::ExtractionQueueError::Sqlite(error) => map_db_error(error),
         conversation_queue::ExtractionQueueError::Config { message } => {

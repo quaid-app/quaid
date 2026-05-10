@@ -24,9 +24,7 @@ use crate::mcp::server::{
     resolve_read_collection_filter_for_mcp, resolve_slug_for_mcp, MemoryGetInput, MemoryListInput,
     MemoryPutInput, MemoryRawInput, QuaidServer,
 };
-use crate::mcp::validation::{
-    validate_content, validate_slug, MAX_LIMIT, MAX_RAW_DATA_LEN,
-};
+use crate::mcp::validation::{validate_content, validate_slug, MAX_LIMIT, MAX_RAW_DATA_LEN};
 
 impl QuaidServer {
     #[tool(description = "Get a page by slug")]

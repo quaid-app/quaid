@@ -18,14 +18,14 @@ use crate::core::namespace;
 use crate::core::types::{ExtractionTriggerKind, TurnRole};
 use crate::core::vault_sync;
 use crate::mcp::errors::{
-    invalid_params, kind_error, map_anyhow_error, map_close_action_put_error,
-    map_correction_error, map_db_error, map_extraction_queue_error, map_namespace_error,
-    map_serialize_error, map_turn_write_error, map_vault_sync_error,
+    invalid_params, kind_error, map_anyhow_error, map_close_action_put_error, map_correction_error,
+    map_db_error, map_extraction_queue_error, map_namespace_error, map_serialize_error,
+    map_turn_write_error, map_vault_sync_error,
 };
 use crate::mcp::server::{
     append_note, canonical_slug, extraction_debounce_ms, extraction_enabled, resolve_slug_for_mcp,
-    MemoryAddTurnInput, MemoryCloseActionInput, MemoryCloseSessionInput, MemoryCorrectContinueInput,
-    MemoryCorrectInput, QuaidServer,
+    MemoryAddTurnInput, MemoryCloseActionInput, MemoryCloseSessionInput,
+    MemoryCorrectContinueInput, MemoryCorrectInput, QuaidServer,
 };
 use crate::mcp::validation::{
     validate_close_action_status, validate_content, validate_slug, validate_turn_timestamp,

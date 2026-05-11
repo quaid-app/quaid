@@ -1,7 +1,14 @@
-// Collections — named groupings with their own root, ignore patterns, and lifecycle.
-//
-// Every page belongs to a collection. Collections track vault filesystem state,
-// ignore patterns, and write-target designation.
+//! Collection metadata, slug resolution, and lifecycle state for the
+//! per-vault groupings that every page belongs to. A collection owns a
+//! root path, ignore patterns, write-target designation, and the
+//! ambiguity-aware rules that turn a bare `<slug>` (or an explicit
+//! `<collection>::<slug>`) into a concrete `(collection_id, slug)` pair
+//! before any read or write touches the page store.
+//!
+//! See also: `crate::core::vault_sync` for the lease and reload state
+//! machine that mutates these rows during sync, and
+//! `crate::core::file_state` for the filesystem-side join keyed by
+//! `(collection_id, relative_path)`.
 
 #![allow(dead_code)]
 #![expect(
@@ -16,47 +23,92 @@ use thiserror::Error;
 // ── Collection ────────────────────────────────────────────────
 
 /// A named grouping of pages with its own vault root and ignore patterns.
+///
+/// One row in the `collections` table. Carries the full lifecycle state
+/// the vault-sync engine needs to coordinate ownership leases, restore
+/// commands, watcher hand-offs, and reconciler halts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Collection {
+    /// Database row id, used as the foreign key on `pages.collection_id`.
     pub id: i64,
+    /// User-visible collection name; the `<collection>` half of an
+    /// explicit `<collection>::<slug>` address.
     pub name: String,
+    /// Absolute filesystem path to the on-disk vault root for this collection.
     pub root_path: String,
+    /// Lifecycle state: `Active`, `Detached`, or `Restoring`.
     pub state: CollectionState,
+    /// Whether MCP / CLI writes are permitted against this collection at all.
     pub writable: bool,
+    /// Whether bare-slug `WriteCreate` operations route here when no
+    /// existing owner is found. Exactly one collection may carry this flag.
     pub is_write_target: bool,
+    /// Raw newline-delimited gitignore-style patterns excluded from sync.
     pub ignore_patterns: Option<String>,
+    /// Diagnostic messages produced while parsing `ignore_patterns`, surfaced
+    /// to operators rather than blocking sync.
     pub ignore_parse_errors: Option<String>,
+    /// When set, the next sync must walk the entire root rather than relying
+    /// on file-state diffs.
     pub needs_full_sync: bool,
+    /// Timestamp of the last successful sync, used to detect stale state.
     pub last_sync_at: Option<String>,
+    /// Session id currently holding the long-lived ownership lease, if any.
     pub active_lease_session_id: Option<String>,
+    /// Identifier of an in-flight restore command, if a restore is running.
     pub restore_command_id: Option<String>,
+    /// Session id holding the short-lived restore lease.
     pub restore_lease_session_id: Option<String>,
+    /// Generation counter incremented on each reload so watchers can detect
+    /// they have been superseded.
     pub reload_generation: i64,
+    /// Session id of the watcher that voluntarily released ownership.
     pub watcher_released_session_id: Option<String>,
+    /// Reload generation observed at the moment the watcher released.
     pub watcher_released_generation: Option<i64>,
+    /// Timestamp at which the watcher released ownership.
     pub watcher_released_at: Option<String>,
+    /// Last heartbeat from a pending long-running command (e.g. restore).
     pub pending_command_heartbeat_at: Option<String>,
+    /// Proposed new `root_path` staged by a pending reload, not yet applied.
     pub pending_root_path: Option<String>,
+    /// Serialized manifest of a restore-in-progress, used to resume after crash.
     pub pending_restore_manifest: Option<String>,
+    /// OS process id of the running restore command, when one is active.
     pub restore_command_pid: Option<i64>,
+    /// Host identifier of the machine running the restore command.
     pub restore_command_host: Option<String>,
+    /// Timestamp at which an integrity check failed; non-null halts writes
+    /// until cleared.
     pub integrity_failed_at: Option<String>,
+    /// Timestamp at which a pending restore manifest was detected to be
+    /// incomplete and quarantined.
     pub pending_manifest_incomplete_at: Option<String>,
+    /// Timestamp at which the reconciler self-halted on this collection.
     pub reconcile_halted_at: Option<String>,
+    /// Human-readable reason captured when the reconciler halted.
     pub reconcile_halt_reason: Option<String>,
+    /// Row creation timestamp.
     pub created_at: String,
+    /// Last-modified timestamp; bumped on every metadata change.
     pub updated_at: String,
 }
 
+/// Lifecycle state of a collection — drives whether sync, reads, and writes
+/// are permitted, and whether the row is mid-restore.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CollectionState {
+    /// Healthy steady state; sync, reads, and writes are all permitted.
     Active,
+    /// Detached from its vault root; reads served from DB, writes refused.
     Detached,
+    /// Restore-in-progress; the vault root is being rebuilt from the DB.
     Restoring,
 }
 
 impl CollectionState {
+    /// Serialize the state as the lowercase string stored in `collections.state`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Active => "active",
@@ -84,6 +136,10 @@ impl std::str::FromStr for CollectionState {
 // ── OpKind ────────────────────────────────────────────────────
 
 /// Classification of operations for bare-slug resolution and interlock enforcement.
+///
+/// Slug resolution rules depend on whether the caller is reading, creating a
+/// new page, updating an existing page, or running collection-level admin
+/// work — the variant selects which of those rule sets `parse_slug` applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpKind {
     /// Non-mutating operation (memory_get, memory_search, memory_list, etc.)
@@ -103,56 +159,105 @@ pub enum OpKind {
 pub enum SlugResolution {
     /// Slug resolved to a single collection
     Resolved {
+        /// Database id of the resolved collection.
         collection_id: i64,
+        /// Human-readable name of the resolved collection.
         collection_name: String,
+        /// Bare slug portion (no `<collection>::` prefix).
         slug: String,
     },
     /// Slug not found in any collection
-    NotFound { slug: String },
+    NotFound {
+        /// Bare slug that could not be resolved.
+        slug: String,
+    },
     /// Slug is ambiguous (exists in multiple collections)
     Ambiguous {
+        /// Bare slug shared by multiple owners.
         slug: String,
+        /// Candidate owners the caller must disambiguate between.
         candidates: Vec<AmbiguityCandidate>,
     },
 }
 
+/// One disambiguation option returned when a bare slug exists in more than
+/// one collection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AmbiguityCandidate {
+    /// Name of the candidate collection.
     pub collection_name: String,
+    /// Fully-qualified `<collection>::<slug>` address the caller can retry with.
     pub full_address: String,
 }
 
 // ── Errors ────────────────────────────────────────────────────
 
+/// Errors produced by the collections module — validation, resolution,
+/// and underlying SQLite failures.
 #[derive(Debug, Error)]
 pub enum CollectionError {
+    /// Requested collection name does not exist in the `collections` table.
     #[error("collection not found: {name}")]
-    NotFound { name: String },
+    NotFound {
+        /// The missing collection name.
+        name: String,
+    },
 
+    /// A stored or supplied state string did not match a known `CollectionState`.
     #[error("invalid collection state: {state}")]
-    InvalidState { state: String },
+    InvalidState {
+        /// The unrecognized state string.
+        state: String,
+    },
 
+    /// Collection name contained the `::` separator reserved for fully-qualified addresses.
     #[error("collection name cannot contain '::'")]
     NameContainsSeparator,
 
+    /// Collection name was the empty string.
     #[error("collection name cannot be empty")]
     NameEmpty,
 
+    /// Path contained a `..` segment that could escape the vault root.
     #[error("path traversal attempt: {path}")]
-    PathTraversal { path: String },
+    PathTraversal {
+        /// The offending path.
+        path: String,
+    },
 
+    /// Path was absolute (Unix `/...` or Windows drive letter), which is rejected
+    /// because slugs must be relative to a collection root.
     #[error("absolute path not allowed: {path}")]
-    AbsolutePath { path: String },
+    AbsolutePath {
+        /// The offending path.
+        path: String,
+    },
 
+    /// Path contained an empty segment (e.g. consecutive slashes).
     #[error("empty path segment in: {path}")]
-    EmptySegment { path: String },
+    EmptySegment {
+        /// The offending path.
+        path: String,
+    },
 
+    /// Path contained a NUL byte, which would not round-trip through C APIs.
     #[error("NUL byte in path: {path}")]
-    NulInPath { path: String },
+    NulInPath {
+        /// The offending path.
+        path: String,
+    },
 
+    /// Slug resolved to more than one collection and the caller must
+    /// retry with an explicit `<collection>::<slug>` address.
     #[error("ambiguous slug: {slug} (candidates: {candidates})")]
-    Ambiguous { slug: String, candidates: String },
+    Ambiguous {
+        /// The ambiguous bare slug.
+        slug: String,
+        /// Comma-separated list of candidate addresses for diagnostics.
+        candidates: String,
+    },
 
+    /// Underlying SQLite failure surfaced unchanged.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 }

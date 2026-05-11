@@ -2,6 +2,10 @@
     clippy::panic,
     reason = "build script panics are the conventional way to fail the build with a diagnostic; addressed in remove-production-panic-paths if a more structured error type is introduced for build-time errors"
 )]
+#![allow(
+    missing_docs,
+    reason = "build scripts are out of the public-api-docs scope per spec public-api-docs Requirement: Documentation scope boundary"
+)]
 
 use std::env;
 use std::fs;

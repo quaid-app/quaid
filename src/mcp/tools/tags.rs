@@ -22,7 +22,13 @@ use crate::mcp::server::{
 use crate::mcp::validation::{validate_slug, validate_tag_list, MAX_LIMIT};
 
 impl QuaidServer {
+    /// `memory_timeline` MCP tool: return a page's timeline entries from
+    /// the structured `timeline_entries` table, falling back to the
+    /// page's legacy markdown timeline field when no rows exist.
     #[tool(description = "Show timeline entries for a page")]
+    /// `memory_timeline` MCP tool: return a page's timeline entries from
+    /// the structured `timeline_entries` table, falling back to the
+    /// page's legacy markdown timeline field when no rows exist.
     pub fn memory_timeline(
         &self,
         #[tool(aggr)] input: MemoryTimelineInput,
@@ -96,7 +102,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_tags` MCP tool: list, add, or remove tag tokens on a
+    /// page, returning the page's current tag set after any mutations are
+    /// applied.
     #[tool(description = "List, add, or remove tags on a page")]
+    /// `memory_tags` MCP tool: list, add, or remove tag tokens on a
+    /// page, returning the page's current tag set after any mutations are
+    /// applied.
     pub fn memory_tags(
         &self,
         #[tool(aggr)] input: MemoryTagsInput,

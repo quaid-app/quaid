@@ -29,13 +29,20 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{load_collection_by_id, VaultSyncError, SESSION_LIVENESS_SECS};
 
+/// Snapshot of the serve session currently holding the owner lease on
+/// a collection, returned by [`live_collection_owner`] when one exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveCollectionOwner {
+    /// Session id of the live serve process owning the lease.
     pub session_id: String,
+    /// OS pid of the live serve process.
     pub pid: i64,
+    /// Hostname reported by the live serve process at registration.
     pub host: String,
 }
 
+/// Returns the live owner of a collection, or `None` if no serve
+/// session has heartbeated within the liveness window.
 pub fn live_collection_owner(
     conn: &Connection,
     collection_id: i64,
@@ -90,6 +97,9 @@ fn live_collection_owner_for_root_path(
     .map_err(Into::into)
 }
 
+/// Errors with `ServeOwnsCollectionError` if a live serve session
+/// currently holds the lease on the collection; used by CLI paths
+/// that must refuse to mutate a collection while serve owns it.
 pub fn ensure_no_live_serve_owner(
     conn: &Connection,
     collection_id: i64,
@@ -106,6 +116,9 @@ pub fn ensure_no_live_serve_owner(
     Ok(())
 }
 
+/// Errors with `ServeOwnsCollectionError` if any collection rooted at
+/// `root_path` is held by a live serve session — the root-path variant
+/// used by attach and import paths that don't yet have a collection id.
 pub fn ensure_no_live_serve_owner_for_root_path(
     conn: &Connection,
     root_path: &str,
@@ -121,6 +134,9 @@ pub fn ensure_no_live_serve_owner_for_root_path(
     Ok(())
 }
 
+/// Returns the recorded owner `session_id` for a collection without
+/// checking heartbeat liveness; callers that need a live owner should
+/// use [`live_collection_owner`] instead.
 pub fn owner_session_id(
     conn: &Connection,
     collection_id: i64,
@@ -134,6 +150,9 @@ pub fn owner_session_id(
     .map_err(Into::into)
 }
 
+/// Records `session_id` as the current owner of the collection and
+/// mirrors the assignment onto `collections.active_lease_session_id`;
+/// errors if a different live serve session already holds the lease.
 pub fn acquire_owner_lease(
     conn: &Connection,
     collection_id: i64,
@@ -171,6 +190,9 @@ pub fn acquire_owner_lease(
     Ok(())
 }
 
+/// Clears the owner lease and `active_lease_session_id` when the
+/// caller's `session_id` matches the recorded owner; a no-op
+/// otherwise so stale releases don't disturb a newer owner.
 pub fn release_owner_lease(
     conn: &Connection,
     collection_id: i64,

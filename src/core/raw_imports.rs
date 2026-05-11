@@ -1,3 +1,12 @@
+//! Active-source rotation, retention, and byte-exact restore support backed
+//! by the `raw_imports` table: each page has exactly one active raw payload
+//! plus a bounded history that powers the round-trip restore tests. Also
+//! enqueues embedding jobs on rotation and prunes inactive rows by both count
+//! and TTL.
+//!
+//! See also: `migrate` for the export/import callers, and `page_uuid` for the
+//! import id allocator used on each rotation.
+
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
@@ -6,6 +15,9 @@ use crate::core::page_uuid;
 const DEFAULT_KEEP: i64 = 10;
 const DEFAULT_TTL_DAYS: i64 = 90;
 
+/// Marks the current active raw import as inactive, inserts a new active row
+/// from `raw_bytes`, syncs the page's frontmatter, and prunes the history per
+/// the retention policy. The single-active invariant is asserted on both ends.
 pub fn rotate_active_raw_import(
     conn: &Connection,
     page_id: i64,
@@ -57,10 +69,14 @@ pub fn rotate_active_raw_import(
     assert_exactly_one_active_row(conn, page_id)
 }
 
+/// Hex-encoded SHA-256 of `raw_bytes` used to dedupe identical raw-import
+/// payloads when comparing or restoring.
 pub fn content_hash_hex(raw_bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(raw_bytes))
 }
 
+/// Inserts or upserts a pending embedding job for `page_id`, resetting attempt
+/// counters and clearing any prior error so the background worker re-embeds it.
 pub fn enqueue_embedding_job(conn: &Connection, page_id: i64) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO embedding_jobs
@@ -79,6 +95,9 @@ pub fn enqueue_embedding_job(conn: &Connection, page_id: i64) -> rusqlite::Resul
     Ok(())
 }
 
+/// Asserts the database holds exactly one active raw-imports row for
+/// `page_id`, returning an error otherwise; called as a postcondition of
+/// every rotation.
 pub fn assert_exactly_one_active_row(conn: &Connection, page_id: i64) -> rusqlite::Result<()> {
     let active_count: i64 = conn.query_row(
         "SELECT COUNT(*)
@@ -97,6 +116,9 @@ pub fn assert_exactly_one_active_row(conn: &Connection, page_id: i64) -> rusqlit
     )))
 }
 
+/// Returns the number of rows in `raw_imports` for this `page_id` whose
+/// `is_active` flag is set; used by tests to assert the
+/// exactly-one-active-row invariant.
 #[cfg(test)]
 pub fn active_raw_import_count(conn: &Connection, page_id: i64) -> rusqlite::Result<i64> {
     conn.query_row(
@@ -161,6 +183,9 @@ fn prune_inactive_rows(conn: &Connection, page_id: i64) -> rusqlite::Result<()> 
     Ok(())
 }
 
+/// Deletes every inactive raw-imports row older than the configured TTL
+/// (`QUAID_RAW_IMPORTS_TTL_DAYS`, default 90 days), returning the number of
+/// rows pruned. Skipped entirely when `QUAID_RAW_IMPORTS_KEEP_ALL` is set.
 pub fn sweep_expired_inactive_rows(conn: &Connection) -> rusqlite::Result<usize> {
     if keep_all_enabled() {
         return Ok(0);

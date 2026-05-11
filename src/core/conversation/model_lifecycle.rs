@@ -1,3 +1,17 @@
+//! Small-language-model lifecycle: alias resolution, local cache layout,
+//! and (under the `online-model` feature) downloading model files from
+//! HuggingFace with per-file integrity verification. The cache stores a
+//! `manifest.json` describing every fetched artifact's SHA-256 so the
+//! runtime can fail closed when files are missing, partial, or corrupt.
+//! Curated aliases (`phi-3.5-mini`, `gemma-3-1b`, `gemma-3-4b`) are
+//! source-pinned against published digests; arbitrary `<org>/<model>`
+//! repo ids fall back to header-supplied hashes when available.
+//!
+//! See also: `super::slm` for the SLM runner that consumes the cached
+//! files, `super::extractor` for the worker that loads a model on first
+//! inference, and `crate::commands::model` for the CLI surface that drives
+//! pull / status / clean operations against this module.
+
 #[cfg(feature = "online-model")]
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -70,12 +84,20 @@ const OPTIONAL_SUPPORT_FILES: &[&str] = &[
 
 /// Reports download progress to a caller-specific UI.
 pub trait ProgressReporter {
+    /// Called once after metadata is fetched with the total file count the
+    /// download plans to fetch.
     fn planned(&mut self, _alias: &ResolvedModelAlias, _file_count: usize) {}
 
+    /// Called when an existing cache passes verification and no network
+    /// fetch is needed.
     fn cache_hit(&mut self, _cache_dir: &Path) {}
 
+    /// Called when an individual file fetch begins, with the expected byte
+    /// length when the server provided one.
     fn file_started(&mut self, _file_name: &str, _bytes_total: Option<u64>) {}
 
+    /// Called periodically while a file streams, with the running byte
+    /// count and the expected total when known.
     fn file_progress(
         &mut self,
         _file_name: &str,
@@ -84,6 +106,7 @@ pub trait ProgressReporter {
     ) {
     }
 
+    /// Called after a file fetch completes and its SHA-256 has been verified.
     fn file_finished(&mut self, _file_name: &str, _actual_sha256: &str) {}
 }
 
@@ -121,20 +144,36 @@ pub struct NoopProgressReporter;
 
 impl ProgressReporter for NoopProgressReporter {}
 
+/// Result of resolving a user-supplied alias to the concrete HuggingFace
+/// repo, revision, and cache key that the lifecycle code operates on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedModelAlias {
+    /// Alias exactly as the user supplied it, after trimming.
     pub requested_alias: String,
+    /// Filesystem-safe directory name used under the model cache root.
     pub cache_key: String,
+    /// HuggingFace repo id (`<org>/<model>`).
     pub repo_id: String,
+    /// Pinned revision (commit SHA or tag) when the alias has one.
     pub revision: Option<String>,
 }
 
+/// Snapshot of a model's local cache directory, including whether the
+/// manifest verified cleanly and whether every file was fetched against a
+/// source pin (versus a header-supplied hash).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedModelStatus {
+    /// Resolved alias the status was computed for.
     pub alias: ResolvedModelAlias,
+    /// Filesystem path of the cache directory.
     pub cache_dir: PathBuf,
+    /// `true` when the cache directory exists on disk.
     pub is_cached: bool,
+    /// `true` when the manifest could be read and every recorded file's
+    /// SHA-256 still matches the on-disk content.
     pub verified: bool,
+    /// `true` when every file in the manifest was verified against a
+    /// source-pinned digest, not a server-supplied hash.
     pub source_pinned: bool,
 }
 
@@ -308,28 +347,67 @@ const GEMMA_3_4B_FILES: &[SourcePinnedFile] = &[
     },
 ];
 
+/// Errors returned from alias resolution, cache verification, and (under
+/// the `online-model` feature) model download.
 #[derive(Debug, Error)]
 pub enum ModelLifecycleError {
+    /// The crate was built without the `online-model` feature, so network
+    /// downloads are not compiled in.
     #[error("model download support requires the online-model build")]
     DownloadsUnsupported,
 
+    /// The supplied alias was empty or did not parse as a curated alias or
+    /// a valid `<org>/<model>` repo id.
     #[error("invalid model alias `{alias}`: {message}")]
-    InvalidAlias { alias: String, message: String },
+    InvalidAlias {
+        /// Alias the caller supplied.
+        alias: String,
+        /// Human-readable reason the alias was rejected.
+        message: String,
+    },
 
+    /// A repo id that the alias resolved to failed structural validation.
     #[error("invalid model repo `{repo_id}`: {message}")]
-    InvalidRepo { repo_id: String, message: String },
+    InvalidRepo {
+        /// Repo id under validation.
+        repo_id: String,
+        /// Human-readable reason the repo id was rejected.
+        message: String,
+    },
 
+    /// Neither `QUAID_MODEL_CACHE_DIR` nor a home directory was available
+    /// to host the model cache.
     #[error("could not resolve a model cache directory")]
     CacheRootUnavailable,
 
+    /// A network or filesystem step of the download pipeline failed.
     #[error("download failed for `{alias}`: {message}")]
-    Download { alias: String, message: String },
+    Download {
+        /// Alias the failed download was for.
+        alias: String,
+        /// Human-readable explanation of the failure.
+        message: String,
+    },
 
+    /// The on-disk cache is present but its manifest or file digests do
+    /// not match expectations.
     #[error("model cache at {cache_dir} is invalid: {message}")]
-    CacheInvalid { cache_dir: String, message: String },
+    CacheInvalid {
+        /// Path of the offending cache directory.
+        cache_dir: String,
+        /// Human-readable explanation of the mismatch.
+        message: String,
+    },
 
+    /// HuggingFace metadata for the model could not be fetched or parsed,
+    /// or required artifacts were missing from the sibling list.
     #[error("model metadata for `{alias}` is incomplete: {message}")]
-    Metadata { alias: String, message: String },
+    Metadata {
+        /// Alias the metadata fetch was for.
+        alias: String,
+        /// Human-readable explanation of the metadata problem.
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -367,6 +445,9 @@ struct DownloadedArtifact {
     verified_from_source: bool,
 }
 
+/// Map a user-facing alias (curated short name or raw `<org>/<model>` repo
+/// id) into a [`ResolvedModelAlias`] with a stable cache key and optional
+/// pinned revision; rejects malformed inputs before any I/O happens.
 pub fn resolve_model_alias(alias: &str) -> Result<ResolvedModelAlias, ModelLifecycleError> {
     let trimmed = alias.trim();
     if trimmed.is_empty() {
@@ -417,11 +498,17 @@ pub fn resolve_model_alias(alias: &str) -> Result<ResolvedModelAlias, ModelLifec
     })
 }
 
+/// Compute the cache directory path for an alias without touching the
+/// network or the filesystem; useful for callers that want to know
+/// "where would this go?" before deciding to pull.
 pub fn cache_dir_for_alias(alias: &str) -> Result<PathBuf, ModelLifecycleError> {
     let alias = resolve_model_alias(alias)?;
     cache_dir_for_resolved_alias(&alias)
 }
 
+/// Inspect the local cache for an alias and return whether it is present,
+/// whether the manifest verifies, and whether every artifact was fetched
+/// against a source-pinned digest.
 pub fn cached_model_status(alias: &str) -> Result<CachedModelStatus, ModelLifecycleError> {
     let alias = resolve_model_alias(alias)?;
     let cache_dir = cache_dir_for_resolved_alias(&alias)?;
@@ -478,6 +565,11 @@ pub fn load_model_from_local_cache(alias: &str) -> Result<PathBuf, ModelLifecycl
     Ok(cache_dir)
 }
 
+/// Fetch a model into the local cache, reusing a verified existing cache
+/// when present and otherwise downloading every required file with
+/// progress events streamed through the supplied [`ProgressReporter`].
+/// Returns [`ModelLifecycleError::DownloadsUnsupported`] when the build
+/// does not include the `online-model` feature.
 pub fn download_model(
     alias: &str,
     progress: &mut impl ProgressReporter,

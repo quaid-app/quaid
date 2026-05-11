@@ -3,6 +3,21 @@
     reason = "addressed in remove-production-panic-paths"
 )]
 
+//! On-disk conversation Markdown format.
+//!
+//! Defines the canonical YAML-frontmatter + `## Turn N · role ·
+//! timestamp` body shape that every conversation day-file uses, plus
+//! the path scheme that lays them out as
+//! `[<namespace>/]conversations/<date>/<session>.md`. Provides both
+//! directions of the round-trip — `parse` / `parse_str` and
+//! `render` / `render_turn_block` — so writers and readers stay
+//! aligned on a single source of truth for the format.
+//!
+//! See also: `super::turn_writer` for the call site that renders new
+//! turns into day-files, `super::extractor` for the reader that
+//! consumes them, and `crate::core::collections` for the path
+//! validation that backs `parse_relative_conversation_path`.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,31 +32,64 @@ use crate::core::{collections, namespace};
 const HEADING_SEPARATOR: &str = " · ";
 const METADATA_FENCE_OPEN: &str = "```json turn-metadata";
 
+/// Errors surfaced by conversation parse/render and path helpers.
 #[derive(Debug, Error)]
 pub enum ConversationFormatError {
+    /// Failed to read the conversation file from disk.
     #[error("conversation read failed: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Frontmatter was missing required fields, used an unsupported
+    /// value, or could not be parsed.
     #[error("invalid conversation frontmatter: {message}")]
-    InvalidFrontmatter { message: String },
+    InvalidFrontmatter {
+        /// Human-readable explanation of why the frontmatter failed
+        /// validation.
+        message: String,
+    },
 
+    /// A `## Turn N · role · timestamp` block was malformed.
     #[error("invalid turn block near line {line}: {message}")]
-    InvalidTurnBlock { line: usize, message: String },
+    InvalidTurnBlock {
+        /// 1-based line number where parsing diverged.
+        line: usize,
+        /// Human-readable explanation of the structural problem.
+        message: String,
+    },
 
+    /// The trailing ```` ```json turn-metadata ```` fence on a turn
+    /// did not contain valid JSON.
     #[error("invalid turn metadata near line {line}: {message}")]
-    InvalidMetadata { line: usize, message: String },
+    InvalidMetadata {
+        /// 1-based line number where the JSON parse failed.
+        line: usize,
+        /// Underlying JSON parse-error message.
+        message: String,
+    },
 
+    /// An incoming timestamp did not start with a valid
+    /// `YYYY-MM-DD` prefix.
     #[error("invalid timestamp: {timestamp}")]
-    InvalidTimestamp { timestamp: String },
+    InvalidTimestamp {
+        /// The offending timestamp string verbatim.
+        timestamp: String,
+    },
 }
 
+/// Where conversation day-files live on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryLocation {
+    /// Day-files live under the active write-target collection's
+    /// vault root (the default).
     VaultSubdir,
+    /// Day-files live in a sibling dedicated collection separate from
+    /// the main vault.
     DedicatedCollection,
 }
 
 impl MemoryLocation {
+    /// Parse the `memory.location` config value into a typed
+    /// `MemoryLocation`, returning an error for unsupported strings.
     pub fn from_config(value: &str) -> Result<Self, ConversationFormatError> {
         match value {
             "vault-subdir" => Ok(Self::VaultSubdir),
@@ -53,24 +101,39 @@ impl MemoryLocation {
     }
 }
 
+/// Output of [`conversation_path_for`]: the vault-relative day-file
+/// path plus the derived `YYYY-MM-DD` date segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationPathInfo {
+    /// Vault-relative path to the day-file, e.g.
+    /// `alpha/conversations/2026-05-04/session-1.md`.
     pub relative_path: PathBuf,
+    /// `YYYY-MM-DD` date segment derived from the input timestamp.
     pub date: String,
 }
 
+/// Decomposed form of a relative conversation path: which optional
+/// namespace, which day, and which session it points at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedConversationPath {
+    /// Namespace segment when present, else `None`.
     pub namespace: Option<String>,
+    /// `YYYY-MM-DD` day segment.
     pub date: String,
+    /// Session identifier (filename with `.md` stripped).
     pub session_id: String,
 }
 
+/// Read a conversation day-file from disk and parse it into a
+/// [`ConversationFile`].
 pub fn parse(path: &Path) -> Result<ConversationFile, ConversationFormatError> {
     let raw = fs::read_to_string(path)?;
     parse_str(&raw)
 }
 
+/// Parse a conversation day-file from its raw Markdown text into a
+/// typed [`ConversationFile`], performing structural validation on
+/// the frontmatter and every turn block.
 pub fn parse_str(raw: &str) -> Result<ConversationFile, ConversationFormatError> {
     let lines = normalize_lines(raw);
     let (frontmatter, mut index) = parse_frontmatter(&lines)?;
@@ -91,6 +154,9 @@ pub fn parse_str(raw: &str) -> Result<ConversationFile, ConversationFormatError>
     Ok(ConversationFile { frontmatter, turns })
 }
 
+/// Render a full [`ConversationFile`] (frontmatter + every turn) to
+/// the canonical Markdown form that [`parse_str`] accepts; the
+/// `render(parse(x)) == x` round-trip is enforced by tests.
 pub fn render(file: &ConversationFile) -> String {
     let mut out = String::new();
     out.push_str("---\n");
@@ -137,6 +203,8 @@ pub fn render(file: &ConversationFile) -> String {
     out
 }
 
+/// Render a single [`Turn`] as the heading + body + optional
+/// metadata fence used by both new-file writes and in-place appends.
 pub fn render_turn_block(turn: &Turn) -> String {
     let mut out = String::new();
     out.push_str("## Turn ");
@@ -160,6 +228,9 @@ pub fn render_turn_block(turn: &Turn) -> String {
     out
 }
 
+/// Build the vault-relative day-file path
+/// `[<namespace>/]conversations/<date>/<session>.md` for a turn whose
+/// timestamp falls on the given calendar day.
 pub fn conversation_path_for(
     namespace: Option<&str>,
     session_id: &str,
@@ -180,6 +251,10 @@ pub fn conversation_path_for(
     })
 }
 
+/// Decompose a vault-relative conversation path back into its
+/// `(namespace, date, session_id)` parts, rejecting paths that don't
+/// match the canonical `[<namespace>/]conversations/<date>/<session>.md`
+/// scheme.
 pub fn parse_relative_conversation_path(
     path: &str,
 ) -> Result<ParsedConversationPath, ConversationFormatError> {
@@ -233,6 +308,8 @@ pub fn parse_relative_conversation_path(
     })
 }
 
+/// Extract the `YYYY-MM-DD` prefix from an ISO-8601 timestamp,
+/// validating its shape, for use as the per-day directory segment.
 pub fn date_from_timestamp(timestamp: &str) -> Result<String, ConversationFormatError> {
     let bytes = timestamp.as_bytes();
     if timestamp.len() < 10

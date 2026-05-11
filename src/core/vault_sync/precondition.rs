@@ -28,10 +28,18 @@ use crate::core::fs_safety;
 
 use super::{ConflictError, VaultSyncError};
 
+/// Classification returned by a vault-write precondition check
+/// describing how the on-disk state relates to the row recorded in
+/// `file_state`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsPreconditionOutcome {
+    /// Stat metadata matches the stored row; no rehash is required.
     FastPath,
+    /// Stat drifted but the content hash still matches; the caller
+    /// should refresh the stored `file_state` row inline.
     SlowPathSelfHeal,
+    /// Neither a stored row nor a file exists yet; the path is being
+    /// newly written.
     FreshCreate,
 }
 
@@ -181,6 +189,10 @@ pub(crate) fn check_fs_precondition_with_parent_fd<Fd: AsFd>(
     .outcome)
 }
 
+/// Inspects the fs precondition for `(collection_id, relative_path)` and
+/// self-heals the file-state row when the disk has drifted; the test-only
+/// thin wrapper over [`inspect_fs_precondition`] that bundles the slow-path
+/// self-heal so test callers don't have to reproduce the logic.
 #[cfg(test)]
 pub fn check_fs_precondition(
     conn: &Connection,

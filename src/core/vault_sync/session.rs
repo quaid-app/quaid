@@ -25,6 +25,9 @@ use uuid::Uuid;
 
 use super::{current_host, VaultSyncError, SESSION_LIVENESS_SECS};
 
+/// Inserts a new long-running `serve` session row and returns its
+/// generated `session_id` — the handle every subsequent ownership
+/// and heartbeat operation pivots on.
 pub fn register_session(conn: &Connection) -> Result<String, VaultSyncError> {
     let session_id = Uuid::now_v7().to_string();
     conn.execute(
@@ -34,6 +37,8 @@ pub fn register_session(conn: &Connection) -> Result<String, VaultSyncError> {
     Ok(session_id)
 }
 
+/// Inserts a short-lived `cli` session row used by single-command
+/// operations that need ownership semantics without a watcher loop.
 pub fn register_cli_session(conn: &Connection) -> Result<String, VaultSyncError> {
     let session_id = Uuid::now_v7().to_string();
     conn.execute(
@@ -43,6 +48,9 @@ pub fn register_cli_session(conn: &Connection) -> Result<String, VaultSyncError>
     Ok(session_id)
 }
 
+/// Atomically removes a session and any owner / lease rows that
+/// referenced it so the session table and the lease columns on
+/// `collections` never drift out of sync.
 pub fn unregister_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
     let tx = conn.unchecked_transaction()?;
     tx.execute(
@@ -71,6 +79,9 @@ pub fn unregister_session(conn: &Connection, session_id: &str) -> Result<(), Vau
     Ok(())
 }
 
+/// Refreshes the `heartbeat_at` timestamp for a session so it stays
+/// inside the liveness window observed by ownership checks and the
+/// stale-session sweeper.
 pub fn heartbeat_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
     conn.execute(
         "UPDATE serve_sessions
@@ -81,6 +92,9 @@ pub fn heartbeat_session(conn: &Connection, session_id: &str) -> Result<(), Vaul
     Ok(())
 }
 
+/// Deletes session rows whose `heartbeat_at` has fallen outside the
+/// liveness window and returns the number reaped — the GC the
+/// supervisor runs each tick to keep `serve_sessions` bounded.
 pub fn sweep_stale_sessions(conn: &Connection) -> Result<usize, VaultSyncError> {
     let removed = conn.execute(
         "DELETE FROM serve_sessions

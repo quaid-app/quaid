@@ -32,7 +32,13 @@ use crate::mcp::validation::{
 };
 
 impl QuaidServer {
+    /// `memory_add_turn` MCP tool: append a turn to an open conversation
+    /// session, enqueueing a debounced extraction job when extraction is
+    /// enabled in config.
     #[tool(description = "Append a turn to a conversation session")]
+    /// `memory_add_turn` MCP tool: append a turn to an open conversation
+    /// session, enqueueing a debounced extraction job when extraction is
+    /// enabled in config.
     pub fn memory_add_turn(
         &self,
         #[tool(aggr)] input: MemoryAddTurnInput,
@@ -99,7 +105,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_close_session` MCP tool: mark a conversation session
+    /// closed, enqueue a session-close extraction job, and report the
+    /// caller's position in the extraction queue.
     #[tool(description = "Close a conversation session and trigger extraction")]
+    /// `memory_close_session` MCP tool: mark a conversation session
+    /// closed, enqueue a session-close extraction job, and report the
+    /// caller's position in the extraction queue.
     pub fn memory_close_session(
         &self,
         #[tool(aggr)] input: MemoryCloseSessionInput,
@@ -144,7 +156,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_close_action` MCP tool: mark an `action_item` page `done`
+    /// or `cancelled` in place, appending an optional note and bumping the
+    /// page version through the same `put` flow used for direct edits.
     #[tool(description = "Close an action item in place")]
+    /// `memory_close_action` MCP tool: mark an `action_item` page `done`
+    /// or `cancelled` in place, appending an optional note and bumping the
+    /// page version through the same `put` flow used for direct edits.
     pub fn memory_close_action(
         &self,
         #[tool(aggr)] input: MemoryCloseActionInput,
@@ -219,7 +237,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_correct` MCP tool: open a multi-step correction dialogue
+    /// against an extracted-fact page, returning the first SLM-mediated
+    /// step.
     #[tool(description = "Start a correction dialogue for an extracted fact")]
+    /// `memory_correct` MCP tool: open a multi-step correction dialogue
+    /// against an extracted-fact page, returning the first SLM-mediated
+    /// step.
     pub fn memory_correct(
         &self,
         #[tool(aggr)] input: MemoryCorrectInput,
@@ -237,7 +261,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_correct_continue` MCP tool: advance an open correction
+    /// dialogue with a follow-up response, or abandon it without
+    /// committing changes.
     #[tool(description = "Continue or abandon an open fact correction dialogue")]
+    /// `memory_correct_continue` MCP tool: advance an open correction
+    /// dialogue with a follow-up response, or abandon it without
+    /// committing changes.
     pub fn memory_correct_continue(
         &self,
         #[tool(aggr)] input: MemoryCorrectContinueInput,

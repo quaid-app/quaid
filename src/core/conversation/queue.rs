@@ -1,22 +1,56 @@
+//! SQLite-backed extraction job queue.
+//!
+//! Every conversation turn that should run through the extractor is
+//! enqueued here; the extractor worker drains rows via `dequeue` and
+//! reports success or failure with `mark_done` / `mark_failed`. The
+//! queue tracks `pending` → `running` → `done` | `failed` state in
+//! the `extraction_queue` table with debounce/manual/session-close
+//! trigger semantics, retry counts, and lease-expiry recovery so a
+//! crashed worker does not strand rows in `running` forever.
+//!
+//! See also: `super::idle_close` for the upstream caller that
+//! enqueues a session-close job once a session goes idle,
+//! `super::extractor` for the worker that drains this queue, and
+//! `super::janitor` for the periodic purge of old terminal rows.
+
 use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::core::db;
 use crate::core::types::{ExtractionJob, ExtractionTriggerKind};
 
+/// Default cap on extraction attempts before a job is parked in
+/// `failed`; overridable via the `extraction.max_retries` config key.
 pub const DEFAULT_EXTRACTION_MAX_RETRIES: i64 = 3;
+/// Default lease window for a `running` job; once this many seconds
+/// elapse without a status update, [`dequeue`] reclaims the row.
 pub const DEFAULT_LEASE_EXPIRY_SECONDS: i64 = 300;
 
+/// Errors surfaced by the extraction-queue API.
 #[derive(Debug, Error)]
 pub enum ExtractionQueueError {
+    /// Underlying SQLite failure (open/prepare/execute).
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// Config value driving queue behaviour was missing or invalid
+    /// (e.g. non-numeric `extraction.max_retries`).
     #[error("config error: {message}")]
-    Config { message: String },
+    Config {
+        /// Human-readable description of the offending config value.
+        message: String,
+    },
 
+    /// Optimistic concurrency check failed on `mark_done` /
+    /// `mark_failed`: the row no longer matches the attempts counter
+    /// the worker saw at dequeue.
     #[error("stale extraction lease for job {job_id} attempt {attempts}")]
-    StaleLease { job_id: i64, attempts: i64 },
+    StaleLease {
+        /// `extraction_queue.id` of the job whose lease was lost.
+        job_id: i64,
+        /// Attempt count the caller observed at dequeue time.
+        attempts: i64,
+    },
 }
 
 /// Enqueue a debounce / session_close / non-force manual job, collapsing
@@ -137,6 +171,9 @@ pub fn enqueue_force_path(
     })
 }
 
+/// Compose the queue-scoped session identifier so namespaced sessions
+/// don't collide across vaults: prefixes `session_id` with the
+/// namespace when one is set, otherwise returns the raw id.
 pub fn session_queue_key(namespace: Option<&str>, session_id: &str) -> String {
     match namespace.filter(|value| !value.is_empty()) {
         Some(namespace) => format!("{namespace}::{session_id}"),
@@ -144,6 +181,9 @@ pub fn session_queue_key(namespace: Option<&str>, session_id: &str) -> String {
     }
 }
 
+/// Compute an ISO-8601 UTC timestamp `offset_ms` milliseconds in the
+/// future relative to SQLite's `now`; used to express debounce delays
+/// in the `scheduled_for` column.
 pub fn scheduled_timestamp_after_ms(
     conn: &Connection,
     offset_ms: i64,
@@ -156,6 +196,10 @@ pub fn scheduled_timestamp_after_ms(
     .map_err(ExtractionQueueError::from)
 }
 
+/// Report the 1-based position of `session_id`'s earliest pending job
+/// in the global pending-queue ordering, or `None` if the session has
+/// no pending row. Used to surface "your extraction is N back" status
+/// to callers.
 pub fn pending_queue_position(
     conn: &Connection,
     session_id: &str,
@@ -187,6 +231,11 @@ pub fn pending_queue_position(
     Ok(Some(position as u32))
 }
 
+/// Atomically claim the next due pending job by flipping it to
+/// `running` and returning its full row, or `None` if no row is due.
+/// Recovers expired leases from a crashed prior worker before
+/// scanning so they re-enter the pending pool (or move to `failed`
+/// when retries are exhausted).
 pub fn dequeue(conn: &Connection) -> Result<Option<ExtractionJob>, ExtractionQueueError> {
     recover_expired_leases(conn)?;
     let now = current_timestamp(conn)?;
@@ -210,6 +259,9 @@ pub fn dequeue(conn: &Connection) -> Result<Option<ExtractionJob>, ExtractionQue
         .map_err(ExtractionQueueError::from)
 }
 
+/// Finalize a successfully-processed job by flipping its status to
+/// `done`; returns [`ExtractionQueueError::StaleLease`] if another
+/// worker has already claimed or advanced the row.
 pub fn mark_done(
     conn: &Connection,
     job_id: i64,
@@ -228,6 +280,11 @@ pub fn mark_done(
     Ok(())
 }
 
+/// Record a failed attempt: bumps `attempts`, stores `error_message`,
+/// and either moves the job back to `pending` for retry or to
+/// `failed` once the retry cap is reached. Returns
+/// [`ExtractionQueueError::StaleLease`] when the row no longer
+/// matches the caller's view.
 pub fn mark_failed(
     conn: &Connection,
     job_id: i64,
@@ -318,6 +375,8 @@ fn max_retries(conn: &Connection) -> Result<i64, ExtractionQueueError> {
         })
 }
 
+/// Read SQLite's current UTC timestamp in canonical
+/// `YYYY-MM-DDTHH:MM:SSZ` form for use in queue-row timestamps.
 pub fn current_timestamp(conn: &Connection) -> Result<String, ExtractionQueueError> {
     conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
         row.get(0)

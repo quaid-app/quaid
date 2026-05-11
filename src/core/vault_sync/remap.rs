@@ -76,6 +76,10 @@ use super::{
 /// the full size.
 const SAMPLE_LIMIT: usize = 5;
 
+/// Rewires a collection from its existing `root_path` to `new_root`
+/// without losing page identity, verifying the new tree is a
+/// bit-identical mirror before flipping `collections.root_path` and
+/// re-arming the watcher for a fresh reconcile.
 pub fn remap_collection(
     conn: &Connection,
     collection_name: &str,
@@ -189,6 +193,10 @@ pub fn remap_collection(
     }
 }
 
+/// Validates that `new_root` is a faithful copy of `collection` by
+/// hashing every markdown file, resolving page identity, and asserting
+/// no third-party writer has mutated the tree mid-check via a
+/// before/after tree-fence comparison.
 pub fn verify_remap_root(
     conn: &Connection,
     collection: &Collection,
@@ -669,6 +677,9 @@ pub fn restore_reset(conn: &Connection, collection_name: &str) -> Result<(), Vau
     Ok(())
 }
 
+/// Clears the `reconcile_halted_at` / `reconcile_halt_reason` flags
+/// on a collection so the watcher can resume automatic reconciliation
+/// after an operator has resolved the underlying integrity issue.
 pub fn reconcile_reset(conn: &Connection, collection_name: &str) -> Result<(), VaultSyncError> {
     let collection = collections::get_by_name(conn, collection_name)?.ok_or_else(|| {
         VaultSyncError::CollectionNotFound {

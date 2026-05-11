@@ -1,3 +1,17 @@
+//! In-process idle tracker that turns conversation silence into a
+//! `session-close` write and an extraction enqueue.
+//!
+//! Every appended turn stamps a `seen_at` `Instant` for its
+//! `(db_path, namespace, session_id)` triple in a global registry. A
+//! periodic scan (`scan_due_sessions`) finds triples whose silence
+//! exceeds the `extraction.idle_close_ms` config threshold, closes
+//! their latest day-file via `turn_writer::close_session_if_idle`,
+//! and enqueues a `SessionClose` extraction job for each one.
+//!
+//! See also: `super::turn_writer` for the call that stamps activity
+//! and performs the actual close, and `super::queue` for where the
+//! follow-on extraction job lands.
+
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -20,35 +34,62 @@ struct SessionKey {
     session_id: String,
 }
 
+/// Per-session record returned by [`scan_due_sessions`] describing a
+/// session that crossed the idle threshold and was closed during the
+/// scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdleCloseResult {
+    /// Namespace the session lives in, or `None` for the default
+    /// (un-namespaced) vault.
     pub namespace: Option<String>,
+    /// Session identifier whose day-file was closed.
     pub session_id: String,
+    /// Vault-relative path of the day-file that was closed and
+    /// enqueued.
     pub conversation_path: String,
+    /// ISO-8601 timestamp written into the enqueued job's
+    /// `scheduled_for` column.
     pub scheduled_for: String,
+    /// `true` when this scan actually transitioned the session from
+    /// `open` to `closed`; `false` when the session was already
+    /// closed and the scan only re-enqueued.
     pub newly_closed: bool,
 }
 
+/// Errors surfaced by the idle-close scan.
 #[derive(Debug, Error)]
 pub enum IdleCloseError {
+    /// The follow-on extraction-queue write failed.
     #[error("queue error: {0}")]
     Queue(#[from] ExtractionQueueError),
 
+    /// The day-file close write failed.
     #[error("turn write error: {0}")]
     TurnWrite(#[from] TurnWriteError),
 
+    /// `extraction.idle_close_ms` config value was missing or
+    /// malformed.
     #[error("config error: {message}")]
-    Config { message: String },
+    Config {
+        /// Human-readable description of the offending config value.
+        message: String,
+    },
 }
 
 type TrackerRegistry = HashMap<String, HashMap<SessionKey, Instant>>;
 
 static IDLE_TRACKERS: OnceLock<Mutex<TrackerRegistry>> = OnceLock::new();
 
+/// Stamp the current instant as the latest activity for
+/// `(db_path, namespace, session_id)` so the next scan measures
+/// silence from this point onward.
 pub fn record_turn(db_path: &str, namespace: Option<&str>, session_id: &str) {
     record_turn_at(db_path, namespace, session_id, Instant::now());
 }
 
+/// Time-injection variant of [`record_turn`]: stamps `seen_at`
+/// instead of `Instant::now()`, used by tests to drive idleness
+/// deterministically.
 pub fn record_turn_at(db_path: &str, namespace: Option<&str>, session_id: &str, seen_at: Instant) {
     let mut trackers = tracker_registry()
         .lock()
@@ -59,6 +100,9 @@ pub fn record_turn_at(db_path: &str, namespace: Option<&str>, session_id: &str, 
         .insert(session_key(namespace, session_id), seen_at);
 }
 
+/// Drop the activity record for `(db_path, namespace, session_id)`
+/// so a subsequent scan ignores it; called after a successful close
+/// or when the day-file no longer exists.
 pub fn clear_session(db_path: &str, namespace: Option<&str>, session_id: &str) {
     let mut trackers = tracker_registry()
         .lock()
@@ -75,6 +119,9 @@ pub fn clear_session(db_path: &str, namespace: Option<&str>, session_id: &str) {
     }
 }
 
+/// Return `true` when the tracked `seen_at` for the session is older
+/// than `idle_for` relative to `now`, or `false` if the session has
+/// never been recorded or the gap is shorter.
 pub fn is_idle_at(
     db_path: &str,
     namespace: Option<&str>,
@@ -93,6 +140,10 @@ pub fn is_idle_at(
         .unwrap_or(false)
 }
 
+/// Close every session whose tracked silence has crossed the
+/// configured idle threshold and enqueue a `SessionClose` extraction
+/// job for each closure; returns the list of sessions that were
+/// processed in this scan.
 pub fn scan_due_sessions(
     db: &Connection,
     db_path: &str,
@@ -100,6 +151,8 @@ pub fn scan_due_sessions(
     scan_due_sessions_at(db, db_path, Instant::now())
 }
 
+/// Time-injection variant of [`scan_due_sessions`]: drives the
+/// idle-threshold comparison from `now` instead of `Instant::now()`.
 pub fn scan_due_sessions_at(
     db: &Connection,
     db_path: &str,

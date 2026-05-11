@@ -1,3 +1,21 @@
+//! Reconciliation path for user edits to already-extracted pages.
+//!
+//! When the user opens an `extracted/<kind>/<slug>.md` file in their
+//! editor and saves changes, the vault watcher routes the new bytes
+//! through here. The prior page is archived (renamed to a
+//! `--archived-<timestamp>` slug and superseded), the live page
+//! keeps its original slug but inherits the new content with
+//! `version + 1` and a `corrected_via: file_edit` marker, and the
+//! supersedes chain is rewired so any predecessor now points at the
+//! archive instead of the live row. Whitespace-only edits are
+//! reported as a no-op so they don't churn history.
+//!
+//! See also: `super::supersede` for the general temporal-correction
+//! primitive this module specializes for in-place file edits,
+//! `crate::core::file_state` for the file-stat metadata recorded
+//! after the rewrite, and `crate::core::raw_imports` for the
+//! byte-exact source-of-truth rotation that backs the edit.
+
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -11,59 +29,106 @@ use crate::core::{db, markdown, page_uuid, palace, raw_imports};
 
 const ELIGIBLE_TYPES: [&str; 4] = ["decision", "preference", "fact", "action_item"];
 
+/// Parsed shape of a user-edited extracted page; the staging form
+/// before [`handle_extracted_edit`] decides what to do with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditedPage {
+    /// Slug pulled from frontmatter or derived from the file path.
     pub slug: String,
+    /// Title pulled from frontmatter or, as a fallback, the slug.
     pub title: String,
+    /// `type` value from frontmatter, inferred from the path, or
+    /// `"concept"` as the final fallback.
     pub page_type: String,
+    /// Short summary computed from the page body.
     pub summary: String,
+    /// Compiled-truth section extracted from the body.
     pub compiled_truth: String,
+    /// Timeline section extracted from the body.
     pub timeline: String,
+    /// Full parsed frontmatter map.
     pub frontmatter: Frontmatter,
+    /// Wing (top-level palace partition) derived from the slug.
     pub wing: String,
+    /// Room (sub-partition) derived from the body.
     pub room: String,
+    /// Hex-encoded SHA-256 of the raw on-disk bytes, used for
+    /// dedup/integrity.
     pub sha256: String,
 }
 
+/// Outcome of an [`handle_extracted_edit`] call: whether the edit was
+/// outside scope, a pure whitespace tweak, or an actual supersede.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandleExtractedEditOutcome {
+    /// Path or page type is not eligible; caller should fall back to
+    /// the default reconcile path.
     Bypass,
+    /// Edit normalized to the same content as the prior page; no
+    /// supersede was performed.
     WhitespaceNoOp,
+    /// Edit produced a real change: the prior page was archived
+    /// under `archived_slug` and the live page advanced one version.
     Superseded {
+        /// Slug given to the archived prior page.
         archived_slug: String,
+        /// Vault-relative path where the prior bytes were copied for
+        /// disk-side history, when that feature is enabled.
         history_path: Option<PathBuf>,
     },
 }
 
+/// Return `true` when the file-edit reconciler is responsible for
+/// pages of the given type (`decision`, `preference`, `fact`,
+/// `action_item`); the watcher routes other types elsewhere.
 pub fn handles_page_type(page_type: &str) -> bool {
     eligible_type(page_type)
 }
 
+/// Compute the whitespace-normalized content key for `raw_bytes`,
+/// used by callers (notably the vault watcher) to spot
+/// formatting-only edits before they reach the supersede path.
 pub fn normalized_content_key(raw_bytes: &[u8]) -> String {
     normalize_whitespace_lossy(raw_bytes)
 }
 
+/// Errors surfaced by the file-edit reconcile path.
 #[derive(Debug, Error)]
 pub enum FileEditError {
+    /// Underlying SQLite failure (read, transaction, or write).
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// File-system failure while reading, writing, or rolling back
+    /// the live or history file.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// Config-table access (e.g. `corrections.history_on_disk`)
+    /// failed.
     #[error("config error: {0}")]
     Db(#[from] crate::core::types::DbError),
+    /// UUID resolution or generation for the new or archived row
+    /// failed.
     #[error("page UUID error: {0}")]
     PageUuid(#[from] crate::core::page_uuid::PageUuidError),
+    /// (De)serializing a frontmatter map into JSON failed.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    /// Caller tried to edit a page that is already superseded; the
+    /// reconciler refuses to fork a non-head node.
     #[error(
         "file-edit supersede requires head page `{slug}`; current successor is `{successor_slug}`"
     )]
     NonHeadTarget {
+        /// Slug of the page the caller targeted.
         slug: String,
+        /// Slug of the existing successor that blocks the edit.
         successor_slug: String,
     },
 }
 
+/// Parse the on-disk bytes of an edited page into a typed
+/// [`EditedPage`], deriving the slug, title, type, wing, and room
+/// when the frontmatter doesn't pin them explicitly.
 pub fn parse_edited_page(
     raw_bytes: &[u8],
     file_path: &Path,
@@ -103,6 +168,12 @@ pub fn parse_edited_page(
     clippy::too_many_arguments,
     reason = "extracted-edit handler binds the full per-page reconciliation context (db, ids, paths, stat, prior/new pages, raw bytes); regrouping into a struct here would obscure the call site"
 )]
+/// Reconcile a user edit to an extracted page: archive the prior
+/// version, rewrite the live row and file with the new content
+/// stamped `corrected_via: file_edit`, rewire any supersedes
+/// predecessor, and rotate the byte-exact raw-import row. Non-edits
+/// (out-of-scope paths or whitespace-only changes) short-circuit
+/// with `Bypass` or `WhitespaceNoOp`.
 pub fn handle_extracted_edit(
     conn: &Connection,
     collection_id: i64,
@@ -313,12 +384,17 @@ pub fn handle_extracted_edit(
     result
 }
 
+/// Return `true` when `relative_path` lives under an
+/// `extracted/<kind>/...` tree (with optional leading namespace) and
+/// is not itself a sidecar `_history` file.
 pub fn is_extracted_path(relative_path: &Path) -> bool {
     let parts = path_parts(relative_path);
     matches!(parts.as_slice(), ["extracted", ..] | [_, "extracted", ..])
         && !is_history_sidecar_path(relative_path)
 }
 
+/// Return `true` when `relative_path` is an `extracted/_history/...`
+/// sidecar so the watcher knows to skip the reconcile path for it.
 pub fn is_history_sidecar_path(relative_path: &Path) -> bool {
     matches!(
         path_parts(relative_path).as_slice(),
@@ -326,6 +402,10 @@ pub fn is_history_sidecar_path(relative_path: &Path) -> bool {
     )
 }
 
+/// Report whether a pending edit normalizes to the same content as
+/// the page's active raw import; used by the watcher to skip the
+/// reconcile path for whitespace-only edits before any DB or disk
+/// work happens.
 pub fn is_extracted_whitespace_noop(
     conn: &Connection,
     collection_id: i64,

@@ -3,6 +3,20 @@
     reason = "addressed in remove-production-panic-paths"
 )]
 
+//! Temporal-correction primitives that decide whether a freshly extracted
+//! fact duplicates, supersedes, or coexists with the current head for the
+//! same key, and that write the resulting markdown page into the vault.
+//! Resolution uses an embedding-cosine threshold over the existing head's
+//! compiled truth so deduplication and supersession share one decision
+//! seam; the writer then renders the new fact with `supersedes` /
+//! `corrected_via` frontmatter and emits it under
+//! `<namespace>/extracted/<type>/<slug>.md`.
+//!
+//! See also: `super::correction` for the user-driven multi-turn correction
+//! flow that forces a supersede regardless of cosine, `super::extractor`
+//! for the worker that feeds raw facts into this module, and
+//! `crate::core::supersede` for the page-graph-level supersede helpers.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,82 +38,163 @@ const DEFAULT_SUPERSEDE_COSINE_MIN: f64 = 0.4;
 const DEFAULT_MODEL_ALIAS: &str = "phi-3.5-mini";
 const MAX_SLUG_COLLISION_ATTEMPTS: u32 = 5;
 
+/// Decision the resolver returns for a freshly extracted fact relative to
+/// the current head of the same `(kind, key)` partition.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Resolution {
-    Drop { matched_slug: String, cosine: f64 },
-    Supersede { prior_slug: String, cosine: f64 },
+    /// Fact is a near-duplicate of an existing head and should not be
+    /// written; carries the matched slug and the observed cosine.
+    Drop {
+        /// Slug of the existing head that the new fact duplicates.
+        matched_slug: String,
+        /// Cosine similarity between the new fact's summary and the matched head.
+        cosine: f64,
+    },
+    /// Fact is a semantic update to an existing head and should supersede
+    /// it; carries the prior slug and the observed cosine.
+    Supersede {
+        /// Slug of the prior head that the new fact supersedes.
+        prior_slug: String,
+        /// Cosine similarity between the new fact's summary and the prior head.
+        cosine: f64,
+    },
+    /// Fact is sufficiently distinct that it becomes a new head alongside
+    /// existing pages in the same partition.
     Coexist,
 }
 
+/// Per-write context that scopes a fact to its collection, namespace, and
+/// the originating extraction job so the renderer can populate frontmatter
+/// (`session_id`, `source_turns`, `extracted_at`, `extracted_by`) without
+/// looking the values back up from the DB.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FactWriteContext {
+    /// Collection id the fact is being written into.
     pub collection_id: i64,
+    /// Vault root path on disk; the relative fact path is joined under this.
     pub root_path: PathBuf,
+    /// Namespace within the collection (empty string for the default namespace).
     pub namespace: String,
+    /// Session id of the conversation that produced the fact.
     pub session_id: String,
+    /// Turn ordinals (or `session_id:ordinal` strings) that support the fact.
     pub source_turns: Vec<String>,
+    /// ISO-8601 timestamp the fact was extracted at.
     pub extracted_at: String,
+    /// Model alias that produced the extraction (e.g. `phi-3.5-mini`).
     pub extracted_by: String,
 }
 
+/// Outcome of writing (or skipping) a fact: the resolution decision plus
+/// the allocated slug and on-disk path when a file was actually emitted.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FactWriteResult {
+    /// Resolution decision applied to the fact.
     pub resolution: Resolution,
+    /// Newly allocated slug if a file was written; `None` for `Drop` resolutions.
     pub slug: Option<String>,
+    /// Vault-relative path (forward slashes) of the written file, or `None` if no file was written.
     pub relative_path: Option<String>,
 }
 
+/// Marker type that plugs into the extractor as the `FactWriter` that
+/// performs full resolve-and-write semantics (dedup, supersede, or new head).
 #[derive(Debug, Default)]
 pub struct ResolvingFactWriter;
 
+/// Errors returned from the resolve / write seam.
 #[derive(Debug, Error)]
 pub enum FactResolutionError {
+    /// A SQLite operation failed during head lookup or transaction control.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// Filesystem I/O failed while creating the parent directory or writing the page file.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// JSON (de)serialisation failed while reading frontmatter or rendering output.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// Reading a runtime configuration value failed.
     #[error("config error: {message}")]
-    Config { message: String },
+    Config {
+        /// Human-readable explanation of the config failure.
+        message: String,
+    },
 
+    /// The embedding backend failed to score the candidate head against the new fact.
     #[error("embedding error: {message}")]
-    Embed { message: String },
+    Embed {
+        /// Human-readable explanation of the embedding failure.
+        message: String,
+    },
 
+    /// More than one current head matched the `(kind, key)` partition;
+    /// resolution refuses to guess which is "the" head.
     #[error(
         "ambiguous same-key head partition for kind `{kind}` {key_field} `{key_value}`: {candidate_slugs:?}"
     )]
     AmbiguousMatchingHeads {
+        /// Fact kind (`decision`, `preference`, `fact`, `action_item`).
         kind: String,
+        /// Name of the frontmatter field used as the partition key.
         key_field: String,
+        /// Value of the partition key.
         key_value: String,
+        /// Slugs of the ambiguous candidate heads.
         candidate_slugs: Vec<String>,
     },
 
+    /// The active embedding backend is not trustworthy enough to drive a
+    /// supersede decision (e.g. the hash-shim fallback is in use).
     #[error(
         "untrustworthy embedding evidence for kind `{kind}` {key_field} `{key_value}`: {reason}"
     )]
     UntrustworthyEmbeddingEvidence {
+        /// Fact kind being resolved.
         kind: String,
+        /// Name of the frontmatter field used as the partition key.
         key_field: String,
+        /// Value of the partition key.
         key_value: String,
+        /// Specific embedding-backend failure mode.
         reason: EmbeddingEvidenceFailure,
     },
 
+    /// The `conversation_path` on the extraction job could not be parsed
+    /// into `<namespace>/conversations/<date>/<session>.md`.
     #[error("invalid conversation path: {path}")]
-    InvalidConversationPath { path: String },
+    InvalidConversationPath {
+        /// The offending path string.
+        path: String,
+    },
 
+    /// Slug-collision retry budget was exhausted while trying to allocate
+    /// a unique file path for the new fact.
     #[error("unable to allocate a unique fact slug after {attempts} attempts: {base_slug}")]
-    SlugCollisionExhausted { base_slug: String, attempts: u32 },
+    SlugCollisionExhausted {
+        /// Base slug derived from the fact's key.
+        base_slug: String,
+        /// Number of allocation attempts that failed.
+        attempts: u32,
+    },
 }
 
+/// Explains why the active embedding backend is not trustworthy enough to
+/// drive a supersede decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingEvidenceFailure {
+    /// The hash-shim fallback backend is active; cosine scores are not
+    /// semantically meaningful and supersede must refuse to fire.
     HashShimOnly,
-    Unavailable { message: String },
+    /// The semantic embedding backend is unavailable; the supplied
+    /// message records the underlying initialisation failure.
+    Unavailable {
+        /// Detail message from the embedding backend's initialisation error.
+        message: String,
+    },
 }
 
 impl std::fmt::Display for EmbeddingEvidenceFailure {
@@ -123,6 +218,8 @@ struct ResolutionThresholds {
     supersede_cosine_min: f64,
 }
 
+/// Resolve a raw fact against the default collection's head partition,
+/// returning whether it should drop, supersede, or coexist.
 pub fn resolve(raw_fact: &RawFact, conn: &Connection) -> Result<Resolution, FactResolutionError> {
     let memory_root =
         turn_writer::resolve_memory_root(conn).map_err(|error| FactResolutionError::Config {
@@ -131,6 +228,9 @@ pub fn resolve(raw_fact: &RawFact, conn: &Connection) -> Result<Resolution, Fact
     resolve_in_scope(raw_fact, conn, memory_root.collection_id, "")
 }
 
+/// Resolve a raw fact against a specific collection + namespace scope,
+/// using the production cosine-similarity backend and requiring trustworthy
+/// embedding evidence before a supersede or drop decision is emitted.
 pub fn resolve_in_scope(
     raw_fact: &RawFact,
     conn: &Connection,
@@ -141,6 +241,9 @@ pub fn resolve_in_scope(
     resolve_from_candidates(raw_fact, conn, candidates, cosine_similarity, true)
 }
 
+/// Test seam variant of [`resolve_in_scope`] that accepts a caller-provided
+/// similarity function and skips the trustworthy-embedding gate, so unit
+/// tests can drive the resolver without spinning up the embedding backend.
 pub fn resolve_in_scope_with_similarity<F>(
     raw_fact: &RawFact,
     conn: &Connection,
@@ -206,6 +309,9 @@ where
     }
 }
 
+/// Write a fact under a default write context derived from current
+/// configuration, applying the supplied resolution to decide whether to
+/// drop, supersede, or emit a fresh head.
 pub fn write_fact(
     resolution: &Resolution,
     raw_fact: &RawFact,
@@ -215,6 +321,9 @@ pub fn write_fact(
     write_fact_in_context(resolution, raw_fact, conn, &context)
 }
 
+/// Apply a pre-computed [`Resolution`] within a specific [`FactWriteContext`],
+/// rendering and persisting the fact file when the resolution calls for a
+/// write and returning the allocated slug + relative path.
 pub fn write_fact_in_context(
     resolution: &Resolution,
     raw_fact: &RawFact,
@@ -263,6 +372,10 @@ pub fn write_fact_in_context(
     }
 }
 
+/// Combined entry point used by the extractor worker: resolve the fact
+/// against the head partition and write the resulting file inside a single
+/// IMMEDIATE transaction so two concurrent workers cannot both treat the
+/// same row as the current head.
 pub fn resolve_and_write_fact_in_context(
     raw_fact: &RawFact,
     conn: &Connection,
@@ -284,6 +397,9 @@ pub fn resolve_and_write_fact_in_context(
     })
 }
 
+/// Unconditionally supersede an existing head with a corrected fact,
+/// bypassing the cosine threshold; used by the user-driven correction flow
+/// where the prior slug and the corrected content are both explicit.
 pub fn force_supersede_fact_in_context(
     raw_fact: &RawFact,
     prior_slug: &str,
@@ -312,6 +428,9 @@ pub fn force_supersede_fact_in_context(
     })
 }
 
+/// Build a [`FactWriteContext`] for an extraction job + window, populating
+/// `namespace`, `session_id`, and `source_turns` from the job's conversation
+/// path and the extractor's current turn window.
 pub fn context_for_job_window(
     conn: &Connection,
     job: &ExtractionJob,

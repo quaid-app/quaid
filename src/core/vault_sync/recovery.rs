@@ -61,6 +61,9 @@ impl Drop for RecoveryInProgressGuard {
     }
 }
 
+/// Returns `true` when the named collection is currently inside a
+/// post-rename recovery window so callers can refuse to start a
+/// conflicting write or sync.
 pub fn collection_recovery_in_progress(collection_id: i64) -> bool {
     PROCESS_REGISTRIES
         .get()
@@ -85,6 +88,8 @@ pub(crate) fn set_collection_recovery_in_progress_for_test(collection_id: i64, i
     });
 }
 
+/// Resolves the `<db_dir>/recovery` directory used to store
+/// per-collection recovery state alongside the SQLite database.
 pub fn recovery_root_for_db_path(db_path: &Path) -> PathBuf {
     db_path
         .parent()
@@ -92,6 +97,8 @@ pub fn recovery_root_for_db_path(db_path: &Path) -> PathBuf {
         .join("recovery")
 }
 
+/// Resolves the per-collection recovery directory used to host
+/// `*.needs_full_sync` sentinel files and other post-crash artefacts.
 pub fn collection_recovery_dir(recovery_root: &Path, collection_id: i64) -> PathBuf {
     recovery_root.join(collection_id.to_string())
 }

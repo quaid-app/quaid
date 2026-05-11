@@ -1,3 +1,13 @@
+//! FTS5 full-text search over the `page_fts` virtual table, plus the
+//! query-sanitization and tiered-fallback helpers callers need to drive it
+//! safely from natural-language input. Quoted phrases, boolean operators,
+//! and prefix wildcards in expert (`--raw`) queries pass through unchanged;
+//! everyday callers sanitize first and let the tiered helper widen
+//! precision-first AND queries into OR-fallback for compound terms.
+//!
+//! See also: `inference` for the semantic counterpart, and `search` for the
+//! hybrid composer that fuses these results with vector hits.
+
 use rusqlite::Connection;
 
 use super::types::{SearchError, SearchResult};
@@ -100,12 +110,19 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
 /// - `limit`: maximum number of rows to return.
 #[derive(Default, Clone)]
 pub struct FtsQuery<'a> {
+    /// FTS5 `MATCH` expression (or sanitized natural-language text for [`search_fts_tiered`]).
     pub query: &'a str,
+    /// Optional wing prefix filter (e.g. `Some("people")`).
     pub wing: Option<&'a str>,
+    /// Optional collection-id filter.
     pub collection: Option<i64>,
+    /// Optional namespace filter; `Some("foo")` also matches the global namespace.
     pub namespace: Option<&'a str>,
+    /// When `false`, hides pages whose `superseded_by` is non-NULL.
     pub include_superseded: bool,
+    /// When `true`, results return slugs in `<collection>::<slug>` form.
     pub canonical: bool,
+    /// Maximum number of rows to return.
     pub limit: usize,
 }
 
@@ -158,7 +175,8 @@ pub fn expand_fts_query_or(sanitized: &str) -> String {
 /// the sanitized query has more than one token, retries with an explicit OR
 /// chain so documents matching any individual term are surfaced.
 ///
-/// Callers must pass a **sanitized** `q.query` from [`sanitize_fts_query`].
+/// Callers must pass a **sanitized** `q.query` from `sanitize_fts_query`
+/// (crate-internal; CLI consumers route through `src/commands/search.rs`).
 /// See [`FtsQuery`] for per-field documentation.
 pub fn search_fts_tiered(
     conn: &Connection,

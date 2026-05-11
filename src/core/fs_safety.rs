@@ -1,18 +1,12 @@
-// Filesystem safety primitives using fd-relative operations.
-//
-// Path traversal attacks (symlink-based TOCTOU) are a known risk when
-// walking and writing to user-controlled directories. This module provides
-// Unix-specific fd-relative syscalls that prevent escapes:
-//
-// - open_root_fd: Open the vault root with O_DIRECTORY | O_NOFOLLOW.
-// - walk_to_parent: Walk to a parent directory via safe openat calls.
-// - stat_at_nofollow: Stat a file via fstatat(AT_SYMLINK_NOFOLLOW).
-// - openat_create_excl: Open a file for exclusive creation under a parent fd.
-// - renameat_parent_fd: Atomically rename a file under parent fd.
-// - linkat_parent_fd: Install a second name without replacing an existing target.
-// - unlinkat_parent_fd: Remove a file under parent fd.
-//
-// On Windows, these functions return UnsupportedPlatformError.
+//! Filesystem-safety primitives that defend against path-traversal and
+//! symlink-based TOCTOU attacks by using fd-relative syscalls (`openat`,
+//! `statat`, `renameat`, `linkat`, `unlinkat`) under a single
+//! `O_DIRECTORY | O_NOFOLLOW` root fd. All entrypoints reject absolute paths,
+//! `..` components, embedded NULs, and symlink ancestors. Windows callers
+//! receive `UnsupportedPlatformError`.
+//!
+//! See also: `file_state` for the stat tuple consumed by the reconciler, and
+//! `vault_sync` for the watcher and write-lock callers.
 
 #![allow(dead_code)]
 
@@ -152,11 +146,17 @@ fn walk_to_parent_impl<Fd: AsFd>(
     Ok(current_fd)
 }
 
+/// Walks from `parent_fd` down through every component of `relative_path`
+/// except the last, returning an `OwnedFd` for the final parent directory.
+/// Refuses absolute paths, `..` components, NUL bytes, and symlinked ancestors.
 #[cfg(unix)]
 pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Result<OwnedFd> {
     walk_to_parent_impl(parent_fd, relative_path, false)
 }
 
+/// Variant of [`walk_to_parent`] that creates missing intermediate directories
+/// with mode `0o755` along the way; used by writers that must materialize
+/// nested paths.
 #[cfg(unix)]
 pub fn walk_to_parent_create_dirs<Fd: AsFd>(
     parent_fd: Fd,
@@ -189,10 +189,15 @@ pub fn walk_to_parent_create_dirs<Fd>(
 /// Stat tuple: (mtime_ns, ctime_ns, size_bytes, inode).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStatNoFollow {
+    /// Modification time in nanoseconds since the Unix epoch.
     pub mtime_ns: i64,
+    /// Inode change time in nanoseconds since the Unix epoch.
     pub ctime_ns: i64,
+    /// File size in bytes.
     pub size_bytes: i64,
+    /// Inode number.
     pub inode: i64,
+    /// Raw `st_mode` bits, used by the helpers below to classify file type.
     pub mode_bits: u32,
 }
 
@@ -202,14 +207,17 @@ impl FileStatNoFollow {
     const REGULAR_FILE_BITS: u32 = 0o100000;
     const SYMLINK_BITS: u32 = 0o120000;
 
+    /// Returns `true` if `mode_bits` classifies this entry as a directory.
     pub fn is_directory(&self) -> bool {
         self.mode_bits & Self::FILE_TYPE_MASK == Self::DIRECTORY_BITS
     }
 
+    /// Returns `true` if `mode_bits` classifies this entry as a regular file.
     pub fn is_regular_file(&self) -> bool {
         self.mode_bits & Self::FILE_TYPE_MASK == Self::REGULAR_FILE_BITS
     }
 
+    /// Returns `true` if `mode_bits` classifies this entry as a symlink.
     pub fn is_symlink(&self) -> bool {
         self.mode_bits & Self::FILE_TYPE_MASK == Self::SYMLINK_BITS
     }

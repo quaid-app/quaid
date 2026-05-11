@@ -1,3 +1,13 @@
+//! Hybrid retrieval composition: exact-slug short-circuit, FTS5 lexical
+//! search, and semantic vector search merged into a single ranked result list.
+//! Operates over the `HybridSearch` parameter struct so new filters (wing,
+//! collection, namespace, superseded toggle, canonical-slug output) extend by
+//! adding fields rather than spawning `_with_<flag>` siblings.
+//!
+//! See also: `fts` for the FTS5 layer this module composes, `inference` for
+//! the vector backend, and `progressive` for the token-budget expansion step
+//! that consumes these results.
+
 use std::collections::HashMap;
 
 use rusqlite::Connection;
@@ -43,12 +53,19 @@ use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 /// - `limit`: maximum number of rows to return after merge.
 #[derive(Default, Clone)]
 pub struct HybridSearch<'a> {
+    /// Natural-language query string.
     pub query: &'a str,
+    /// Optional wing prefix filter (e.g. `Some("people")`).
     pub wing: Option<&'a str>,
+    /// Optional collection-id filter.
     pub collection: Option<i64>,
+    /// Optional namespace filter; `Some("foo")` also matches the global namespace.
     pub namespace: Option<&'a str>,
+    /// When `false`, hides pages whose `superseded_by` is non-NULL.
     pub include_superseded: bool,
+    /// When `true`, results return slugs in `<collection>::<slug>` form.
     pub canonical: bool,
+    /// Maximum number of rows to return after the merge step.
     pub limit: usize,
 }
 

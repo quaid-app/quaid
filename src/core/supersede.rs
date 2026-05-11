@@ -1,31 +1,63 @@
+//! Superseding-page semantics: managing the `superseded_by` pointer chain
+//! between predecessor and successor pages, including head-only enforcement,
+//! self-reference rejection, and cross-collection target validation.
+//!
+//! See also: `collections` for slug resolution across collections, and
+//! `conversation::supersede` for the conversation-side write helpers.
+
 use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::core::collections::{self, OpKind, SlugResolution};
 
+/// Failure mode raised when establishing or validating a supersede relationship
+/// between two pages.
 #[derive(Debug, Error)]
 pub enum SupersedeError {
+    /// Target slug does not exist in the current collection/namespace.
     #[error("page not found: {slug}")]
-    NotFound { slug: String },
+    NotFound {
+        /// The slug that could not be resolved.
+        slug: String,
+    },
 
+    /// Target slug matches multiple pages and cannot be uniquely resolved.
     #[error("ambiguous slug: {slug} ({candidates})")]
-    Ambiguous { slug: String, candidates: String },
+    Ambiguous {
+        /// The ambiguous slug as provided.
+        slug: String,
+        /// Comma-separated list of candidate canonical slugs.
+        candidates: String,
+    },
 
+    /// Supersede target is not at the head of its chain — it already has a successor.
     #[error("SupersedeConflictError: page `{slug}` is already superseded by `{successor_slug}`")]
     NonHeadTarget {
+        /// Slug of the target that is not at the head of its chain.
         slug: String,
+        /// Slug of the existing successor that blocks the new supersede.
         successor_slug: String,
     },
 
+    /// A page tried to mark itself as its own predecessor.
     #[error("SupersedeConflictError: page `{slug}` cannot supersede itself")]
-    SelfReference { slug: String },
+    SelfReference {
+        /// Slug of the page that tried to self-reference.
+        slug: String,
+    },
 
+    /// Target lives in a different collection from the new revision.
     #[error("SupersedeConflictError: supersede target `{slug}` must stay in the same collection")]
-    CrossCollection { slug: String },
+    CrossCollection {
+        /// Slug of the cross-collection target.
+        slug: String,
+    },
 
+    /// Underlying SQLite failure.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// Collection-resolution failure propagated from [`crate::core::collections`].
     #[error("{0}")]
     Collection(#[from] collections::CollectionError),
 }
@@ -36,6 +68,8 @@ struct SupersedeTarget {
     canonical_slug: String,
 }
 
+/// Looks up the canonical `<collection>::<slug>` of a successor page id,
+/// returning `Ok(None)` when no successor id was supplied.
 pub fn successor_slug_by_id(
     conn: &Connection,
     successor_id: Option<i64>,
@@ -45,6 +79,8 @@ pub fn successor_slug_by_id(
         .transpose()
 }
 
+/// Finds the slug of the page that is currently superseded by `successor_id`
+/// in the given collection/namespace, or `Ok(None)` if no predecessor exists.
 pub fn predecessor_slug_by_successor_id(
     conn: &Connection,
     collection_id: i64,
@@ -62,6 +98,9 @@ pub fn predecessor_slug_by_successor_id(
     .optional()
 }
 
+/// Adjusts the `superseded_by` pointer for `page_id` so its predecessor
+/// matches `supersedes`, clearing any stale predecessor and rejecting invalid
+/// targets (self-reference, non-head, cross-collection).
 pub fn reconcile_supersede_chain(
     conn: &Connection,
     collection_id: i64,
@@ -125,6 +164,8 @@ pub fn reconcile_supersede_chain(
     Ok(())
 }
 
+/// Dry-run version of [`reconcile_supersede_chain`] that returns the same
+/// errors but does not write — used by validators before a page is committed.
 pub fn validate_supersede_target(
     conn: &Connection,
     collection_id: i64,

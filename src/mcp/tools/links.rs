@@ -22,7 +22,13 @@ use crate::mcp::validation::{
 };
 
 impl QuaidServer {
+    /// `memory_link` MCP tool: create a typed, temporally-bounded
+    /// directed link from one page to another, validating both endpoints
+    /// and the optional `valid_from` / `valid_until` bounds.
     #[tool(description = "Create a typed temporal link between two pages")]
+    /// `memory_link` MCP tool: create a typed, temporally-bounded
+    /// directed link from one page to another, validating both endpoints
+    /// and the optional `valid_from` / `valid_until` bounds.
     pub fn memory_link(
         &self,
         #[tool(aggr)] input: MemoryLinkInput,
@@ -58,7 +64,13 @@ impl QuaidServer {
         ))]))
     }
 
+    /// `memory_link_close` MCP tool: close an existing link by row id,
+    /// stamping a `valid_until` timestamp without otherwise touching the
+    /// link's relationship or endpoints.
     #[tool(description = "Close a temporal link by its database ID")]
+    /// `memory_link_close` MCP tool: close an existing link by row id,
+    /// stamping a `valid_until` timestamp without otherwise touching the
+    /// link's relationship or endpoints.
     pub fn memory_link_close(
         &self,
         #[tool(aggr)] input: MemoryLinkCloseInput,
@@ -74,7 +86,13 @@ impl QuaidServer {
         ))]))
     }
 
+    /// `memory_backlinks` MCP tool: list inbound edges pointing at the
+    /// resolved page, optionally restricted to currently-active links and
+    /// clamped to `MAX_LIMIT`.
     #[tool(description = "List inbound backlinks for a page")]
+    /// `memory_backlinks` MCP tool: list inbound edges pointing at the
+    /// resolved page, optionally restricted to currently-active links and
+    /// clamped to `MAX_LIMIT`.
     pub fn memory_backlinks(
         &self,
         #[tool(aggr)] input: MemoryBacklinksInput,
@@ -133,7 +151,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_graph` MCP tool: build a bounded N-hop neighbourhood graph
+    /// from the resolved page, with depth clamped to `graph::MAX_DEPTH`
+    /// and edges filtered by the requested temporal mode.
     #[tool(description = "N-hop neighbourhood graph from a page")]
+    /// `memory_graph` MCP tool: build a bounded N-hop neighbourhood graph
+    /// from the resolved page, with depth clamped to `graph::MAX_DEPTH`
+    /// and edges filtered by the requested temporal mode.
     pub fn memory_graph(
         &self,
         #[tool(aggr)] input: MemoryGraphInput,

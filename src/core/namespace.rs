@@ -1,3 +1,11 @@
+//! Namespace identifiers and lifecycle. Namespaces let agents partition pages
+//! by session (e.g. an ephemeral planning scratch-space) without leaking into
+//! the global vault; this module validates ids, manages the `namespaces`
+//! metadata table, and provides destructive cleanup that cascades to pages.
+//!
+//! See also: `db` for the schema that backs these rows, and `search` /
+//! `fts` for the namespace-aware filtering applied at query time.
+
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use thiserror::Error;
@@ -8,26 +16,37 @@ pub const MAX_NAMESPACE_ID_LEN: usize = 128;
 /// A namespace row persisted in the memory database.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Namespace {
+    /// Namespace identifier (matches `[A-Za-z0-9_.-]{1,128}`).
     pub id: String,
+    /// Optional TTL in hours used by janitor sweeps; `None` means no expiry.
     pub ttl_hours: Option<f64>,
+    /// ISO-8601 creation timestamp.
     pub created_at: String,
 }
 
 /// Errors returned by namespace management operations.
 #[derive(Debug, Error)]
 pub enum NamespaceError {
+    /// Identifier was an empty string.
     #[error("invalid namespace: must not be empty")]
     Empty,
 
+    /// Identifier exceeded [`MAX_NAMESPACE_ID_LEN`] bytes.
     #[error("invalid namespace: exceeds maximum length of {MAX_NAMESPACE_ID_LEN} characters")]
     TooLong,
 
+    /// Identifier contained characters outside the `[A-Za-z0-9_.-]` allowlist.
     #[error("invalid namespace: allowed characters are [A-Za-z0-9_.-]")]
     InvalidCharacters,
 
+    /// Namespace row did not exist for the requested id.
     #[error("namespace not found: {id}")]
-    NotFound { id: String },
+    NotFound {
+        /// The id that was not found.
+        id: String,
+    },
 
+    /// Underlying SQLite failure.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 }

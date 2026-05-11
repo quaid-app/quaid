@@ -32,15 +32,15 @@ Docs (#7) is half a day once the modules are stable.
 
 | # | Name | Status | Covers (§) | Effort |
 |--:|---|:--:|---|--:|
-| 1 | [`add-rust-lints-and-ci-gate`](../openspec/changes/add-rust-lints-and-ci-gate/) | ✅ shipped | 3.1, 3.2, 3.3, 7 partial | <1d |
+| 1 | [`add-rust-lints-and-ci-gate`](../openspec/changes/archive/2026-05-11-add-rust-lints-and-ci-gate/) | ✅ archived 2026-05-11 | 3.1, 3.2, 3.3, 7 partial | <1d |
+| 2 | [`remove-production-panic-paths`](../openspec/changes/archive/2026-05-11-remove-production-panic-paths/) | ✅ archived 2026-05-11 | 2.1 | <1d |
+| 3 | [`extract-inline-tests-to-integration`](../openspec/changes/archive/2026-05-11-extract-inline-tests-to-integration/) | ✅ archived 2026-05-11 | 1.5, 4.2 partial | 1–2d |
+| 4 | [`decompose-vault-sync-module`](../openspec/changes/archive/2026-05-11-decompose-vault-sync-module/) | ✅ archived 2026-05-11 | 1.3, 2.2, 2.3, 5.3 partial | 3–4d |
+| 5 | [`decompose-mcp-server-module`](../openspec/changes/archive/2026-05-11-decompose-mcp-server-module/) | ✅ archived 2026-05-11 | 1.4, 2.4 | 2–3d |
+| 6 | [`collapse-search-fn-variants`](../openspec/changes/archive/2026-05-11-collapse-search-fn-variants/) | ✅ archived 2026-05-11 | 1.6, 5.1, 5.2 | <1d |
+| 7 | [`add-public-api-rustdoc`](../openspec/changes/add-public-api-rustdoc/) | 🟢 ready (deps cleared) | 6.1 | <1d |
 
-> Proposal #1 shipped: Cargo.toml `[lints.*]` tables + CI `--locked` gate; 46 `#[allow]` migrated (33 dead deleted, 13 → `#[expect]` with reasons); 18 `unsafe` blocks annotated; deferred unwraps/expects suppressed at file level pointing at proposal #2 `remove-production-panic-paths`. `clippy::pedantic` dropped per design Decision 1 (5,672 baseline warnings — evidence-driven fallback already documented in design.md). Follow-up names in source annotations match this dashboard.
-| 2 | [`remove-production-panic-paths`](../openspec/changes/remove-production-panic-paths/) | 🟡 (after #1) | 2.1 | <1d |
-| 3 | [`extract-inline-tests-to-integration`](../openspec/changes/extract-inline-tests-to-integration/) | 🟢 | 1.5, 4.2 partial | 1–2d |
-| 4 | [`decompose-vault-sync-module`](../openspec/changes/decompose-vault-sync-module/) | 🟡 (after #3) | 1.3, 2.2, 2.3, 5.3 partial | 3–4d |
-| 5 | [`decompose-mcp-server-module`](../openspec/changes/decompose-mcp-server-module/) | 🟡 (after #3) | 1.4, 2.4 | 2–3d |
-| 6 | [`collapse-search-fn-variants`](../openspec/changes/collapse-search-fn-variants/) | 🟢 | 1.6, 5.1, 5.2 | <1d |
-| 7 | [`add-public-api-rustdoc`](../openspec/changes/add-public-api-rustdoc/) | 🟡 (after #4, #5) | 6.1 | <1d |
+> Proposals #1–#6 shipped and archived on 2026-05-11. Delta specs synced into `openspec/specs/`. Only #7 (`add-public-api-rustdoc`) remains; with #4 and #5 archived its dependencies are cleared. Delete this file once #7 archives.
 
 Deferred (no proposal):
 

@@ -3,6 +3,19 @@
     reason = "addressed in remove-production-panic-paths"
 )]
 
+//! Multi-turn correction dialogue that lets a user refine an extracted
+//! fact after the fact has already landed as a page. A correction session
+//! holds a bounded exchange log; on each user turn the small language
+//! model is asked to either commit a corrected fact (forcing a supersede
+//! of the prior head), ask one clarifying question, or abandon. The
+//! session is persisted in `correction_sessions` so it can survive
+//! process restarts within its expiry window.
+//!
+//! See also: `super::supersede` for the supersede write path that commit
+//! outcomes call into, `super::extractor` for the original extraction
+//! pipeline that produced the head fact under correction, and
+//! `super::slm` for the underlying SLM runner.
+
 use std::path::PathBuf;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -23,7 +36,10 @@ use crate::core::types::{frontmatter_get_string, Frontmatter, RawFact};
 use crate::core::vault_sync::{self, ResolvedSlug, VaultSyncError};
 
 const DEFAULT_MODEL_ALIAS: &str = "phi-3.5-mini";
+/// Default `max_tokens` budget for a single SLM correction inference call.
 pub const DEFAULT_CORRECTION_MAX_TOKENS: usize = 2048;
+/// Hard cap on the number of user turns accepted in a single correction
+/// session before the session is abandoned with `turn_cap_reached`.
 pub const MAX_CORRECTION_TURNS: i64 = 3;
 
 const CORRECTION_SYSTEM_PROMPT: &str = concat!(
@@ -45,39 +61,66 @@ const CORRECTION_SYSTEM_PROMPT: &str = concat!(
     "- Use `abandon` only when the correction cannot be made actionable from the dialogue.\n"
 );
 
+/// One line of the correction dialogue, persisted as part of the session's
+/// exchange log so the SLM sees the full back-and-forth on each turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CorrectionExchange {
+    /// Speaker role for this exchange (`user` or `assistant`).
     pub role: String,
+    /// Free-form text the speaker contributed.
     pub content: String,
 }
 
+/// In-memory view of a correction session loaded from `correction_sessions`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Correction {
+    /// Stable identifier (UUIDv7) for the correction session.
     pub correction_id: String,
+    /// Canonical slug of the fact page being corrected.
     pub fact_slug: String,
+    /// Full dialogue captured so far, in chronological order.
     pub exchange_log: Vec<CorrectionExchange>,
+    /// Number of user turns already consumed in this session.
     pub turns_used: i64,
+    /// Maximum user turns allowed before the session is force-abandoned.
     pub turn_budget: i64,
 }
 
+/// Public outcome of a single correction step, surfaced to the caller so
+/// they can either present a clarification question, persist the committed
+/// fact reference, or report an abandonment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum CorrectionStep {
+    /// The SLM produced a valid corrected fact and the supersede write committed.
     Committed {
+        /// Canonical slug of the newly written corrected fact.
         new_fact_slug: String,
+        /// Canonical slug of the prior head that was superseded.
         supersedes: String,
     },
+    /// The SLM asked one clarifying question; the session remains open.
     NeedsClarification {
+        /// Identifier of the session to continue.
         correction_id: String,
+        /// The clarifying question to relay to the user.
         question: String,
+        /// Remaining user turns before the turn cap forces an abandon.
         turns_remaining: i64,
     },
+    /// The session ended without a corrected fact being committed.
     Abandoned {
+        /// Reason code (e.g. `user_requested`, `turn_cap_reached`, `slm_abandoned`).
         reason: String,
     },
 }
 
+/// SLM seam used by the correction flow; identical shape to
+/// [`super::extractor::SlmClient`], split so correction tests can stub the
+/// SLM without pulling in the extractor's full worker dependencies.
 pub trait CorrectionSlmClient {
+    /// Run inference under the given model alias with the supplied prompt
+    /// and token budget, returning the raw model output.
     fn infer(&self, alias: &str, prompt: &str, max_tokens: usize) -> Result<String, SlmError>;
 }
 
@@ -90,38 +133,75 @@ where
     }
 }
 
+/// Errors that can be returned from the correction flow.
 #[derive(Debug, Error)]
 pub enum CorrectionError {
+    /// No page (or no correction session) matches the supplied slug or id.
     #[error("NotFoundError: page `{slug}` not found")]
-    NotFound { slug: String },
+    NotFound {
+        /// The slug or session id that could not be found.
+        slug: String,
+    },
 
+    /// The target page exists but its kind is not user-correctable
+    /// (only `decision`, `preference`, `fact`, and `action_item` are).
     #[error("KindError: page `{slug}` is `{page_type}` not one of decision, preference, fact, action_item")]
-    Kind { slug: String, page_type: String },
+    Kind {
+        /// Canonical slug of the rejected page.
+        slug: String,
+        /// Actual page type stored in the DB.
+        page_type: String,
+    },
 
+    /// The correction cannot proceed because of a session-state conflict
+    /// (already committed, abandoned, expired, or the target is superseded).
     #[error("{message}")]
-    Conflict { message: String },
+    Conflict {
+        /// Human-readable conflict explanation, including the failing condition.
+        message: String,
+    },
 
+    /// The caller's request payload is malformed (e.g. empty text, or
+    /// neither `response` nor `abandon: true` provided).
     #[error("invalid correction request: {message}")]
-    InvalidRequest { message: String },
+    InvalidRequest {
+        /// Human-readable explanation of the input problem.
+        message: String,
+    },
 
+    /// Required runtime configuration is missing or unreadable.
     #[error("correction config error: {message}")]
-    Config { message: String },
+    Config {
+        /// Human-readable explanation of the config failure.
+        message: String,
+    },
 
+    /// The SLM produced an output that does not satisfy the correction
+    /// envelope contract (bad JSON, wrong kind, missing fields, etc.).
     #[error("correction output error: {message}")]
-    Output { message: String },
+    Output {
+        /// Human-readable description of the offending output.
+        message: String,
+    },
 
+    /// A SQLite operation failed.
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
+    /// JSON (de)serialisation of the exchange log or fact payload failed.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
+    /// The SLM runner surfaced an error.
     #[error(transparent)]
     Slm(#[from] SlmError),
 
+    /// The supersede write failed during a commit outcome.
     #[error(transparent)]
     FactResolution(#[from] FactResolutionError),
 
+    /// Vault-sync helpers refused the corrected write (e.g. the target
+    /// collection has no writable root path or the slug cannot be resolved).
     #[error(transparent)]
     VaultSync(#[from] VaultSyncError),
 }
@@ -188,6 +268,9 @@ enum ParsedCorrectionResponse {
     Abandon { reason: String },
 }
 
+/// Open a new correction session for an existing fact page, seed the
+/// exchange log with the user's first correction message, run one SLM
+/// inference, and return the resulting [`CorrectionStep`].
 pub fn start_correction<S: CorrectionSlmClient + ?Sized>(
     conn: &Connection,
     slm: &S,
@@ -228,6 +311,10 @@ pub fn start_correction<S: CorrectionSlmClient + ?Sized>(
     apply_slm_outcome(conn, &target, &correction_id, &mut exchange_log, 1, outcome)
 }
 
+/// Append a user response (or an explicit `abandon`) to an open
+/// correction session, drive one more SLM inference if applicable, and
+/// return the next [`CorrectionStep`], enforcing the turn cap and expiry
+/// window along the way.
 pub fn continue_correction<S: CorrectionSlmClient + ?Sized>(
     conn: &Connection,
     slm: &S,

@@ -1,3 +1,19 @@
+//! Conversation-turn writer.
+//!
+//! Owns the path from "a turn happened" to "the right day-file on
+//! disk has been appended atomically": resolves the memory root
+//! collection, takes a per-session in-process mutex plus an on-disk
+//! `flock` so concurrent writers don't interleave, parses any
+//! existing day-file to derive the next turn ordinal, and either
+//! appends to the existing file or creates a new one. Also exposes
+//! the explicit close path (`close_session`, `close_session_if_idle`)
+//! that flips a day-file's `status` to `closed`.
+//!
+//! See also: `super::format` for the on-disk Markdown shape this
+//! module writes, `super::idle_close` for the silence-driven caller
+//! of `close_session_if_idle`, and `crate::core::collections` for
+//! the write-target resolution underneath `resolve_memory_root`.
+
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -26,38 +42,72 @@ const DEDICATED_ROOT_SUFFIX: &str = "-quaid-memory";
 
 static SESSION_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 
+/// Errors surfaced by turn-writer operations.
 #[derive(Debug, Error)]
 pub enum TurnWriteError {
+    /// The conversation Markdown could not be parsed or rendered.
     #[error("conversation format error: {0}")]
     Format(#[from] ConversationFormatError),
 
+    /// Underlying SQLite failure when reading config or collections.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// File-system failure while reading or writing a day-file or
+    /// lock file.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Session identifier was empty, contained path traversal, or
+    /// otherwise failed validation.
     #[error("invalid session id: {message}")]
-    InvalidSessionId { message: String },
+    InvalidSessionId {
+        /// Human-readable description of why the id is invalid.
+        message: String,
+    },
 
+    /// Required config (memory.location, write-target collection) is
+    /// missing or invalid.
     #[error("config error: {message}")]
-    Config { message: String },
+    Config {
+        /// Human-readable description of the offending config value.
+        message: String,
+    },
 
+    /// Caller attempted to append to or close a session whose latest
+    /// day-file is already in `status: closed`.
     #[error("conflict: session `{session_id}` is already closed")]
-    SessionClosed { session_id: String },
+    SessionClosed {
+        /// Session identifier that was already closed.
+        session_id: String,
+    },
 
+    /// Caller asked to close a session for which no day-file exists.
     #[error("session not found: {session_id}")]
-    SessionNotFound { session_id: String },
+    SessionNotFound {
+        /// Session identifier the caller asked about.
+        session_id: String,
+    },
 }
 
+/// Resolved on-disk root where conversation day-files will be written
+/// for the active vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryRoot {
+    /// Database id of the collection backing this root.
     pub collection_id: i64,
+    /// Human-readable collection name (used for diagnostics and for
+    /// deriving dedicated-collection names).
     pub collection_name: String,
+    /// Absolute filesystem path to the collection root.
     pub root_path: PathBuf,
+    /// Which `memory.location` policy resolved this root.
     pub location: MemoryLocation,
 }
 
+/// Append one turn to the session's day-file for `timestamp`,
+/// creating the day-file when none exists yet, and stamp the session
+/// as active for the idle-close tracker.
 pub fn append_turn(
     conn: &Connection,
     session_id: &str,
@@ -118,6 +168,9 @@ pub fn append_turn(
     })
 }
 
+/// Unconditionally close `session_id` by flipping the latest
+/// day-file's `status` to `closed` and stamping `closed_at`. Idempotent:
+/// closing an already-closed session reports `newly_closed: false`.
 pub fn close_session(
     conn: &Connection,
     session_id: &str,
@@ -130,6 +183,9 @@ pub fn close_session(
     })
 }
 
+/// Close `session_id` only if the idle-close tracker reports it has
+/// been silent for at least `idle_for` as of `now`; returns `Ok(None)`
+/// when the session is still considered active.
 pub fn close_session_if_idle(
     conn: &Connection,
     session_id: &str,
@@ -200,6 +256,10 @@ fn close_session_internal(
     }))
 }
 
+/// Resolve the active write-target collection plus the
+/// `memory.location` policy into the concrete on-disk root where
+/// conversation day-files belong, creating a dedicated-collection
+/// directory on first call when that policy is selected.
 pub fn resolve_memory_root(conn: &Connection) -> Result<MemoryRoot, TurnWriteError> {
     let location = MemoryLocation::from_config(
         &db::read_config_value_or(conn, "memory.location", "vault-subdir").map_err(|error| {

@@ -1,8 +1,10 @@
-// File state tracking for stat-based change detection.
-//
-// The `file_state` table holds (mtime_ns, ctime_ns, size_bytes, inode, sha256) for
-// every indexed file. Reconciliation compares these four stat fields first; any mismatch
-// triggers a re-hash.
+//! Stat-based file-state tracking used by the reconciler to decide whether an
+//! indexed file needs to be re-hashed. The `file_state` table stores
+//! `(mtime_ns, ctime_ns, size_bytes, inode, sha256)` per file; mismatched stat
+//! fields trigger a content hash, mismatched hashes trigger a re-ingest.
+//!
+//! See also: `fs_safety` for the fd-relative `stat_at_nofollow` primitive
+//! used on Unix, and `reconciler` for the walk that drives these comparisons.
 
 #![allow(dead_code)]
 
@@ -20,9 +22,13 @@ use std::path::Path;
 /// inode numbers, and ctime semantics differ). On Unix, both should be populated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStat {
+    /// Modification time in nanoseconds since the Unix epoch.
     pub mtime_ns: i64,
+    /// Inode change time in nanoseconds since the Unix epoch (`None` on Windows).
     pub ctime_ns: Option<i64>,
+    /// File size in bytes.
     pub size_bytes: i64,
+    /// Inode number, or `None` on platforms that don't expose one.
     pub inode: Option<i64>,
 }
 
@@ -100,6 +106,7 @@ pub fn stat_file_fd<Fd: rustix::fd::AsFd>(parent_fd: Fd, name: &Path) -> io::Res
     })
 }
 
+/// Windows fallback that ignores the parent fd and falls back to path-based stat.
 #[cfg(not(unix))]
 pub fn stat_file_fd<Fd>(_parent_fd: Fd, name: &Path) -> io::Result<FileStat> {
     // Windows fallback: use path-based stat
@@ -131,15 +138,25 @@ pub fn hash_file(path: &Path) -> io::Result<String> {
 /// A row from the `file_state` table.
 #[derive(Debug, Clone)]
 pub struct FileStateRow {
+    /// Collection that owns this file.
     pub collection_id: i64,
+    /// Path relative to the collection root.
     pub relative_path: String,
+    /// Page id this file is currently bound to.
     pub page_id: i64,
+    /// Last observed modification time in nanoseconds since the Unix epoch.
     pub mtime_ns: i64,
+    /// Last observed inode change time (Unix only).
     pub ctime_ns: Option<i64>,
+    /// Last observed file size in bytes.
     pub size_bytes: i64,
+    /// Last observed inode number (Unix only).
     pub inode: Option<i64>,
+    /// Hex-encoded SHA-256 of the last hashed contents.
     pub sha256: String,
+    /// ISO-8601 timestamp of the last time the reconciler observed this file.
     pub last_seen_at: String,
+    /// ISO-8601 timestamp of the last full content hash.
     pub last_full_hash_at: String,
 }
 

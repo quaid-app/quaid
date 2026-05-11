@@ -21,7 +21,13 @@ use crate::mcp::server::{
 use crate::mcp::validation::{validate_slug, MAX_GAP_CONTEXT_LEN, MAX_LIMIT};
 
 impl QuaidServer {
+    /// `memory_gap` MCP tool: record an unanswered query as a knowledge
+    /// gap, storing only a SHA-256 of the query text plus an optional
+    /// page binding to keep raw query strings out of the database.
     #[tool(description = "Log a knowledge gap (privacy-safe: stores query_hash, not raw query)")]
+    /// `memory_gap` MCP tool: record an unanswered query as a knowledge
+    /// gap, storing only a SHA-256 of the query text plus an optional
+    /// page binding to keep raw query strings out of the database.
     pub fn memory_gap(
         &self,
         #[tool(aggr)] input: MemoryGapInput,
@@ -84,7 +90,11 @@ impl QuaidServer {
         )]))
     }
 
+    /// `memory_gaps` MCP tool: paginate the knowledge-gap log, optionally
+    /// including resolved gaps, with the page size clamped to `MAX_LIMIT`.
     #[tool(description = "List knowledge gaps")]
+    /// `memory_gaps` MCP tool: paginate the knowledge-gap log, optionally
+    /// including resolved gaps, with the page size clamped to `MAX_LIMIT`.
     pub fn memory_gaps(
         &self,
         #[tool(aggr)] input: MemoryGapsInput,

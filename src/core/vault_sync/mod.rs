@@ -309,8 +309,9 @@ use restore::{
     materialize_collection_to_path,
 };
 pub use session::{
-    heartbeat_session, register_cli_session, register_session, sweep_stale_sessions,
-    unregister_session,
+    find_active_daemon_session, find_active_runtime_host, heartbeat_session, register_cli_session,
+    register_session, sweep_stale_sessions, try_promote_to_serve_host, unregister_session,
+    ActiveSessionInfo, SessionType,
 };
 #[cfg(unix)]
 pub use watcher::WatcherError;
@@ -2682,7 +2683,7 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     init_process_registries()?;
     let conn = Connection::open(&db_path)?;
     sweep_stale_sessions(&conn)?;
-    let session_id = register_session(&conn)?;
+    let session_id = register_session(&conn, SessionType::Serve)?;
 
     #[cfg(unix)]
     let published_ipc = bind_socket(&conn, &session_id)?;
@@ -3612,7 +3613,7 @@ mod tests {
             [page_id],
         )
         .unwrap();
-        let session_id = register_session(&conn).unwrap();
+        let session_id = register_session(&conn, SessionType::Serve).unwrap();
 
         run_startup_sequence(&conn, Path::new(&db_path), &session_id).unwrap();
 
@@ -5350,7 +5351,7 @@ mod tests {
         let (_dir, db_path, conn) = open_test_db_file();
         let temp = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", temp.path());
-        let session_id = register_session(&conn).unwrap();
+        let session_id = register_session(&conn, SessionType::Serve).unwrap();
         acquire_owner_lease(&conn, collection_id, &session_id).unwrap();
 
         {

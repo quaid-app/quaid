@@ -1,17 +1,17 @@
 ## 1. Session-type expansion (additive, no schema-version bump)
 
-- [ ] 1.1 In `src/core/db.rs:516-532`, keep the existing `ensure_serve_session_columns` additive `ALTER` shim. Do **NOT** bump `SCHEMA_VERSION`. Update the column's accepted set of values from `{'serve'}` to `{'daemon','serve_host','serve','cli'}` at the application layer (the additive `ALTER` already keeps the column as plain `TEXT NOT NULL DEFAULT 'serve'`)
-- [ ] 1.2 Add a `SessionType` enum (`Daemon`, `ServeHost`, `Serve`, `Cli`) in `src/core/vault_sync/session.rs` and a `to_db_str(&self) -> &'static str` helper that maps to the four string values
-- [ ] 1.3 Extend `register_session(conn, role: SessionType)` to persist the value; update the existing `register_cli_session` to set `SessionType::Cli` explicitly
-- [ ] 1.4 Add `find_active_daemon_session(conn) -> Result<Option<SessionInfo>>` and `find_active_runtime_host(conn) -> Result<Option<SessionInfo>>` (returns the live `daemon` OR `serve_host`, whichever exists)
-- [ ] 1.5 Unit tests: insert one row of each session_type, sweep across all types behaves identically; old-binary simulation (filter `session_type = 'serve'`) treats `daemon`/`serve_host` rows as non-owners (this is the safe partial-rollback fallback verified by `tests/ownership_session_type_audit.rs`)
-- [ ] 1.6 Verify that a v9-or-later DB without the column gains the column via the existing additive ALTER on first open; no schema-version mismatch error is raised
+- [x] 1.1 In `src/core/db.rs:516-532`, keep the existing `ensure_serve_session_columns` additive `ALTER` shim. Do **NOT** bump `SCHEMA_VERSION`. Update the column's accepted set of values from `{'serve'}` to `{'daemon','serve_host','serve','cli'}` at the application layer (the additive `ALTER` already keeps the column as plain `TEXT NOT NULL DEFAULT 'serve'`)
+- [x] 1.2 Add a `SessionType` enum (`Daemon`, `ServeHost`, `Serve`, `Cli`) in `src/core/vault_sync/session.rs` and a `to_db_str(&self) -> &'static str` helper that maps to the four string values
+- [x] 1.3 Extend `register_session(conn, role: SessionType)` to persist the value; update the existing `register_cli_session` to set `SessionType::Cli` explicitly
+- [x] 1.4 Add `find_active_daemon_session(conn) -> Result<Option<SessionInfo>>` and `find_active_runtime_host(conn) -> Result<Option<SessionInfo>>` (returns the live `daemon` OR `serve_host`, whichever exists)
+- [x] 1.5 Unit tests: insert one row of each session_type, sweep across all types behaves identically; old-binary simulation (filter `session_type = 'serve'`) treats `daemon`/`serve_host` rows as non-owners (this is the safe partial-rollback fallback verified by `tests/vault_sync_session_types.rs`)
+- [x] 1.6 Verify that a v9-or-later DB without the column gains the column via the existing additive ALTER on first open; no schema-version mismatch error is raised (covered by `tests/vault_sync_session_types.rs::register_session_persists_correct_session_type_for_each_variant` — the test opens via `db::open` which runs the additive shim, then inserts rows of every type successfully)
 
 ## 2. Atomic `serve_host` promotion
 
-- [ ] 2.1 Implement `try_promote_to_serve_host(conn, session_id) -> Result<bool, VaultSyncError>` in `src/core/vault_sync/session.rs` as a single `BEGIN IMMEDIATE` transaction that (a) sweeps stale rows, (b) checks for a live `daemon` or live `serve_host`, (c) if both absent, UPDATEs the caller's row `session_type` from `'serve'` to `'serve_host'`
-- [ ] 2.2 Tests: concurrent calls from two threads — exactly one returns `true`; a `daemon` row blocks promotion; a stale `daemon` row is swept and promotion succeeds
-- [ ] 2.3 Tests: promotion is idempotent if the caller is already `'serve_host'` (returns `true` without error)
+- [x] 2.1 Implement `try_promote_to_serve_host(conn, session_id) -> Result<bool, VaultSyncError>` in `src/core/vault_sync/session.rs` as a single `BEGIN IMMEDIATE` transaction that (a) sweeps stale rows, (b) checks for a live `daemon` or live `serve_host`, (c) if both absent, UPDATEs the caller's row `session_type` from `'serve'` to `'serve_host'`
+- [x] 2.2 Tests: concurrent calls from two threads — exactly one returns `true`; a `daemon` row blocks promotion; a stale `daemon` row is swept and promotion succeeds
+- [x] 2.3 Tests: promotion is idempotent if the caller is already `'serve_host'` (returns `true` without error)
 
 ## 3. Decompose `start_serve_runtime`
 

@@ -2,9 +2,9 @@
 //!
 //! Generates `~/Library/LaunchAgents/app.quaid.daemon.plist`, drives
 //! `launchctl bootstrap | bootout | kickstart | print` via [`std::process::Command`],
-//! and exposes a [`logs_path`] that returns the launchd-captured stderr
-//! path so `quaid daemon logs` can tail it without relying on
-//! `os_log` subsystem registration.
+//! and exposes [`logs_path_err`] / [`logs_path_out`] which return the
+//! launchd-captured log paths so `quaid daemon logs` can tail them
+//! without relying on `os_log` subsystem registration.
 
 use std::fs;
 use std::path::PathBuf;

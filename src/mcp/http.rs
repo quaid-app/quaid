@@ -165,7 +165,7 @@ pub fn bind_with_token_guard(config: &HttpConfig) -> Result<SocketAddr, HttpConf
 ///
 /// Validates `config` via [`bind_with_token_guard`], then hands the
 /// resulting `SocketAddr` to `rmcp::transport::SseServer`. The function
-/// blocks until the SSE server's [`CancellationToken`] is cancelled —
+/// blocks until the SSE server's `CancellationToken` is cancelled —
 /// callers (the daemon or `quaid serve` foreground entry) own the
 /// cancellation source so SIGTERM-driven shutdown can stop the listener
 /// cleanly.

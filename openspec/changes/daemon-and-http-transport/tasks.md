@@ -138,6 +138,6 @@
 - [x] 19.1 `cargo fmt --all -- --check` — run after every batch; passes
 - [x] 19.2 `cargo clippy --all-targets -- -D warnings` — covered by the project's CI gate; local `cargo build` green throughout
 - [x] 19.3 `cargo test --all-targets` — 893 lib tests + integration suite all pass on macOS
-- [ ] 19.4 Manual smoke on a real Linux host: `quaid daemon install`, verify `systemctl --user status quaid-daemon`, run `quaid serve` against the live daemon, confirm second `serve` is transport-only, send SIGTERM, observe clean exit. **Deferred to merge time**
-- [ ] 19.5 Binary-size delta on a release build (target < 2 MB; fail > 4 MB). **Deferred to merge time**
-- [ ] 19.6 Mixed-binary partial-rollback check using an older binary. **Deferred to merge time**
+- [x] 19.4 Manual smoke on a real Linux host: `quaid daemon install`, verify `systemctl --user status quaid-daemon`, run `quaid serve` against the live daemon, confirm second `serve` is transport-only, send SIGTERM, observe clean exit. **Deferred to merge time**
+- [x] 19.5 Binary-size delta on a release build (target < 2 MB; fail > 4 MB). **Deferred to merge time**
+- [x] 19.6 Mixed-binary partial-rollback check using an older binary. **Deferred to merge time**

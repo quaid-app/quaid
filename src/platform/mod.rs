@@ -9,8 +9,8 @@
 //! documented "manual setup" message.
 //!
 //! Module layout:
-//! - [`launchd`] (macOS only) — plist generator, `launchctl` wrappers
-//! - [`systemd`] (Linux only) — unit generator, `systemctl --user` wrappers
+//! - `launchd` (macOS only) — plist generator, `launchctl` wrappers
+//! - `systemd` (Linux only) — unit generator, `systemctl --user` wrappers
 //! - [`UnitArgs`] — the shared argument shape both generators consume
 
 #[cfg(target_os = "macos")]

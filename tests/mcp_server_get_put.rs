@@ -267,11 +267,14 @@ fn memory_put_rejects_create_with_expected_version_when_page_does_not_exist() {
 
 #[test]
 fn memory_put_does_not_call_printing_put_from_string_variant() {
+    // memory_put lives in src/mcp/tools/pages.rs after the
+    // decompose-mcp-server-module split.
     let source = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("mcp")
-            .join("server.rs"),
+            .join("tools")
+            .join("pages.rs"),
     )
     .unwrap();
     // Locate the memory_put function body.

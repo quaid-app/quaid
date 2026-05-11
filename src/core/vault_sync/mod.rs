@@ -3751,6 +3751,7 @@ mod tests {
         );
     }
 
+    #[serial_test::serial]
     #[test]
     fn collection_recovery_in_progress_guard_sets_and_clears_flag() {
         init_process_registries().unwrap();
@@ -4253,6 +4254,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn writer_side_sentinel_create_failure_leaves_no_tempfile_dedup_or_db_mutation() {
         let (_dir, _db_path, conn) = open_test_db_file();
@@ -4301,6 +4303,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn writer_side_pre_rename_abort_cleans_tempfile_dedup_and_sentinel() {
         let (_dir, _db_path, conn) = open_test_db_file();
@@ -4347,6 +4350,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn writer_side_rename_failure_cleans_tempfile_dedup_and_sentinel_without_touching_target() {
         let (_dir, _db_path, conn) = open_test_db_file();
@@ -4394,6 +4398,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn writer_side_post_rename_fsync_abort_retains_sentinel_removes_dedup_and_marks_full_sync() {
         let (_dir, db_path, conn) = open_test_db_file();
@@ -4444,6 +4449,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn insert_write_dedup_rejects_duplicate_key() {
         init_process_registries().unwrap();
@@ -4467,6 +4473,7 @@ mod tests {
         assert!(!has_write_dedup(&key).unwrap());
     }
 
+    #[serial_test::serial]
     #[test]
     fn write_slug_lock_is_scoped_by_root_path() {
         init_process_registries().unwrap();
@@ -4499,6 +4506,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn self_write_dedup_suppresses_recent_matching_path_and_hash_only() {
         init_process_registries().unwrap();
@@ -4528,6 +4536,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn self_write_dedup_does_not_suppress_after_ttl_and_sweeps_expired_entries() {
         init_process_registries().unwrap();
@@ -4551,6 +4560,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn classify_watch_event_only_suppresses_rename_when_source_is_not_markdown_or_is_self_write() {
         init_process_registries().unwrap();
@@ -4608,6 +4618,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn start_serve_runtime_watcher_rejects_path_only_dedup_match() {
         let (_dir, db_path, conn) = open_test_db_file();
@@ -4662,6 +4673,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn start_serve_runtime_watcher_ignores_stale_dedup_entries_after_ttl() {
         let (_dir, db_path, conn) = open_test_db_file();
@@ -4862,6 +4874,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn publish_watcher_health_updates_only_matching_session_handles() {
         init_process_registries().unwrap();
@@ -4899,6 +4912,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn run_overflow_recovery_pass_clears_needs_full_sync_for_active_matching_lease() {
         let (_dir, db_path, conn) = open_test_db_file();
@@ -5087,6 +5101,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn run_rcrt_pass_clears_needs_full_sync_after_tx_b() {
         const COLLECTION_ID: i64 = 50_000;
@@ -5126,6 +5141,7 @@ mod tests {
         assert_eq!(row.1, 0);
     }
 
+    #[serial_test::serial]
     #[test]
     fn run_rcrt_pass_preserves_pending_root_path_when_manifest_is_incomplete() {
         const COLLECTION_ID: i64 = 50_001;
@@ -5304,6 +5320,7 @@ mod tests {
         );
     }
 
+    #[serial_test::serial]
     #[test]
     fn run_rcrt_pass_skips_reconcile_halted_collections() {
         const COLLECTION_ID: i64 = 50_002;
@@ -5340,6 +5357,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn start_serve_runtime_recovers_owned_sentinel_dirty_collection_and_unlinks_all_sentinels() {
         #[cfg(target_os = "linux")]
@@ -5444,6 +5462,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn start_serve_runtime_only_processes_owned_collection_sentinels() {
         #[cfg(target_os = "linux")]
@@ -5517,6 +5536,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn start_serve_runtime_retains_sentinel_when_startup_reconcile_fails() {
         #[cfg(target_os = "linux")]
@@ -5571,6 +5591,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[serial_test::serial]
     #[test]
     fn writer_side_foreign_rename_with_sqlite_busy_recovers_from_sentinel_alone() {
         #[cfg(target_os = "linux")]

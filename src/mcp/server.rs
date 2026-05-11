@@ -1,91 +1,48 @@
+//! `QuaidServer` definition and bootstrap. Owns the struct, the input
+//! types every `#[tool]` method consumes (kept here so domain submodules
+//! don't have to circular-import each other), the small set of free
+//! helpers that resolve slugs and read configuration, the central
+//! `rmcp::tool_box!` registry listing every tool exposed by the MCP wire
+//! surface, and the `ServerHandler` impl that wires the registry into the
+//! `tools/list` and `tools/call` handlers. Tool method bodies themselves
+//! live under `crate::mcp::tools::*`.
+
 use std::sync::{Arc, Mutex};
 
 use rmcp::model::*;
 use rmcp::schemars;
 use rmcp::tool;
 use rmcp::{ServerHandler, ServiceExt};
-use rusqlite::{Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use rusqlite::Connection;
+use serde::Deserialize;
 
-use crate::commands::{check, get, link, put};
+#[cfg(test)]
+use crate::commands::{get, put};
 
-use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
-use crate::core::conversation::{
-    correction, extractor::SlmClient, queue as conversation_queue, slm::LazySlmRunner, turn_writer,
-};
-use crate::core::fts::sanitize_fts_query;
-use crate::core::gaps;
-use crate::core::graph::{self, GraphError, TemporalFilter};
-use crate::core::namespace;
-use crate::core::progressive::progressive_retrieve_with_namespace;
-use crate::core::search::{hybrid_search, HybridSearch};
-use crate::core::supersede;
-use crate::core::types::{ExtractionTriggerKind, SearchError, TurnRole};
+use crate::core::collections::{self, OpKind, SlugResolution};
+use crate::core::conversation::{extractor::SlmClient, slm::LazySlmRunner};
+#[cfg(test)]
+use crate::core::graph::{GraphError, TemporalFilter};
 use crate::core::vault_sync;
+use crate::mcp::errors::{
+    ambiguous_slug_error, map_collection_error, map_config_error, map_db_error, page_not_found,
+};
+#[cfg(test)]
+use crate::mcp::errors::{map_anyhow_error, map_graph_error, serialize_response};
+#[cfg(test)]
+use crate::mcp::validation::{
+    parse_temporal_filter, validate_relationship, validate_slug, validate_tag_list,
+    validate_temporal_value, MAX_SLUG_LEN, MAX_TAGS_PER_REQUEST,
+};
 
-type DbRef = Arc<Mutex<Connection>>;
-type SlmRef = Arc<dyn SlmClient + Send + Sync>;
+pub(crate) type DbRef = Arc<Mutex<Connection>>;
+pub(crate) type SlmRef = Arc<dyn SlmClient + Send + Sync>;
 
-const MAX_SLUG_LEN: usize = 512;
-const MAX_CONTENT_LEN: usize = 1_048_576; // 1 MB
-const MAX_LIMIT: u32 = 1000;
-const MAX_RELATIONSHIP_LEN: usize = 64;
-const MAX_TAG_LEN: usize = 64;
-const MAX_TAGS_PER_REQUEST: usize = 100;
-const MAX_GAP_CONTEXT_LEN: usize = 500;
-const MAX_RAW_DATA_LEN: usize = 1_048_576; // 1 MB
-
-fn invalid_params(message: impl Into<String>) -> rmcp::Error {
-    rmcp::Error::new(ErrorCode(-32602), message.into(), None)
-}
-
-fn validate_slug(slug: &str) -> Result<(), rmcp::Error> {
-    if slug.is_empty() {
-        return Err(invalid_params("invalid slug: must not be empty"));
-    }
-    if slug.len() > MAX_SLUG_LEN {
-        return Err(invalid_params(format!(
-            "invalid slug: exceeds maximum length of {MAX_SLUG_LEN} characters"
-        )));
-    }
-    vault_sync::parse_slug_input(slug).map_err(|err| invalid_params(err.to_string()))
-}
-
-fn canonical_slug(collection_name: &str, slug: &str) -> String {
+pub(crate) fn canonical_slug(collection_name: &str, slug: &str) -> String {
     format!("{collection_name}::{slug}")
 }
 
-fn ambiguous_slug_error(slug: &str, candidates: Vec<String>) -> rmcp::Error {
-    rmcp::Error::new(
-        ErrorCode(-32002),
-        format!("AmbiguityError: slug `{slug}` matches multiple collections"),
-        Some(serde_json::json!({
-            "code": "ambiguous_slug",
-            "candidates": candidates,
-        })),
-    )
-}
-
-fn map_collection_error(error: CollectionError) -> rmcp::Error {
-    match error {
-        CollectionError::NotFound { name } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("collection not found: {name}"),
-            None,
-        ),
-        CollectionError::Ambiguous { slug, candidates } => ambiguous_slug_error(
-            &slug,
-            candidates
-                .split(", ")
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-        CollectionError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-        other => invalid_params(other.to_string()),
-    }
-}
-
-fn resolve_slug_for_mcp(
+pub(crate) fn resolve_slug_for_mcp(
     db: &Connection,
     input: &str,
     op_kind: OpKind,
@@ -100,11 +57,7 @@ fn resolve_slug_for_mcp(
             collection_name,
             slug,
         }),
-        SlugResolution::NotFound { slug } => Err(rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("page not found: {slug}"),
-            None,
-        )),
+        SlugResolution::NotFound { slug } => Err(page_not_found(slug)),
         SlugResolution::Ambiguous { slug, candidates } => Err(ambiguous_slug_error(
             &slug,
             candidates
@@ -115,14 +68,14 @@ fn resolve_slug_for_mcp(
     }
 }
 
-fn resolve_read_collection_filter_for_mcp(
+pub(crate) fn resolve_read_collection_filter_for_mcp(
     db: &Connection,
     collection_name: Option<&str>,
 ) -> Result<Option<collections::Collection>, rmcp::Error> {
     collections::resolve_read_collection_filter(db, collection_name).map_err(map_collection_error)
 }
 
-fn page_id_for_resolved(
+pub(crate) fn page_id_for_resolved(
     db: &Connection,
     resolved: &vault_sync::ResolvedSlug,
 ) -> Result<i64, rmcp::Error> {
@@ -132,19 +85,14 @@ fn page_id_for_resolved(
         |row| row.get(0),
     )
     .map_err(|error| match error {
-        rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!(
-                "page not found: {}",
-                canonical_slug(&resolved.collection_name, &resolved.slug)
-            ),
-            None,
-        ),
+        rusqlite::Error::QueryReturnedNoRows => {
+            page_not_found(canonical_slug(&resolved.collection_name, &resolved.slug))
+        }
         other => map_db_error(other),
     })
 }
 
-fn canonicalize_page_for_mcp(
+pub(crate) fn canonicalize_page_for_mcp(
     page: &crate::core::types::Page,
     resolved: &vault_sync::ResolvedSlug,
 ) -> crate::core::types::Page {
@@ -162,26 +110,7 @@ fn canonicalize_page_for_mcp(
     rendered
 }
 
-fn validate_content(content: &str) -> Result<(), rmcp::Error> {
-    if content.len() > MAX_CONTENT_LEN {
-        return Err(invalid_params(format!(
-            "content too large: {} bytes exceeds maximum of {MAX_CONTENT_LEN} bytes",
-            content.len()
-        )));
-    }
-    Ok(())
-}
-
-fn validate_close_action_status(status: &str) -> Result<(), rmcp::Error> {
-    match status {
-        "done" | "cancelled" => Ok(()),
-        other => Err(invalid_params(format!(
-            "invalid status: expected 'done' or 'cancelled', got '{other}'"
-        ))),
-    }
-}
-
-fn append_note(body: &mut String, note: &str) {
+pub(crate) fn append_note(body: &mut String, note: &str) {
     if note.trim().is_empty() {
         return;
     }
@@ -196,441 +125,29 @@ fn append_note(body: &mut String, note: &str) {
     body.push_str(note);
 }
 
-fn resolved_page_version(
-    db: &Connection,
-    resolved: &vault_sync::ResolvedSlug,
-) -> Result<Option<i64>, rmcp::Error> {
-    db.query_row(
-        "SELECT version
-         FROM pages
-         WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![resolved.collection_id, &resolved.slug],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(map_db_error)
-}
-
-fn map_close_action_put_error(
-    db: &Connection,
-    resolved: &vault_sync::ResolvedSlug,
-    error: anyhow::Error,
-) -> rmcp::Error {
-    let message = error.to_string();
-    if message.contains("Conflict:") || message.contains("ConflictError") {
-        let current_version = resolved_page_version(db, resolved).ok().flatten();
-        let normalized = if message.contains("Conflict: ") {
-            message.replace("Conflict: ", "ConflictError: ")
-        } else {
-            message
-        };
-        rmcp::Error::new(
-            ErrorCode(-32009),
-            normalized,
-            Some(serde_json::json!({ "current_version": current_version })),
-        )
-    } else {
-        map_anyhow_error(error)
-    }
-}
-
-fn validate_token(
-    value: &str,
-    field: &str,
-    max_len: usize,
-    allowed: fn(u8) -> bool,
-    allowed_hint: &str,
-) -> Result<(), rmcp::Error> {
-    if value.is_empty() {
-        return Err(invalid_params(format!(
-            "invalid {field}: must not be empty"
-        )));
-    }
-    if value.len() > max_len {
-        return Err(invalid_params(format!(
-            "invalid {field}: exceeds maximum length of {max_len} characters"
-        )));
-    }
-    if !value.bytes().all(allowed) {
-        return Err(invalid_params(format!(
-            "invalid {field}: allowed characters are {allowed_hint}"
-        )));
-    }
-    Ok(())
-}
-
-fn is_tag_byte(byte: u8) -> bool {
-    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
-}
-
-fn validate_relationship(relationship: &str) -> Result<(), rmcp::Error> {
-    validate_token(
-        relationship,
-        "relationship",
-        MAX_RELATIONSHIP_LEN,
-        is_tag_byte,
-        "[a-z0-9_-]",
-    )
-}
-
-fn validate_tag_list(tags: &[String], field: &str) -> Result<(), rmcp::Error> {
-    if tags.len() > MAX_TAGS_PER_REQUEST {
-        return Err(invalid_params(format!(
-            "invalid {field}: exceeds maximum of {MAX_TAGS_PER_REQUEST} tags"
-        )));
-    }
-    for tag in tags {
-        validate_token(tag, "tag", MAX_TAG_LEN, is_tag_byte, "[a-z0-9_-]")?;
-    }
-    Ok(())
-}
-
-fn parse_component(value: &str, start: usize, len: usize) -> Option<u32> {
-    value.get(start..start + len)?.parse().ok()
-}
-
-fn is_valid_temporal_value(value: &str) -> bool {
-    match value.len() {
-        7 => matches!(
-            (parse_component(value, 0, 4), value.as_bytes().get(4), parse_component(value, 5, 2)),
-            (Some(_year), Some(b'-'), Some(month)) if (1..=12).contains(&month)
-        ),
-        10 => matches!(
-            (
-                parse_component(value, 0, 4),
-                value.as_bytes().get(4),
-                parse_component(value, 5, 2),
-                value.as_bytes().get(7),
-                parse_component(value, 8, 2)
-            ),
-            (Some(_year), Some(b'-'), Some(month), Some(b'-'), Some(day))
-                if (1..=12).contains(&month) && (1..=31).contains(&day)
-        ),
-        20 => matches!(
-            (
-                parse_component(value, 0, 4),
-                value.as_bytes().get(4),
-                parse_component(value, 5, 2),
-                value.as_bytes().get(7),
-                parse_component(value, 8, 2),
-                value.as_bytes().get(10),
-                parse_component(value, 11, 2),
-                value.as_bytes().get(13),
-                parse_component(value, 14, 2),
-                value.as_bytes().get(16),
-                parse_component(value, 17, 2),
-                value.as_bytes().get(19)
-            ),
-            (
-                Some(_year),
-                Some(b'-'),
-                Some(month),
-                Some(b'-'),
-                Some(day),
-                Some(b'T'),
-                Some(hour),
-                Some(b':'),
-                Some(minute),
-                Some(b':'),
-                Some(second),
-                Some(b'Z')
-            ) if (1..=12).contains(&month)
-                && (1..=31).contains(&day)
-                && hour <= 23
-                && minute <= 59
-                && second <= 59
-        ),
-        _ => false,
-    }
-}
-
-fn validate_temporal_value(value: &str, field: &str) -> Result<(), rmcp::Error> {
-    if is_valid_temporal_value(value) {
-        Ok(())
-    } else {
-        Err(invalid_params(format!(
-            "invalid {field}: expected YYYY-MM, YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SSZ"
-        )))
-    }
-}
-
-fn map_db_error(e: rusqlite::Error) -> rmcp::Error {
-    if let rusqlite::Error::SqliteFailure(ref err, ref msg) = e {
-        // SQLITE_CONSTRAINT_UNIQUE (extended code 2067)
-        if err.extended_code == 2067 {
-            return rmcp::Error::new(
-                ErrorCode(-32009),
-                format!(
-                    "conflict: {}",
-                    msg.as_deref().unwrap_or("unique constraint violation")
-                ),
-                None,
-            );
-        }
-        // FTS5 parse/syntax errors surface as SQLITE_ERROR with "fts5" in message
-        if let Some(ref msg_str) = msg {
-            if msg_str.contains("fts5") {
-                return rmcp::Error::new(
-                    ErrorCode(-32602),
-                    format!("invalid search query: {msg_str}"),
-                    None,
-                );
-            }
-        }
-    }
-    rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None)
-}
-
-fn map_search_error(e: SearchError) -> rmcp::Error {
-    match e {
-        SearchError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-        SearchError::Ambiguous { slug, candidates } => ambiguous_slug_error(
-            &slug,
-            candidates
-                .split(", ")
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-        SearchError::Internal { message } => {
-            rmcp::Error::new(ErrorCode(-32003), format!("search error: {message}"), None)
-        }
-    }
-}
-
-fn serialize_response<T: serde::Serialize>(value: &T) -> Result<String, rmcp::Error> {
-    serde_json::to_string_pretty(value).map_err(|e| map_anyhow_error(anyhow::Error::from(e)))
-}
-
-fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
-    let msg = e.to_string();
-    if msg.contains("ConflictError")
-        || msg.contains("ConcurrentRenameError")
-        || msg.contains("SupersedeConflictError")
-    {
-        rmcp::Error::new(ErrorCode(-32009), msg, None)
-    } else if msg.contains("page not found") || msg.contains("link not found") {
-        rmcp::Error::new(ErrorCode(-32001), msg, None)
-    } else if msg.contains("CollectionRestoringError")
-        || msg.contains("ServeOwnsCollectionError")
-        || msg.contains("Restore")
-        || msg.contains("NewRoot")
-        || msg.contains("ambiguous slug")
-    {
-        rmcp::Error::new(ErrorCode(-32002), msg, None)
-    } else {
-        rmcp::Error::new(ErrorCode(-32003), msg, None)
-    }
-}
-
-fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
-    if let vault_sync::VaultSyncError::AmbiguousSlug { slug, candidates } = &e {
-        return ambiguous_slug_error(
-            slug,
-            candidates
-                .split(", ")
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        );
-    }
-    let code = match e {
-        vault_sync::VaultSyncError::PageNotFound { .. } => ErrorCode(-32001),
-        vault_sync::VaultSyncError::AmbiguousSlug { .. }
-        | vault_sync::VaultSyncError::CollectionRestoring { .. }
-        | vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestoreInProgress {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestorePendingFinalize {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(
-            vault_sync::RestoreError::RestoreIntegrityBlocked { .. },
-        )
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestoreNonEmptyTarget {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(
-            vault_sync::RestoreError::ServeDiedDuringHandshake { .. },
-        )
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::HandshakeTimeout {
-            ..
-        })
-        | vault_sync::VaultSyncError::Restore(
-            vault_sync::RestoreError::NewRootVerificationFailed { .. },
-        )
-        | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::NewRootUnstable {
-            ..
-        })
-        | vault_sync::VaultSyncError::ReconcileHalted { .. } => ErrorCode(-32002),
-        #[cfg(unix)]
-        vault_sync::VaultSyncError::Conflict(
-            vault_sync::ConflictError::MissingExpectedVersion { .. },
-        )
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::StaleExpectedVersion {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ExternalDelete {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ExternalCreate {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::HashMismatch {
-            ..
-        })
-        | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ConcurrentRename {
-            ..
-        }) => ErrorCode(-32009),
-        _ => ErrorCode(-32003),
-    };
-    rmcp::Error::new(code, e.to_string(), None)
-}
-
-fn map_graph_error(e: GraphError) -> rmcp::Error {
-    match e {
-        GraphError::PageNotFound { slug } => {
-            rmcp::Error::new(ErrorCode(-32001), format!("page not found: {slug}"), None)
-        }
-        GraphError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-    }
-}
-
-fn map_namespace_error(e: namespace::NamespaceError) -> rmcp::Error {
-    match e {
-        namespace::NamespaceError::NotFound { id } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("namespace not found: {id}"),
-            None,
-        ),
-        namespace::NamespaceError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
-        other => invalid_params(other.to_string()),
-    }
-}
-
-fn map_turn_write_error(e: turn_writer::TurnWriteError) -> rmcp::Error {
-    match e {
-        turn_writer::TurnWriteError::InvalidSessionId { message } => invalid_params(message),
-        turn_writer::TurnWriteError::SessionClosed { session_id } => rmcp::Error::new(
-            ErrorCode(-32009),
-            format!("ConflictError: session `{session_id}` is already closed"),
-            None,
-        ),
-        turn_writer::TurnWriteError::SessionNotFound { session_id } => rmcp::Error::new(
-            ErrorCode(-32001),
-            format!("NotFoundError: session `{session_id}` not found"),
-            None,
-        ),
-        turn_writer::TurnWriteError::Config { message } => {
-            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {message}"), None)
-        }
-        turn_writer::TurnWriteError::Io(error) => {
-            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None)
-        }
-        turn_writer::TurnWriteError::Sqlite(error) => map_db_error(error),
-        turn_writer::TurnWriteError::Format(error) => rmcp::Error::new(
-            ErrorCode(-32003),
-            format!("conversation error: {error}"),
-            None,
-        ),
-    }
-}
-
-fn map_extraction_queue_error(e: conversation_queue::ExtractionQueueError) -> rmcp::Error {
-    match e {
-        conversation_queue::ExtractionQueueError::Sqlite(error) => map_db_error(error),
-        conversation_queue::ExtractionQueueError::Config { message } => {
-            rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {message}"), None)
-        }
-        conversation_queue::ExtractionQueueError::StaleLease { job_id, attempts } => {
-            rmcp::Error::new(
-                ErrorCode(-32009),
-                format!(
-                    "ConflictError: stale extraction lease for job {job_id} attempt {attempts}"
-                ),
-                None,
-            )
-        }
-    }
-}
-
-fn map_correction_error(e: correction::CorrectionError) -> rmcp::Error {
-    match e {
-        correction::CorrectionError::NotFound { .. } => {
-            rmcp::Error::new(ErrorCode(-32001), e.to_string(), None)
-        }
-        correction::CorrectionError::Kind { .. }
-        | correction::CorrectionError::InvalidRequest { .. }
-        | correction::CorrectionError::Config { .. } => {
-            rmcp::Error::new(ErrorCode(-32002), e.to_string(), None)
-        }
-        correction::CorrectionError::Conflict { message } => {
-            rmcp::Error::new(ErrorCode(-32009), message, None)
-        }
-        correction::CorrectionError::Sqlite(error) => map_db_error(error),
-        correction::CorrectionError::VaultSync(error) => map_vault_sync_error(error),
-        correction::CorrectionError::Json(_)
-        | correction::CorrectionError::Slm(_)
-        | correction::CorrectionError::FactResolution(_)
-        | correction::CorrectionError::Output { .. } => {
-            rmcp::Error::new(ErrorCode(-32003), e.to_string(), None)
-        }
-    }
-}
-
-fn validate_turn_timestamp(value: &str) -> Result<(), rmcp::Error> {
-    if value.len() == 20 && is_valid_temporal_value(value) {
-        Ok(())
-    } else {
-        Err(invalid_params(
-            "invalid timestamp: expected YYYY-MM-DDTHH:MM:SSZ".to_owned(),
-        ))
-    }
-}
-
-fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
-    let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false").map_err(
-        |error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None),
-    )?;
+pub(crate) fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
+    let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false")
+        .map_err(map_config_error)?;
     match raw.as_str() {
         "true" => Ok(true),
         "false" => Ok(false),
-        other => Err(rmcp::Error::new(
-            ErrorCode(-32002),
-            format!("ConfigError: invalid extraction.enabled value: {other}"),
-            None,
-        )),
+        other => Err(map_config_error(format!(
+            "invalid extraction.enabled value: {other}"
+        ))),
     }
 }
 
-fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
-    let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000").map_err(
-        |error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None),
-    )?;
-    raw.parse::<i64>().map_err(|_| {
-        rmcp::Error::new(
-            ErrorCode(-32002),
-            format!("ConfigError: invalid extraction.debounce_ms value: {raw}"),
-            None,
-        )
-    })
-}
-
-fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp::Error> {
-    match temporal.unwrap_or("active") {
-        "active" | "current" => Ok(TemporalFilter::Active),
-        "all" | "history" => Ok(TemporalFilter::All),
-        other => Err(rmcp::Error::new(
-            ErrorCode(-32602),
-            format!("invalid temporal filter: {other}"),
-            None,
-        )),
-    }
+pub(crate) fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
+    let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000")
+        .map_err(map_config_error)?;
+    raw.parse::<i64>()
+        .map_err(|_| map_config_error(format!("invalid extraction.debounce_ms value: {raw}")))
 }
 
 #[derive(Clone)]
 pub struct QuaidServer {
-    db: DbRef,
-    slm: SlmRef,
+    pub(crate) db: DbRef,
+    pub(crate) slm: SlmRef,
 }
 
 impl QuaidServer {
@@ -646,6 +163,19 @@ impl QuaidServer {
             db: Arc::new(Mutex::new(conn)),
             slm,
         }
+    }
+
+    /// Borrow the shared database handle. Used by tool bodies in
+    /// `crate::mcp::tools::*` that need to take the lock.
+    pub(crate) fn db(&self) -> &DbRef {
+        &self.db
+    }
+
+    /// Borrow the shared SLM handle. Used by tool bodies that need to call
+    /// out to the small-language-model client.
+    #[allow(dead_code)]
+    pub(crate) fn slm(&self) -> &SlmRef {
+        &self.slm
     }
 }
 
@@ -848,1186 +378,47 @@ pub struct MemoryRawInput {
     pub overwrite: Option<bool>,
 }
 
-#[tool(tool_box)]
+// Central registry: every `#[tool]` method exposed by `QuaidServer`,
+// regardless of which file in `crate::mcp::tools::*` defines it, must be
+// listed here. The `rmcp::tool_box!` macro generates the static `ToolBox`
+// that the `ServerHandler` impl below queries via `Self::tool_box()`.
+// Adding a new `#[tool]` method WITHOUT updating this list silently drops
+// it from the MCP `tools/list` response.
 impl QuaidServer {
-    #[tool(description = "Get a page by slug")]
-    pub fn memory_get(
-        &self,
-        #[tool(aggr)] input: MemoryGetInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.slug)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
-        let page = vault_sync::get_page_by_input(&db, &input.slug).map_err(map_vault_sync_error)?;
-        let canonical_page = canonicalize_page_for_mcp(&page, &resolved);
-        let successor_slug = supersede::successor_slug_by_id(&db, canonical_page.superseded_by)
-            .map_err(map_db_error)?;
-        let supersedes = canonical_page
-            .frontmatter
-            .get("supersedes")
-            .and_then(serde_json::Value::as_str)
-            .map(|slug| canonical_slug(&resolved.collection_name, slug));
-
-        let json = serde_json::to_string_pretty(&serde_json::json!({
-            "slug": canonical_page.slug,
-            "uuid": canonical_page.uuid,
-            "type": canonical_page.page_type,
-            "title": canonical_page.title,
-            "summary": canonical_page.summary,
-            "compiled_truth": canonical_page.compiled_truth,
-            "timeline": canonical_page.timeline,
-            "frontmatter": canonical_page.frontmatter,
-            "wing": canonical_page.wing,
-            "room": canonical_page.room,
-            "version": canonical_page.version,
-            "created_at": canonical_page.created_at,
-            "updated_at": canonical_page.updated_at,
-            "truth_updated_at": canonical_page.truth_updated_at,
-            "timeline_updated_at": canonical_page.timeline_updated_at,
-            "supersedes": supersedes,
-            "superseded_by": successor_slug,
-        }))
-        .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Append a turn to a conversation session")]
-    pub fn memory_add_turn(
-        &self,
-        #[tool(aggr)] input: MemoryAddTurnInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_content(&input.content)?;
-        namespace::validate_optional_namespace(input.namespace.as_deref())
-            .map_err(map_namespace_error)?;
-        if let Some(metadata) = input.metadata.as_ref() {
-            if !metadata.is_object() {
-                return Err(invalid_params("metadata must be a JSON object"));
-            }
-        }
-
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let role = input.role.parse::<TurnRole>().map_err(invalid_params)?;
-        let timestamp = match input.timestamp.as_deref() {
-            Some(timestamp) => {
-                validate_turn_timestamp(timestamp)?;
-                timestamp.to_owned()
-            }
-            None => {
-                conversation_queue::current_timestamp(&db).map_err(map_extraction_queue_error)?
-            }
-        };
-
-        let write_result = turn_writer::append_turn(
-            &db,
-            &input.session_id,
-            role,
-            &input.content,
-            &timestamp,
-            input.metadata,
-            input.namespace.as_deref(),
-        )
-        .map_err(map_turn_write_error)?;
-
-        let extraction_scheduled_at = if extraction_enabled(&db)? {
-            let scheduled_for =
-                conversation_queue::scheduled_timestamp_after_ms(&db, extraction_debounce_ms(&db)?)
-                    .map_err(map_extraction_queue_error)?;
-            let queue_session_id = conversation_queue::session_queue_key(
-                input.namespace.as_deref(),
-                &input.session_id,
-            );
-            conversation_queue::enqueue(
-                &db,
-                &queue_session_id,
-                &write_result.conversation_path,
-                ExtractionTriggerKind::Debounce,
-                &scheduled_for,
-            )
-            .map_err(map_extraction_queue_error)?;
-            Some(scheduled_for)
-        } else {
-            None
-        };
-
-        let json = serde_json::to_string_pretty(&serde_json::json!({
-            "turn_id": write_result.turn_id,
-            "conversation_path": write_result.conversation_path,
-            "extraction_scheduled_at": extraction_scheduled_at,
-        }))
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Close a conversation session and trigger extraction")]
-    pub fn memory_close_session(
-        &self,
-        #[tool(aggr)] input: MemoryCloseSessionInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        namespace::validate_optional_namespace(input.namespace.as_deref())
-            .map_err(map_namespace_error)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let close_result =
-            turn_writer::close_session(&db, &input.session_id, input.namespace.as_deref())
-                .map_err(map_turn_write_error)?;
-
-        let queue_session_id =
-            conversation_queue::session_queue_key(input.namespace.as_deref(), &input.session_id);
-        let (extraction_triggered, queue_position) = if close_result.newly_closed {
-            let scheduled_for =
-                conversation_queue::current_timestamp(&db).map_err(map_extraction_queue_error)?;
-            conversation_queue::enqueue(
-                &db,
-                &queue_session_id,
-                &close_result.conversation_path,
-                ExtractionTriggerKind::SessionClose,
-                &scheduled_for,
-            )
-            .map_err(map_extraction_queue_error)?;
-            let position = conversation_queue::pending_queue_position(&db, &queue_session_id)
-                .map_err(map_extraction_queue_error)?
-                .unwrap_or(0);
-            (true, position)
-        } else {
-            let position = conversation_queue::pending_queue_position(&db, &queue_session_id)
-                .map_err(map_extraction_queue_error)?
-                .unwrap_or(0);
-            (position > 0, position)
-        };
-
-        let json = serde_json::to_string_pretty(&serde_json::json!({
-            "closed_at": close_result.closed_at,
-            "extraction_triggered": extraction_triggered,
-            "queue_position": queue_position,
-        }))
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Close an action item in place")]
-    pub fn memory_close_action(
-        &self,
-        #[tool(aggr)] input: MemoryCloseActionInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        self.memory_close_action_impl(input, |_, _, _| Ok(()))
-    }
-
-    fn memory_close_action_impl<F>(
-        &self,
-        input: MemoryCloseActionInput,
-        before_write: F,
-    ) -> Result<CallToolResult, rmcp::Error>
-    where
-        F: FnOnce(
-            &Connection,
-            &vault_sync::ResolvedSlug,
-            &crate::core::types::Page,
-        ) -> Result<(), rmcp::Error>,
-    {
-        validate_slug(&input.slug)?;
-        validate_close_action_status(&input.status)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
-        vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
-            .map_err(map_vault_sync_error)?;
-        let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
-            .map_err(map_anyhow_error)?;
-        if page.page_type != "action_item" {
-            return Err(rmcp::Error::new(
-                ErrorCode(-32002),
-                format!(
-                    "KindError: page `{}` is `{}` not `action_item`",
-                    canonical_slug(&resolved.collection_name, &resolved.slug),
-                    page.page_type
-                ),
-                None,
-            ));
-        }
-
-        let mut updated_page = page.clone();
-        crate::core::types::frontmatter_insert_string(
-            &mut updated_page.frontmatter,
-            "status",
-            input.status.clone(),
-        );
-        if let Some(note) = input.note.as_deref() {
-            append_note(&mut updated_page.compiled_truth, note);
-        }
-
-        before_write(&db, &resolved, &updated_page)?;
-
-        let content = crate::core::markdown::render_page(&updated_page);
-        put::put_from_string_quiet(
-            &db,
-            &canonical_slug(&resolved.collection_name, &resolved.slug),
-            &content,
-            Some(page.version),
-        )
-        .map_err(|error| map_close_action_put_error(&db, &resolved, error))?;
-
-        let (updated_at, version): (String, i64) = db
-            .query_row(
-                "SELECT updated_at, version
-                 FROM pages
-                 WHERE collection_id = ?1 AND slug = ?2",
-                rusqlite::params![resolved.collection_id, &resolved.slug],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(map_db_error)?;
-
-        let json = serde_json::to_string_pretty(&serde_json::json!({
-            "updated_at": updated_at,
-            "version": version,
-        }))
-        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Start a correction dialogue for an extracted fact")]
-    pub fn memory_correct(
-        &self,
-        #[tool(aggr)] input: MemoryCorrectInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.fact_slug)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let step = correction::start_correction(
-            &db,
-            self.slm.as_ref(),
-            &input.fact_slug,
-            &input.correction,
-        )
-        .map_err(map_correction_error)?;
-        let json = serde_json::to_string_pretty(&step)
-            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Continue or abandon an open fact correction dialogue")]
-    pub fn memory_correct_continue(
-        &self,
-        #[tool(aggr)] input: MemoryCorrectContinueInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let step = correction::continue_correction(
-            &db,
-            self.slm.as_ref(),
-            &input.correction_id,
-            input.response.as_deref(),
-            input.abandon.unwrap_or(false),
-        )
-        .map_err(map_correction_error)?;
-        let json = serde_json::to_string_pretty(&step)
-            .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Write or update a page")]
-    pub fn memory_put(
-        &self,
-        #[tool(aggr)] input: MemoryPutInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.slug)?;
-        validate_content(&input.content)?;
-        namespace::validate_optional_namespace(input.namespace.as_deref())
-            .map_err(map_namespace_error)?;
-        let namespace_filter = input.namespace.as_deref().unwrap_or("");
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let resolved = resolve_slug_for_mcp(
-            &db,
-            &input.slug,
-            if input.expected_version.is_some() {
-                OpKind::WriteUpdate
-            } else {
-                OpKind::WriteCreate
-            },
-        )?;
-        // Collection write-gate must run BEFORE any OCC/precondition prevalidation.
-        // If the collection is restoring or needs_full_sync, CollectionRestoringError wins
-        // over any version-conflict or existence-conflict that the prevalidation would surface.
-        vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
-            .map_err(map_vault_sync_error)?;
-        let existing_version: Option<i64> = db
-            .query_row(
-                "SELECT version
-                 FROM pages
-                 WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
-                rusqlite::params![resolved.collection_id, namespace_filter, &resolved.slug],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(map_db_error)?;
-        match (existing_version, input.expected_version) {
-            (None, Some(expected)) => {
-                return Err(rmcp::Error::new(
-                    ErrorCode(-32009),
-                    format!("conflict: page does not exist at version {expected}"),
-                    Some(serde_json::json!({ "current_version": null })),
-                ));
-            }
-            (Some(current), None) => {
-                return Err(rmcp::Error::new(
-                    ErrorCode(-32009),
-                    format!(
-                        "conflict: page already exists (current version: {current}). Provide expected_version to update."
-                    ),
-                    Some(serde_json::json!({ "current_version": current })),
-                ));
-            }
-            _ => {}
-        }
-        crate::commands::put::put_from_string_quiet_with_namespace(
-            &db,
-            &canonical_slug(&resolved.collection_name, &resolved.slug),
-            &input.content,
-            Some(namespace_filter),
-            input.expected_version,
-        )
-        .map_err(|err| {
-            let message = err.to_string();
-            if message.contains("Conflict:") {
-                rmcp::Error::new(
-                    ErrorCode(-32009),
-                    message.replace("Conflict: ", "conflict: "),
-                    Some(serde_json::json!({ "current_version": existing_version })),
-                )
-            } else {
-                map_anyhow_error(err)
-            }
-        })?;
-        let version: i64 = db
-            .query_row(
-                "SELECT version
-                 FROM pages
-                 WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
-                rusqlite::params![resolved.collection_id, namespace_filter, &resolved.slug],
-                |row| row.get(0),
-            )
-            .map_err(map_db_error)?;
-        let verb = if input.expected_version.is_some() {
-            "Updated"
-        } else {
-            "Created"
-        };
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "{verb} {}::{} (version {})",
-            resolved.collection_name, resolved.slug, version
-        ))]))
-    }
-
-    #[tool(description = "Hybrid semantic + FTS5 query")]
-    pub fn memory_query(
-        &self,
-        #[tool(aggr)] input: MemoryQueryInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        namespace::validate_optional_namespace(input.namespace.as_deref())
-            .map_err(map_namespace_error)?;
-        let namespace_filter = input.namespace.as_deref().or(Some(""));
-        let collection_filter =
-            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
-        let include_superseded = input.include_superseded.unwrap_or(false);
-
-        let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
-        let results = hybrid_search(
-            &db,
-            HybridSearch {
-                query: &input.query,
-                wing: input.wing.as_deref(),
-                collection: collection_filter.as_ref().map(|collection| collection.id),
-                namespace: namespace_filter,
-                include_superseded,
-                canonical: true,
-                limit,
-            },
-        )
-        .map_err(map_search_error)?;
-
-        // Auto-log knowledge gap on weak results
-        if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
-            let _ = gaps::log_gap(
-                None,
-                &input.query,
-                "",
-                results.first().map(|r| r.score),
-                &db,
-            );
-        }
-
-        let depth_normalized = input.depth.as_deref().map(|d| d.trim().to_lowercase());
-        let results = match depth_normalized.as_deref() {
-            Some("auto") => {
-                let budget: usize = db
-                    .query_row(
-                        "SELECT value FROM config WHERE key = 'default_token_budget'",
-                        [],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(4000);
-                progressive_retrieve_with_namespace(
-                    results.clone(),
-                    budget,
-                    3,
-                    collection_filter.as_ref().map(|c| c.id),
-                    namespace_filter,
-                    include_superseded,
-                    &db,
-                )
-                .unwrap_or(results)
-            }
-            _ => results,
-        };
-
-        let json = serde_json::to_string_pretty(&results)
-            .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "FTS5 full-text search")]
-    pub fn memory_search(
-        &self,
-        #[tool(aggr)] input: MemorySearchInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        namespace::validate_optional_namespace(input.namespace.as_deref())
-            .map_err(map_namespace_error)?;
-        let namespace_filter = input.namespace.as_deref().or(Some(""));
-        let collection_filter =
-            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
-        let include_superseded = input.include_superseded.unwrap_or(false);
-
-        let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        let safe_query = sanitize_fts_query(&input.query);
-        let results = crate::core::fts::search_fts(
-            &db,
-            crate::core::fts::FtsQuery {
-                query: &safe_query,
-                wing: input.wing.as_deref(),
-                collection: collection_filter.as_ref().map(|collection| collection.id),
-                namespace: namespace_filter,
-                include_superseded,
-                canonical: true,
-                limit,
-            },
-        )
-        .map_err(map_search_error)?;
-
-        let json = serde_json::to_string_pretty(&results)
-            .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "List pages with optional filters")]
-    pub fn memory_list(
-        &self,
-        #[tool(aggr)] input: MemoryListInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        namespace::validate_optional_namespace(input.namespace.as_deref())
-            .map_err(map_namespace_error)?;
-        let namespace_filter = input.namespace.as_deref().or(Some(""));
-        let collection_filter =
-            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
-
-        let limit = input.limit.unwrap_or(50).min(MAX_LIMIT);
-        let mut sql = String::from(
-            "SELECT c.name || '::' || p.slug, p.type, p.summary \
-             FROM pages p \
-             JOIN collections c ON c.id = p.collection_id \
-             WHERE 1=1",
-        );
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-        if let Some(ref w) = input.wing {
-            sql.push_str(" AND p.wing = ?");
-            params.push(Box::new(w.clone()));
-        }
-        if let Some(ref t) = input.page_type {
-            sql.push_str(" AND p.type = ?");
-            params.push(Box::new(t.clone()));
-        }
-        if let Some(collection) = collection_filter {
-            sql.push_str(" AND p.collection_id = ?");
-            params.push(Box::new(collection.id));
-        }
-        if let Some(namespace) = namespace_filter {
-            if namespace.is_empty() {
-                sql.push_str(" AND p.namespace = ?");
-                params.push(Box::new(String::new()));
-            } else {
-                sql.push_str(" AND (p.namespace = ? OR p.namespace = '')");
-                params.push(Box::new(namespace.to_owned()));
-            }
-        }
-        sql.push_str(" ORDER BY p.updated_at DESC LIMIT ?");
-        params.push(Box::new(limit));
-
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = db.prepare(&sql).map_err(map_db_error)?;
-
-        #[derive(Serialize)]
-        struct ListEntry {
-            slug: String,
-            #[serde(rename = "type")]
-            page_type: String,
-            summary: String,
-        }
-
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok(ListEntry {
-                    slug: row.get(0)?,
-                    page_type: row.get(1)?,
-                    summary: row.get(2)?,
-                })
-            })
-            .map_err(map_db_error)?;
-
-        let mut entries = Vec::new();
-        for row in rows {
-            entries.push(row.map_err(map_db_error)?);
-        }
-
-        let json = serde_json::to_string_pretty(&entries)
-            .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Create a typed temporal link between two pages")]
-    pub fn memory_link(
-        &self,
-        #[tool(aggr)] input: MemoryLinkInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.from_slug)?;
-        validate_slug(&input.to_slug)?;
-        validate_relationship(&input.relationship)?;
-        if let Some(valid_from) = input.valid_from.as_deref() {
-            validate_temporal_value(valid_from, "valid_from")?;
-        }
-        if let Some(valid_until) = input.valid_until.as_deref() {
-            validate_temporal_value(valid_until, "valid_until")?;
-        }
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let from = resolve_slug_for_mcp(&db, &input.from_slug, OpKind::WriteUpdate)?;
-        let to = resolve_slug_for_mcp(&db, &input.to_slug, OpKind::WriteUpdate)?;
-        let from_slug = canonical_slug(&from.collection_name, &from.slug);
-        let to_slug = canonical_slug(&to.collection_name, &to.slug);
-
-        link::run_silent(
-            &db,
-            &from_slug,
-            &to_slug,
-            &input.relationship,
-            input.valid_from,
-            input.valid_until,
-        )
-        .map_err(map_anyhow_error)?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Linked {} → {} ({})",
-            from_slug, to_slug, input.relationship
-        ))]))
-    }
-
-    #[tool(description = "Close a temporal link by its database ID")]
-    pub fn memory_link_close(
-        &self,
-        #[tool(aggr)] input: MemoryLinkCloseInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_temporal_value(&input.valid_until, "valid_until")?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        link::close_silent(&db, input.link_id, &input.valid_until).map_err(map_anyhow_error)?;
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Closed link {} valid_until={}",
-            input.link_id, input.valid_until
-        ))]))
-    }
-
-    #[tool(description = "List inbound backlinks for a page")]
-    pub fn memory_backlinks(
-        &self,
-        #[tool(aggr)] input: MemoryBacklinksInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.slug)?;
-        let filter = parse_temporal_filter(input.temporal.as_deref())?;
-        let limit = input.limit.unwrap_or(100).min(MAX_LIMIT);
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
-        let to_id = page_id_for_resolved(&db, &resolved)?;
-
-        #[derive(Serialize)]
-        struct BacklinkRow {
-            id: i64,
-            from_slug: String,
-            relationship: String,
-            valid_from: Option<String>,
-            valid_until: Option<String>,
-        }
-
-        let temporal_clause = match filter {
-            TemporalFilter::Active => {
-                " AND (l.valid_from IS NULL OR l.valid_from <= date('now'))\
-                 AND (l.valid_until IS NULL OR l.valid_until >= date('now'))"
-            }
-            TemporalFilter::All => "",
-        };
-
-        let sql = format!(
-            "SELECT l.id, c.name || '::' || p.slug, l.relationship, l.valid_from, l.valid_until \
-             FROM links l \
-             JOIN pages p ON l.from_page_id = p.id \
-             JOIN collections c ON c.id = p.collection_id \
-             WHERE l.to_page_id = ?1{temporal_clause} \
-             ORDER BY l.created_at DESC \
-             LIMIT ?2"
-        );
-
-        let mut stmt = db.prepare(&sql).map_err(map_db_error)?;
-
-        let rows: Vec<BacklinkRow> = stmt
-            .query_map(rusqlite::params![to_id, limit], |row| {
-                Ok(BacklinkRow {
-                    id: row.get(0)?,
-                    from_slug: row.get(1)?,
-                    relationship: row.get(2)?,
-                    valid_from: row.get(3)?,
-                    valid_until: row.get(4)?,
-                })
-            })
-            .map_err(map_db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(map_db_error)?;
-
-        let json = serde_json::to_string_pretty(&rows)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "N-hop neighbourhood graph from a page")]
-    pub fn memory_graph(
-        &self,
-        #[tool(aggr)] input: MemoryGraphInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.slug)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        let depth = input.depth.unwrap_or(1).min(graph::MAX_DEPTH);
-        let filter = parse_temporal_filter(input.temporal.as_deref())?;
-        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
-        let page_id = page_id_for_resolved(&db, &resolved)?;
-        let result = graph::neighborhood_graph_for_page(
-            page_id,
-            &resolved.collection_name,
-            &resolved.slug,
-            depth,
-            filter,
-            &db,
-        )
-        .map_err(map_graph_error)?;
-
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Run contradiction detection on a page or all pages")]
-    pub fn memory_check(
-        &self,
-        #[tool(aggr)] input: MemoryCheckInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        if let Some(slug) = input.slug.as_deref() {
-            validate_slug(slug)?;
-        }
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let slug_filter = input
-            .slug
-            .as_deref()
-            .map(|slug| resolve_slug_for_mcp(&db, slug, OpKind::WriteUpdate))
-            .transpose()?;
-
-        let selected_page_id = if let Some(resolved) = slug_filter.as_ref() {
-            vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
-                .map_err(map_vault_sync_error)?;
-            let page_id = page_id_for_resolved(&db, resolved)?;
-            let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
-                .map_err(map_anyhow_error)?;
-            crate::core::assertions::extract_assertions(&page, &db)
-                .map_err(|error| map_anyhow_error(error.into()))?;
-            crate::core::assertions::check_assertions_for_page_id(page_id, &db)
-                .map_err(|error| map_anyhow_error(error.into()))?;
-            Some(page_id)
-        } else {
-            check::execute_check(&db, None, true, None).map_err(map_anyhow_error)?;
-            None
-        };
-
-        // Fetch unresolved contradictions as JSON
-        use crate::core::assertions::Contradiction;
-        let contradictions: Vec<Contradiction> = if let Some(page_id) = selected_page_id {
-            let mut stmt = db
-                .prepare(
-                    "SELECT cp.name || '::' || p.slug, \
-                            COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug), \
-                            c.type, c.description, c.detected_at \
-                      FROM contradictions c \
-                      JOIN pages p ON p.id = c.page_id \
-                      JOIN collections cp ON cp.id = p.collection_id \
-                      LEFT JOIN pages other ON other.id = c.other_page_id \
-                      LEFT JOIN collections co ON co.id = other.collection_id \
-                      WHERE c.resolved_at IS NULL AND (c.page_id = ?1 OR c.other_page_id = ?1) \
-                      ORDER BY c.detected_at, p.slug",
-                )
-                .map_err(map_db_error)?;
-
-            let rows = stmt
-                .query_map([page_id], |row| {
-                    Ok(Contradiction {
-                        page_slug: row.get(0)?,
-                        other_page_slug: row.get(1)?,
-                        r#type: row.get(2)?,
-                        description: row.get(3)?,
-                        detected_at: row.get(4)?,
-                    })
-                })
-                .map_err(map_db_error)?;
-
-            rows.collect::<Result<Vec<_>, _>>().map_err(map_db_error)?
-        } else {
-            let mut stmt = db
-                .prepare(
-                    "SELECT cp.name || '::' || p.slug, \
-                            COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug), \
-                            c.type, c.description, c.detected_at \
-                      FROM contradictions c \
-                      JOIN pages p ON p.id = c.page_id \
-                      JOIN collections cp ON cp.id = p.collection_id \
-                      LEFT JOIN pages other ON other.id = c.other_page_id \
-                      LEFT JOIN collections co ON co.id = other.collection_id \
-                      WHERE c.resolved_at IS NULL \
-                      ORDER BY c.detected_at, p.slug",
-                )
-                .map_err(map_db_error)?;
-
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok(Contradiction {
-                        page_slug: row.get(0)?,
-                        other_page_slug: row.get(1)?,
-                        r#type: row.get(2)?,
-                        description: row.get(3)?,
-                        detected_at: row.get(4)?,
-                    })
-                })
-                .map_err(map_db_error)?;
-
-            rows.collect::<Result<Vec<_>, _>>().map_err(map_db_error)?
-        };
-
-        let json = serde_json::to_string_pretty(&contradictions)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Show timeline entries for a page")]
-    pub fn memory_timeline(
-        &self,
-        #[tool(aggr)] input: MemoryTimelineInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.slug)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
-
-        let limit = input.limit.unwrap_or(20).min(MAX_LIMIT);
-
-        let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
-            .map_err(map_anyhow_error)?;
-
-        let page_id = page_id_for_resolved(&db, &resolved)?;
-
-        // Query structured timeline_entries table
-        let mut stmt = db
-            .prepare(
-                "SELECT date, summary, source, detail FROM timeline_entries \
-                 WHERE page_id = ?1 ORDER BY date DESC LIMIT ?2",
-            )
-            .map_err(map_db_error)?;
-
-        let rows = stmt
-            .query_map(rusqlite::params![page_id, limit], |row| {
-                let date: String = row.get(0)?;
-                let summary: String = row.get(1)?;
-                let source: String = row.get(2)?;
-                let detail: String = row.get(3)?;
-                let mut entry = format!("{date}: {summary}");
-                if !source.is_empty() {
-                    entry.push_str(&format!(" [source: {source}]"));
-                }
-                if !detail.is_empty() {
-                    entry.push_str(&format!("\n{detail}"));
-                }
-                Ok(entry)
-            })
-            .map_err(map_db_error)?;
-
-        let mut entries: Vec<String> = Vec::new();
-        for row in rows {
-            entries.push(row.map_err(map_db_error)?);
-        }
-
-        // Fall back to legacy timeline markdown field
-        if entries.is_empty() {
-            let timeline = page.timeline.trim();
-            if !timeline.is_empty() {
-                entries = timeline
-                    .split("\n---\n")
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .take(limit as usize)
-                    .collect();
-            }
-        }
-
-        #[derive(Serialize)]
-        struct TimelineOutput {
-            slug: String,
-            entries: Vec<String>,
-        }
-
-        let output = TimelineOutput {
-            slug: canonical_slug(&resolved.collection_name, &resolved.slug),
-            entries,
-        };
-
-        let json = serde_json::to_string_pretty(&output)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "List, add, or remove tags on a page")]
-    pub fn memory_tags(
-        &self,
-        #[tool(aggr)] input: MemoryTagsInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.slug)?;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        let add = input.add.unwrap_or_default();
-        let remove = input.remove.unwrap_or_default();
-        validate_tag_list(&add, "add")?;
-        validate_tag_list(&remove, "remove")?;
-        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
-        if !add.is_empty() || !remove.is_empty() {
-            vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
-                .map_err(map_vault_sync_error)?;
-        }
-        let page_id: i64 = db
-            .query_row(
-                "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-                rusqlite::params![resolved.collection_id, &resolved.slug],
-                |row| row.get(0),
-            )
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
-                    ErrorCode(-32001),
-                    format!("page not found: {}", input.slug),
-                    None,
-                ),
-                other => map_db_error(other),
-            })?;
-
-        for tag in &add {
-            db.execute(
-                "INSERT OR IGNORE INTO tags (page_id, tag) VALUES (?1, ?2)",
-                rusqlite::params![page_id, tag],
-            )
-            .map_err(map_db_error)?;
-        }
-
-        for tag in &remove {
-            db.execute(
-                "DELETE FROM tags WHERE page_id = ?1 AND tag = ?2",
-                rusqlite::params![page_id, tag],
-            )
-            .map_err(map_db_error)?;
-        }
-
-        // Return current tags
-        let mut stmt = db
-            .prepare("SELECT tag FROM tags WHERE page_id = ?1 ORDER BY tag")
-            .map_err(map_db_error)?;
-        let tags: Vec<String> = stmt
-            .query_map([page_id], |row| row.get(0))
-            .map_err(map_db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(map_db_error)?;
-
-        let json = serde_json::to_string_pretty(&tags)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Log a knowledge gap (privacy-safe: stores query_hash, not raw query)")]
-    pub fn memory_gap(
-        &self,
-        #[tool(aggr)] input: MemoryGapInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        if input.query.trim().is_empty() {
-            return Err(invalid_params("query must not be empty"));
-        }
-        let mut context = input.context.unwrap_or_default();
-        if context.len() > MAX_GAP_CONTEXT_LEN {
-            return Err(invalid_params(format!(
-                "context exceeds maximum length of {MAX_GAP_CONTEXT_LEN} characters"
-            )));
-        }
-        if !context.is_empty() {
-            // Do not persist caller-provided context to avoid leaking sensitive query text.
-            context.clear();
-        }
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let page_id = if let Some(slug) = input.slug.as_deref() {
-            validate_slug(slug)?;
-            let resolved = resolve_slug_for_mcp(&db, slug, OpKind::WriteUpdate)?;
-            vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
-                .map_err(map_vault_sync_error)?;
-            Some(page_id_for_resolved(&db, &resolved)?)
-        } else {
-            None
-        };
-
-        let query_hash = {
-            use sha2::{Digest, Sha256};
-            let digest = Sha256::digest(input.query.as_bytes());
-            digest
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        };
-
-        match page_id {
-            Some(page_id) => gaps::log_gap_for_page(page_id, &input.query, &context, None, &db),
-            None => gaps::log_gap(None, &input.query, &context, None, &db),
-        }
-        .map_err(|e| rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None))?;
-
-        // Retrieve the gap ID
-        let gap_id: i64 = db
-            .query_row(
-                "SELECT id FROM knowledge_gaps WHERE query_hash = ?1",
-                [&query_hash],
-                |row| row.get(0),
-            )
-            .map_err(map_db_error)?;
-
-        let result = serde_json::json!({
-            "id": gap_id,
-            "query_hash": query_hash,
-            "page_id": page_id,
-        });
-        Ok(CallToolResult::success(vec![Content::text(
-            serialize_response(&result)?,
-        )]))
-    }
-
-    #[tool(description = "List knowledge gaps")]
-    pub fn memory_gaps(
-        &self,
-        #[tool(aggr)] input: MemoryGapsInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let resolved = input.resolved.unwrap_or(false);
-        let limit = input.limit.unwrap_or(20).min(MAX_LIMIT) as usize;
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        let gap_list = gaps::list_gaps(resolved, limit, &db).map_err(|e| {
-            rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None)
-        })?;
-
-        let json = serde_json::to_string_pretty(&gap_list)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tool(description = "Brain statistics (page count, link count, etc.)")]
-    pub fn memory_stats(
-        &self,
-        #[tool(aggr)] _input: MemoryStatsInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        let page_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-        let link_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM links", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-        let assertion_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM assertions", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-        let contradiction_count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM contradictions WHERE resolved_at IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(map_db_error)?;
-        let gap_count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM knowledge_gaps WHERE resolved_at IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(map_db_error)?;
-        let embedding_count: i64 = db
-            .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
-            .map_err(map_db_error)?;
-
-        let active_model: Option<String> = db
-            .query_row(
-                "SELECT name FROM embedding_models WHERE active = 1 LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        let db_size_bytes: u64 = db
-            .query_row(
-                "SELECT file FROM pragma_database_list WHERE name = 'main'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .ok()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .map(|m| m.len())
-            .unwrap_or(0);
-
-        let result = serde_json::json!({
-            "page_count": page_count,
-            "link_count": link_count,
-            "assertion_count": assertion_count,
-            "contradiction_count": contradiction_count,
-            "gap_count": gap_count,
-            "embedding_count": embedding_count,
-            "active_model": active_model,
-            "db_size_bytes": db_size_bytes,
-        });
-
-        Ok(CallToolResult::success(vec![Content::text(
-            serialize_response(&result)?,
-        )]))
-    }
-
-    #[tool(description = "List collection status for MCP clients")]
-    pub fn memory_collections(
-        &self,
-        #[tool(aggr)] _input: MemoryCollectionsInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let collections = vault_sync::list_memory_collections(&db).map_err(map_vault_sync_error)?;
-        Ok(CallToolResult::success(vec![Content::text(
-            serialize_response(&collections)?,
-        )]))
-    }
-
-    #[tool(description = "Create namespace metadata")]
-    pub fn memory_namespace_create(
-        &self,
-        #[tool(aggr)] input: MemoryNamespaceCreateInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let namespace = namespace::create_namespace(&db, &input.id, input.ttl_hours)
-            .map_err(map_namespace_error)?;
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&namespace)
-                .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?,
-        )]))
-    }
-
-    #[tool(description = "Destroy a namespace and all pages assigned to it")]
-    pub fn memory_namespace_destroy(
-        &self,
-        #[tool(aggr)] input: MemoryNamespaceDestroyInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let deleted_pages =
-            namespace::destroy_namespace(&db, &input.id).map_err(map_namespace_error)?;
-        let result = serde_json::json!({
-            "status": "ok",
-            "namespace": input.id,
-            "deleted_pages": deleted_pages,
-        });
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result)
-                .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?,
-        )]))
-    }
-
-    #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
-    pub fn memory_raw(
-        &self,
-        #[tool(aggr)] input: MemoryRawInput,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        validate_slug(&input.slug)?;
-        if input.source.is_empty() {
-            return Err(invalid_params("source must not be empty"));
-        }
-        if !input.data.is_object() {
-            return Err(invalid_params(
-                "data must be a JSON object, not an array or scalar",
-            ));
-        }
-        let data_json = serde_json::to_string(&input.data)
-            .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
-        if data_json.len() > MAX_RAW_DATA_LEN {
-            return Err(invalid_params(format!(
-                "data exceeds maximum size of {MAX_RAW_DATA_LEN} bytes"
-            )));
-        }
-        let overwrite = input.overwrite.unwrap_or(false);
-        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
-        vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
-            .map_err(map_vault_sync_error)?;
-
-        let page_id = page_id_for_resolved(&db, &resolved)?;
-        let canonical_page_slug = canonical_slug(&resolved.collection_name, &resolved.slug);
-
-        // Guard against silent replacement of existing source data.
-        let existing: Option<i64> = db
-            .query_row(
-                "SELECT id FROM raw_data WHERE page_id = ?1 AND source = ?2",
-                rusqlite::params![page_id, &input.source],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(map_db_error)?;
-
-        if existing.is_some() && !overwrite {
-            return Err(rmcp::Error::new(
-                ErrorCode(-32003),
-                format!(
-                    "raw data for source '{}' already exists on '{}'; set overwrite=true to replace",
-                    input.source, canonical_page_slug
-                ),
-                None,
-            ));
-        }
-
-        db.execute(
-            "INSERT OR REPLACE INTO raw_data (page_id, source, data, fetched_at) \
-             VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
-            rusqlite::params![page_id, input.source, data_json],
-        )
-        .map_err(map_db_error)?;
-
-        let row_id = db.last_insert_rowid();
-        let result = serde_json::json!({ "id": row_id });
-        Ok(CallToolResult::success(vec![Content::text(
-            serialize_response(&result)?,
-        )]))
-    }
+    rmcp::tool_box!(QuaidServer {
+        // pages
+        memory_get,
+        memory_put,
+        memory_list,
+        memory_raw,
+        // search
+        memory_query,
+        memory_search,
+        // links
+        memory_link,
+        memory_link_close,
+        memory_backlinks,
+        memory_graph,
+        // assertions
+        memory_check,
+        // tags
+        memory_timeline,
+        memory_tags,
+        // gaps
+        memory_gap,
+        memory_gaps,
+        // conversation
+        memory_add_turn,
+        memory_close_session,
+        memory_close_action,
+        memory_correct,
+        memory_correct_continue,
+        // admin
+        memory_stats,
+        memory_collections,
+        memory_namespace_create,
+        memory_namespace_destroy,
+    } tool_box);
 }
 
 #[tool(tool_box)]
@@ -2067,6 +458,51 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
+
+    /// Spec: every `#[tool]` method declared in `mcp::tools::*` (or in this
+    /// file's residual impl block) MUST be wired into the central
+    /// `tool_box!` registry in `server.rs`. If the tool count drifts, this
+    /// test catches it before the post-split MCP wire surface diverges from
+    /// the pre-split baseline.
+    #[test]
+    fn tool_registry_lists_all_24_tools() {
+        let names: std::collections::BTreeSet<String> = QuaidServer::tool_box()
+            .list()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let expected: std::collections::BTreeSet<String> = [
+            "memory_get",
+            "memory_put",
+            "memory_list",
+            "memory_raw",
+            "memory_query",
+            "memory_search",
+            "memory_link",
+            "memory_link_close",
+            "memory_backlinks",
+            "memory_graph",
+            "memory_check",
+            "memory_timeline",
+            "memory_tags",
+            "memory_gap",
+            "memory_gaps",
+            "memory_stats",
+            "memory_collections",
+            "memory_namespace_create",
+            "memory_namespace_destroy",
+            "memory_add_turn",
+            "memory_close_session",
+            "memory_close_action",
+            "memory_correct",
+            "memory_correct_continue",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        assert_eq!(names, expected, "tool registry drift");
+        assert_eq!(names.len(), 24, "expected 24 tools, got {}", names.len());
+    }
 
     #[test]
     fn serialize_response_returns_rmcp_error_on_unrepresentable_input() {

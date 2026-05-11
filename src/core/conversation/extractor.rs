@@ -1,3 +1,17 @@
+//! Extraction worker that drains the queue, slices each conversation into
+//! lookback-aware turn windows, prompts the SLM for structured facts, and
+//! hands the validated facts to a pluggable `FactWriter` (either the
+//! resolving writer that performs full supersede semantics or a no-op
+//! writer for tests). Cursor state in the conversation frontmatter is
+//! advanced only after every window of a job succeeds so partial failures
+//! re-extract from the same boundary.
+//!
+//! See also: `super::queue` for the SQLite-backed job table this worker
+//! consumes, `super::slm` for the SLM runtime, `super::supersede` for the
+//! resolve-and-write pipeline that turns raw facts into pages, and
+//! `super::format` for the on-disk conversation parser used to materialise
+//! windows.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -18,7 +32,9 @@ use crate::core::types::{
     ConversationFile, ExtractionJob, ExtractionResponse, ExtractionTriggerKind, Turn, WindowedTurns,
 };
 
+/// Default `max_tokens` budget for a single SLM extraction inference call.
 pub const DEFAULT_EXTRACTION_MAX_TOKENS: usize = 2048;
+/// Default sleep interval between worker polls when the queue is empty.
 pub const DEFAULT_WORKER_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 const DEFAULT_WINDOW_TURNS: usize = 5;
@@ -43,9 +59,17 @@ const EXTRACTION_SYSTEM_PROMPT: &str = concat!(
     "Return: {\"facts\": [...]}. Empty array if nothing durable."
 );
 
+/// SLM seam consumed by [`Worker`]; production code uses
+/// [`super::slm::LazySlmRunner`] and tests plug in stubs to drive the
+/// worker without loading model weights.
 pub trait SlmClient {
+    /// Run inference under the given model alias with the supplied prompt
+    /// and token budget, returning the raw model output.
     fn infer(&self, alias: &str, prompt: &str, max_tokens: usize) -> Result<String, SlmError>;
 
+    /// Returns `true` when the SLM runtime is administratively disabled
+    /// (e.g. the embedded-model build is running without an installed
+    /// extraction model); the worker treats this like an empty queue.
     fn is_runtime_disabled(&self) -> bool {
         false
     }
@@ -61,10 +85,17 @@ impl SlmClient for LazySlmRunner {
     }
 }
 
+/// `FactWriter` that intentionally discards extracted facts; used in
+/// dry-run paths and tests that exercise the queue and prompt flow
+/// without touching the vault.
 #[derive(Debug, Default)]
 pub struct PendingFactWriter;
 
+/// Strategy plugged into [`Worker`] to decide what happens with extracted
+/// facts after the SLM call succeeds.
 pub trait FactWriter {
+    /// Persist (or otherwise act on) the facts produced for one window of
+    /// a job; the default implementation is a no-op.
     fn write_window(
         &self,
         _db: &Connection,
@@ -75,6 +106,8 @@ pub trait FactWriter {
         Ok(())
     }
 
+    /// Hook invoked after every window of a job has been written, just
+    /// before the worker marks the queue row done; defaults to a no-op.
     fn before_mark_done(&self, _db: &Connection, _job: &ExtractionJob) -> Result<(), WorkerError> {
         Ok(())
     }
@@ -101,6 +134,9 @@ impl FactWriter for ResolvingFactWriter {
     }
 }
 
+/// Extraction worker that owns a borrowed DB connection plus a pluggable
+/// SLM client and fact writer, and exposes the polling, windowing,
+/// inference, and persistence steps as a small set of methods.
 #[derive(Debug)]
 pub struct Worker<'db, S = LazySlmRunner, W = ResolvingFactWriter> {
     db: &'db Connection,
@@ -112,23 +148,33 @@ pub struct Worker<'db, S = LazySlmRunner, W = ResolvingFactWriter> {
     max_tokens: usize,
 }
 
+/// Errors returned from the extraction worker's polling and processing loop.
 #[derive(Debug, Error)]
 pub enum WorkerError {
+    /// An operation against the extraction queue table failed.
     #[error("queue error: {0}")]
     Queue(#[from] ExtractionQueueError),
 
+    /// Parsing or rendering the on-disk conversation file failed.
     #[error("conversation format error: {0}")]
     Format(#[from] format::ConversationFormatError),
 
+    /// The SLM runner surfaced an error during inference or parsing.
     #[error("SLM error: {0}")]
     Slm(#[from] SlmError),
 
+    /// Filesystem I/O failed (typically when updating the cursor frontmatter).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Required runtime configuration is missing or unreadable.
     #[error("worker config error: {message}")]
-    Config { message: String },
+    Config {
+        /// Human-readable explanation of the config failure.
+        message: String,
+    },
 
+    /// The fact-write seam refused or failed on a produced fact.
     #[error("fact resolution error: {0}")]
     FactResolution(#[from] FactResolutionError),
 }
@@ -138,6 +184,9 @@ where
     S: SlmClient,
     W: FactWriter,
 {
+    /// Build a worker bound to a database connection, SLM client, and
+    /// fact-writer strategy, reading model alias and window size from
+    /// the on-disk configuration.
     pub fn new(db: &'db Connection, slm: S, vault_writer: W) -> Result<Self, WorkerError> {
         let model_alias =
             db::read_config_value_or(db, "extraction.model_alias", DEFAULT_MODEL_ALIAS).map_err(
@@ -158,12 +207,17 @@ where
         })
     }
 
+    /// Override the worker's poll interval and inference token budget;
+    /// used by tests and the CLI to tune behavior without touching config.
     pub fn with_limits(mut self, poll_interval: Duration, max_tokens: usize) -> Self {
         self.poll_interval = poll_interval;
         self.max_tokens = max_tokens;
         self
     }
 
+    /// Atomically lease the next ready job from the queue, returning
+    /// `None` when extraction is disabled, the SLM runtime is unavailable,
+    /// or the queue has no due rows.
     pub fn claim_next_job(&self) -> Result<Option<ExtractionJob>, WorkerError> {
         if !extraction_enabled(self.db)? || self.slm.is_runtime_disabled() {
             return Ok(None);
@@ -171,10 +225,15 @@ where
         queue::dequeue(self.db).map_err(WorkerError::from)
     }
 
+    /// Attempt to lease and fully process a single job, returning `true`
+    /// when work was done and `false` when the queue had nothing ready.
     pub fn poll_once(&self) -> Result<bool, WorkerError> {
         Ok(self.process_next_job()?.is_some())
     }
 
+    /// Like [`Self::poll_once`] but sleeps for the configured poll
+    /// interval when no work is found, so callers can write a tight loop
+    /// without busy-spinning.
     pub fn run_once(&self) -> Result<bool, WorkerError> {
         let processed = self.poll_once()?;
         if !processed {
@@ -183,16 +242,21 @@ where
         Ok(processed)
     }
 
+    /// Drive the worker forever, calling [`Self::run_once`] in a loop
+    /// until an unrecoverable error bubbles up.
     pub fn run_forever(&self) -> Result<(), WorkerError> {
         loop {
             let _ = self.run_once()?;
         }
     }
 
+    /// Park the current thread for the worker's configured poll interval.
     pub fn sleep_until_next_poll(&self) {
         thread::sleep(self.poll_interval);
     }
 
+    /// Lease the next job and run [`Self::process_job`] against it,
+    /// returning the job on success or `None` if the queue was empty.
     pub fn process_next_job(&self) -> Result<Option<ExtractionJob>, WorkerError> {
         let Some(job) = self.claim_next_job()? else {
             return Ok(None);
@@ -201,6 +265,9 @@ where
         Ok(Some(job))
     }
 
+    /// Parse the job's conversation file and compute the turn windows
+    /// that would be sent to the SLM, without invoking the model; used by
+    /// the CLI's dry-run path and by tests.
     pub fn plan_windows_for_job(
         &self,
         job: &ExtractionJob,
@@ -209,6 +276,9 @@ where
         Ok(self.compute_windows(&conversation, job.trigger_kind))
     }
 
+    /// Slice a parsed conversation into extraction windows using the
+    /// worker's configured `window_turns`, applying trigger-specific
+    /// lookback rules.
     pub fn compute_windows(
         &self,
         conversation: &ConversationFile,
@@ -217,10 +287,13 @@ where
         compute_windows(conversation, trigger_kind, self.window_turns)
     }
 
+    /// Assemble the SLM prompt for a single window under the given session id.
     pub fn build_prompt(&self, session_id: &str, window: &WindowedTurns) -> String {
         build_prompt(session_id, window)
     }
 
+    /// Build the prompt for a single window, invoke the SLM, and parse
+    /// the JSON envelope into an [`ExtractionResponse`].
     pub fn infer_window(
         &self,
         session_id: &str,
@@ -234,6 +307,9 @@ where
         parse_response(&raw).map_err(WorkerError::from)
     }
 
+    /// Like [`Self::infer_window`] but tied to a specific job so a parse
+    /// failure is recorded against the queue row's `last_error` before
+    /// being surfaced.
     pub fn infer_and_parse_window(
         &self,
         job: &ExtractionJob,
@@ -254,6 +330,10 @@ where
         }
     }
 
+    /// Run every window of a leased job through the SLM and the fact
+    /// writer, advance the conversation's extraction cursor on success,
+    /// and mark the queue row done; records `last_error` and surfaces the
+    /// failure when any step fails.
     pub fn process_job(&self, job: &ExtractionJob) -> Result<(), WorkerError> {
         let conversation_path = self.resolve_conversation_path(&job.conversation_path)?;
         let mut conversation = format::parse(&conversation_path)?;
@@ -292,6 +372,9 @@ where
         queue::mark_done(self.db, job.id, job.attempts).map_err(WorkerError::from)
     }
 
+    /// Persist a truncated copy of the offending raw SLM output to the
+    /// queue row's `last_error` column so the failure can be inspected
+    /// after the worker increments the attempt counter.
     pub fn record_parse_failure(
         &self,
         job: &ExtractionJob,
@@ -331,6 +414,10 @@ where
     }
 }
 
+/// Slice a parsed conversation into extraction windows: chunk new turns
+/// past the cursor into `window_turns`-sized batches, optionally fall back
+/// to a trailing-context-only window on session close, and pad short
+/// batches with lookback turns for context.
 pub fn compute_windows(
     conversation: &ConversationFile,
     trigger_kind: ExtractionTriggerKind,
@@ -388,6 +475,9 @@ pub fn compute_windows(
     }]
 }
 
+/// Render the SLM prompt for one extraction window, framing the new
+/// turns as the extraction target and the lookback turns as
+/// reference-only context.
 pub fn build_prompt(session_id: &str, window: &WindowedTurns) -> String {
     format!(
         "SYSTEM:\n{EXTRACTION_SYSTEM_PROMPT}\n\nUSER:\nSession: {session_id}\nNew turns to extract from ({}):\n{}\nLookback context (do not extract from these — for reference only):\n{}",

@@ -1,12 +1,12 @@
-//! Inference — text embedding and vector search via configurable BGE models.
+//! Candle-backed text embedding and `sqlite-vec` k-NN search over the
+//! `page_embeddings_vec_*` virtual tables. Two compile-time channels are
+//! supported: `embedded-model` ships the airgapped BGE-small assets directly
+//! in the binary; `online-model` downloads and caches a user-selected BGE
+//! variant on first use. A deterministic SHA-256-based hash shim provides a
+//! degraded fallback when no real model is available.
 //!
-//! Two compile-time channels are supported:
-//!
-//! - `embedded-model` — airgapped build with embedded BGE-small assets
-//! - `online-model` — online build with first-use download + cache
-//!
-//! The public API (`embed`, `search_vec`, `configure_runtime_model`,
-//! `resolve_model`, `embedding_to_blob`) is stable regardless of backend.
+//! See also: `chunking` for the page-to-chunk inputs this module embeds,
+//! `search` for the hybrid composer that fuses these vector hits with FTS5.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -40,10 +40,15 @@ compile_error!("Enable only one model channel: `embedded-model` or `online-model
 const DEFAULT_MODEL_ALIAS: &str = "small";
 const DEFAULT_EMBEDDING_DIMENSIONS: usize = 384;
 
+/// Pinned SHA-256 fingerprints for the three files that make up a downloadable
+/// embedding model, used for integrity verification after download.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelFileHashes {
+    /// Expected SHA-256 of the model's `config.json`.
     pub config_json: &'static str,
+    /// Expected SHA-256 of the model's `tokenizer.json`.
     pub tokenizer_json: &'static str,
+    /// Expected SHA-256 of the model's `model.safetensors` weights file.
     pub model_safetensors: &'static str,
     /// Pinned HuggingFace revision (commit SHA) used when downloading.
     /// Standard aliases always use a pinned revision for reproducibility.
@@ -51,29 +56,45 @@ pub struct ModelFileHashes {
     pub revision: Option<&'static str>,
 }
 
+/// Resolved description of an embedding model: alias, HuggingFace id, output
+/// dimension, and pinned hashes (when available).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelConfig {
+    /// Short alias (`small`, `base`, `large`, `m3`, or `custom`).
     pub alias: String,
+    /// HuggingFace repository id (`<org>/<name>`).
     pub model_id: String,
+    /// Output embedding dimensionality; `0` means the dimension still needs
+    /// hydration from the on-disk `config.json`.
     pub embedding_dim: usize,
+    /// Pinned SHA-256 hashes; `None` for custom (unpinned) models.
     pub sha256_hashes: Option<ModelFileHashes>,
 }
 
+/// Tag indicating whether an embedding came from a real semantic model or from
+/// the deterministic hash-based fallback shim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingEvidenceKind {
+    /// Embedding was produced by a real Candle BERT or XLM-RoBERTa model.
     Semantic,
+    /// Embedding was produced by the deterministic SHA-256 fallback shim.
     HashShim,
 }
 
 impl ModelConfig {
+    /// Returns the `sqlite-vec` virtual-table name that stores embeddings of
+    /// this model's dimensionality.
     pub fn vec_table(&self) -> String {
         format!("page_embeddings_vec_{}", self.embedding_dim)
     }
 
+    /// Returns the HuggingFace `<org>/<name>` id used as the persisted model name.
     pub fn embedding_model_name(&self) -> &str {
         &self.model_id
     }
 
+    /// Returns a short, user-facing label for the model: the alias for
+    /// standard models, or the full model id for custom ones.
     pub fn model_hint(&self) -> &str {
         if self.alias == "custom" {
             &self.model_id
@@ -82,10 +103,14 @@ impl ModelConfig {
         }
     }
 
+    /// Returns `true` when this is the default BGE-small model used by the
+    /// airgapped (embedded-model) build channel.
     pub fn is_small(&self) -> bool {
         self.alias == "small" || self.model_id == "BAAI/bge-small-en-v1.5"
     }
 
+    /// Returns `true` when the embedding dimension still needs to be read out
+    /// of the model's `config.json` (only possible for custom models).
     pub fn needs_dimension_hydration(&self) -> bool {
         self.embedding_dim == 0
     }
@@ -119,10 +144,14 @@ const M3_HASHES: ModelFileHashes = ModelFileHashes {
     revision: Some("babcf60cae0a1f438d7ade582983571a6b46523f"),
 };
 
+/// Returns the [`ModelConfig`] for the default model (`BAAI/bge-small-en-v1.5`).
 pub fn default_model() -> ModelConfig {
     resolve_model(DEFAULT_MODEL_ALIAS)
 }
 
+/// Resolves a user-supplied model alias or HuggingFace id into a
+/// [`ModelConfig`], falling back to a custom-model record (with no pinned
+/// hashes) for unknown inputs.
 pub fn resolve_model(input: &str) -> ModelConfig {
     let trimmed = input.trim();
     let normalized = trimmed.to_ascii_lowercase();
@@ -190,11 +219,17 @@ pub fn resolve_model(input: &str) -> ModelConfig {
     }
 }
 
+/// Resolves an optional user-supplied model selector, defaulting to the
+/// embedded model and coercing the result to what the current build channel
+/// can actually load.
 pub fn resolve_requested_model(input: Option<&str>) -> ModelConfig {
     let requested = resolve_model(input.unwrap_or(DEFAULT_MODEL_ALIAS));
     coerce_model_for_build(&requested)
 }
 
+/// Returns `requested` unchanged on the `online-model` build, but on the
+/// airgapped `embedded-model` build silently falls back to the embedded
+/// BGE-small model (with a warning) if anything else was asked for.
 pub fn coerce_model_for_build(requested: &ModelConfig) -> ModelConfig {
     #[cfg(feature = "embedded-model")]
     {
@@ -209,6 +244,9 @@ pub fn coerce_model_for_build(requested: &ModelConfig) -> ModelConfig {
     requested.clone()
 }
 
+/// Fills in a custom model's missing embedding dimension by reading
+/// `hidden_size` from its `config.json`; standard models pass through
+/// unchanged. Requires the `online-model` feature for custom models.
 pub fn hydrate_model_config(model: &ModelConfig) -> Result<ModelConfig, String> {
     if !model.needs_dimension_hydration() {
         return Ok(model.clone());
@@ -252,6 +290,9 @@ fn model_runtime() -> &'static Mutex<ModelRuntime> {
     MODEL_RUNTIME.get_or_init(|| Mutex::new(ModelRuntime::default()))
 }
 
+/// Sets the process-wide embedding model. Subsequent calls to [`embed`] and
+/// [`search_vec`] will load the new model on first use; the previously loaded
+/// model is dropped if the configuration changes.
 pub fn configure_runtime_model(model: ModelConfig) {
     let mut runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
     if runtime.configured != model {
@@ -260,6 +301,7 @@ pub fn configure_runtime_model(model: ModelConfig) {
     }
 }
 
+/// Compatibility alias for [`configure_runtime_model`].
 pub fn set_model_config(model: ModelConfig) {
     configure_runtime_model(model);
 }
@@ -272,6 +314,10 @@ fn runtime_model_config() -> ModelConfig {
         .clone()
 }
 
+/// Loaded embedding backend (real Candle model or hash-shim fallback) plus the
+/// [`ModelConfig`] it was instantiated from. Held in a process-wide
+/// [`OnceLock`]-guarded mutex; callers should reach for [`embed`] and
+/// [`search_vec`] rather than constructing this directly.
 pub struct EmbeddingModel {
     config: ModelConfig,
     backend: EmbeddingBackend,
@@ -1032,6 +1078,9 @@ fn accumulate_token_hash(token: &str, token_index: usize, embedding: &mut [f32])
     }
 }
 
+/// Lazily loads the configured embedding model into the process-wide runtime
+/// slot if it has not been loaded yet (or if the configured model changed
+/// since the last load).
 pub fn ensure_model() {
     let configured = runtime_model_config();
 
@@ -1063,6 +1112,9 @@ pub fn ensure_model() {
     }
 }
 
+/// Embeds `text` into a normalized vector with the currently configured model,
+/// loading the model on first use. Returns [`InferenceError::EmptyInput`] for
+/// blank input.
 pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -1082,6 +1134,9 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
         .embed(trimmed)
 }
 
+/// Reports whether the currently loaded model is the real semantic backend or
+/// the deterministic hash-based shim. Used by callers that want to label or
+/// downrank evidence produced by the fallback.
 pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError> {
     ensure_model();
     let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
@@ -1094,6 +1149,8 @@ pub fn embedding_evidence_kind() -> Result<EmbeddingEvidenceKind, InferenceError
         .evidence_kind())
 }
 
+/// Embeds `query` and returns the top `k` semantically nearest pages (by
+/// cosine distance) optionally filtered by wing and collection.
 pub fn search_vec(
     query: &str,
     k: usize,
@@ -1124,6 +1181,8 @@ pub fn search_vec_with_namespace(
     )
 }
 
+/// Namespace-aware variant of [`search_vec`] that also exposes the
+/// `include_superseded` toggle for callers that want to inspect history.
 pub fn search_vec_with_namespace_filtered(
     query: &str,
     k: usize,
@@ -1145,6 +1204,8 @@ pub fn search_vec_with_namespace_filtered(
     )
 }
 
+/// Canonical-slug variant of [`search_vec`]: returns slugs in
+/// `<collection>::<slug>` form so cross-collection results can be disambiguated.
 pub fn search_vec_canonical(
     query: &str,
     k: usize,
@@ -1175,6 +1236,8 @@ pub fn search_vec_canonical_with_namespace(
     )
 }
 
+/// Namespace-aware canonical-slug variant of [`search_vec`] that also exposes
+/// the `include_superseded` toggle.
 pub fn search_vec_canonical_with_namespace_filtered(
     query: &str,
     k: usize,
@@ -1325,6 +1388,9 @@ fn active_model(conn: &Connection) -> Result<(String, String), SearchError> {
     })
 }
 
+/// Recomputes and replaces all chunk embeddings for `page_id` under the
+/// currently active model, returning the number of chunks indexed. Drops any
+/// prior embeddings transactionally.
 pub fn refresh_page_embeddings(
     conn: &Connection,
     page_id: i64,
@@ -1342,6 +1408,8 @@ pub fn refresh_page_embeddings(
     Ok(chunks.len())
 }
 
+/// Encodes a float embedding into the little-endian byte blob format expected
+/// by the `sqlite-vec` virtual tables.
 pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(std::mem::size_of_val(embedding));
     for value in embedding {

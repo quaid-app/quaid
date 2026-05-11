@@ -20,7 +20,13 @@ use crate::mcp::server::{
 use crate::mcp::validation::validate_slug;
 
 impl QuaidServer {
+    /// `memory_check` MCP tool: run heuristic contradiction detection
+    /// over a single resolved page (when a slug is provided) or every
+    /// page, returning the unresolved contradictions as JSON.
     #[tool(description = "Run contradiction detection on a page or all pages")]
+    /// `memory_check` MCP tool: run heuristic contradiction detection
+    /// over a single resolved page (when a slug is provided) or every
+    /// page, returning the unresolved contradictions as JSON.
     pub fn memory_check(
         &self,
         #[tool(aggr)] input: MemoryCheckInput,

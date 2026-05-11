@@ -377,6 +377,8 @@ The longest 5 production functions in the codebase:
 
 For internal functions, doc comments are inconsistent: `core/fts.rs` has good ones (`/// Expands a sanitized multi-token query into an explicit FTS5 OR chain.`), `core/vault_sync.rs` has almost none. Recommend `#![warn(missing_docs)]` on `lib.rs` once the modules stabilise — at minimum on every `pub fn` in `core/`.
 
+**Closed by `add-public-api-rustdoc` (2026-05-11):** crate-level `//!` intro added to `src/lib.rs`; `#![warn(missing_docs)]` enabled and `Cargo.toml` `[lints.rust]` flipped from `allow` to `warn`; every module under `src/core/` and `src/mcp/` carries a `//!` header; every `pub` item documented; CI gates both feature channels with `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`.
+
 ### 6.2 Comments
 
 Spot check: comments in this codebase are largely *good* — they explain why, not what (e.g., `vault_sync.rs:74–94` constants block, `vault_sync.rs:3370–3385` finalize ordering). No `TODO`/`FIXME` markers in source at all (`grep` returns 0). Maintain this.

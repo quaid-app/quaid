@@ -1,3 +1,10 @@
+//! N-hop breadth-first traversal of the typed `links` graph plus the
+//! `superseded_by` predecessor/successor chain, with optional temporal
+//! filtering and hard caps on traversal depth, node count, and edge count.
+//!
+//! See also: `links` for link insertion and temporal validity helpers, and
+//! `supersede` for the head-only chain semantics this traversal honours.
+
 use std::collections::{HashSet, VecDeque};
 
 use rusqlite::Connection;
@@ -19,35 +26,50 @@ pub enum TemporalFilter {
 /// A node in the neighbourhood graph result.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphNode {
+    /// Slug of the node (canonical `<collection>::<slug>` when requested).
     pub slug: String,
+    /// Page type (e.g. `person`, `company`, `concept`).
     #[serde(rename = "type")]
     pub node_type: String,
+    /// Human-readable title of the page.
     pub title: String,
 }
 
 /// An edge in the neighbourhood graph result.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphEdge {
+    /// Slug of the source page.
     pub from: String,
+    /// Slug of the target page.
     pub to: String,
+    /// Relationship label carried by the underlying link row.
     pub relationship: String,
+    /// Inclusive lower bound of temporal validity, if any.
     pub valid_from: Option<String>,
+    /// Inclusive upper bound of temporal validity, if any.
     pub valid_until: Option<String>,
 }
 
 /// The complete result of a neighbourhood graph query.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphResult {
+    /// All reachable nodes including the root.
     pub nodes: Vec<GraphNode>,
+    /// All edges between the returned nodes.
     pub edges: Vec<GraphEdge>,
 }
 
 /// Errors that can occur during graph traversal.
 #[derive(Debug, Error)]
 pub enum GraphError {
+    /// Root page lookup by slug returned no rows.
     #[error("page not found: {slug}")]
-    PageNotFound { slug: String },
+    PageNotFound {
+        /// Slug that could not be resolved.
+        slug: String,
+    },
 
+    /// Underlying SQLite failure during traversal.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 }
@@ -85,6 +107,8 @@ pub fn neighborhood_graph(
     neighborhood_graph_from_root(root_id, slug.to_string(), depth, filter, conn, false)
 }
 
+/// Variant of [`neighborhood_graph`] keyed by an already-known page id and
+/// collection name, returning canonical `<collection>::<slug>` node identifiers.
 pub fn neighborhood_graph_for_page(
     page_id: i64,
     collection_name: &str,

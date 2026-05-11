@@ -14,13 +14,27 @@ use crate::core::vault_sync;
 use crate::mcp::errors::invalid_params;
 use rmcp::model::ErrorCode;
 
+/// Upper bound on the byte length of a slug accepted by `validate_slug`.
 pub const MAX_SLUG_LEN: usize = 512;
+/// Upper bound on the byte length of a page content body accepted by
+/// `validate_content` (1 MB).
 pub const MAX_CONTENT_LEN: usize = 1_048_576; // 1 MB
+/// Maximum value any caller-supplied `limit` field on a list-style tool may
+/// take; values above this are clamped at the tool body.
 pub const MAX_LIMIT: u32 = 1000;
+/// Upper bound on the byte length of a relationship token (`memory_link`'s
+/// `relationship` field).
 pub const MAX_RELATIONSHIP_LEN: usize = 64;
+/// Upper bound on the byte length of any single tag token.
 pub const MAX_TAG_LEN: usize = 64;
+/// Upper bound on the number of tags any single `memory_tags` request may
+/// add or remove.
 pub const MAX_TAGS_PER_REQUEST: usize = 100;
+/// Upper bound on the byte length of the `context` field accepted by
+/// `memory_gap`.
 pub const MAX_GAP_CONTEXT_LEN: usize = 500;
+/// Upper bound on the serialised byte length of the `data` payload accepted
+/// by `memory_raw` (1 MB).
 pub const MAX_RAW_DATA_LEN: usize = 1_048_576; // 1 MB
 
 /// Validate that a slug is non-empty, within length limits, and a

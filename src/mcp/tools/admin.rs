@@ -21,7 +21,13 @@ use crate::mcp::server::{
 };
 
 impl QuaidServer {
+    /// `memory_stats` MCP tool: report top-level brain counters (pages,
+    /// links, assertions, unresolved contradictions, gaps, embeddings) plus
+    /// active embedding model and on-disk database size.
     #[tool(description = "Brain statistics (page count, link count, etc.)")]
+    /// `memory_stats` MCP tool: report top-level brain counters (pages,
+    /// links, assertions, unresolved contradictions, gaps, embeddings) plus
+    /// active embedding model and on-disk database size.
     pub fn memory_stats(
         &self,
         #[tool(aggr)] _input: MemoryStatsInput,
@@ -90,7 +96,13 @@ impl QuaidServer {
         )]))
     }
 
+    /// `memory_collections` MCP tool: surface the per-collection status
+    /// snapshot (root path, writability, sync state) that MCP clients use
+    /// to render the collection list.
     #[tool(description = "List collection status for MCP clients")]
+    /// `memory_collections` MCP tool: surface the per-collection status
+    /// snapshot (root path, writability, sync state) that MCP clients use
+    /// to render the collection list.
     pub fn memory_collections(
         &self,
         #[tool(aggr)] _input: MemoryCollectionsInput,
@@ -102,7 +114,11 @@ impl QuaidServer {
         )]))
     }
 
+    /// `memory_namespace_create` MCP tool: register a namespace id with an
+    /// optional TTL, returning the persisted namespace record.
     #[tool(description = "Create namespace metadata")]
+    /// `memory_namespace_create` MCP tool: register a namespace id with an
+    /// optional TTL, returning the persisted namespace record.
     pub fn memory_namespace_create(
         &self,
         #[tool(aggr)] input: MemoryNamespaceCreateInput,
@@ -115,7 +131,11 @@ impl QuaidServer {
         )]))
     }
 
+    /// `memory_namespace_destroy` MCP tool: remove a namespace and every
+    /// page assigned to it, reporting the count of deleted pages.
     #[tool(description = "Destroy a namespace and all pages assigned to it")]
+    /// `memory_namespace_destroy` MCP tool: remove a namespace and every
+    /// page assigned to it, reporting the count of deleted pages.
     pub fn memory_namespace_destroy(
         &self,
         #[tool(aggr)] input: MemoryNamespaceDestroyInput,

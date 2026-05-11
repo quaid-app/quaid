@@ -1,3 +1,16 @@
+//! Periodic cleanup tick for conversation-side state.
+//!
+//! The janitor runs from the same loop that processes the extraction
+//! queue; each tick deletes `done` / `failed` extraction-queue rows
+//! older than the retention window and flips lapsed
+//! `correction_sessions` rows from `open` to `expired`. Live `pending`
+//! and `running` queue rows are never touched, and committed or
+//! abandoned correction sessions are left alone.
+//!
+//! See also: `super::queue` for the extraction-queue rows being
+//! purged, and `super::correction` for the correction-session
+//! lifecycle whose expiry this enforces.
+
 use rusqlite::{params, Connection};
 use thiserror::Error;
 
@@ -5,18 +18,30 @@ use crate::core::db;
 
 const DEFAULT_RETENTION_DAYS: i64 = 30;
 
+/// Errors surfaced by janitor passes.
 #[derive(Debug, Error)]
 pub enum JanitorError {
+    /// Underlying SQLite failure during a cleanup statement.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// Janitor config value was missing or malformed (e.g.
+    /// non-numeric or negative `extraction.retention_days`).
     #[error("config error: {message}")]
-    Config { message: String },
+    Config {
+        /// Human-readable description of the offending config value.
+        message: String,
+    },
 }
 
+/// Per-tick counts emitted by [`run_tick`] so callers can log or
+/// surface janitor activity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JanitorResult {
+    /// Number of terminal `extraction_queue` rows deleted this tick.
     pub queue_rows_purged: u64,
+    /// Number of `correction_sessions` rows transitioned from
+    /// `open` to `expired` this tick.
     pub correction_sessions_expired: u64,
 }
 
@@ -26,6 +51,9 @@ pub fn run_tick(conn: &Connection) -> Result<JanitorResult, JanitorError> {
     run_tick_at(conn, &now)
 }
 
+/// Run both janitor passes against an explicit `now` timestamp; the
+/// time-injection form used by [`run_tick`] and by tests that need
+/// deterministic clock control.
 pub fn run_tick_at(conn: &Connection, now: &str) -> Result<JanitorResult, JanitorError> {
     let queue_rows_purged = purge_old_queue_rows_at(conn, now)?;
     let correction_sessions_expired = expire_stale_correction_sessions_at(conn, now)?;
@@ -43,6 +71,9 @@ pub fn purge_old_queue_rows(conn: &Connection) -> Result<u64, JanitorError> {
     purge_old_queue_rows_at(conn, &now)
 }
 
+/// Time-injection variant of [`purge_old_queue_rows`]: compares
+/// `enqueued_at` against the caller-supplied `now` instead of the
+/// SQLite clock.
 pub fn purge_old_queue_rows_at(conn: &Connection, now: &str) -> Result<u64, JanitorError> {
     let retention_days = retention_days(conn)?;
     let changed = conn.execute(
@@ -62,6 +93,9 @@ pub fn expire_stale_correction_sessions(conn: &Connection) -> Result<u64, Janito
     expire_stale_correction_sessions_at(conn, &now)
 }
 
+/// Time-injection variant of
+/// [`expire_stale_correction_sessions`]: compares `expires_at`
+/// against the caller-supplied `now`.
 pub fn expire_stale_correction_sessions_at(
     conn: &Connection,
     now: &str,

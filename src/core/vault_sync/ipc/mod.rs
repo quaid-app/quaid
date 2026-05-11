@@ -102,18 +102,49 @@ pub(super) struct IpcSocketLocation {
     pub(super) create_runtime_root: bool,
 }
 
+/// Errors surfaced by the IPC subsystem and wrapped by
+/// [`super::VaultSyncError::Ipc`] at the API boundary.
 #[cfg(unix)]
 #[derive(Debug, Error)]
 pub enum IpcError {
+    /// Raised when the directory that will host the IPC socket has
+    /// permissions or ownership the server refuses to bind under.
     #[error("IpcDirectoryInsecureError: path={path} reason={reason}")]
-    IpcDirectoryInsecure { path: String, reason: String },
+    IpcDirectoryInsecure {
+        /// Filesystem path of the offending directory.
+        path: String,
+        /// Human-readable description of what about the directory
+        /// failed the security check.
+        reason: String,
+    },
 
+    /// Raised when the on-disk IPC socket has permissions the server
+    /// refuses to publish or the client refuses to connect to.
     #[error("IpcSocketPermissionError: path={path} reason={reason}")]
-    IpcSocketPermission { path: String, reason: String },
+    IpcSocketPermission {
+        /// Filesystem path of the IPC socket.
+        path: String,
+        /// Human-readable description of the permission mismatch.
+        reason: String,
+    },
 
+    /// Raised when a leftover or third-party file blocks publishing
+    /// the IPC socket at its expected path.
     #[error("IpcSocketCollisionError: path={path} reason={reason}")]
-    IpcSocketCollision { path: String, reason: String },
+    IpcSocketCollision {
+        /// Filesystem path of the conflicting file.
+        path: String,
+        /// Human-readable description of the collision.
+        reason: String,
+    },
 
+    /// Raised when the connected peer's credentials (uid/pid) do not
+    /// authorise it to talk to this serve session.
     #[error("IpcPeerAuthFailedError: path={path} reason={reason}")]
-    IpcPeerAuthFailed { path: String, reason: String },
+    IpcPeerAuthFailed {
+        /// Filesystem path of the IPC socket the peer connected on.
+        path: String,
+        /// Human-readable description of the auth failure.
+        reason: String,
+    },
 }

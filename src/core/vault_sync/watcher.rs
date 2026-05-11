@@ -68,10 +68,16 @@ pub(super) const WATCH_CHANNEL_CAPACITY: usize = 4096;
 #[cfg(unix)]
 pub(super) const DEFAULT_WATCH_DEBOUNCE_MS: u64 = 1500;
 
+/// Operational mode reported for a per-collection watcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatcherMode {
+    /// Linux `inotify` (or platform equivalent) backed watcher.
     Native,
+    /// Periodic polling fallback used when the native backend is
+    /// unavailable or has failed to initialise.
     Poll,
+    /// Watcher has crashed and is currently inside its back-off
+    /// window before the supervisor retries arming it.
     Crashed,
 }
 
@@ -92,10 +98,15 @@ pub(super) struct WatcherHealthSnapshot {
     pub(super) channel_depth: usize,
 }
 
+/// JSON-shaped read-out of a watcher's current health, surfaced via
+/// `vault_sync::collection_watcher_health` for CLI and IPC consumers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WatcherHealthView {
+    /// Stringified [`WatcherMode`] (`"native"`, `"poll"`, `"crashed"`).
     pub mode: String,
+    /// ISO-8601 timestamp of the last event the watcher observed.
     pub last_event_at: Option<String>,
+    /// Current depth of the mpsc channel buffering pending events.
     pub channel_depth: i64,
 }
 
@@ -145,37 +156,65 @@ pub(super) enum WatchEvent {
     IgnoreFileChanged,
 }
 
+/// Errors surfaced by the watcher subsystem and wrapped by
+/// [`super::VaultSyncError::Watcher`] at the API boundary.
 #[cfg(unix)]
 #[derive(Debug, Error)]
 pub enum WatcherError {
+    /// Raised when an in-process write tries to claim a write-dedup
+    /// key that is already held — the writer aborts rather than risk
+    /// double-applying the same edit.
     #[error("DuplicateWriteDedupError: key={key}")]
-    DuplicateWriteDedup { key: String },
+    DuplicateWriteDedup {
+        /// The dedup key the writer attempted to insert.
+        key: String,
+    },
 
+    /// Raised when the post-rename recovery sentinel for a path is
+    /// missing or malformed, indicating an integrity-breaking
+    /// state the watcher refuses to recover from automatically.
     #[error(
         "RecoverySentinelError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} reason={reason}"
     )]
     RecoverySentinel {
+        /// Collection whose sentinel was checked.
         collection_id: i64,
+        /// Vault-relative path the sentinel describes.
         relative_path: String,
+        /// On-disk path of the sentinel file.
         sentinel_path: String,
+        /// Human-readable failure reason.
         reason: String,
     },
 
+    /// Test-only variant used by the durability fault-injection
+    /// fixtures to simulate fsync failure on a write.
     #[cfg(test)]
     #[error("DurabilityError: collection_id={collection_id} relative_path={relative_path}")]
     Durability {
+        /// Collection that experienced the simulated durability fault.
         collection_id: i64,
+        /// Vault-relative path that the durability fault affected.
         relative_path: String,
     },
 
+    /// Raised when a watcher event arrives for a path that is still
+    /// inside a post-rename recovery window and the supervisor must
+    /// wait for the recovery stage to complete before reconciling.
     #[error(
         "PostRenameRecoveryPendingError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} stage={stage} reason={reason}"
     )]
     PostRenameRecoveryPending {
+        /// Collection whose recovery is still pending.
         collection_id: i64,
+        /// Vault-relative path waiting on recovery.
         relative_path: String,
+        /// On-disk path of the sentinel that gates recovery.
         sentinel_path: String,
+        /// Static label naming the recovery stage that has not yet
+        /// completed.
         stage: &'static str,
+        /// Human-readable description of why recovery is still pending.
         reason: String,
     },
 }

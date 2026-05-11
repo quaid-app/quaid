@@ -1,4 +1,10 @@
-//! Knowledge gap detection — log, list, and resolve unanswered queries.
+//! Knowledge-gap log: records queries the brain couldn't answer (keyed by
+//! SHA-256 for idempotent inserts), lists unresolved entries, and links them
+//! to pages that later answered them. Provides the data behind `quaid gap`,
+//! `quaid gaps`, and the matching MCP tools.
+//!
+//! See also: `types::KnowledgeGap` for the row shape, and `search` for the
+//! query path that detects low-confidence retrievals.
 
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
@@ -6,13 +12,19 @@ use thiserror::Error;
 
 use super::types::KnowledgeGap;
 
+/// Failure mode raised by gap logging, listing, or resolution.
 #[derive(Debug, Error)]
 pub enum GapsError {
+    /// Underlying SQLite failure.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// No unresolved gap exists with the requested id.
     #[error("gap not found: id {id}")]
-    NotFound { id: i64 },
+    NotFound {
+        /// The requested gap id.
+        id: i64,
+    },
 }
 
 /// Log a knowledge gap using the SHA-256 of the query for idempotency.
@@ -35,6 +47,8 @@ pub fn log_gap(
     Ok(())
 }
 
+/// Convenience wrapper around [`log_gap`] for callers that always have a
+/// concrete `page_id` (as opposed to a free-floating query).
 pub fn log_gap_for_page(
     page_id: i64,
     query: &str,

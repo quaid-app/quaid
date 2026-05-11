@@ -31,6 +31,9 @@ use super::sha256_hex;
 #[cfg(unix)]
 use super::WatcherError;
 
+/// Inserts a write-dedup key into the in-process registry; returns
+/// `WatcherError::DuplicateWriteDedup` if the key was already present,
+/// so the writer fails closed instead of double-applying a write.
 #[cfg(unix)]
 pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
@@ -48,6 +51,9 @@ pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     }
 }
 
+/// Removes a write-dedup key after the writer has finished so the
+/// next legitimate write of the same target is not rejected as a
+/// duplicate.
 #[cfg(unix)]
 pub fn remove_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
@@ -59,6 +65,9 @@ pub fn remove_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     Ok(())
 }
 
+/// Returns `true` if the cross-process write-dedup registry currently
+/// contains `key`; test helper for asserting that an in-flight write has
+/// been registered without racing the consumer that removes it.
 #[cfg(all(test, unix))]
 pub fn has_write_dedup(key: &str) -> Result<bool, VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
@@ -69,6 +78,9 @@ pub fn has_write_dedup(key: &str) -> Result<bool, VaultSyncError> {
         .contains(key))
 }
 
+/// Serialises writes to a single `(root_path, relative_path)` target
+/// by running `action` while holding the per-slug mutex stored in the
+/// process-wide slug-write registry.
 pub fn with_write_slug_lock<T, F>(
     root_path: &str,
     relative_path: &str,

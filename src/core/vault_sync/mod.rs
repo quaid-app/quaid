@@ -9,22 +9,27 @@
 //! reconcile-error conversion — and re-exports the focused
 //! submodules that own the rest:
 //!
-//! - [`error`] — parent `VaultSyncError`
-//! - [`precondition`] — fs precondition checks before a write
-//! - [`recovery`] — recovery-in-progress guard + sentinel paths
-//! - [`watcher`] — watcher state types and `WatcherError`
-//! - [`ownership`] — live owner / lease helpers
-//! - [`session`] — serve / cli session lifecycle
-//! - [`write_lock`] — slug locking + write-dedup helpers
-//! - [`restore`] — restore-flow types, `RestoreError`,
+//! - `error` — parent `VaultSyncError`
+//! - `precondition` — fs precondition checks before a write
+//! - `recovery` — recovery-in-progress guard + sentinel paths
+//! - `watcher` — watcher state types and `WatcherError`
+//! - `ownership` — live owner / lease helpers
+//! - `session` — serve / cli session lifecycle
+//! - `write_lock` — slug locking + write-dedup helpers
+//! - `restore` — restore-flow types, `RestoreError`,
 //!   `ConflictError`
-//! - [`ipc`] — IPC datagram types, `IpcError`, socket auth
+//! - `ipc` — IPC datagram types, `IpcError`, socket auth
 //!
 //! Items reachable as `crate::core::vault_sync::Foo` before the
 //! split remain reachable at the same path via re-exports declared
 //! near the top of this file. New code that extends `vault_sync`
 //! should land in the submodule whose concern matches; if no
 //! submodule fits, add a new one rather than overloading `mod.rs`.
+//!
+//! See also: [`crate::core::collections`] for the on-disk + DB
+//! collection model that this subsystem operates on, and
+//! [`crate::core::reconciler`] for the page reconcile primitive that
+//! `vault_sync` schedules and supervises.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -136,51 +141,98 @@ struct SelfWriteDedupEntry {
 
 pub(super) static PROCESS_REGISTRIES: OnceLock<RuntimeRegistries> = OnceLock::new();
 
+/// JSON-shaped view of a single `.quaidignore` parse error reported
+/// for a collection — surfaced inside [`MemoryCollectionView`] so
+/// operators can see why their ignore rules failed to load.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IgnoreParseErrorView {
+    /// Stable error code identifying the parse failure.
     pub code: String,
+    /// Line number in `.quaidignore` where the failure was detected,
+    /// when applicable.
     pub line: Option<i64>,
+    /// Raw text of the offending line, when applicable.
     pub raw: Option<String>,
+    /// Human-readable description of the parse failure.
     pub message: String,
 }
 
+/// JSON-shaped view of a registered memory collection that the CLI
+/// `memory list` command and various IPC consumers render — the
+/// stable shape that aggregates state, ownership, sync, and
+/// integrity status of one collection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryCollectionView {
+    /// Collection name (the unique identifier visible to users).
     pub name: String,
+    /// On-disk root path of the collection, when one is set.
     pub root_path: Option<String>,
+    /// Stringified `CollectionState` (`"active"`, `"restoring"`, …).
     pub state: String,
+    /// True when the collection accepts writes from this process.
     pub writable: bool,
+    /// True when this collection is the current `memory put` target.
     pub is_write_target: bool,
+    /// Total number of non-quarantined pages in the collection.
     pub page_count: i64,
+    /// ISO-8601 timestamp of the last successful reconcile, if any.
     pub last_sync_at: Option<String>,
+    /// Number of embedding jobs pending or running for this
+    /// collection.
     pub embedding_queue_depth: i64,
+    /// Number of embedding jobs in the `failed` state; not exposed
+    /// via JSON (the caller derives display state from it).
     #[serde(skip_serializing)]
     pub failing_jobs: i64,
+    /// Parsed errors from the collection's `.quaidignore`, when any
+    /// rule failed to load.
     pub ignore_parse_errors: Option<Vec<IgnoreParseErrorView>>,
+    /// True when the supervisor still owes the collection a full
+    /// reconcile sweep (recovery, restore, or post-crash).
     pub needs_full_sync: bool,
+    /// True when the supervisor is currently inside the post-rename
+    /// recovery window for this collection.
     pub recovery_in_progress: bool,
+    /// Stable string describing why the collection is integrity-blocked,
+    /// or `None` if it is healthy.
     pub integrity_blocked: Option<String>,
+    /// True when a `begin_restore` flow is currently in flight.
     pub restore_in_progress: bool,
 }
 
+/// Result of resolving a bare slug to a concrete `(collection, slug)`
+/// pair after disambiguation across collections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSlug {
+    /// Numeric id of the collection that owns the resolved slug.
     pub collection_id: i64,
+    /// Name of the collection that owns the resolved slug.
     pub collection_name: String,
+    /// The slug as recorded inside the collection.
     pub slug: String,
 }
 
 impl ResolvedSlug {
+    /// Returns the canonical `collection::slug` form callers use when
+    /// printing or persisting a globally unique slug reference.
     pub fn canonical_slug(&self) -> String {
         format!("{}::{}", self.collection_name, self.slug)
     }
 }
 
+/// Summary returned by [`verify_remap_root`] describing how the
+/// candidate root compared against the collection's recorded pages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemapVerificationSummary {
+    /// Number of pages whose identity was matched bit-for-bit.
     pub resolved_pages: usize,
+    /// Number of pages with no corresponding file in the new root.
     pub missing_pages: usize,
+    /// Number of pages whose file content hash differs from the
+    /// stored hash.
     pub mismatched_pages: usize,
+    /// Number of files in the new root that did not map back to a
+    /// known page.
     pub extra_files: usize,
 }
 
@@ -285,6 +337,9 @@ use write_lock::{
     writer_side_dedup_key,
 };
 
+/// Returns `Ok(())` on unix targets and a typed
+/// `UnsupportedPlatform` error elsewhere — used by CLI command
+/// dispatch to refuse vault-write operations on Windows builds.
 pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError> {
     #[cfg(unix)]
     {
@@ -298,10 +353,14 @@ pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError>
     }
 }
 
+/// Owns the background threads spawned by [`start_serve_runtime`] —
+/// the supervisor loop and the extraction worker — and tears them
+/// down on drop so the serve process exits cleanly.
 pub struct ServeRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     extractor_handle: Option<thread::JoinHandle<()>>,
+    /// Session id assigned to this serve runtime at startup.
     pub session_id: String,
 }
 
@@ -317,6 +376,9 @@ impl Drop for ServeRuntime {
     }
 }
 
+/// Returns the hostname reported by the OS for the running process,
+/// used to populate `serve_sessions.host` and to identify the owner
+/// of a remote-looking lease in error messages.
 pub fn current_host() -> String {
     std::env::var("COMPUTERNAME")
         .ok()
@@ -335,6 +397,10 @@ pub(crate) fn current_effective_uid() -> u32 {
     }
 }
 
+/// Validates that `expected_version` matches the page's currently
+/// recorded `current_version`, returning a typed `ConflictError`
+/// when the caller has stale data — the optimistic-concurrency gate
+/// that protects every `memory put` write.
 #[cfg(unix)]
 pub fn check_update_expected_version(
     collection_id: i64,
@@ -417,6 +483,9 @@ fn with_supervisor_handles<T>(
     Ok(f(&mut handles))
 }
 
+/// Returns the most recent [`WatcherHealthView`] for the collection,
+/// or `None` if no supervisor handle is currently tracking it — the
+/// snapshot CLI and IPC consumers render in `memory list`.
 pub fn collection_watcher_health(collection_id: i64) -> Option<WatcherHealthView> {
     with_supervisor_handles(|handles| {
         handles
@@ -519,6 +588,9 @@ fn restore_in_progress(collection: &Collection) -> bool {
         && collection.watcher_released_at.is_some()
 }
 
+/// Builds a [`MemoryCollectionView`] for every registered collection,
+/// joining live state, ownership, embedding-queue depth, and
+/// integrity flags into the shape consumed by `memory list`.
 pub fn list_memory_collections(
     conn: &Connection,
 ) -> Result<Vec<MemoryCollectionView>, VaultSyncError> {
@@ -901,6 +973,9 @@ pub(in crate::core::vault_sync) fn maybe_suppress_self_write_event(
     self_write_should_suppress_at(path, &hash, Instant::now())
 }
 
+/// Marks a collection `needs_full_sync = 1` using a fresh connection
+/// so the watcher callback can persist the flag from a non-mutex
+/// context without contending on the supervisor's primary handle.
 #[cfg(unix)]
 pub fn mark_collection_needs_full_sync_via_fresh_connection(
     conn: &Connection,
@@ -1217,6 +1292,9 @@ fn run_startup_sequence(
     Ok(())
 }
 
+/// Returns the on-disk file path backing an open SQLite connection,
+/// used by the watcher callback to open a fresh connection without
+/// reaching back into the main runtime state.
 pub fn database_path(conn: &Connection) -> Result<String, VaultSyncError> {
     conn.query_row("PRAGMA database_list", [], |row| row.get::<_, String>(2))
         .map_err(Into::into)
@@ -1277,6 +1355,9 @@ pub(crate) fn live_serve_endpoint_for_root_path(
     }
 }
 
+/// Runs a one-shot reconcile pass over a collection from the CLI,
+/// validating that the collection's state and ownership allow a
+/// plain sync before delegating to the reconciler.
 pub fn sync_collection(
     conn: &Connection,
     collection_name: &str,
@@ -1313,6 +1394,9 @@ pub fn sync_collection(
     Ok(stats)
 }
 
+/// Confirms a collection currently accepts writes — the named alias
+/// callers reach for instead of the lower-level
+/// [`check_writable`] when they want intent-revealing call sites.
 pub fn ensure_collection_write_allowed(
     conn: &Connection,
     collection_id: i64,
@@ -1320,6 +1404,9 @@ pub fn ensure_collection_write_allowed(
     check_writable(conn, collection_id)
 }
 
+/// Errors with `CollectionRestoring` when the collection is mid-restore
+/// or still owes a full reconcile sweep, so callers refuse to issue
+/// writes that would race the supervisor.
 pub fn check_writable(conn: &Connection, collection_id: i64) -> Result<(), VaultSyncError> {
     let collection = load_collection_by_id(conn, collection_id)?;
     if collection.state == CollectionState::Restoring || collection.needs_full_sync {
@@ -1332,6 +1419,9 @@ pub fn check_writable(conn: &Connection, collection_id: i64) -> Result<(), Vault
     Ok(())
 }
 
+/// Strictly stronger than [`check_writable`]: also rejects writes to
+/// a collection that has been explicitly marked read-only, returning
+/// `CollectionReadOnly` so vault-write paths fail closed.
 pub fn ensure_collection_vault_write_allowed(
     conn: &Connection,
     collection_id: i64,
@@ -1346,6 +1436,9 @@ pub fn ensure_collection_vault_write_allowed(
     Ok(())
 }
 
+/// Stamps the `quaid_id` frontmatter on a page's on-disk markdown
+/// file, used after a successful page write to make the file
+/// self-describing when copied to another vault.
 pub fn write_quaid_id_to_file(
     conn: &Connection,
     collection: &Collection,
@@ -1851,6 +1944,9 @@ fn run_overflow_recovery_pass(
     Ok(actions)
 }
 
+/// Errors if any registered collection is currently restoring or
+/// still owes a full reconcile sweep — the precondition the CLI
+/// applies before running operations that span the whole memory.
 pub fn ensure_all_collections_write_allowed(conn: &Connection) -> Result<(), VaultSyncError> {
     let mut stmt = conn.prepare(
         "SELECT id FROM collections WHERE state = 'restoring' OR needs_full_sync = 1 LIMIT 1",
@@ -1862,6 +1958,9 @@ pub fn ensure_all_collections_write_allowed(conn: &Connection) -> Result<(), Vau
     Ok(())
 }
 
+/// Resolves a bare or qualified slug for a given operation kind,
+/// raising `PageNotFound` or `AmbiguousSlug` so callers don't have to
+/// reach into `collections::parse_slug` directly.
 pub fn resolve_slug_for_op(
     conn: &Connection,
     input: &str,
@@ -1889,6 +1988,9 @@ pub fn resolve_slug_for_op(
     }
 }
 
+/// Loads a [`Collection`] row by primary key and surfaces a typed
+/// `CollectionNotFound` when the row is missing — the canonical
+/// way the rest of `vault_sync` fetches collection metadata.
 pub fn load_collection_by_id(
     conn: &Connection,
     collection_id: i64,
@@ -1945,6 +2047,9 @@ pub fn load_collection_by_id(
     .map_err(Into::into)
 }
 
+/// Flips a collection into `state = 'restoring'` and bumps its
+/// `reload_generation`, returning the row and the generation pair the
+/// restore/remap handshake uses to coordinate watcher release.
 pub fn mark_collection_restoring_for_handshake(
     conn: &Connection,
     collection_id: i64,
@@ -1988,6 +2093,10 @@ pub fn mark_collection_restoring_for_handshake(
     ))
 }
 
+/// Blocks until the running serve session acknowledges a specific
+/// `reload_generation` for `collection_id`, or times out — the
+/// handshake step in the online restore/remap flow that proves the
+/// supervisor has released its watcher before the CLI proceeds.
 pub fn wait_for_exact_ack(
     conn: &Connection,
     collection_id: i64,
@@ -2061,6 +2170,9 @@ fn scheduled_full_hash_audit_budget(total_files: usize) -> usize {
     total_files.div_ceil(audit_days).max(1)
 }
 
+/// Runs the daily background full-hash audit across every active
+/// collection the session owns, returning per-collection reconcile
+/// statistics so the supervisor can log progress and TTL-skipped rows.
 pub fn run_full_hash_audit_pass(
     conn: &Connection,
     session_id: &str,
@@ -2136,6 +2248,9 @@ pub fn run_full_hash_audit_pass(
     Ok(audited)
 }
 
+/// Runs an on-demand full-hash audit over a single collection from
+/// the CLI, updating `last_sync_at` and returning per-page reconcile
+/// statistics.
 pub fn audit_collection(
     conn: &Connection,
     collection_name: &str,
@@ -2160,10 +2275,16 @@ pub fn audit_collection(
     Ok(stats)
 }
 
+/// Reaps expired inactive rows from `raw_imports` so the byte-exact
+/// restore history stays within its retention budget; returns the
+/// number of rows deleted.
 pub fn sweep_raw_import_ttl(conn: &Connection) -> Result<usize, VaultSyncError> {
     raw_imports::sweep_expired_inactive_rows(conn).map_err(VaultSyncError::from)
 }
 
+/// Records that the supervisor has released its watcher for a
+/// pending restore/remap by stamping the `watcher_released_*`
+/// columns; returns `true` when the row was actually updated.
 pub fn write_supervisor_ack_if_needed(
     conn: &Connection,
     collection_id: i64,
@@ -2188,6 +2309,9 @@ pub fn write_supervisor_ack_if_needed(
     Ok(rows != 0)
 }
 
+/// Walks a directory tree, hashes every markdown file, and returns a
+/// sorted [`RestoreManifest`] suitable for `begin_restore` to compare
+/// against the database side of a restore.
 pub fn build_restore_manifest_for_directory(
     path: &Path,
 ) -> Result<RestoreManifest, VaultSyncError> {
@@ -2206,6 +2330,9 @@ pub fn build_restore_manifest_for_directory(
     Ok(RestoreManifest { entries })
 }
 
+/// Completes an in-flight restore once the originating command has
+/// reported the new vault is ready; chooses between finalize, defer,
+/// and integrity-failed outcomes based on liveness and integrity flags.
 pub fn finalize_pending_restore(
     conn: &Connection,
     collection_id: i64,
@@ -2292,6 +2419,10 @@ pub fn finalize_pending_restore(
     }
 }
 
+/// Runs the "tx-b" transaction that commits a pending restore — the
+/// atomic flip from `pending_root_path` to a live `root_path` plus
+/// `state = 'restoring'` so the watcher reconciles the new vault on
+/// the next supervisor tick.
 pub fn run_tx_b(conn: &Connection, collection_id: i64) -> Result<bool, VaultSyncError> {
     let pending_root_path: Option<String> = conn
         .query_row(
@@ -2330,6 +2461,9 @@ pub fn run_tx_b(conn: &Connection, collection_id: i64) -> Result<bool, VaultSync
     Ok(true)
 }
 
+/// CLI-side entry that acquires a short-lived lease and drives the
+/// pending-restore finalize sequence to completion offline (i.e.,
+/// without a running serve session ack).
 pub fn finalize_pending_restore_via_cli(
     conn: &Connection,
     collection_id: i64,
@@ -2461,6 +2595,9 @@ pub(in crate::core::vault_sync) fn complete_attach(
     Ok(rows != 0)
 }
 
+/// Runs the per-tick "restore continuation / re-attach" pass that
+/// finishes any restore the previous serve crashed mid-flight and
+/// re-arms the supervisor handle for collections that need it.
 pub fn run_rcrt_pass(
     conn: &Connection,
     session_id: &str,
@@ -2537,6 +2674,10 @@ pub fn run_rcrt_pass(
     Ok(actions)
 }
 
+/// Boots the long-running serve runtime: registers a session,
+/// publishes the IPC socket, runs the startup recovery sequence,
+/// spawns watcher and extraction threads, and returns the handle that
+/// owns them all.
 pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
     let conn = Connection::open(&db_path)?;
@@ -2797,6 +2938,9 @@ fn run_supervisor_loop(
     }
 }
 
+/// CLI entry point that attaches a fresh, empty vault directory to a
+/// brand-new collection, running the post-attach reconcile pass under
+/// a short-lived owner lease.
 pub fn fresh_attach_collection(
     conn: &Connection,
     collection_id: i64,
@@ -3015,6 +3159,9 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     output
 }
 
+/// Validates a slug input — either `collection::slug` or a bare slug —
+/// against the allowed character set and the parser rules used by
+/// every CLI entry that takes a page identifier.
 pub fn parse_slug_input(input: &str) -> Result<(), VaultSyncError> {
     fn valid_token(value: &str) -> bool {
         value.bytes().all(|byte| {
@@ -3044,6 +3191,9 @@ pub fn parse_slug_input(input: &str) -> Result<(), VaultSyncError> {
     Ok(())
 }
 
+/// Resolves a slug input intended for a read operation, returning a
+/// [`ResolvedSlug`] or a typed not-found / ambiguous error so read
+/// callers don't have to specialise the op-kind themselves.
 pub fn resolve_page_for_read(
     conn: &Connection,
     input: &str,
@@ -3051,6 +3201,10 @@ pub fn resolve_page_for_read(
     resolve_slug_for_op(conn, input, OpKind::Read)
 }
 
+/// Loads the page named by a slug input, combining slug resolution
+/// and key lookup into a single call so read paths can ask "give me
+/// the page for this user-supplied string" without juggling
+/// intermediate error types.
 pub fn get_page_by_input(
     conn: &Connection,
     input: &str,

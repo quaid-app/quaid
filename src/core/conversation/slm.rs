@@ -3,6 +3,24 @@
     reason = "addressed in remove-production-panic-paths"
 )]
 
+//! Small language model runner for fact extraction.
+//!
+//! Wraps a candle-backed Phi-3 model: loads the tokenizer and
+//! weights from the local cache, performs greedy (argmax) inference
+//! on a prompt, and parses the JSON envelope the model emits into
+//! typed `crate::core::types::RawFact` values. All `load` and
+//! `infer` calls are wrapped in `catch_unwind` so a model-side panic
+//! becomes a typed `SlmError::Panic` instead of aborting the
+//! process. `LazySlmRunner` provides a lazy, reusable handle that
+//! disables the runtime after fatal load failures so the worker
+//! keeps draining the queue with explicit errors instead of looping
+//! on the same failure.
+//!
+//! See also: `super::model_lifecycle` for the cache-resolution
+//! layer feeding `SlmRunner::load`, and `super::extractor` for the
+//! caller that drives prompt construction and persists the parsed
+//! response.
+
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -24,8 +42,12 @@ use crate::core::types::{ExtractionFactValidationError, ExtractionResponse, RawF
 
 const DEFAULT_SLM_SEED: u64 = 0;
 
+/// Knobs that control SLM token sampling; held on the runner so each
+/// inference call uses a stable, reproducible setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlmInferenceConfig {
+    /// PRNG seed handed to the logits processor; with the current
+    /// `Sampling::ArgMax` policy it is only consulted for tie-breaks.
     pub seed: u64,
 }
 
@@ -37,6 +59,8 @@ impl Default for SlmInferenceConfig {
     }
 }
 
+/// Loaded SLM ready to run inference; owns the tokenizer, weights,
+/// and the candle device the model was built against.
 #[derive(Debug)]
 pub struct SlmRunner {
     tokenizer: Tokenizer,
@@ -51,6 +75,10 @@ pub struct SlmRunner {
     model_dir: PathBuf,
 }
 
+/// Reusable lazy handle around an [`SlmRunner`]: loads the model on
+/// first use, caches it for subsequent calls, and disables the
+/// runtime after fatal failures so the worker reports a typed error
+/// instead of retrying a doomed load.
 #[derive(Debug, Default)]
 pub struct LazySlmRunner {
     state: Mutex<LazySlmState>,
@@ -63,34 +91,76 @@ struct LazySlmState {
     last_error: Option<String>,
 }
 
+/// Errors surfaced by SLM load, inference, and response parsing.
 #[derive(Debug, Error)]
 pub enum SlmError {
+    /// Caller passed a blank or whitespace-only prompt.
     #[error("input prompt is empty")]
     EmptyPrompt,
 
+    /// Resolving or downloading the model cache failed.
     #[error(transparent)]
     Cache(#[from] ModelLifecycleError),
 
+    /// A prior fatal failure flipped the lazy runtime into a disabled
+    /// state; further calls return this variant until re-enabled.
     #[error("slm runtime is disabled: {message}")]
-    RuntimeDisabled { message: String },
+    RuntimeDisabled {
+        /// Human-readable message describing the original failure
+        /// that disabled the runtime.
+        message: String,
+    },
 
+    /// `config.json` for the model was missing, unreadable, or
+    /// declared an unsupported model type.
     #[error("slm config at {path} is invalid: {message}")]
-    Config { path: String, message: String },
+    Config {
+        /// Filesystem path of the offending config file.
+        path: String,
+        /// Underlying parser or validation message.
+        message: String,
+    },
 
+    /// `tokenizer.json` for the model could not be loaded or parsed.
     #[error("slm tokenizer at {path} is invalid: {message}")]
-    Tokenizer { path: String, message: String },
+    Tokenizer {
+        /// Filesystem path of the tokenizer file.
+        path: String,
+        /// Underlying parser or validation message.
+        message: String,
+    },
 
+    /// Required `.safetensors` weights were missing or unreadable.
     #[error("slm weights are unavailable in {cache_dir}: {message}")]
-    Weights { cache_dir: String, message: String },
+    Weights {
+        /// Cache directory that was inspected.
+        cache_dir: String,
+        /// Underlying I/O or load message.
+        message: String,
+    },
 
+    /// Inference failed deterministically inside candle (e.g. tensor
+    /// shape mismatch, tokenizer encode/decode error).
     #[error("slm inference failed: {message}")]
-    Inference { message: String },
+    Inference {
+        /// Underlying inference-stage message.
+        message: String,
+    },
 
+    /// `load` or `infer` panicked; converted from `catch_unwind`.
     #[error("slm inference panicked: {message}")]
-    Panic { message: String },
+    Panic {
+        /// Best-effort string form of the panic payload.
+        message: String,
+    },
 
+    /// The model emitted output that did not parse as the expected
+    /// `{ "facts": [...] }` JSON envelope.
     #[error("slm output was not valid JSON: {message}")]
-    Parse { message: String },
+    Parse {
+        /// Underlying JSON parse-error message.
+        message: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +174,10 @@ struct RawExtractionEnvelope {
 }
 
 impl SlmRunner {
+    /// Load the model identified by `alias` from its local cache,
+    /// returning a runner ready for [`infer`](Self::infer); panics
+    /// during load are caught and surfaced as
+    /// [`SlmError::Panic`].
     pub fn load(alias: &str) -> Result<Self, SlmError> {
         Self::catch_load(|| Self::load_inner(alias))
     }
@@ -187,6 +261,10 @@ impl SlmRunner {
         }
     }
 
+    /// Run greedy (argmax) inference over `prompt` for up to
+    /// `max_tokens` newly generated tokens and return the decoded
+    /// completion; the KV cache is cleared on every call so the
+    /// runner is reusable.
     pub fn infer(&mut self, prompt: &str, max_tokens: usize) -> Result<String, SlmError> {
         self.catch_infer(|runner| runner.infer_inner(prompt, max_tokens))
     }
@@ -278,10 +356,16 @@ impl LazySlmState {
 }
 
 impl LazySlmRunner {
+    /// Construct an empty handle; no model is loaded until the first
+    /// [`infer`](Self::infer) call.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Load the model on first use and run inference, caching the
+    /// runner for subsequent calls; fatal load or inference failures
+    /// disable the runtime so the next call returns
+    /// [`SlmError::RuntimeDisabled`] immediately.
     pub fn infer(&self, alias: &str, prompt: &str, max_tokens: usize) -> Result<String, SlmError> {
         let mut state = self
             .state
@@ -318,6 +402,8 @@ impl LazySlmRunner {
         result
     }
 
+    /// Report whether a runner has been successfully loaded into the
+    /// handle; useful for diagnostics and tests.
     pub fn is_loaded(&self) -> bool {
         self.state
             .lock()
@@ -326,6 +412,8 @@ impl LazySlmRunner {
             .is_some()
     }
 
+    /// Report whether the runtime has been disabled after a fatal
+    /// failure and is short-circuiting subsequent calls.
     pub fn is_runtime_disabled(&self) -> bool {
         self.state
             .lock()
@@ -334,6 +422,10 @@ impl LazySlmRunner {
     }
 }
 
+/// Parse the model's raw output into the typed
+/// [`ExtractionResponse`] envelope, accepting either a bare JSON
+/// object or a fenced ```` ```json ```` block; per-fact validation
+/// errors are collected rather than aborting the whole response.
 pub fn parse_response(raw: &str) -> Result<ExtractionResponse, SlmError> {
     let trimmed = raw.trim();
     let json = strip_json_fence(trimmed).unwrap_or(trimmed);
@@ -416,6 +508,9 @@ fn strip_json_fence(raw: &str) -> Option<&str> {
     Some(inner.trim())
 }
 
+/// Validate that the required string fields on a [`RawFact`] are
+/// non-empty, returning `Some(message)` describing the first missing
+/// field or `None` when the fact is well-formed.
 pub fn validate_raw_fact(fact: &RawFact) -> Option<String> {
     match fact {
         RawFact::Decision { chose, summary, .. } => validate_required_strings(

@@ -1,3 +1,11 @@
+//! SQLite connection setup, schema bootstrap, and `sqlite-vec` extension
+//! loading. Handles WAL configuration, the embedding-model registry, schema
+//! version checks, and crash-partial bootstrap recovery so the rest of the
+//! crate can assume an open `Connection` is at the current schema version.
+//!
+//! See also: `inference` for the `ModelConfig` values persisted here, `types`
+//! for `DbError`, and `migrate` for export/import round-trips.
+
 #![expect(
     clippy::unwrap_used,
     reason = "addressed in remove-production-panic-paths"
@@ -29,8 +37,13 @@ const PAGES_AU_TRIGGER_SQL: &str =
     WHERE new.quarantined_at IS NULL;
 END;";
 
+/// Result of [`open_with_model`]: the live SQLite connection paired with the
+/// model configuration that was actually selected (which may differ from the
+/// requested one when the build channel forces a fallback).
 pub struct OpenDb {
+    /// Underlying SQLite connection with WAL, sqlite-vec, and schema applied.
     pub conn: Connection,
+    /// Embedding model the database is currently configured to use.
     pub effective_model: ModelConfig,
 }
 
@@ -42,11 +55,18 @@ impl std::fmt::Debug for OpenDb {
     }
 }
 
+/// Persisted database-level configuration: the embedding model the database
+/// was initialized with and the schema version it expects. Stored in the
+/// `quaid_config` table and validated on every open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuaidConfig {
+    /// HuggingFace id of the embedding model (`<org>/<name>`).
     pub model_id: String,
+    /// Short alias for the model (`small`, `base`, `large`, `m3`, or `custom`).
     pub model_alias: String,
+    /// Output dimensionality of the embedding model.
     pub embedding_dim: usize,
+    /// Schema version this database was created with.
     pub schema_version: i64,
 }
 
@@ -103,20 +123,28 @@ fn ensure_sqlite_vec() {
     });
 }
 
+/// Opens the database at `path` with the default embedding model, applying
+/// schema migrations and registering `sqlite-vec` along the way.
 pub fn open(path: &str) -> Result<Connection, DbError> {
     open_with_model(path, &default_model()).map(|opened| opened.conn)
 }
 
+/// Returns the conventional `~/.quaid/memory.db` path, falling back to
+/// `memory.db` in the current directory when no home directory is available.
 pub fn default_db_path() -> std::path::PathBuf {
     dirs::home_dir()
         .map(|home| home.join(".quaid").join("memory.db"))
         .unwrap_or_else(|| std::path::PathBuf::from("memory.db"))
 }
 
+/// String form of [`default_db_path`] for use in error messages.
 pub fn default_db_path_string() -> String {
     default_db_path().display().to_string()
 }
 
+/// Opens the database at `path` and ensures it is configured for
+/// `requested_model`, returning the effective model along with the connection.
+/// Rejects schema-version or model-id mismatches against any prior init.
 pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<OpenDb, DbError> {
     let requested_model = coerce_model_for_build(requested_model);
     let existed_before = path != ":memory:" && Path::new(path).exists();
@@ -168,6 +196,9 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
     })
 }
 
+/// Initializes a new database at `path` with `requested_model`, or re-opens
+/// an existing one. Used by `quaid init` and the test harness; recovers from
+/// crash-partial bootstraps and persists the model metadata on first init.
 pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbError> {
     let requested_model = coerce_model_for_build(requested_model);
     let existed_before = path != ":memory:" && Path::new(path).exists();
@@ -781,6 +812,9 @@ fn sync_legacy_config(conn: &Connection, model: &ModelConfig) -> Result<(), DbEr
     Ok(())
 }
 
+/// Writes the four `quaid_config` keys (`model_id`, `model_alias`,
+/// `embedding_dim`, `schema_version`) atomically so a mid-flight crash never
+/// leaves a partial config that would silently fall back to the small model.
 pub fn write_quaid_config(conn: &Connection, config: &QuaidConfig) -> Result<(), DbError> {
     // Write all four keys atomically so a mid-flight crash never leaves a
     // partial quaid_config that silently falls back to the legacy small-model
@@ -810,6 +844,9 @@ pub fn write_quaid_config(conn: &Connection, config: &QuaidConfig) -> Result<(),
     Ok(())
 }
 
+/// Reads the persisted [`QuaidConfig`] back out, returning `Ok(None)` for
+/// legacy databases that pre-date the `quaid_config` table and an error for
+/// tables that exist but are missing required keys (partial-write corruption).
 pub fn read_quaid_config(conn: &Connection) -> Result<Option<QuaidConfig>, DbError> {
     if !table_exists(conn, "quaid_config")? {
         // Legacy DB pre-dating quaid_config — treated as small-model default.
@@ -870,6 +907,7 @@ pub fn read_quaid_config(conn: &Connection) -> Result<Option<QuaidConfig>, DbErr
     }))
 }
 
+/// Reads a single value out of the legacy `config` key/value table by key.
 pub fn read_config_value(conn: &Connection, key: &str) -> Result<Option<String>, DbError> {
     conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
         row.get(0)
@@ -878,6 +916,8 @@ pub fn read_config_value(conn: &Connection, key: &str) -> Result<Option<String>,
     .map_err(DbError::from)
 }
 
+/// Reads a single value out of the legacy `config` table, returning `default`
+/// (owned) when the key is absent.
 pub fn read_config_value_or(
     conn: &Connection,
     key: &str,
@@ -965,11 +1005,15 @@ fn format_model_mismatch(stored: &QuaidConfig, requested: &ModelConfig, db_path:
     )
 }
 
+/// Runs a `PRAGMA wal_checkpoint(TRUNCATE)` to reclaim WAL disk space without
+/// closing the connection.
 pub fn compact(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
 
+/// Writes the current schema version into SQLite's `user_version` pragma so
+/// external tooling can verify compatibility without opening a transaction.
 pub fn set_version(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     Ok(())

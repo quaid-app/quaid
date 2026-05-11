@@ -1,3 +1,15 @@
+//! Quarantine workflow for pages whose vault file disappeared or became
+//! unparseable: the page row stays in the database with `quarantined_at`
+//! set, decoupled from any on-disk path, while an operator decides whether
+//! to export the salvageable state, discard the row, or restore the file
+//! at a new vault location. A TTL sweep retires expired entries that carry
+//! no DB-only state.
+//!
+//! See also: `crate::core::reconciler` for the detector that quarantines
+//! pages during sync and the `has_db_only_state` check this module gates
+//! discard on, and `crate::core::vault_sync` for the lease and write-allow
+//! interlocks that wrap restore.
+
 use std::fs;
 #[cfg(unix)]
 use std::io::Write;
@@ -39,56 +51,98 @@ use rustix::fs::fsync;
 
 const DEFAULT_QUARANTINE_TTL_DAYS: i64 = 30;
 
+/// Per-row count of database state that would be lost if a quarantined
+/// page were discarded without first being exported. A non-zero count
+/// blocks `discard_quarantined_page` unless `force` is set or a current
+/// export already exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub struct DbOnlyStateCounts {
+    /// Number of programmatic (non-import) links touching the page.
     pub programmatic_links: i64,
+    /// Number of assertions on the page authored outside the import path.
     pub non_import_assertions: i64,
+    /// Number of attached raw-data rows.
     pub raw_data: i64,
+    /// Number of contradiction rows referencing the page on either side.
     pub contradictions: i64,
+    /// Number of knowledge-gap rows attributed to the page.
     pub knowledge_gaps: i64,
 }
 
+/// CLI / MCP view of a single quarantined page row, including whether
+/// it has already been exported and how much DB-only state is attached.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QuarantinedPageView {
+    /// Collection that owns the quarantined page.
     pub collection: String,
+    /// Bare slug within the collection.
     pub slug: String,
+    /// Fully-qualified `<collection>::<slug>` address.
     pub address: String,
+    /// Page title at the time of quarantine.
     pub title: String,
+    /// Timestamp at which the page was quarantined.
     pub quarantined_at: String,
+    /// Timestamp of the most recent matching export, if any.
     pub exported_at: Option<String>,
+    /// Counts of DB-only state that would be lost on discard.
     pub db_only_state: DbOnlyStateCounts,
 }
 
+/// Receipt returned to the caller after a successful export of a
+/// quarantined page to a JSON file on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QuarantineExportReceipt {
+    /// Collection that owned the exported page.
     pub collection: String,
+    /// Bare slug of the exported page.
     pub slug: String,
+    /// Original quarantine timestamp.
     pub quarantined_at: String,
+    /// Timestamp at which the export was written.
     pub exported_at: String,
+    /// Filesystem path of the resulting export file.
     pub output_path: String,
 }
 
+/// Receipt returned to the caller after a quarantined page is discarded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QuarantineDiscardReceipt {
+    /// Collection that owned the discarded page.
     pub collection: String,
+    /// Bare slug of the discarded page.
     pub slug: String,
+    /// Original quarantine timestamp.
     pub quarantined_at: String,
+    /// Whether the discard required the `force` flag to bypass DB-only state.
     pub forced: bool,
+    /// Whether a current export already existed at discard time.
     pub exported_before_discard: bool,
 }
 
+/// Receipt returned to the caller after a quarantined page is restored
+/// back to a vault file and the row is removed from quarantine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QuarantineRestoreReceipt {
+    /// Collection that owns the restored page.
     pub collection: String,
+    /// Bare slug at the time of quarantine.
     pub slug: String,
+    /// Slug after restore (may change if the restored markdown supplied a new one).
     pub restored_slug: String,
+    /// Relative path the page was installed at within the collection root.
     pub restored_relative_path: String,
+    /// Original quarantine timestamp.
     pub quarantined_at: String,
 }
 
+/// Summary of a TTL-sweep run: how many quarantined rows were discarded
+/// and how many were skipped because they still hold DB-only state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct QuarantineSweepSummary {
+    /// Number of quarantined rows the sweep deleted.
     pub discarded: usize,
+    /// Number of rows the sweep left in place because they had DB-only state.
     pub skipped_db_only_state: usize,
 }
 
@@ -218,14 +272,26 @@ impl QuarantinedPageRecord {
     }
 }
 
+/// Errors produced by quarantine list / export / discard / restore /
+/// sweep operations.
 #[derive(Debug, Error)]
 pub enum QuarantineError {
+    /// Caller referenced a collection that does not exist.
     #[error("quarantine collection not found: {collection}")]
-    CollectionNotFound { collection: String },
+    CollectionNotFound {
+        /// Name of the missing collection.
+        collection: String,
+    },
 
+    /// Caller targeted a slug whose page row exists but is not in quarantine.
     #[error("page is not quarantined: {slug}")]
-    NotQuarantined { slug: String },
+    NotQuarantined {
+        /// The slug that resolved to a non-quarantined page.
+        slug: String,
+    },
 
+    /// Discard refused because the page still holds DB-only state and has
+    /// no current export — the caller must export first or pass `force`.
     #[error(
         "QuarantineDiscardExportRequiredError: slug={slug} programmatic_links={} non_import_assertions={} raw_data={} contradictions={} knowledge_gaps={}",
         counts.programmatic_links,
@@ -235,48 +301,78 @@ pub enum QuarantineError {
         counts.knowledge_gaps
     )]
     ExportRequired {
+        /// Slug of the page that would lose state on discard.
         slug: String,
+        /// Counts of the DB-only state that would be lost.
         counts: DbOnlyStateCounts,
     },
 
+    /// Restore target path did not end in `.md` and could not be auto-normalized.
     #[cfg(unix)]
     #[error("QuarantineRestoreTargetNotMarkdownError: target={target}")]
-    RestoreTargetNotMarkdown { target: String },
+    RestoreTargetNotMarkdown {
+        /// The rejected target path.
+        target: String,
+    },
 
+    /// Restore target path is already occupied by another file on disk.
     #[cfg(unix)]
     #[error("QuarantineRestoreTargetOccupiedError: target={target}")]
-    RestoreTargetOccupied { target: String },
+    RestoreTargetOccupied {
+        /// The occupied target path.
+        target: String,
+    },
 
+    /// Restore target path is registered in `file_state` for a different page.
     #[cfg(unix)]
     #[error("QuarantineRestorePathOwnedError: target={target} owner_slug={owner_slug}")]
-    RestorePathOwned { target: String, owner_slug: String },
+    RestorePathOwned {
+        /// The conflicting target path.
+        target: String,
+        /// Slug of the page that already owns the path.
+        owner_slug: String,
+    },
 
+    /// Test-only hook injected a synthetic failure mid-restore.
     #[cfg(unix)]
     #[error("QuarantineRestoreHookError: {message}")]
-    RestoreHook { message: String },
+    RestoreHook {
+        /// Diagnostic message describing the injected failure point.
+        message: String,
+    },
 
+    /// Underlying SQLite failure surfaced unchanged.
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
+    /// Underlying filesystem I/O failure surfaced unchanged.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    /// JSON serialization / deserialization failure during export payload work.
     #[error(transparent)]
     Serde(#[from] serde_json::Error),
 
+    /// Error originating from the collections module (validation, resolution).
     #[error(transparent)]
     Collections(#[from] collections::CollectionError),
 
+    /// Error originating from the reconciler (DB-only-state probes).
     #[error(transparent)]
     Reconcile(#[from] reconciler::ReconcileError),
 
+    /// Error originating from the vault-sync engine (leases, write-allow checks).
     #[error(transparent)]
     VaultSync(#[from] VaultSyncError),
 
+    /// Error originating from page-UUID resolution during restore parsing.
     #[error(transparent)]
     PageUuid(#[from] page_uuid::PageUuidError),
 }
 
+/// Resolve the TTL (in days) after which quarantined pages with no
+/// DB-only state become eligible for sweep, honoring the
+/// `QUAID_QUARANTINE_TTL_DAYS` environment override.
 pub fn quarantine_ttl_days() -> i64 {
     std::env::var("QUAID_QUARANTINE_TTL_DAYS")
         .ok()
@@ -285,6 +381,8 @@ pub fn quarantine_ttl_days() -> i64 {
         .unwrap_or(DEFAULT_QUARANTINE_TTL_DAYS)
 }
 
+/// List every quarantined page in the named collection along with its
+/// most recent export timestamp and DB-only state counts for operator review.
 pub fn list_collection_quarantine(
     conn: &Connection,
     collection_name: &str,
@@ -332,6 +430,9 @@ pub fn list_collection_quarantine(
         .collect()
 }
 
+/// Serialize a quarantined page and all its attached DB state (links,
+/// assertions, raw data, contradictions, gaps, tags, timeline) to a JSON
+/// file on disk, then record the export so a later discard can proceed safely.
 pub fn export_quarantined_page(
     conn: &Connection,
     slug_input: &str,
@@ -367,6 +468,9 @@ pub fn export_quarantined_page(
     })
 }
 
+/// Permanently delete a quarantined page row, refusing the call when
+/// DB-only state would be lost unless `force` is set or a current export
+/// already covers the quarantine timestamp.
 pub fn discard_quarantined_page(
     conn: &Connection,
     slug_input: &str,
@@ -398,6 +502,9 @@ pub fn discard_quarantined_page(
     })
 }
 
+/// Reinstate a quarantined page by writing its active raw markdown back
+/// into the vault at `relative_path_input`, re-parsing it, and clearing
+/// the quarantine flag in a single fsync-anchored transaction.
 #[cfg(unix)]
 pub fn restore_quarantined_page(
     conn: &Connection,
@@ -541,6 +648,9 @@ pub fn restore_quarantined_page(
     }
 }
 
+/// Non-Unix stub: the durable restore path requires `openat` / `linkat` /
+/// `fsync` semantics that Quaid only implements on Unix. Returns
+/// `VaultSyncError::UnsupportedPlatform` on all other platforms.
 #[cfg(not(unix))]
 pub fn restore_quarantined_page(
     _conn: &Connection,
@@ -553,6 +663,9 @@ pub fn restore_quarantined_page(
     .into())
 }
 
+/// Discard every quarantined page older than the configured TTL that
+/// carries no DB-only state, leaving exportable rows in place for
+/// operator review.
 pub fn sweep_expired_quarantined_pages(
     conn: &Connection,
 ) -> Result<QuarantineSweepSummary, QuarantineError> {
@@ -603,6 +716,8 @@ pub fn sweep_expired_quarantined_pages(
     Ok(summary)
 }
 
+/// Count, per category, the DB-only state attached to a page so the caller
+/// can report what a discard would erase.
 pub fn db_only_state_counts(
     conn: &Connection,
     page_id: i64,

@@ -1,12 +1,19 @@
-// Reconciler: filesystem walk → stat-diff → ingest/quarantine/delete.
-//
-// This module owns collection-backed vault reconciliation and re-ingest.
-//
-// Planned responsibilities:
-// - Cold-start reconciliation on `quaid serve` startup
-// - On-demand sync via `quaid collection sync`
-// - Rename detection (native events, UUID match, content-hash uniqueness)
-// - Delete-vs-quarantine classification via `has_db_only_state`
+//! Reconciles a collection's on-disk vault tree against the page rows in the
+//! database by walking the working tree under an fd-pinned root, classifying
+//! each path into unchanged / modified / new / missing using cached
+//! `file_state` stats, resolving the missing-vs-new pairs into native renames,
+//! UUID-frontmatter renames, and content-hash renames, and then applying the
+//! resulting plan as ingests, quarantines, hard deletes, or `raw_imports`
+//! rotations inside bounded SQLite transactions. The module also owns the
+//! authorized full-hash variants used for fresh attach, remap-root, restore,
+//! and periodic audit, plus the restore/remap safety pipeline that captures
+//! drift and proves filesystem stability before promoting a collection back
+//! to `Active`.
+//!
+//! See also: `core::vault_sync` for the live watcher that feeds incremental
+//! events into this reconciler, `core::file_state` for the cached stat
+//! tuples consulted on every diff, and `core::raw_imports` for the
+//! byte-exact source rotation invoked when content changes.
 
 #![allow(dead_code)]
 
@@ -45,16 +52,38 @@ use rustix::fs::{openat, Mode, OFlags};
 /// Summary statistics from a reconciliation pass.
 #[derive(Debug, Default, Clone)]
 pub struct ReconcileStats {
+    /// Total filesystem entries visited by the walk, including paths that
+    /// were skipped because they matched an ignore pattern.
     pub walked: usize,
+    /// Files whose cached `file_state` stat tuple matched the live stat and
+    /// were therefore not rehashed or reingested.
     pub unchanged: usize,
+    /// Files whose stat tuple no longer matches the cache and were
+    /// rehashed and reingested.
     pub modified: usize,
+    /// Files present on disk that had no corresponding `pages` row before
+    /// rename resolution claimed them.
     pub new: usize,
+    /// Pages present in the database whose on-disk path was not found by the
+    /// walk before rename resolution claimed them.
     pub missing: usize,
+    /// Missing/new pairs resolved by a native filesystem rename event from
+    /// the watcher.
     pub native_renamed: usize,
+    /// Missing/new pairs resolved by matching the `uuid` frontmatter field
+    /// across both sides.
     pub uuid_renamed: usize,
+    /// Missing/new pairs resolved by matching a uniquely-identifying content
+    /// hash across both sides.
     pub hash_renamed: usize,
+    /// Pages quarantined because rename resolution found multiple candidate
+    /// matches and could not pick safely.
     pub quarantined_ambiguous: usize,
+    /// Pages quarantined because the database row carries state (links,
+    /// tags, …) that must not be silently dropped on delete.
     pub quarantined_db_state: usize,
+    /// Pages whose database row was hard-deleted because the on-disk file
+    /// is gone and no DB-only state would be lost.
     pub hard_deleted: usize,
 }
 
@@ -62,14 +91,30 @@ pub(crate) const MIN_CANONICAL_BODY_BYTES: i64 = 64;
 const UUID_MIGRATION_SAMPLE_LIMIT: usize = 5;
 const DEFAULT_RESTORE_STABILITY_MAX_ITERS: usize = 5;
 
+/// Which authorized caller initiated a full-hash reconciliation pass; gates
+/// what the reconciler is allowed to do and how mismatches are reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FullHashReconcileMode {
+    /// Periodic background audit that hashes a sampled subset and never
+    /// mutates page content beyond `file_state` self-heal.
     Audit,
+    /// Initial reconciliation after a collection is freshly attached to a
+    /// working tree.
     FreshAttach,
+    /// Recovery pass triggered when the sentinel queue overflowed and the
+    /// in-memory event stream can no longer be trusted.
     OverflowRecovery,
+    /// Reconciliation following a `collection sync --remap-root` that moves
+    /// the working tree to a new root path.
     RemapRoot,
+    /// Reconciliation that follows a `collection restore` from a recovery
+    /// snapshot.
     Restore,
+    /// Drift-capture phase that records pre-existing divergence before a
+    /// remap-root takes effect.
     RemapDriftCapture,
+    /// Drift-capture phase that records pre-existing divergence before a
+    /// restore takes effect.
     RestoreDriftCapture,
 }
 
@@ -87,13 +132,37 @@ impl FullHashReconcileMode {
     }
 }
 
+/// Proof-of-authority token carried alongside a [`FullHashReconcileMode`] to
+/// prove the caller is allowed to invoke the destructive pass for that mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FullHashReconcileAuthorization {
+    /// The pass was launched by the audit command, which is always
+    /// authorized but is read-mostly.
     AuditCommand,
-    ActiveLease { lease_session_id: String },
-    AttachCommand { attach_command_id: String },
-    RestoreCommand { restore_command_id: String },
-    RestoreLease { lease_session_id: String },
+    /// The pass is running under an active vault-sync lease and inherits
+    /// that session's authorization.
+    ActiveLease {
+        /// Identifier of the vault-sync session that holds the lease.
+        lease_session_id: String,
+    },
+    /// The pass is part of a `collection attach` invocation.
+    AttachCommand {
+        /// Identifier of the attach command session that authorized the
+        /// pass.
+        attach_command_id: String,
+    },
+    /// The pass is part of a `collection restore` invocation.
+    RestoreCommand {
+        /// Identifier of the restore command session that authorized the
+        /// pass.
+        restore_command_id: String,
+    },
+    /// The pass is running inside a restore lease, which authorizes a
+    /// broader set of mutations than `ActiveLease`.
+    RestoreLease {
+        /// Identifier of the restore lease session.
+        lease_session_id: String,
+    },
 }
 
 impl FullHashReconcileAuthorization {
@@ -119,9 +188,14 @@ impl FullHashReconcileAuthorization {
     }
 }
 
+/// Which top-level recovery operation a [`RestoreRemapSafetyRequest`]
+/// describes; controls drift-capture authorization mode and the post-pipeline
+/// state transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestoreRemapOperation {
+    /// The pipeline is preparing for `collection restore`.
     Restore,
+    /// The pipeline is preparing for `collection sync --remap-root`.
     Remap,
 }
 
@@ -134,11 +208,21 @@ impl RestoreRemapOperation {
     }
 }
 
+/// Aggregated count of page-level changes observed during one or more
+/// drift-capture reconciliation passes, used by the restore/remap safety
+/// pipeline to decide whether the operation can proceed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DriftCaptureSummary {
+    /// Pages whose content was rewritten because the on-disk file diverged
+    /// from the database row.
     pub pages_updated: usize,
+    /// Pages that existed on disk but had no matching database row.
     pub pages_added: usize,
+    /// Pages diverted to quarantine because their disposition could not be
+    /// resolved safely.
     pub pages_quarantined: usize,
+    /// Pages whose database row was hard-deleted because the on-disk file
+    /// was gone and no DB-only state would be lost.
     pub pages_deleted: usize,
 }
 
@@ -167,41 +251,80 @@ impl DriftCaptureSummary {
     }
 }
 
+/// Snapshot of the bookkeeping signals that mark a collection as needing a
+/// fresh reconciliation pass before it can be trusted as up to date.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollectionDirtyStatus {
+    /// The collection's `needs_full_sync` flag is set, typically because a
+    /// recovery operation left the working tree in an indeterminate state.
     pub needs_full_sync: bool,
+    /// Number of sentinel files left behind by interrupted writer
+    /// transactions that must be drained before the collection is clean.
     pub sentinel_count: usize,
+    /// A recovery flow (restore or remap-root) is currently in progress and
+    /// holds a lease on the collection.
     pub recovery_in_progress: bool,
+    /// ISO 8601 timestamp of the most recent successful sync, or `None` if
+    /// the collection has never completed a sync.
     pub last_sync_at: Option<String>,
 }
 
 impl CollectionDirtyStatus {
+    /// Returns true when any signal indicates the collection cannot be
+    /// trusted as in sync with its working tree.
     pub fn is_dirty(&self) -> bool {
         self.needs_full_sync || self.sentinel_count != 0
     }
 }
 
+/// Whether a reconciliation pass must enforce strict `raw_imports`
+/// invariants, or may relax them because a controlled re-render is in flight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawImportInvariantPolicy {
+    /// Reject the pass if any `raw_imports` invariant is violated.
     Enforce,
+    /// Allow the pass to override `raw_imports` invariants because a
+    /// canonical re-render is rewriting the affected rows in the same
+    /// transaction.
     AllowRerenderOverride,
 }
 
+/// Input bundle for the restore/remap safety pipeline that runs drift
+/// capture and stability proofs before a restore or remap-root is allowed
+/// to mutate the active collection.
 #[derive(Debug, Clone)]
 pub struct RestoreRemapSafetyRequest<'a> {
+    /// Identifier of the collection the pipeline operates on.
     pub collection_id: i64,
+    /// Path to the SQLite database file backing the collection.
     pub db_path: &'a Path,
+    /// Path to the recovery snapshot or staging root the pipeline reads
+    /// from.
     pub recovery_root: &'a Path,
+    /// Which top-level operation the safety pipeline is gating.
     pub operation: RestoreRemapOperation,
+    /// Authorization token proving the caller may invoke the destructive
+    /// pass.
     pub authorization: FullHashReconcileAuthorization,
+    /// When true, allow the pipeline to finalize pending writer
+    /// transactions during the stability loop instead of bailing.
     pub allow_finalize_pending: bool,
+    /// Maximum number of stability iterations to run before the pipeline
+    /// gives up and reports the collection as unstable.
     pub stability_max_iters: usize,
 }
 
+/// Result of running the restore/remap safety pipeline to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreRemapSafetyOutcome {
+    /// Aggregate of all drift captured across the pipeline's reconciliation
+    /// passes.
     pub drift_summary: DriftCaptureSummary,
+    /// Number of stability retries the pipeline needed before observing two
+    /// consecutive identical snapshots.
     pub stability_retries: usize,
+    /// File count of the final stable snapshot used as the proof that the
+    /// working tree has quiesced.
     pub final_snapshot_files: usize,
 }
 
@@ -372,6 +495,9 @@ pub fn full_hash_reconcile(
     )
 }
 
+/// Run [`full_hash_reconcile`] with an explicit mode and authorization token
+/// so the caller can opt into the heavier modes (fresh attach, remap-root,
+/// restore, drift capture) that hash every file regardless of stat metadata.
 pub fn full_hash_reconcile_authorized(
     conn: &Connection,
     collection_id: i64,
@@ -427,6 +553,8 @@ pub fn full_hash_reconcile_authorized(
     }
 }
 
+/// Run a periodic audit pass that hashes only the paths whose audit sampler
+/// has flagged them as due, leaving the rest of the working tree untouched.
 pub fn scheduled_full_hash_audit_authorized(
     conn: &Connection,
     collection_id: i64,
@@ -927,6 +1055,9 @@ fn sentinel_count(recovery_root: &Path, collection_id: i64) -> Result<usize, Rec
     Ok(count)
 }
 
+/// Inspect a collection's persistent flags and sentinel queue and return the
+/// signals that mark it as needing a fresh reconciliation pass before reads
+/// or writes can be trusted.
 pub fn is_collection_dirty(
     conn: &Connection,
     collection_id: i64,
@@ -1249,6 +1380,9 @@ where
     })
 }
 
+/// Run the drift-capture and stability-proof pipeline that gates a restore
+/// or remap-root, verifying the recovery root is mounted read-only and that
+/// two consecutive walks observe identical state before reporting success.
 pub fn run_restore_remap_safety_pipeline(
     conn: &Connection,
     request: &RestoreRemapSafetyRequest<'_>,
@@ -1263,6 +1397,9 @@ pub(crate) fn run_restore_remap_safety_pipeline_without_mount_check(
     run_restore_remap_safety_pipeline_inner(conn, request, |_| Ok(()), || Ok(()))
 }
 
+/// Run the initial full-hash reconciliation for a freshly attached
+/// collection and, on success, transition its state to `Active` so vault
+/// sync can begin servicing events.
 pub fn fresh_attach_reconcile_and_activate(
     conn: &Connection,
     collection_id: i64,
@@ -1530,9 +1667,17 @@ fn apply_full_hash_metadata_self_heal(
 /// Stat-diff result: classify files into changed/unchanged/new/missing sets.
 #[derive(Debug, Default)]
 pub struct StatDiff {
+    /// Files whose cached `file_state` stat tuple exactly matched the live
+    /// stat and therefore need no further work.
     pub unchanged: HashSet<PathBuf>,
+    /// Files whose stat tuple no longer matches the cache, mapped to the
+    /// fresh `FileStat` observed by the walk.
     pub modified: HashMap<PathBuf, FileStat>,
+    /// Files present on disk that have no corresponding cached
+    /// `file_state` row, mapped to the fresh `FileStat`.
     pub new: HashMap<PathBuf, FileStat>,
+    /// Cached `file_state` rows whose paths were not encountered by the
+    /// walk.
     pub missing: HashSet<PathBuf>,
 }
 
@@ -2937,55 +3082,109 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 // ── Error ─────────────────────────────────────────────────────
 
+/// Failure modes returned by the reconciler's public entry points; each
+/// variant marks a class of mismatch, invariant violation, or authorization
+/// failure that must surface to the caller rather than be silently swallowed.
 #[derive(Debug)]
 pub enum ReconcileError {
+    /// A SQLite operation failed during the pass.
     DbError(rusqlite::Error),
+    /// A filesystem operation failed during the walk or apply step.
     IoError(std::io::Error),
+    /// The reconciler observed a state that violates a documented
+    /// invariant and cannot continue safely.
     InvariantViolationError {
+        /// Human-readable description of which invariant was violated.
         message: String,
     },
+    /// The caller's authorization token is not a valid pairing for the
+    /// requested mode.
     InvalidFullHashAuthorization {
+        /// The mode that was requested.
         mode: FullHashReconcileMode,
+        /// String tag of the authorization that was supplied.
         authorization: &'static str,
+        /// Explanation of why this pairing is invalid.
         reason: &'static str,
     },
+    /// The caller's mode/authorization pairing is well-formed but is not
+    /// permitted given the collection's current state.
     UnauthorizedFullHashReconcile {
+        /// The mode that was requested.
         mode: FullHashReconcileMode,
+        /// String tag of the authorization that was supplied.
         authorization: &'static str,
+        /// State the collection was in when the pass was rejected.
         collection_state: crate::core::collections::CollectionState,
     },
+    /// One or more on-disk pages are missing the `uuid` frontmatter field
+    /// required by the current reconciler and must be migrated first.
     UuidMigrationRequiredError {
+        /// Name of the offending collection.
         collection_name: String,
+        /// Total number of pages still missing a `uuid` field.
         affected_count: usize,
+        /// A bounded sample of affected paths included for diagnostics.
         sample_paths: Vec<String>,
     },
+    /// The collection is currently being written by another actor (vault
+    /// sync, an external writer, or an interrupted recovery) and the
+    /// reconciler refuses to run until that writer quiesces.
     CollectionLacksWriterQuiescenceError {
+        /// Name of the offending collection.
         collection_name: String,
+        /// Working-tree root associated with the collection.
         root_path: String,
     },
+    /// The collection's persistent flags or sentinel queue indicate it is
+    /// dirty and must be reconciled before the requested operation can
+    /// proceed.
     CollectionDirtyError {
+        /// Name of the offending collection.
         collection_name: String,
+        /// Snapshot of the dirty signals at the time of the check.
         status: CollectionDirtyStatus,
     },
+    /// A remap-root operation was aborted because drift capture observed
+    /// page-level changes that would silently overwrite live state.
     RemapDriftConflictError {
+        /// Name of the offending collection.
         collection_name: String,
+        /// Drift counts that triggered the conflict.
         summary: DriftCaptureSummary,
     },
+    /// The restore/remap safety pipeline gave up after repeatedly observing
+    /// the working tree change between stability iterations.
     CollectionUnstableError {
+        /// Name of the offending collection.
         collection_name: String,
+        /// Which operation the pipeline was gating.
         operation: RestoreRemapOperation,
+        /// String tag of the pipeline phase that detected instability.
         phase: &'static str,
+        /// Number of stability retries already consumed.
         retries: usize,
     },
+    /// Two or more on-disk files share the same `uuid` frontmatter value,
+    /// which is required to be globally unique.
     DuplicateUuidError {
+        /// The duplicated UUID value.
         uuid: String,
+        /// Paths of every file observed carrying that UUID.
         paths: Vec<String>,
     },
+    /// A missing page's body is short enough that content-hash rename
+    /// detection cannot distinguish it from candidate matches.
     UnresolvableTrivialContentError {
+        /// Path of the missing page.
         missing_path: String,
+        /// Candidate paths that the resolver could not pick between.
         candidate_paths: Vec<String>,
+        /// Human-readable explanation of why the resolution failed.
         reason: String,
     },
+    /// Catch-all for failure modes that do not yet have a dedicated
+    /// variant.
     Other(String),
 }
 

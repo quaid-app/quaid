@@ -1,3 +1,11 @@
+//! Heuristic subject-predicate-object extraction plus pairwise contradiction
+//! detection across pages. Regex patterns scan a page's `## Assertions`
+//! section and a small frontmatter allowlist, persist the resulting triples,
+//! and compare them under temporal validity to surface conflicts.
+//!
+//! See also: `types` for `Page` and frontmatter helpers, and `markdown` for
+//! the section-splitting primitives the scanner builds on.
+
 #![expect(
     clippy::expect_used,
     reason = "addressed in remove-production-panic-paths"
@@ -22,27 +30,42 @@ const SUPPORTED_FRONTMATTER_PREDICATES: [&str; 3] = ["is_a", "works_at", "founde
 /// A heuristic subject-predicate-object triple extracted from page content.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Triple {
+    /// Subject of the assertion (typically the page's title or slug).
     pub subject: String,
+    /// Predicate (e.g. `works_at`, `is_a`, `founded`).
     pub predicate: String,
+    /// Object the predicate ties the subject to.
     pub object: String,
 }
 
 /// A stored contradiction row surfaced by `quaid check`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Contradiction {
+    /// Slug of the page where the contradiction was attributed.
     pub page_slug: String,
+    /// Slug of the other page involved in the conflict (same as `page_slug` for
+    /// same-page contradictions).
     pub other_page_slug: String,
+    /// Contradiction taxonomy label (currently `assertion_conflict`).
     #[serde(rename = "type")]
     pub r#type: String,
+    /// Human-readable description of the conflict.
     pub description: String,
+    /// ISO-8601 timestamp the contradiction was detected.
     pub detected_at: String,
 }
 
+/// Failure mode raised by assertion extraction or contradiction detection.
 #[derive(Debug, Error)]
 pub enum AssertionError {
+    /// Requested slug does not exist in the database.
     #[error("page not found: {slug}")]
-    PageNotFound { slug: String },
+    PageNotFound {
+        /// Slug that could not be resolved.
+        slug: String,
+    },
 
+    /// Underlying SQLite failure.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 }
@@ -122,6 +145,8 @@ pub fn check_assertions(
     check_assertions_for_page_id(root_page_id, conn)
 }
 
+/// Page-id variant of [`check_assertions`] used when the caller has already
+/// resolved the slug; useful for cross-collection traversal.
 pub fn check_assertions_for_page_id(
     root_page_id: i64,
     conn: &Connection,

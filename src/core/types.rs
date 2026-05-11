@@ -1,3 +1,12 @@
+//! Shared data types used across the `core` library: pages, links, tags,
+//! search results, knowledge gaps, conversation turns, extraction facts, and
+//! the structured-error envelopes that pass through the MCP wire.
+//!
+//! See also: `core::db` for the persistence layer that reads and writes these
+//! types, `core::search` for the retrieval surface that produces `SearchResult`
+//! values, and `core::conversation` for the extraction pipeline that emits
+//! `RawFact` and `ExtractionJob` rows.
+
 // Types defined ahead of consumers (db.rs, search.rs, etc.) — remove when wired.
 #![allow(dead_code)]
 
@@ -10,20 +19,25 @@ use thiserror::Error;
 
 // ── Page ──────────────────────────────────────────────────────
 
+/// Free-form YAML/JSON frontmatter map stored alongside a page's prose body.
 pub type Frontmatter = JsonMap<String, JsonValue>;
 
+/// Looks up a frontmatter entry by key, returning the raw JSON value if present.
 pub fn frontmatter_get<'a>(frontmatter: &'a Frontmatter, key: &str) -> Option<&'a JsonValue> {
     frontmatter.get(key)
 }
 
+/// Looks up a frontmatter entry and narrows it to a borrowed string slice.
 pub fn frontmatter_get_str<'a>(frontmatter: &'a Frontmatter, key: &str) -> Option<&'a str> {
     frontmatter_get(frontmatter, key)?.as_str()
 }
 
+/// Looks up a frontmatter entry and clones it into an owned `String`.
 pub fn frontmatter_get_string(frontmatter: &Frontmatter, key: &str) -> Option<String> {
     frontmatter_get_str(frontmatter, key).map(str::to_owned)
 }
 
+/// Inserts a string-valued frontmatter entry, accepting any types that convert into `String`.
 pub fn frontmatter_insert_string(
     frontmatter: &mut Frontmatter,
     key: impl Into<String>,
@@ -32,6 +46,7 @@ pub fn frontmatter_insert_string(
     frontmatter.insert(key.into(), JsonValue::String(value.into()));
 }
 
+/// Builds a `Frontmatter` map from `(key, value)` string pairs — convenience for tests and fixtures.
 pub fn string_frontmatter(entries: impl IntoIterator<Item = (String, String)>) -> Frontmatter {
     entries
         .into_iter()
@@ -42,22 +57,38 @@ pub fn string_frontmatter(entries: impl IntoIterator<Item = (String, String)>) -
 /// Core knowledge page — the unit of storage in a Quaid database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
+    /// Stable per-namespace slug identifying the page.
     pub slug: String,
+    /// Persistent UUID assigned on first write; survives slug renames.
     pub uuid: String,
+    /// Semantic page kind (e.g. `person`, `decision`, `note`).
     #[serde(rename = "type")]
     pub page_type: String,
+    /// Optional pointer to the page that supersedes this one, by integer page id.
     pub superseded_by: Option<i64>,
+    /// Human-facing title rendered at the top of the page.
     pub title: String,
+    /// One-paragraph summary used for retrieval previews.
     pub summary: String,
+    /// Current synthesized "truth" section of the page body.
     pub compiled_truth: String,
+    /// Append-only timeline section of the page body, in markdown.
     pub timeline: String,
+    /// Raw structured frontmatter parsed from the source markdown.
     pub frontmatter: Frontmatter,
+    /// Memory-palace wing the page is filed under.
     pub wing: String,
+    /// Memory-palace room within `wing` (may be empty).
     pub room: String,
+    /// Monotonic version counter used for optimistic concurrency.
     pub version: i64,
+    /// RFC 3339 timestamp of first write.
     pub created_at: String,
+    /// RFC 3339 timestamp of most recent write to any field.
     pub updated_at: String,
+    /// RFC 3339 timestamp of the most recent change to `compiled_truth`.
     pub truth_updated_at: String,
+    /// RFC 3339 timestamp of the most recent change to `timeline`.
     pub timeline_updated_at: String,
 }
 
@@ -72,13 +103,19 @@ pub struct Page {
 pub struct Link {
     /// `None` before the link is persisted; `Some(id)` after insert.
     pub id: Option<i64>,
+    /// Slug of the source page (the link's "from" endpoint).
     pub from_slug: String,
+    /// Slug of the target page (the link's "to" endpoint).
     pub to_slug: String,
+    /// Free-form relationship label (e.g. `works_with`, `supersedes`).
     pub relationship: String,
     /// Optional note stored alongside the link (schema column: `context`).
     pub context: String,
+    /// RFC 3339 inclusive start of temporal validity, or `None` for unbounded past.
     pub valid_from: Option<String>,
+    /// RFC 3339 exclusive end of temporal validity, or `None` if still valid.
     pub valid_until: Option<String>,
+    /// RFC 3339 timestamp the link row was inserted.
     pub created_at: String,
 }
 
@@ -87,7 +124,9 @@ pub struct Link {
 /// A single tag attached to a page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tag {
+    /// Integer id of the page this tag belongs to.
     pub page_id: i64,
+    /// The tag string itself, stored verbatim.
     pub tag: String,
 }
 
@@ -96,12 +135,19 @@ pub struct Tag {
 /// A structured timeline row for a page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEntry {
+    /// Row id within `timeline_entries`.
     pub id: i64,
+    /// Integer id of the parent page.
     pub page_id: i64,
+    /// Date the event occurred (free-form: `2024`, `2024-05`, `2024-05-12`, …).
     pub date: String,
+    /// Short source-or-category label rendered before the summary.
     pub source: String,
+    /// One-line description shown in the timeline body.
     pub summary: String,
+    /// Optional longer detail block expanded after the summary.
     pub detail: String,
+    /// RFC 3339 timestamp the row was inserted.
     pub created_at: String,
 }
 
@@ -110,10 +156,15 @@ pub struct TimelineEntry {
 /// A single result from FTS5, vector, or hybrid search.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
+    /// Slug of the page that produced the hit.
     pub slug: String,
+    /// Page title at the time of retrieval.
     pub title: String,
+    /// Short page summary used as the retrieval preview.
     pub summary: String,
+    /// Relevance score; sign and scale depend on the merge strategy.
     pub score: f64,
+    /// Memory-palace wing of the page, exposed for downstream filtering.
     pub wing: String,
 }
 
@@ -122,11 +173,17 @@ pub struct SearchResult {
 /// A derived embedding/search chunk from a page section or timeline entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
+    /// Slug of the page this chunk was derived from.
     pub page_slug: String,
+    /// Slash-joined heading path locating the chunk within the page.
     pub heading_path: String,
+    /// The chunk's prose body, ready for embedding.
     pub content: String,
+    /// Stable hash of `content` used to detect unchanged chunks across reruns.
     pub content_hash: String,
+    /// Approximate token count of `content`.
     pub token_count: usize,
+    /// Chunk category (e.g. `truth`, `timeline_entry`).
     pub chunk_type: String,
 }
 
@@ -135,14 +192,23 @@ pub struct Chunk {
 /// An unanswered query detected by the memory engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeGap {
+    /// Row id within `knowledge_gaps`.
     pub id: i64,
+    /// Optional id of the page the query was meant to land on.
     pub page_id: Option<i64>,
+    /// Stable hash of the normalized query string, used for dedup.
     pub query_hash: String,
+    /// Free-form context recorded alongside the gap.
     pub context: String,
+    /// Optional retrieval confidence at the time the gap was logged.
     pub confidence_score: Option<f64>,
+    /// Sensitivity label controlling who can see the gap.
     pub sensitivity: String,
+    /// RFC 3339 timestamp the gap was resolved, or `None` while still open.
     pub resolved_at: Option<String>,
+    /// Slug of the page that resolved the gap, if any.
     pub resolved_by_slug: Option<String>,
+    /// RFC 3339 timestamp the gap was first detected.
     pub detected_at: String,
 }
 
@@ -151,12 +217,19 @@ pub struct KnowledgeGap {
 /// An entry in the idempotency audit trail.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestRecord {
+    /// Row id within `ingest_records`.
     pub id: i64,
+    /// Caller-supplied idempotency key used to dedupe repeated ingests.
     pub ingest_key: String,
+    /// Category of the source (e.g. `vault_sync`, `manual`).
     pub source_type: String,
+    /// Free-form reference to the source artifact (path, URL, etc.).
     pub source_ref: String,
+    /// JSON-encoded list of slugs that this ingest touched.
     pub pages_updated: String,
+    /// Short prose summary of what the ingest accomplished.
     pub summary: String,
+    /// RFC 3339 timestamp the ingest finished.
     pub completed_at: String,
 }
 
@@ -165,11 +238,14 @@ pub struct IngestRecord {
 /// How hybrid search merges FTS5 and vector result sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SearchMergeStrategy {
+    /// Take the set-union of hits, scored by the better of the two ranks.
     SetUnion,
+    /// Merge via Reciprocal Rank Fusion across the two ranked lists.
     Rrf,
 }
 
 impl SearchMergeStrategy {
+    /// Parses a config string into a strategy, defaulting to `SetUnion` on unrecognized input.
     pub fn from_config(value: &str) -> Self {
         match value.to_lowercase().as_str() {
             "rrf" => Self::Rrf,
@@ -180,44 +256,68 @@ impl SearchMergeStrategy {
 
 // ── Conversation ────────────────────────────────────────────────
 
+/// Frontmatter block at the top of an on-disk conversation file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationFrontmatter {
+    /// File-kind marker, always `conversation` for these files.
     #[serde(rename = "type")]
     pub file_type: String,
+    /// Stable session identifier shared by every turn in the file.
     pub session_id: String,
+    /// Calendar date the session was filed under, in `YYYY-MM-DD` form.
     pub date: String,
+    /// RFC 3339 timestamp of the first turn in the session.
     pub started_at: String,
+    /// Whether the session is still being written to or has been closed.
     pub status: ConversationStatus,
+    /// RFC 3339 timestamp of session close, or `None` while still open.
     pub closed_at: Option<String>,
+    /// RFC 3339 timestamp of the most recent extraction run, if any.
     pub last_extracted_at: Option<String>,
+    /// Highest turn ordinal already covered by extraction.
     pub last_extracted_turn: i64,
 }
 
+/// A full parsed conversation file: header plus all recorded turns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationFile {
+    /// Parsed frontmatter header.
     pub frontmatter: ConversationFrontmatter,
+    /// Turns in their on-disk order.
     pub turns: Vec<Turn>,
 }
 
+/// A single turn (one message) inside a conversation file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Turn {
+    /// 1-based position of the turn within its session.
     pub ordinal: i64,
+    /// Role that produced the turn (user, assistant, system, tool).
     pub role: TurnRole,
+    /// RFC 3339 timestamp the turn was recorded.
     pub timestamp: String,
+    /// Raw turn body, typically markdown.
     pub content: String,
+    /// Optional structured metadata blob attached to the turn.
     pub metadata: Option<serde_json::Value>,
 }
 
+/// Speaker role attached to a conversation turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnRole {
+    /// Message authored by the human user.
     User,
+    /// Message authored by the assistant.
     Assistant,
+    /// Out-of-band system or harness message.
     System,
+    /// Tool-call result injected into the conversation.
     Tool,
 }
 
 impl TurnRole {
+    /// Returns the canonical lowercase string form used in storage and JSON.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::User => "user",
@@ -248,14 +348,18 @@ impl FromStr for TurnRole {
     }
 }
 
+/// Lifecycle state of a conversation file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationStatus {
+    /// Still accepting new turns.
     Open,
+    /// Session has been closed; no further turns will be appended.
     Closed,
 }
 
 impl ConversationStatus {
+    /// Returns the canonical lowercase string form used in storage and JSON.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Open => "open",
@@ -282,56 +386,86 @@ impl FromStr for ConversationStatus {
     }
 }
 
+/// Result of appending a single turn to a conversation file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnWriteResult {
+    /// Stable per-turn identifier returned to the caller.
     pub turn_id: String,
+    /// Final ordinal assigned to the written turn.
     pub ordinal: i64,
+    /// Vault-relative path of the conversation file that was updated.
     pub conversation_path: String,
 }
 
+/// Result of closing a conversation session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CloseSessionResult {
+    /// RFC 3339 timestamp recorded as the close time.
     pub closed_at: String,
+    /// Vault-relative path of the conversation file that was closed.
     pub conversation_path: String,
+    /// `true` if this call transitioned the session from open to closed.
     pub newly_closed: bool,
 }
 
+/// A queued unit of work for the conversation extraction pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractionJob {
+    /// Row id within `extraction_queue`.
     pub id: i64,
+    /// Session id whose conversation file the job is bound to.
     pub session_id: String,
+    /// Vault-relative path of the conversation file to process.
     pub conversation_path: String,
+    /// What triggered the job to be enqueued.
     pub trigger_kind: ExtractionTriggerKind,
+    /// RFC 3339 timestamp the job was enqueued.
     pub enqueued_at: String,
+    /// RFC 3339 timestamp at or after which the job may run.
     pub scheduled_for: String,
+    /// Number of execution attempts so far.
     pub attempts: i64,
+    /// Last error message if the most recent attempt failed.
     pub last_error: Option<String>,
+    /// Current lifecycle status of the job.
     pub status: ExtractionJobStatus,
 }
 
+/// SLM extraction output for a single batch of turns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ExtractionResponse {
+    /// Facts the model emitted for this batch.
     pub facts: Vec<RawFact>,
+    /// Per-fact validation errors collected during parsing; never serialized.
     #[serde(skip, default)]
     pub validation_errors: Vec<ExtractionFactValidationError>,
 }
 
+/// A single per-fact validation failure surfaced during extraction parsing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractionFactValidationError {
+    /// Position of the offending fact within the model's emitted list.
     pub index: usize,
+    /// Declared fact kind, if the kind field parsed.
     pub kind: Option<String>,
+    /// Human-readable description of what failed validation.
     pub message: String,
 }
 
+/// Qualitative strength label attached to a `Preference` fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceStrength {
+    /// Mild or situational preference.
     Low,
+    /// Default-but-overridable preference.
     Medium,
+    /// Strongly held preference.
     High,
 }
 
 impl PreferenceStrength {
+    /// Returns the canonical lowercase string form used in storage and JSON.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -341,15 +475,20 @@ impl PreferenceStrength {
     }
 }
 
+/// Lifecycle state of an `ActionItem` fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionItemState {
+    /// Outstanding; not yet done or cancelled.
     Open,
+    /// Completed.
     Done,
+    /// Withdrawn before completion.
     Cancelled,
 }
 
 impl ActionItemState {
+    /// Returns the canonical lowercase string form used in storage and JSON.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Open => "open",
@@ -359,28 +498,46 @@ impl ActionItemState {
     }
 }
 
+/// One typed fact emitted by the extraction pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RawFact {
+    /// A choice that was made; pivot key is `chose`.
     Decision {
+        /// What was chosen.
         chose: String,
+        /// Optional reason recorded alongside the choice.
         rationale: Option<String>,
+        /// Prose summary of the decision.
         summary: String,
     },
+    /// A user preference about something; pivot key is `about`.
     Preference {
+        /// Subject the preference is about.
         about: String,
+        /// Optional strength label.
         strength: Option<PreferenceStrength>,
+        /// Prose summary of the preference.
         summary: String,
     },
+    /// A persistent factual statement; pivot key is `about`.
     Fact {
+        /// Subject the fact concerns.
         about: String,
+        /// Prose summary of the fact.
         summary: String,
     },
+    /// A task to be done; pivot key is `what`.
     ActionItem {
+        /// Optional owner of the action item.
         who: Option<String>,
+        /// Short description of the work to do.
         what: String,
+        /// Current lifecycle state.
         status: ActionItemState,
+        /// Optional due date in `YYYY-MM-DD` form.
         due: Option<String>,
+        /// Prose summary of the action item.
         summary: String,
     },
 }
@@ -451,32 +608,43 @@ impl RawFact {
     }
 }
 
+/// A bounded extraction window: new turns to extract plus prior turns for context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowedTurns {
+    /// Turns whose facts have not yet been extracted.
     pub new_turns: Vec<Turn>,
+    /// Already-extracted turns included only as context for the SLM.
     pub lookback_turns: Vec<Turn>,
+    /// `true` when the window contains only context and nothing to extract.
     pub context_only: bool,
 }
 
 impl WindowedTurns {
+    /// Returns the ordinal of the first new turn in the window, if any.
     pub fn first_new_ordinal(&self) -> Option<i64> {
         self.new_turns.first().map(|turn| turn.ordinal)
     }
 
+    /// Returns the ordinal of the last new turn in the window, if any.
     pub fn last_new_ordinal(&self) -> Option<i64> {
         self.new_turns.last().map(|turn| turn.ordinal)
     }
 }
 
+/// What caused an extraction job to be enqueued.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionTriggerKind {
+    /// Quiet-period debounce timer fired after a burst of turns.
     Debounce,
+    /// Session was closed and a final extraction pass is owed.
     SessionClose,
+    /// Operator forced a run via the CLI or MCP surface.
     Manual,
 }
 
 impl ExtractionTriggerKind {
+    /// Returns the canonical lowercase string form used in storage and JSON.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Debounce => "debounce",
@@ -505,16 +673,22 @@ impl FromStr for ExtractionTriggerKind {
     }
 }
 
+/// Lifecycle status of an `ExtractionJob` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractionJobStatus {
+    /// Awaiting a worker lease.
     Pending,
+    /// Currently leased and executing.
     Running,
+    /// Completed successfully.
     Done,
+    /// Exhausted retries without success.
     Failed,
 }
 
 impl ExtractionJobStatus {
+    /// Returns the canonical lowercase string form used in storage and JSON.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -550,53 +724,91 @@ impl FromStr for ExtractionJobStatus {
 /// Optimistic concurrency control error.
 #[derive(Debug, Error)]
 pub enum OccError {
+    /// The page was updated by another writer since the caller last read it.
     #[error("conflict: page updated elsewhere (current version: {current_version})")]
-    Conflict { current_version: i64 },
+    Conflict {
+        /// Version currently persisted in the database.
+        current_version: i64,
+    },
 }
 
 /// Errors from FTS5 or hybrid search operations.
 #[derive(Debug, Error)]
 pub enum SearchError {
+    /// Underlying SQLite or FTS5 error.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// A slug prefix matched more than one page and could not be resolved.
     #[error("ambiguous slug: {slug} ({candidates})")]
-    Ambiguous { slug: String, candidates: String },
+    Ambiguous {
+        /// The slug fragment the caller supplied.
+        slug: String,
+        /// Comma-separated list of candidate full slugs.
+        candidates: String,
+    },
 
+    /// Search failed for a non-SQLite reason; `message` carries the detail.
     #[error("search failed: {message}")]
-    Internal { message: String },
+    Internal {
+        /// Human-readable failure description.
+        message: String,
+    },
 }
 
 /// Errors from text embedding and vector inference operations.
 #[derive(Debug, Error)]
 pub enum InferenceError {
+    /// Caller passed an empty string to the embedder.
     #[error("input text is empty")]
     EmptyInput,
 
+    /// Embedding or vector search failed; `message` carries the detail.
     #[error("inference failed: {message}")]
-    Internal { message: String },
+    Internal {
+        /// Human-readable failure description.
+        message: String,
+    },
 }
 
 /// Database-layer errors surfaced by `src/core/`.
 #[derive(Debug, Error)]
 pub enum DbError {
+    /// No page exists for the requested slug.
     #[error("page not found: {slug}")]
-    NotFound { slug: String },
+    NotFound {
+        /// Slug the caller asked for.
+        slug: String,
+    },
 
+    /// No page exists for the requested vault-relative path.
     #[error("path not found: {path}")]
-    PathNotFound { path: String },
+    PathNotFound {
+        /// Path the caller asked for.
+        path: String,
+    },
 
+    /// Optimistic-concurrency conflict propagated up from the write path.
     #[error("OCC conflict: {0}")]
     Occ(#[from] OccError),
 
+    /// Underlying SQLite error.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    /// Schema mismatch or migration failure; `message` carries the detail.
     #[error("schema error: {message}")]
-    Schema { message: String },
+    Schema {
+        /// Human-readable failure description.
+        message: String,
+    },
 
+    /// The database was initialized with a different embedding model than requested.
     #[error("{message}")]
-    ModelMismatch { message: String },
+    ModelMismatch {
+        /// Human-readable mismatch description.
+        message: String,
+    },
 }
 
 #[cfg(test)]

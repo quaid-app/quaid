@@ -1,8 +1,11 @@
-// Ignore pattern handling for vault sync.
-//
-// The `.quaidignore` file on disk is authoritative. The `collections.ignore_patterns`
-// DB column is a cached mirror. Atomic parsing ensures the mirror is only updated
-// when the entire file is valid.
+//! `.gitignore`-style pattern matching for vault sync: parses a collection's
+//! `.quaidignore` file atomically (all-or-nothing on parse errors), mirrors
+//! the validated patterns into `collections.ignore_patterns`, and builds a
+//! `GlobSet` for the reconciler to filter walks against.
+//!
+//! See also: `fs_safety` for path-safety primitives the reconciler uses, and
+//! `vault_sync::watcher` which calls back into `reload_patterns` on file
+//! changes.
 
 #![allow(dead_code)]
 #![expect(
@@ -36,9 +39,13 @@ pub fn builtin_patterns() -> &'static [&'static str] {
 /// Structured parse error for a single line in `.quaidignore`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IgnoreParseError {
+    /// Machine-readable error code (e.g. `parse_error`).
     pub code: String,
+    /// 1-based line number where the bad pattern appeared.
     pub line: usize,
+    /// Original raw line text from the file.
     pub raw: String,
+    /// Human-readable description of the failure.
     pub message: String,
 }
 
@@ -67,7 +74,9 @@ impl IgnoreParseError {
 /// Parse result: either a valid pattern set or a list of errors.
 #[derive(Debug)]
 pub enum ParseResult {
+    /// All non-comment, non-blank lines parsed cleanly; carries the patterns.
     Valid(Vec<String>),
+    /// At least one line failed to parse; carries every error found.
     Invalid(Vec<IgnoreParseError>),
 }
 
@@ -141,6 +150,8 @@ pub fn reload_patterns(
     )
 }
 
+/// Explicitly clears the mirrored ignore patterns when the on-disk file is
+/// gone, used by `quaid collection ignore clear --confirm`.
 pub fn clear_patterns(
     conn: &Connection,
     collection_id: i64,
@@ -220,11 +231,16 @@ fn reload_patterns_with_mode(
     }
 }
 
+/// Failure mode raised by [`reload_patterns`] and [`clear_patterns`].
 #[derive(Debug)]
 pub enum ReloadError {
+    /// SQLite returned an error while reading or writing the mirror.
     DbError(String),
+    /// Filesystem I/O against `.quaidignore` failed.
     IoError(String),
+    /// One or more lines failed to parse; the mirror is left unchanged.
     ParseErrors(Vec<IgnoreParseError>),
+    /// File is gone but a prior mirror still exists; operator must explicitly clear.
     FileStablyAbsent(IgnoreParseError),
 }
 

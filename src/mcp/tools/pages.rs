@@ -27,7 +27,13 @@ use crate::mcp::server::{
 use crate::mcp::validation::{validate_content, validate_slug, MAX_LIMIT, MAX_RAW_DATA_LEN};
 
 impl QuaidServer {
+    /// `memory_get` MCP tool: resolve a slug to its canonical page, render
+    /// the truth body and timeline together, and surface supersede pointers
+    /// alongside the standard page payload.
     #[tool(description = "Get a page by slug")]
+    /// `memory_get` MCP tool: resolve a slug to its canonical page, render
+    /// the truth body and timeline together, and surface supersede pointers
+    /// alongside the standard page payload.
     pub fn memory_get(
         &self,
         #[tool(aggr)] input: MemoryGetInput,
@@ -68,7 +74,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_put` MCP tool: create or update a page under optimistic
+    /// concurrency, honouring the collection write-gate and rejecting
+    /// version mismatches with a structured `ConflictError`.
     #[tool(description = "Write or update a page")]
+    /// `memory_put` MCP tool: create or update a page under optimistic
+    /// concurrency, honouring the collection write-gate and rejecting
+    /// version mismatches with a structured `ConflictError`.
     pub fn memory_put(
         &self,
         #[tool(aggr)] input: MemoryPutInput,
@@ -158,7 +170,13 @@ impl QuaidServer {
         ))]))
     }
 
+    /// `memory_list` MCP tool: enumerate pages with optional collection,
+    /// namespace, wing, and type filters, ordered by recency and clamped to
+    /// `MAX_LIMIT`.
     #[tool(description = "List pages with optional filters")]
+    /// `memory_list` MCP tool: enumerate pages with optional collection,
+    /// namespace, wing, and type filters, ordered by recency and clamped to
+    /// `MAX_LIMIT`.
     pub fn memory_list(
         &self,
         #[tool(aggr)] input: MemoryListInput,
@@ -234,7 +252,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_raw` MCP tool: attach an arbitrary JSON-object payload to a
+    /// page under a named source identifier, guarded against silent
+    /// replacement by the `overwrite` flag.
     #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
+    /// `memory_raw` MCP tool: attach an arbitrary JSON-object payload to a
+    /// page under a named source identifier, guarded against silent
+    /// replacement by the `overwrite` flag.
     pub fn memory_raw(
         &self,
         #[tool(aggr)] input: MemoryRawInput,

@@ -105,7 +105,10 @@ harness = false
 
 [lints.rust]
 unsafe_code = "deny"
-missing_docs = "allow"
+# missing_docs is enforced only on the library crate via `#![warn(missing_docs)]`
+# in src/lib.rs — keeping the Cargo.toml entry off so integration tests, build.rs,
+# and the bin target (which all live outside the spec's documentation scope per
+# public-api-docs Requirement: Documentation scope boundary) aren't gated.
 unreachable_pub = "warn"
 
 [lints.clippy]

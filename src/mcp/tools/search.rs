@@ -21,7 +21,13 @@ use crate::mcp::server::{
 use crate::mcp::validation::MAX_LIMIT;
 
 impl QuaidServer {
+    /// `memory_query` MCP tool: run hybrid semantic + FTS5 retrieval with
+    /// optional progressive-depth expansion, auto-logging weak results as
+    /// knowledge gaps so the brain remembers what it failed to answer.
     #[tool(description = "Hybrid semantic + FTS5 query")]
+    /// `memory_query` MCP tool: run hybrid semantic + FTS5 retrieval with
+    /// optional progressive-depth expansion, auto-logging weak results as
+    /// knowledge gaps so the brain remembers what it failed to answer.
     pub fn memory_query(
         &self,
         #[tool(aggr)] input: MemoryQueryInput,
@@ -90,7 +96,13 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    /// `memory_search` MCP tool: run an FTS5 full-text search over the
+    /// sanitised query, honouring collection, namespace, wing, and
+    /// superseded filters and clamping the result count to `MAX_LIMIT`.
     #[tool(description = "FTS5 full-text search")]
+    /// `memory_search` MCP tool: run an FTS5 full-text search over the
+    /// sanitised query, honouring collection, namespace, wing, and
+    /// superseded filters and clamping the result count to `MAX_LIMIT`.
     pub fn memory_search(
         &self,
         #[tool(aggr)] input: MemorySearchInput,

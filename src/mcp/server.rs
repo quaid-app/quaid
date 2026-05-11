@@ -144,6 +144,10 @@ pub(crate) fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error
         .map_err(|_| map_config_error(format!("invalid extraction.debounce_ms value: {raw}")))
 }
 
+/// MCP stdio server handle. Owns the shared database connection (behind a
+/// `Mutex`) and the small-language-model client used by extraction-aware
+/// tools. Cloneable: every tool invocation receives a cheap clone that
+/// shares the same underlying `Arc`s.
 #[derive(Clone)]
 pub struct QuaidServer {
     pub(crate) db: DbRef,
@@ -151,10 +155,18 @@ pub struct QuaidServer {
 }
 
 impl QuaidServer {
+    /// Construct a server backed by `conn` and a lazily-initialised
+    /// in-process SLM runner. The default entry point for production
+    /// callers; tests that need to inject a stub SLM use
+    /// [`QuaidServer::new_with_slm`] instead.
     pub fn new(conn: Connection) -> Self {
         Self::new_with_slm(conn, Arc::new(LazySlmRunner::new()))
     }
 
+    /// Construct a server backed by `conn` with a caller-supplied SLM
+    /// client. Used by tests (and any embedder that wants to swap in a
+    /// non-default model implementation) to plug a custom `SlmClient` into
+    /// the conversation-extraction and fact-correction tool bodies.
     pub fn new_with_slm<S>(conn: Connection, slm: Arc<S>) -> Self
     where
         S: SlmClient + Send + Sync + 'static,
@@ -179,12 +191,14 @@ impl QuaidServer {
     }
 }
 
+/// Input schema for the `memory_get` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryGetInput {
     /// Page slug to retrieve
     pub slug: String,
 }
 
+/// Input schema for the `memory_put` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryPutInput {
     /// Page slug to create or update
@@ -197,42 +211,64 @@ pub struct MemoryPutInput {
     pub namespace: Option<String>,
 }
 
+/// Input schema for the `memory_add_turn` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryAddTurnInput {
+    /// Conversation session identifier the turn belongs to.
     pub session_id: String,
+    /// Role string ("user" / "assistant" / "system") parsed into a `TurnRole`.
     pub role: String,
+    /// Raw textual content of the turn.
     pub content: String,
+    /// Optional ISO-8601 timestamp; defaults to the server's current time.
     pub timestamp: Option<String>,
+    /// Optional JSON-object metadata attached to the turn.
     pub metadata: Option<serde_json::Value>,
+    /// Optional namespace the conversation lives under.
     pub namespace: Option<String>,
 }
 
+/// Input schema for the `memory_close_session` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryCloseSessionInput {
+    /// Identifier of the session to close.
     pub session_id: String,
+    /// Optional namespace the session lives under.
     pub namespace: Option<String>,
 }
 
+/// Input schema for the `memory_close_action` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryCloseActionInput {
+    /// Slug of the `action_item` page to close.
     pub slug: String,
+    /// New status value (`done` or `cancelled`).
     pub status: String,
+    /// Optional note appended to the page's truth body.
     pub note: Option<String>,
 }
 
+/// Input schema for the `memory_correct` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryCorrectInput {
+    /// Slug of the fact page being corrected.
     pub fact_slug: String,
+    /// Natural-language correction the user wants applied.
     pub correction: String,
 }
 
+/// Input schema for the `memory_correct_continue` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryCorrectContinueInput {
+    /// Identifier of the open correction dialogue.
     pub correction_id: String,
+    /// Optional response advancing the dialogue.
     pub response: Option<String>,
+    /// Set to `true` to abandon the dialogue without applying changes.
     pub abandon: Option<bool>,
 }
 
+/// Input schema for the `memory_query` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryQueryInput {
     /// Search query string
@@ -251,6 +287,7 @@ pub struct MemoryQueryInput {
     pub include_superseded: Option<bool>,
 }
 
+/// Input schema for the `memory_search` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemorySearchInput {
     /// FTS5 search query string
@@ -267,6 +304,7 @@ pub struct MemorySearchInput {
     pub include_superseded: Option<bool>,
 }
 
+/// Input schema for the `memory_list` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryListInput {
     /// Optional collection filter
@@ -281,53 +319,81 @@ pub struct MemoryListInput {
     pub limit: Option<u32>,
 }
 
+/// Input schema for the `memory_link` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryLinkInput {
+    /// Slug of the source page (the "from" end of the directed link).
     pub from_slug: String,
+    /// Slug of the target page (the "to" end of the directed link).
     pub to_slug: String,
+    /// Relationship token classifying the link (e.g. `works_at`).
     pub relationship: String,
+    /// Optional ISO-8601 lower bound for when the link is valid.
     pub valid_from: Option<String>,
+    /// Optional ISO-8601 upper bound for when the link is valid.
     pub valid_until: Option<String>,
 }
 
+/// Input schema for the `memory_link_close` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryLinkCloseInput {
+    /// Database row id of the link to close.
     pub link_id: u64,
+    /// ISO-8601 timestamp marking the link's `valid_until`.
     pub valid_until: String,
 }
 
+/// Input schema for the `memory_backlinks` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryBacklinksInput {
+    /// Slug of the page whose inbound edges should be listed.
     pub slug: String,
+    /// Maximum number of backlinks to return.
     pub limit: Option<u32>,
+    /// Optional temporal filter (`active` or `all`); defaults to `active`.
     pub temporal: Option<String>,
 }
 
+/// Input schema for the `memory_graph` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryGraphInput {
+    /// Slug of the page to use as the graph root.
     pub slug: String,
+    /// Optional traversal depth (clamped to `graph::MAX_DEPTH`).
     pub depth: Option<u32>,
+    /// Optional temporal filter (`active` or `all`); defaults to `active`.
     pub temporal: Option<String>,
 }
 
+/// Input schema for the `memory_check` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryCheckInput {
+    /// Optional slug restricting the check to a single page; omitted runs
+    /// detection across every page.
     pub slug: Option<String>,
 }
 
+/// Input schema for the `memory_timeline` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryTimelineInput {
+    /// Slug of the page whose timeline entries should be returned.
     pub slug: String,
+    /// Maximum number of entries to return.
     pub limit: Option<u32>,
 }
 
+/// Input schema for the `memory_tags` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryTagsInput {
+    /// Slug of the page whose tags should be listed or mutated.
     pub slug: String,
+    /// Optional tag tokens to add (created if missing).
     pub add: Option<Vec<String>>,
+    /// Optional tag tokens to remove.
     pub remove: Option<Vec<String>>,
 }
 
+/// Input schema for the `memory_gap` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryGapInput {
     /// Query string to log as a knowledge gap
@@ -338,6 +404,7 @@ pub struct MemoryGapInput {
     pub context: Option<String>,
 }
 
+/// Input schema for the `memory_gaps` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryGapsInput {
     /// Include resolved gaps (default: false)
@@ -346,12 +413,15 @@ pub struct MemoryGapsInput {
     pub limit: Option<u32>,
 }
 
+/// Input schema for the `memory_stats` MCP tool (no parameters).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryStatsInput {}
 
+/// Input schema for the `memory_collections` MCP tool (no parameters).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryCollectionsInput {}
 
+/// Input schema for the `memory_namespace_create` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryNamespaceCreateInput {
     /// Namespace ID to create
@@ -360,12 +430,14 @@ pub struct MemoryNamespaceCreateInput {
     pub ttl_hours: Option<f64>,
 }
 
+/// Input schema for the `memory_namespace_destroy` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryNamespaceDestroyInput {
     /// Namespace ID to destroy
     pub id: String,
 }
 
+/// Input schema for the `memory_raw` MCP tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MemoryRawInput {
     /// Page slug to attach raw data to

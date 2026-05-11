@@ -354,15 +354,26 @@ pub fn ensure_unix_platform(command: &'static str) -> Result<(), VaultSyncError>
     }
 }
 
-/// Owns the background threads spawned by [`start_serve_runtime`] —
-/// the supervisor loop and the extraction worker — and tears them
-/// down on drop so the serve process exits cleanly.
+/// Owns the background threads spawned by [`start_serve_runtime`] /
+/// [`start_daemon_runtime`] — the supervisor loop and the extraction
+/// worker — and tears them down on drop so the runtime process exits
+/// cleanly.
+///
+/// A transport-only handle (`quaid serve` running while a `daemon` or
+/// other `serve_host` already owns the runtime) holds `None` for both
+/// thread handles and a `Some(db_path)` in `transport_only_db_path` so
+/// the Drop impl can still unregister the `serve_sessions` row.
 pub struct ServeRuntime {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     extractor_handle: Option<thread::JoinHandle<()>>,
-    /// Session id assigned to this serve runtime at startup.
+    /// Session id assigned to this runtime at startup.
     pub session_id: String,
+    /// Set to `Some(db_path)` only when the handle is transport-only
+    /// (the supervisor thread isn't running and therefore can't unregister
+    /// the session itself). Drop opens a fresh connection and removes the
+    /// row to keep `serve_sessions` bounded.
+    transport_only_db_path: Option<String>,
 }
 
 impl Drop for ServeRuntime {
@@ -373,6 +384,14 @@ impl Drop for ServeRuntime {
         }
         if let Some(handle) = self.extractor_handle.take() {
             let _ = handle.join();
+        }
+        // Transport-only handle has no supervisor to unregister the session
+        // on its way out, so do it from Drop. Best-effort: a stuck SQLite
+        // open here would just leak the row to the next sweep.
+        if let Some(path) = self.transport_only_db_path.take() {
+            if let Ok(conn) = Connection::open(&path) {
+                let _ = unregister_session(&conn, &self.session_id);
+            }
         }
     }
 }
@@ -845,7 +864,7 @@ fn claim_owned_collections(conn: &Connection, session_id: &str) -> Result<(), Va
         .collect::<Result<Vec<_>, _>>()?;
     for collection_id in collection_ids {
         match acquire_owner_lease(conn, collection_id, session_id) {
-            Ok(()) | Err(VaultSyncError::ServeOwnsCollectionError { .. }) => {}
+            Ok(()) | Err(VaultSyncError::RuntimeOwnsCollectionError { .. }) => {}
             Err(err) => return Err(err),
         }
     }
@@ -1328,7 +1347,7 @@ pub(crate) fn live_serve_endpoint_for_root_path(
              JOIN serve_sessions s ON s.session_id = o.session_id
              WHERE c.root_path = ?1
                AND s.heartbeat_at >= datetime('now', ?2)
-               AND s.session_type = 'serve'
+               AND s.session_type IN ('daemon', 'serve_host', 'serve')
              ORDER BY c.id
              LIMIT 1",
             params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
@@ -2057,15 +2076,17 @@ pub fn mark_collection_restoring_for_handshake(
 ) -> Result<(Collection, String, i64), VaultSyncError> {
     let collection = load_collection_by_id(conn, collection_id)?;
     // Must use live_collection_owner (not untyped owner_session_id) so that a live
-    // CLI lease in collection_owners is never mistaken for the serve supervisor that
-    // must write the ack.  live_collection_owner enforces session_type = 'serve' AND
-    // heartbeat liveness in one typed query (design.md §404-408).
+    // CLI lease in collection_owners is never mistaken for the runtime-host supervisor
+    // that must write the ack.  live_collection_owner enforces session_type IN
+    // ('daemon','serve_host','serve') AND heartbeat liveness in one typed query
+    // (design.md §404-408 + daemon-and-http-transport).
     let owner = live_collection_owner(conn, collection_id)?.ok_or_else(|| {
-        VaultSyncError::ServeOwnsCollectionError {
+        VaultSyncError::RuntimeOwnsCollectionError {
             collection_name: collection.name.clone(),
             owner_session_id: "none".to_owned(),
             owner_pid: 0,
             owner_host: "unknown".to_owned(),
+            owner_session_type: "none".to_owned(),
         }
     })?;
     let expected_session_id = owner.session_id;
@@ -2675,16 +2696,83 @@ pub fn run_rcrt_pass(
     Ok(actions)
 }
 
-/// Boots the long-running serve runtime: registers a session,
-/// publishes the IPC socket, runs the startup recovery sequence,
-/// spawns watcher and extraction threads, and returns the handle that
-/// owns them all.
+/// Boots the long-running serve runtime: registers a `serve` session,
+/// attempts to promote it to `serve_host`, and — only when the
+/// promotion succeeds — publishes the IPC socket, runs the startup
+/// recovery sequence, spawns watcher and extraction threads, and
+/// returns the handle that owns them all.
+///
+/// When a live `daemon` (or another `serve_host`) already owns the
+/// runtime, the promotion is refused and this function returns a
+/// transport-only [`ServeRuntime`] handle: the `serve_sessions` row is
+/// registered (and will be cleaned up by Drop) but no watcher or
+/// extraction-worker thread is spawned. This is the path that lets
+/// `quaid daemon install` + `quaid serve` coexist safely on a single
+/// database without double-spawning the runtime.
 pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
     let conn = Connection::open(&db_path)?;
     sweep_stale_sessions(&conn)?;
     let session_id = register_session(&conn, SessionType::Serve)?;
 
+    let promoted = try_promote_to_serve_host(&conn, &session_id).inspect_err(|_| {
+        let _ = unregister_session(&conn, &session_id);
+    })?;
+
+    if !promoted {
+        // Another runtime owner (daemon or serve_host) is live; stay
+        // transport-only. Drop's `transport_only_db_path` cleanup will
+        // unregister this session.
+        return Ok(ServeRuntime {
+            stop: Arc::new(AtomicBool::new(false)),
+            handle: None,
+            extractor_handle: None,
+            session_id,
+            transport_only_db_path: Some(db_path),
+        });
+    }
+
+    start_full_runtime(conn, db_path, session_id)
+}
+
+/// Boots the long-running daemon runtime: registers a `daemon`
+/// session (refusing if another live `daemon` already exists),
+/// publishes the IPC socket, runs the startup recovery sequence, and
+/// spawns watcher and extraction threads. The daemon is the canonical
+/// runtime owner; subsequent `quaid serve` invocations against the
+/// same database will see this `daemon` row and stay transport-only
+/// per [`start_serve_runtime`].
+pub fn start_daemon_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
+    init_process_registries()?;
+    let conn = Connection::open(&db_path)?;
+    sweep_stale_sessions(&conn)?;
+
+    if let Some(existing) = find_active_daemon_session(&conn)? {
+        return Err(VaultSyncError::InvariantViolation {
+            message: format!(
+                "DaemonAlreadyRunningError: another daemon is already running for this database \
+                 (pid={pid} host={host} session_id={sid}). Stop it first via `quaid daemon stop` \
+                 (or `kill {pid}` if it isn't installed as a service) and retry.",
+                pid = existing.pid,
+                host = existing.host,
+                sid = existing.session_id
+            ),
+        });
+    }
+
+    let session_id = register_session(&conn, SessionType::Daemon)?;
+    start_full_runtime(conn, db_path, session_id)
+}
+
+/// Shared body of [`start_serve_runtime`] (after a successful
+/// promotion to `serve_host`) and [`start_daemon_runtime`]. Owns IPC
+/// socket publishing, the startup recovery sequence, watcher spawning,
+/// and the supervisor + extraction-worker threads.
+fn start_full_runtime(
+    conn: Connection,
+    db_path: String,
+    session_id: String,
+) -> Result<ServeRuntime, VaultSyncError> {
     #[cfg(unix)]
     let published_ipc = bind_socket(&conn, &session_id)?;
 
@@ -2740,6 +2828,7 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         handle: Some(handle),
         extractor_handle: Some(extractor_handle),
         session_id,
+        transport_only_db_path: None,
     })
 }
 

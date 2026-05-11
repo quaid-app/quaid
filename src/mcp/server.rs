@@ -505,11 +505,24 @@ impl ServerHandler for QuaidServer {
 }
 
 /// Run the MCP stdio server with the given database connection.
+///
+/// Preserved as a back-compat entry point. New callers should prefer
+/// [`run_stdio`] (identical behaviour) or [`crate::mcp::http::run_http`]
+/// for the opt-in SSE transport.
 pub async fn run(conn: Connection) -> anyhow::Result<()> {
+    run_stdio(conn).await
+}
+
+/// Run the MCP stdio server, binding stdin/stdout as the transport.
+///
+/// Returns when the peer closes stdin or the server returns an error.
+/// Used by interactive `quaid serve` invocations attached to an
+/// MCP-over-stdio client (an IDE agent, etc.).
+pub async fn run_stdio(conn: Connection) -> anyhow::Result<()> {
     let server = QuaidServer::new(conn);
     let transport = (tokio::io::stdin(), tokio::io::stdout());
-    let _service = server.serve(transport).await?;
-    _service.waiting().await?;
+    let service = server.serve(transport).await?;
+    service.waiting().await?;
     Ok(())
 }
 

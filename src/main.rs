@@ -260,8 +260,41 @@ enum Commands {
         #[arg(long)]
         embeddings: bool,
     },
-    /// Start MCP stdio server
-    Serve,
+    /// Start MCP server. Defaults to stdio; `--http` opens the SSE
+    /// transport on loopback instead.
+    Serve {
+        /// Open the HTTP/SSE MCP transport (mutually exclusive with stdio,
+        /// which is the default).
+        #[arg(long)]
+        http: bool,
+        /// TCP port for the HTTP transport (default: 3112). Requires `--http`.
+        #[arg(long, requires = "http")]
+        port: Option<u16>,
+        /// Bind address for the HTTP transport (default: 127.0.0.1).
+        /// Non-loopback binds are refused in v1; requires `--http`.
+        #[arg(long, requires = "http")]
+        bind: Option<std::net::IpAddr>,
+        /// Path to a bearer-token file. Parsed and validated but not
+        /// enforced in v1 (see HTTP transport docs); requires `--http`.
+        #[arg(long, requires = "http")]
+        token_file: Option<std::path::PathBuf>,
+        /// Treat the loopback interface as trusted and allow unauthenticated
+        /// access (matches stdio's security profile). Requires `--http`.
+        #[arg(long, requires = "http")]
+        trust_loopback: bool,
+    },
+    /// Background-daemon lifecycle: install, run, status, logs, etc.
+    Daemon {
+        #[command(subcommand)]
+        action: commands::daemon::DaemonAction,
+    },
+    /// Process-level status: daemon installed/running, MCP transports,
+    /// recent runtime activity. Distinct from `quaid stats` (content-level).
+    Status {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Memory statistics
     Stats,
     /// Skills management
@@ -459,7 +492,39 @@ async fn main() -> Result<()> {
             let flags = validate_flags_from_args(all, links, assertions, embeddings);
             commands::validate::run(&db, &flags, cli.json)
         }
-        Commands::Serve => commands::serve::run(db).await,
+        Commands::Serve {
+            http,
+            port,
+            bind,
+            token_file,
+            trust_loopback,
+        } => {
+            let http_config = if http {
+                Some(quaid::mcp::HttpConfig {
+                    port: port.unwrap_or(quaid::mcp::http::DEFAULT_HTTP_PORT),
+                    bind: bind.unwrap_or(quaid::mcp::http::DEFAULT_HTTP_BIND),
+                    token_file,
+                    trusted_loopback: trust_loopback,
+                })
+            } else {
+                None
+            };
+            commands::serve::run(db, http_config).await
+        }
+        Commands::Daemon { action } => {
+            let code = commands::daemon::run(action, db).await?;
+            if code != 0 {
+                std::process::exit(i32::from(code));
+            }
+            Ok(())
+        }
+        Commands::Status { json } => {
+            let code = commands::status::run(&db, json)?;
+            if code != 0 {
+                std::process::exit(i32::from(code));
+            }
+            Ok(())
+        }
         Commands::Stats => commands::stats::run(&db, cli.json),
         Commands::Skills { action } => commands::skills::run(action, cli.json),
         Commands::Call { tool, params } => commands::call::run(db, &tool, params),

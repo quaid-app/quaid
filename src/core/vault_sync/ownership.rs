@@ -1,22 +1,27 @@
-//! Per-collection ownership: who currently holds the live serve
+//! Per-collection ownership: who currently holds the live runtime
 //! lease and how leases are acquired/released.
 //!
 //! Three concerns live here:
 //!
 //! 1. [`LiveCollectionOwner`] is the row shape returned when a
-//!    collection has a live serve session attached.
+//!    collection has a live runtime-host session attached. The
+//!    `session_type` field distinguishes whether the owner is the
+//!    long-lived `daemon`, a no-daemon-fallback `serve_host`, or
+//!    (during partial-rollback windows) an older binary's `serve`.
 //! 2. The query helpers [`live_collection_owner`] and
 //!    [`ensure_no_live_serve_owner`] (plus their `_for_root_path`
-//!    siblings) check whether a serve is alive within the
+//!    siblings) check whether a runtime-host is alive within the
 //!    `SESSION_LIVENESS_SECS` heartbeat window before letting an
 //!    operation continue. They surface
-//!    `VaultSyncError::ServeOwnsCollectionError` when the answer is
+//!    [`VaultSyncError::RuntimeOwnsCollectionError`] (renamed from
+//!    the prior `ServeOwnsCollectionError` so the error name matches
+//!    the role-agnostic ownership model) when the answer is
 //!    "yes, somebody else owns this".
 //! 3. [`acquire_owner_lease`] and [`release_owner_lease`] write the
 //!    owner row on `collection_owners` and the redundant
 //!    `active_lease_session_id` column on `collections`. These are
 //!    the only places that mutate ownership state during normal
-//!    serve startup/shutdown; restore/recovery paths use the
+//!    runtime-host startup/shutdown; restore/recovery paths use the
 //!    short-lived lease helpers in `start_serve_runtime`.
 //!
 //! `SESSION_LIVENESS_SECS` (the 15-second heartbeat threshold) and
@@ -29,37 +34,51 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{load_collection_by_id, VaultSyncError, SESSION_LIVENESS_SECS};
 
-/// Snapshot of the serve session currently holding the owner lease on
-/// a collection, returned by [`live_collection_owner`] when one exists.
+/// Snapshot of the runtime-host session currently holding the owner
+/// lease on a collection, returned by [`live_collection_owner`] when
+/// one exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveCollectionOwner {
-    /// Session id of the live serve process owning the lease.
+    /// Session id of the live runtime-host process owning the lease.
     pub session_id: String,
-    /// OS pid of the live serve process.
+    /// OS pid of the live runtime-host process.
     pub pid: i64,
-    /// Hostname reported by the live serve process at registration.
+    /// Hostname reported by the live runtime-host process at registration.
     pub host: String,
+    /// `serve_sessions.session_type` of the owning session — one of
+    /// `'daemon'`, `'serve_host'`, or `'serve'`. Lets callers surface the
+    /// actual role in operator-facing error messages so the suggestion
+    /// (`quaid daemon stop` vs `kill <pid>`) is accurate.
+    pub session_type: String,
 }
 
-/// Returns the live owner of a collection, or `None` if no serve
-/// session has heartbeated within the liveness window.
+/// Returns the live owner of a collection, or `None` if no
+/// runtime-host session has heartbeated within the liveness window.
+///
+/// The `session_type` filter accepts `'daemon'`, `'serve_host'`, and
+/// `'serve'`. The third (`'serve'`) is included only to keep older
+/// `quaid serve` rows (written by a binary that predates the
+/// daemon-and-http-transport change) visible as owners during
+/// partial-rollback windows; new code never assigns `collection_owners`
+/// to a plain `'serve'`-typed session.
 pub fn live_collection_owner(
     conn: &Connection,
     collection_id: i64,
 ) -> Result<Option<LiveCollectionOwner>, VaultSyncError> {
     conn.query_row(
-        "SELECT o.session_id, s.pid, s.host
+        "SELECT o.session_id, s.pid, s.host, s.session_type
          FROM collection_owners o
          JOIN serve_sessions s ON s.session_id = o.session_id
          WHERE o.collection_id = ?1
            AND s.heartbeat_at >= datetime('now', ?2)
-           AND s.session_type = 'serve'",
+           AND s.session_type IN ('daemon', 'serve_host', 'serve')",
         params![collection_id, format!("-{SESSION_LIVENESS_SECS} seconds")],
         |row| {
             Ok(LiveCollectionOwner {
                 session_id: row.get(0)?,
                 pid: row.get(1)?,
                 host: row.get(2)?,
+                session_type: row.get(3)?,
             })
         },
     )
@@ -72,13 +91,13 @@ fn live_collection_owner_for_root_path(
     root_path: &str,
 ) -> Result<Option<(String, LiveCollectionOwner)>, VaultSyncError> {
     conn.query_row(
-        "SELECT c.name, o.session_id, s.pid, s.host
+        "SELECT c.name, o.session_id, s.pid, s.host, s.session_type
          FROM collections c
          JOIN collection_owners o ON o.collection_id = c.id
          JOIN serve_sessions s ON s.session_id = o.session_id
          WHERE c.root_path = ?1
            AND s.heartbeat_at >= datetime('now', ?2)
-           AND s.session_type = 'serve'
+           AND s.session_type IN ('daemon', 'serve_host', 'serve')
          ORDER BY c.id
          LIMIT 1",
         params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
@@ -89,6 +108,7 @@ fn live_collection_owner_for_root_path(
                     session_id: row.get(1)?,
                     pid: row.get(2)?,
                     host: row.get(3)?,
+                    session_type: row.get(4)?,
                 },
             ))
         },
@@ -97,38 +117,42 @@ fn live_collection_owner_for_root_path(
     .map_err(Into::into)
 }
 
-/// Errors with `ServeOwnsCollectionError` if a live serve session
-/// currently holds the lease on the collection; used by CLI paths
-/// that must refuse to mutate a collection while serve owns it.
+/// Errors with `RuntimeOwnsCollectionError` if a live runtime-host
+/// session currently holds the lease on the collection; used by CLI
+/// paths that must refuse to mutate a collection while a runtime
+/// owns it.
 pub fn ensure_no_live_serve_owner(
     conn: &Connection,
     collection_id: i64,
 ) -> Result<(), VaultSyncError> {
     let collection = load_collection_by_id(conn, collection_id)?;
     if let Some(owner) = live_collection_owner(conn, collection_id)? {
-        return Err(VaultSyncError::ServeOwnsCollectionError {
+        return Err(VaultSyncError::RuntimeOwnsCollectionError {
             collection_name: collection.name,
             owner_session_id: owner.session_id,
             owner_pid: owner.pid,
             owner_host: owner.host,
+            owner_session_type: owner.session_type,
         });
     }
     Ok(())
 }
 
-/// Errors with `ServeOwnsCollectionError` if any collection rooted at
-/// `root_path` is held by a live serve session — the root-path variant
-/// used by attach and import paths that don't yet have a collection id.
+/// Errors with `RuntimeOwnsCollectionError` if any collection rooted at
+/// `root_path` is held by a live runtime-host session — the root-path
+/// variant used by attach and import paths that don't yet have a
+/// collection id.
 pub fn ensure_no_live_serve_owner_for_root_path(
     conn: &Connection,
     root_path: &str,
 ) -> Result<(), VaultSyncError> {
     if let Some((collection_name, owner)) = live_collection_owner_for_root_path(conn, root_path)? {
-        return Err(VaultSyncError::ServeOwnsCollectionError {
+        return Err(VaultSyncError::RuntimeOwnsCollectionError {
             collection_name,
             owner_session_id: owner.session_id,
             owner_pid: owner.pid,
             owner_host: owner.host,
+            owner_session_type: owner.session_type,
         });
     }
     Ok(())
@@ -152,7 +176,8 @@ pub fn owner_session_id(
 
 /// Records `session_id` as the current owner of the collection and
 /// mirrors the assignment onto `collections.active_lease_session_id`;
-/// errors if a different live serve session already holds the lease.
+/// errors if a different live runtime-host session already holds the
+/// lease.
 pub fn acquire_owner_lease(
     conn: &Connection,
     collection_id: i64,
@@ -161,11 +186,12 @@ pub fn acquire_owner_lease(
     if let Some(owner) = live_collection_owner(conn, collection_id)? {
         if owner.session_id != session_id {
             let collection = load_collection_by_id(conn, collection_id)?;
-            return Err(VaultSyncError::ServeOwnsCollectionError {
+            return Err(VaultSyncError::RuntimeOwnsCollectionError {
                 collection_name: collection.name,
                 owner_session_id: owner.session_id,
                 owner_pid: owner.pid,
                 owner_host: owner.host,
+                owner_session_type: owner.session_type,
             });
         }
     }

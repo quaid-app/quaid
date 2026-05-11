@@ -173,6 +173,24 @@ The daemon-runtime/serve-host split must enumerate every background duty owned b
 
 Tasks 2.5, 3.1, 5.x, 6.x, 7.x are extended to gate each duty on runtime-host ownership rather than on "is this a `quaid serve` process."
 
+### Decision 11 — v1 HTTP transport implements a strict subset of the policy matrix.
+
+Discovered during implementation: rmcp 0.1.5's `SseServer::serve_with_config` builds its own axum router internally and starts `axum::serve` before returning, with no public hook for injecting `tower::Layer` middleware between the `Router` and the running server. The `App`, `sse_handler`, and `post_event_handler` types referenced inside `serve_with_config` are crate-private, so we cannot replicate `serve_with_config` in user code to add an auth layer. Two options were considered:
+
+- **Upgrade or fork rmcp** to expose a `Router`-returning API or wrap the SSE handlers with a layer that supports `tower::Layer<S>`. Out of scope for v1; tracked as a follow-up.
+- **Replace rmcp's SSE handlers with a Quaid-owned axum app** that wires the lower-level `RoleServer` trait directly. Roughly a day of work plus its own test surface; also out of scope for v1.
+
+**Chosen for v1:** ship the subset that rmcp 0.1.5 directly supports without bearer-auth, and fail closed on everything else. The implemented policy:
+
+| bind         | token_file | trusted_loopback | v1 outcome                              |
+|--------------|------------|------------------|-----------------------------------------|
+| loopback     | None       | true             | Listener opens (unauthenticated)        |
+| loopback     | None       | false            | Refused (`LoopbackUntrustedNoToken`)    |
+| loopback     | Some(_)    | any              | Refused (`BearerAuthDeferred`)          |
+| non-loopback | any        | any              | Refused (`NonLoopbackBindUnsupported`)  |
+
+This honors the spec's "fail closed" requirement by the strongest possible means — no listener is ever opened when the requested mode is unsupported. The follow-up that lifts these restrictions can swap `bind_with_token_guard`'s policy without changing any caller; `HttpConfig` already carries every field the eventual implementation needs.
+
 ### Decision 10 — `quaid daemon logs` tails launchd's `StandardErrorPath` file on macOS; uses `journalctl` on Linux.
 
 The earlier draft specified `log show --predicate 'subsystem == "app.quaid.daemon"'` for macOS, but the current runtime uses plain `eprintln!` (see `src/core/vault_sync/mod.rs:2807`); there is no `os_log` integration. Rather than adding `os_log` plumbing to every log site, the launchd plist captures stderr to a known file (`~/Library/Logs/quaid-daemon.err.log`) and `quaid daemon logs` tails that file. `--follow` switches to `tail -F`. Linux uses `journalctl --user -u quaid-daemon` because systemd captures stdout/stderr natively into the journal.

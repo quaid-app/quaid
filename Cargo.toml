@@ -35,8 +35,8 @@ tokenizers = "0.20"
 # Model download for the online channel
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 
-# MCP server (stdio transport, JSON-RPC 2.0)
-rmcp = "0.1"
+# MCP server (stdio + opt-in SSE/HTTP transport, JSON-RPC 2.0)
+rmcp = { version = "0.1", features = ["transport-sse-server"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

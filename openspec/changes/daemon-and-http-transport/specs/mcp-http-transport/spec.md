@@ -1,5 +1,18 @@
 ## ADDED Requirements
 
+### Requirement: v1 implementation scope and known limitations
+The system SHALL implement the HTTP/SSE transport on top of `rmcp` 0.1.5's `SseServer` API, which does not expose middleware hooks for bearer-auth. v1 SHALL therefore implement only the subset of the policy below that rmcp 0.1.5 directly supports without forking or replacing its SSE handlers: loopback bind under `--trust-loopback` (unauthenticated, stdio-equivalent). Every other combination (loopback without `--trust-loopback`, loopback with `--token-file`, any non-loopback bind) SHALL fail closed at startup with a typed error before any TCP listener is opened. This satisfies the "fail closed" requirement below by the strongest possible means (no listener) and tracks bearer-auth enforcement, non-loopback bind, and SIGHUP token reload as follow-ups. The `HttpConfig` struct SHALL carry every field the eventual full policy needs (`port`, `bind`, `token_file`, `trusted_loopback`) so the deferred work is purely additive in `bind_with_token_guard` rather than a wider refactor.
+
+#### Scenario: v1 build refuses loopback-with-token
+- **WHEN** `quaid serve --http --token-file /path/to/token` is invoked in a v1 binary
+- **THEN** the process exits non-zero with a `BearerAuthDeferred` error message naming the v1 limitation
+- **AND** no TCP listener is opened on the configured port
+
+#### Scenario: v1 build refuses non-loopback bind
+- **WHEN** `quaid serve --http --bind 0.0.0.0` is invoked in a v1 binary regardless of `--token-file` / `--trust-loopback` combination
+- **THEN** the process exits non-zero with a `NonLoopbackBindUnsupported` error
+- **AND** no TCP listener is opened on the configured port
+
 ### Requirement: `quaid serve --http` and `quaid daemon run --http` both open the MCP SSE transport
 
 The system SHALL provide an opt-in HTTP/SSE MCP transport via both `quaid serve --http [...]` (interactive) and `quaid daemon run --http [...]` (under launchd/systemd, per the `daemon-runtime` capability). The transport SHALL be backed by the `rmcp` crate's `transport-sse-server` feature, exposing the same MCP tool registry as the stdio transport. When `--http` is passed to `quaid serve`, stdio MCP SHALL NOT be opened on the same invocation; stdio and HTTP transports are mutually exclusive per `serve` invocation. `quaid daemon run` SHALL NEVER open stdio MCP; the `--http` flag is the only way to expose an MCP transport from a daemon.

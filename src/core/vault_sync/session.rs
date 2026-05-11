@@ -240,9 +240,7 @@ fn try_promote_inner(conn: &Connection, session_id: &str) -> Result<bool, VaultS
         }
         None => {
             return Err(VaultSyncError::InvariantViolation {
-                message: format!(
-                    "try_promote_to_serve_host: session_id={session_id} not found"
-                ),
+                message: format!("try_promote_to_serve_host: session_id={session_id} not found"),
             });
         }
     }

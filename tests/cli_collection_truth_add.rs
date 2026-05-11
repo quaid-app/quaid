@@ -135,10 +135,13 @@ fn collection_add_write_quaid_id_refuses_same_root_live_owner_before_alias_attac
         "same-root live owner should block alias write-back add: {output:?}"
     );
     let text = combined_output(&output);
-    assert!(text.contains("ServeOwnsCollectionError"));
+    assert!(text.contains("RuntimeOwnsCollectionError"));
     assert!(text.contains("owner_pid=2468"));
     assert!(text.contains("owner_host=alias-host"));
-    assert!(text.contains("stop serve first"));
+    assert!(
+        text.contains("stop the daemon first") || text.contains("stop the running serve first"),
+        "expected runtime stop-hint in error text: {text}"
+    );
 
     let conn = open_test_db(&db_path);
     let alias_count: i64 = conn

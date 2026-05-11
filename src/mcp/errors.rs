@@ -165,7 +165,8 @@ pub fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
     } else if msg.contains("page not found") || msg.contains("link not found") {
         rmcp::Error::new(ErrorCode(-32001), msg, None)
     } else if msg.contains("CollectionRestoringError")
-        || msg.contains("ServeOwnsCollectionError")
+        || msg.contains("RuntimeOwnsCollectionError")
+        || msg.contains("ServeOwnsCollectionError") // legacy text in serialized payloads
         || msg.contains("Restore")
         || msg.contains("NewRoot")
         || msg.contains("ambiguous slug")
@@ -191,7 +192,7 @@ pub fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
         vault_sync::VaultSyncError::PageNotFound { .. } => ErrorCode(-32001),
         vault_sync::VaultSyncError::AmbiguousSlug { .. }
         | vault_sync::VaultSyncError::CollectionRestoring { .. }
-        | vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }
+        | vault_sync::VaultSyncError::RuntimeOwnsCollectionError { .. }
         | vault_sync::VaultSyncError::Restore(vault_sync::RestoreError::RestoreInProgress {
             ..
         })

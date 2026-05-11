@@ -318,21 +318,19 @@ fn try_promote_to_serve_host_concurrent_elects_exactly_one_winner() {
     let barrier = Arc::new(Barrier::new(2));
 
     let path_a = db_path_str.clone();
-    let s1_clone = s1.clone();
     let b_a = Arc::clone(&barrier);
     let t1 = thread::spawn(move || {
         let conn = quaid::core::db::open(&path_a).unwrap();
         b_a.wait();
-        try_promote_to_serve_host(&conn, &s1_clone).unwrap()
+        try_promote_to_serve_host(&conn, &s1).unwrap()
     });
 
     let path_b = db_path_str.clone();
-    let s2_clone = s2.clone();
     let b_b = Arc::clone(&barrier);
     let t2 = thread::spawn(move || {
         let conn = quaid::core::db::open(&path_b).unwrap();
         b_b.wait();
-        try_promote_to_serve_host(&conn, &s2_clone).unwrap()
+        try_promote_to_serve_host(&conn, &s2).unwrap()
     });
 
     let r1 = t1.join().unwrap();

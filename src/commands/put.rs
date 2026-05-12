@@ -2531,7 +2531,7 @@ mod tests {
     fn cli_put_does_not_refuse_cli_session_as_serve_owner() {
         let (_guard, _dir, _db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         // A live CLI-type session in collection_owners (e.g. a concurrent offline put) must NOT
-        // cause put_from_cli_string to return ServeOwnsCollectionError.
+        // cause put_from_cli_string to return RuntimeOwnsCollectionError.
         conn.execute(
             "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at, session_type)
              VALUES ('cli-offline', 9999, 'cli-host', datetime('now'), 'cli')",

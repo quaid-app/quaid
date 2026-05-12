@@ -590,7 +590,7 @@ fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
                             c.needs_full_sync,
                             c.pending_root_path,
                             c.restore_command_id,
-                            (SELECT COUNT(*) FROM serve_sessions WHERE session_id = ?2 AND session_type = 'serve'),
+                            (SELECT COUNT(*) FROM serve_sessions WHERE session_id = ?2 AND session_type IN ('daemon', 'serve_host', 'serve')),
                             (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2)
                      FROM collections c
                      WHERE c.id = ?1",

@@ -513,9 +513,19 @@ fn run_uuid_write_back(
 
 fn map_bulk_uuid_write_back_error(err: vault_sync::VaultSyncError) -> anyhow::Error {
     match err {
-        vault_sync::VaultSyncError::ServeOwnsCollectionError { .. } => anyhow!(
-            "{err}. stop serve first, run the bulk UUID rewrite offline, then restart serve."
-        ),
+        vault_sync::VaultSyncError::RuntimeOwnsCollectionError {
+            ref owner_session_type,
+            ..
+        } => {
+            let stop_hint = if owner_session_type == "daemon" {
+                "stop the daemon first (`quaid daemon stop`)"
+            } else {
+                "stop the running serve first (`kill <pid>`)"
+            };
+            anyhow!(
+                "{err}. {stop_hint}, run the bulk UUID rewrite offline, then restart the runtime."
+            )
+        }
         other => anyhow!(other.to_string()),
     }
 }
@@ -1957,10 +1967,13 @@ mod tests {
         let error = run_uuid_write_back(&conn, &collection, false).unwrap_err();
         let text = error.to_string();
 
-        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("RuntimeOwnsCollectionError"));
         assert!(text.contains("owner_pid=4321"));
         assert!(text.contains("owner_host=batch3-host"));
-        assert!(text.contains("stop serve first"));
+        assert!(
+            text.contains("stop the daemon first") || text.contains("stop the running serve first"),
+            "expected runtime stop-hint in error text: {text}"
+        );
     }
 
     #[cfg(unix)]
@@ -1997,10 +2010,13 @@ mod tests {
         .unwrap_err();
         let text = error.to_string();
 
-        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("RuntimeOwnsCollectionError"));
         assert!(text.contains("owner_pid=7654"));
         assert!(text.contains("owner_host=alias-host"));
-        assert!(text.contains("stop serve first"));
+        assert!(
+            text.contains("stop the daemon first") || text.contains("stop the running serve first"),
+            "expected runtime stop-hint in error text: {text}"
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM collections WHERE root_path = ?1",
@@ -2038,10 +2054,13 @@ mod tests {
         let error = run_uuid_write_back(&conn, &collection, false).unwrap_err();
         let text = error.to_string();
 
-        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("RuntimeOwnsCollectionError"));
         assert!(text.contains("owner_pid=7654"));
         assert!(text.contains("owner_host=alias-host"));
-        assert!(text.contains("stop serve first"));
+        assert!(
+            text.contains("stop the daemon first") || text.contains("stop the running serve first"),
+            "expected runtime stop-hint in error text: {text}"
+        );
         let rendered = fs::read_to_string(&note_path).unwrap();
         assert_eq!(rendered, original);
         assert!(!rendered.contains("quaid_id: "));
@@ -2607,7 +2626,7 @@ mod tests {
 
         let error = remove(&conn, "work", false, false, true).unwrap_err();
         let text = error.to_string();
-        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("RuntimeOwnsCollectionError"));
         assert!(text.contains("owner_pid=2468"));
         assert!(text.contains("owner_host=remove-host"));
     }

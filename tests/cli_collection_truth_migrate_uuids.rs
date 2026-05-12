@@ -126,8 +126,14 @@ fn collection_migrate_uuids_refuses_live_owner_with_pid_and_host() {
         "migrate-uuids should refuse: {output:?}"
     );
     let text = combined_output(&output);
-    assert!(text.contains("ServeOwnsCollectionError"));
+    assert!(text.contains("RuntimeOwnsCollectionError"));
     assert!(text.contains("owner_pid=9876"));
     assert!(text.contains("owner_host=truth-host"));
-    assert!(text.contains("stop serve first"));
+    // map_bulk_uuid_write_back_error inspects owner_session_type and emits one of two
+    // stop-hint phrases. The test fixture inserts a serve_host row, so we expect the
+    // kill-pid suggestion; daemon-typed rows would get "stop the daemon first".
+    assert!(
+        text.contains("stop the daemon first") || text.contains("stop the running serve first"),
+        "expected stop-hint phrasing in error: {text}"
+    );
 }

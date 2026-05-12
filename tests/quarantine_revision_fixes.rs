@@ -242,7 +242,7 @@ fn restore_refuses_live_owned_collection() {
     );
     let output_text = String::from_utf8_lossy(&restore_result.stderr);
     assert!(
-        output_text.contains("ServeOwnsCollectionError"),
+        output_text.contains("RuntimeOwnsCollectionError"),
         "restore must preserve the live-owner refusal: {output_text}"
     );
 

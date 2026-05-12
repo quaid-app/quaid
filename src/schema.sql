@@ -443,7 +443,11 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('extraction.idle_close_ms', '60000'),
     ('extraction.retention_days', '30'),
     ('fact_resolution.dedup_cosine_min', '0.92'),
-    ('fact_resolution.supersede_cosine_min', '0.4');
+    ('fact_resolution.supersede_cosine_min', '0.4'),
+    ('daemon.http.enabled', 'false'),
+    ('daemon.http.port', '3112'),
+    ('daemon.http.bind', '127.0.0.1'),
+    ('daemon.http.trusted_loopback', 'false');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

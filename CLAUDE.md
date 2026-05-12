@@ -22,26 +22,26 @@ memory.db                  — SQLite: pages + FTS5 + vec0 + links + assertions
 
 ## Key files
 
-| File | Purpose |
-|------|---------|
-| `src/core/db.rs` | rusqlite connection, schema init, WAL, sqlite-vec load |
-| `src/core/types.rs` | Page, Link, Tag, SearchResult, KnowledgeGap, etc. |
-| `src/core/markdown.rs` | `parse_frontmatter()`, `split_content()`, `extract_summary()`, `render_page()` |
-| `src/core/fts.rs` | FTS5 search: `search_fts(query, wing_filter, db)` → ranked results |
-| `src/core/inference.rs` | candle init, `embed(text)`, `search_vec(query, k, wing_filter, db)` |
-| `src/core/search.rs` | `hybrid_search(query, db)`: SMS + palace filter + FTS5 + vec + set-union |
-| `src/core/progressive.rs` | `progressive_retrieve(results, budget, depth)`: token-budget expansion |
-| `src/core/palace.rs` | `derive_wing(slug)`, `derive_room(content)`, `classify_intent(query)` |
-| `src/core/novelty.rs` | `check_novelty(content, page, db)`: Jaccard + cosine dedup |
-| `src/core/assertions.rs` | `check_assertions(slug, db)`: heuristic contradiction detection |
-| `src/core/graph.rs` | `neighborhood_graph(slug, depth, db)`: N-hop BFS over links |
-| `src/core/gaps.rs` | `log_gap()`, `list_gaps()`, `resolve_gap()` |
-| `src/core/chunking.rs` | temporal sub-chunking: truth sections + individual timeline entries |
-| `src/core/links.rs` | `extract_links()`, `resolve_slug()`, temporal validity |
-| `src/core/migrate.rs` | `export_dir()` plus round-trip export helpers |
-| `src/core/raw_imports.rs` | Active-source rotation, retention, and byte-exact restore support |
-| `src/mcp/server.rs` | MCP stdio server with all tools |
-| `src/schema.sql` | Current DDL — embedded via `include_str!()` |
+| File                      | Purpose                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------ |
+| `src/core/db.rs`          | rusqlite connection, schema init, WAL, sqlite-vec load                         |
+| `src/core/types.rs`       | Page, Link, Tag, SearchResult, KnowledgeGap, etc.                              |
+| `src/core/markdown.rs`    | `parse_frontmatter()`, `split_content()`, `extract_summary()`, `render_page()` |
+| `src/core/fts.rs`         | FTS5 search: `search_fts(query, wing_filter, db)` → ranked results             |
+| `src/core/inference.rs`   | candle init, `embed(text)`, `search_vec(query, k, wing_filter, db)`            |
+| `src/core/search.rs`      | `hybrid_search(query, db)`: SMS + palace filter + FTS5 + vec + set-union       |
+| `src/core/progressive.rs` | `progressive_retrieve(results, budget, depth)`: token-budget expansion         |
+| `src/core/palace.rs`      | `derive_wing(slug)`, `derive_room(content)`, `classify_intent(query)`          |
+| `src/core/novelty.rs`     | `check_novelty(content, page, db)`: Jaccard + cosine dedup                     |
+| `src/core/assertions.rs`  | `check_assertions(slug, db)`: heuristic contradiction detection                |
+| `src/core/graph.rs`       | `neighborhood_graph(slug, depth, db)`: N-hop BFS over links                    |
+| `src/core/gaps.rs`        | `log_gap()`, `list_gaps()`, `resolve_gap()`                                    |
+| `src/core/chunking.rs`    | temporal sub-chunking: truth sections + individual timeline entries            |
+| `src/core/links.rs`       | `extract_links()`, `resolve_slug()`, temporal validity                         |
+| `src/core/migrate.rs`     | `export_dir()` plus round-trip export helpers                                  |
+| `src/core/raw_imports.rs` | Active-source rotation, retention, and byte-exact restore support              |
+| `src/mcp/server.rs`       | MCP stdio server with all tools                                                |
+| `src/schema.sql`          | Current DDL — embedded via `include_str!()`                                    |
 
 ## Build
 
@@ -69,6 +69,10 @@ cross build --release --target aarch64-unknown-linux-musl
 cargo test
 # Key: tests/roundtrip_semantic.rs (normalized export) + tests/roundtrip_raw.rs (byte-exact)
 ```
+
+Testing rules:
+- Add new test coverage under organized files in `tests/...`; do not add new inline `#[cfg(test)] mod tests` blocks to production source files in `src/...`.
+- Prefer subprocess or public-API integration tests for CLI/parser/runtime behavior. Do not add test-only production seams just to improve coverage unless the seam is part of the production design.
 
 ## Embedding model
 

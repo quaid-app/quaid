@@ -86,19 +86,33 @@ pub enum VaultSyncError {
     },
 
     /// Raised when a CLI-side operation tries to mutate a collection
-    /// while a live `serve` session still holds the owner lease for it.
+    /// while a live runtime-host session (a `daemon`, a promoted
+    /// `serve_host`, or — during partial-rollback windows — an older
+    /// binary's `serve`) still holds the owner lease for it.
+    ///
+    /// Renamed from `ServeOwnsCollectionError` in the
+    /// daemon-and-http-transport change: the error fires for any
+    /// runtime owner regardless of which session_type holds the lease,
+    /// so the operator-facing message should reflect the actual role
+    /// (`daemon` → suggest `quaid daemon stop`; `serve_host` / `serve`
+    /// → suggest `kill <pid>`).
     #[error(
-        "ServeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id} owner_pid={owner_pid} owner_host={owner_host}"
+        "RuntimeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id} owner_pid={owner_pid} owner_host={owner_host} owner_session_type={owner_session_type}"
     )]
-    ServeOwnsCollectionError {
-        /// Name of the collection held by a live serve session.
+    RuntimeOwnsCollectionError {
+        /// Name of the collection held by a live runtime-host session.
         collection_name: String,
-        /// Session id of the owning serve process.
+        /// Session id of the owning runtime-host process.
         owner_session_id: String,
-        /// OS pid of the owning serve process.
+        /// OS pid of the owning runtime-host process.
         owner_pid: i64,
-        /// Hostname of the owning serve process.
+        /// Hostname of the owning runtime-host process.
         owner_host: String,
+        /// `serve_sessions.session_type` of the owning session — one of
+        /// `'daemon'`, `'serve_host'`, or `'serve'`. Determines whether
+        /// the operator-facing suggestion is `quaid daemon stop`
+        /// (`daemon` role) or `kill <pid>` (any other role).
+        owner_session_type: String,
     },
 
     /// Surfaces an IPC subsystem failure (handshake, framing, peer

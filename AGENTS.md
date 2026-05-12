@@ -50,6 +50,11 @@ quaid serve                     # start MCP server
 - `memory_gap` always creates gaps with `sensitivity = 'internal'`. Escalation requires `memory_gap_approve`.
 - Ingest is idempotent for exact-byte duplicates and keeps the active source in `raw_imports`.
 
+## Testing rules
+
+- Add new test coverage under organized files in `tests/...`; do not add new inline `#[cfg(test)] mod tests` blocks to production source files in `src/...`.
+- Prefer subprocess or public-API integration tests for CLI/parser/runtime behavior. Do not add test-only production seams just to improve coverage unless the seam is part of the production design.
+
 ## Tech stack
 
 Rust + rusqlite (bundled SQLite) + sqlite-vec + candle (BGE-small-en-v1.5) + clap + rmcp

@@ -114,11 +114,11 @@ fn mark_collection_restoring_rejects_cli_session_as_handshake_owner() {
 
     let err = mark_collection_restoring_for_handshake(&conn, collection_id).unwrap_err();
 
-    // live_collection_owner finds no serve-type owner → ServeOwnsCollectionError,
+    // live_collection_owner finds no serve-type owner → RuntimeOwnsCollectionError,
     // NOT a timeout waiting for an ack only a serve supervisor can emit.
     assert!(
-        err.to_string().contains("ServeOwnsCollectionError"),
-        "expected ServeOwnsCollectionError but got: {err}"
+        err.to_string().contains("RuntimeOwnsCollectionError"),
+        "expected RuntimeOwnsCollectionError but got: {err}"
     );
 }
 
@@ -180,7 +180,7 @@ fn acquire_owner_lease_refuses_live_foreign_owner_and_preserves_existing_claim()
 
     let error = acquire_owner_lease(&conn, collection_id, "cli-owner").unwrap_err();
 
-    assert!(error.to_string().contains("ServeOwnsCollectionError"));
+    assert!(error.to_string().contains("RuntimeOwnsCollectionError"));
     assert_eq!(
         owner_session_id(&conn, collection_id).unwrap().as_deref(),
         Some("serve-owner")
@@ -437,7 +437,7 @@ fn ensure_no_live_serve_owner_for_root_path_reports_same_root_alias_owner() {
         ensure_no_live_serve_owner_for_root_path(&conn, &temp_canonical.display().to_string())
             .unwrap_err();
     let text = error.to_string();
-    assert!(text.contains("ServeOwnsCollectionError"));
+    assert!(text.contains("RuntimeOwnsCollectionError"));
     assert!(text.contains("collection=work"));
     assert!(text.contains("owner_pid=77"));
     assert!(text.contains("owner_host=batch3-host"));
@@ -481,6 +481,6 @@ fn ensure_no_live_serve_owner_for_root_path_ignores_cli_session() {
     )
     .unwrap();
 
-    // A live CLI-type lease must not trigger a ServeOwnsCollectionError.
+    // A live CLI-type lease must not trigger a RuntimeOwnsCollectionError.
     ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string()).unwrap();
 }

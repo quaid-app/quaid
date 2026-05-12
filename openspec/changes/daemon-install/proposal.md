@@ -1,5 +1,12 @@
 # Daemon install
 
+> **Superseded by `daemon-and-http-transport`** (2026-05-11). The unified
+> change at `openspec/changes/daemon-and-http-transport/` implements the
+> daemon-install scope plus the runtime split, the opt-in HTTP/SSE
+> transport, and the supporting session-registry / ownership work that
+> this stub did not address. This stub should be archived alongside that
+> change.
+
 ## Why
 
 `quaid serve` is now the long-lived runtime required for live vault sync and MCP access, but operators still have to wire it into launchd or systemd manually. That keeps deployment truth scattered across shell snippets instead of a first-class Quaid workflow.

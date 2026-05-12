@@ -90,7 +90,7 @@ QUAID_DB=~/.quaid/memory.db quaid serve
 
 ## MCP tools
 
-The latest public release (`v0.20.0`) exposes 24 MCP tools via `quaid serve`. This branch prepares `v0.21.0`, which keeps the 24-tool surface and adds daemon runtime and opt-in HTTP/SSE transport. All tool names use the `memory_*` prefix.
+The current published release (`v0.21.0`) exposes 24 MCP tools via `quaid serve` and adds daemon runtime and opt-in HTTP/SSE transport. All tool names use the `memory_*` prefix.
 
 ### `memory_query` vs `memory_search`
 

@@ -9,8 +9,8 @@ aliases: [quaid-roadmap]
 # Quaid Product Roadmap
 
 **Last updated:** May 12, 2026
-**Latest public release:** v0.20.0
-**Current release lane:** v0.21.0
+**Latest public release:** v0.21.0
+**Current release lane:** v0.22.0
 **Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
 
 ---
@@ -90,32 +90,27 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 
 ---
 
-## Phase 5b - Daemon runtime and HTTP/SSE transport
+## Phase 5b - Daemon runtime and HTTP/SSE transport ✅ Shipped in v0.21.0
 
-**Priority: current release lane**
-**Target: v0.21.0**
+**Shipped: v0.21.0**
 **Issues: #175 (multi-agent HTTP transport), #177 (standalone extraction worker)**
 
-### What it needs to achieve
+### What it achieved
 
-`quaid serve` couples the background runtime to the stdio MCP transport: when the MCP client closes stdin, the workers die with it. This phase separates the runtime from the transport so vault sync, the extraction worker, and all supervised duties survive MCP client disconnects.
+`quaid serve` coupled the background runtime to the stdio MCP transport: when the MCP client closed stdin, the workers died with it. This phase separates the runtime from the transport so vault sync, the extraction worker, and all supervised duties survive MCP client disconnects.
 
-### Shipped on this branch (pre-tag v0.21.0)
+### Shipped surface (v0.21.0)
 
 - `quaid daemon run` — foreground entry point for launchd/systemd; owns the full background runtime and never opens stdio MCP; optionally hosts HTTP/SSE via `--http`
 - `quaid daemon install|uninstall|start|stop|restart|status|logs` — platform service lifecycle (macOS launchd, Linux systemd)
 - `quaid status` — top-level process overview (session type, PID, DB path, transports, activity)
-- `quaid serve --http` — opt-in HTTP/SSE MCP transport on loopback (v1: `--trust-loopback` or `--token-file`); stdio behavior unchanged
+- `quaid serve --http` — opt-in HTTP/SSE MCP transport on loopback (v1: `--trust-loopback` required; non-loopback binds and `--token-file` are refused in v1); stdio behavior unchanged
 - Session-type expansion: `daemon`, `serve_host`, `serve`, `cli` — exactly one process holds the runtime-host lease per database
 - `RuntimeOwnsCollectionError` replaces `ServeOwnsCollectionError` in ownership predicates and error payloads
 - No new MCP tools; the 24-tool surface is unchanged
 
 ### Release truth
-- The latest public binaries and `install.sh` resolve to `v0.20.0`
-- This branch prepares `v0.21.0`; build from source if you need the daemon follow-on before the tag exists
-
-### Remaining release work
-- Tag and publish `v0.21.0`
+- `v0.21.0` is published. GitHub Releases and `install.sh` resolve to `v0.21.0`.
 
 ---
 
@@ -241,7 +236,7 @@ Both are right in different contexts. A future feature worth considering:
 
 `quaid eval --against-history` - run your N most recent queries against current binary, compare to stored baseline, report regressions. Each user gets their own personalized regression detector.
 
-Not on the current roadmap but worth an OpenSpec after the `v0.21.0` daemon follow-on is shipped.
+Not on the current roadmap but worth an OpenSpec after the `v0.21.0` daemon surface is stable.
 
 ---
 

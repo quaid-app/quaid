@@ -8,9 +8,9 @@ aliases: [quaid-roadmap]
 
 # Quaid Product Roadmap
 
-**Last updated:** May 5, 2026
-**Latest public release:** v0.18.0
-**Current release lane:** v0.19.0
+**Last updated:** May 12, 2026
+**Latest public release:** v0.20.0
+**Current release lane:** v0.21.0
 **Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
 
 ---
@@ -48,17 +48,17 @@ Multi-collection live filesystem sync, namespace isolation, collection health re
 
 ---
 
-## Phase 5 - Conversation memory foundations + SLM extraction
+## Phase 5 - Conversation memory foundations + SLM extraction ✅ Shipped in v0.19.0
 
-**Priority: current release lane — extractor follow-on landed on branch**
+**Shipped: v0.19.0**
 **Target: >40% LoCoMo, >40% LongMemEval**
 **Issues: #137 (namespace, shipped), #105 (conversation memory), #135 (contradiction resolution)**
 
-### What it needs to achieve
+### What it needed to achieve
 
 The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as documents. Fact extraction doesn't happen at write time. When asked "What degree did I graduate with?", Quaid can't answer from "Business Administration, spent 4 years at it" buried in casual conversation.
 
-### Latest public release / branch truth
+### Shipped surface (v0.19.0)
 
 **Namespace isolation** ✅ Shipped in `v0.16.0` — multiple agents and sessions share one DB without bleed.
 
@@ -76,12 +76,7 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - `memory_get` and `memory_graph` surface supersede relationships directly
 
 **Release truth**
-- The latest public binaries and `install.sh` publish `v0.18.0`
-- This branch prepares `v0.19.0` with the extraction worker, `quaid extraction status`, `quaid extract`, DAB §8 benchmark wiring, and the new extraction/integration proof surfaces
-
-### Remaining release work after the landed branch implementation
-
-- Final release/ops work: refresh the draft PR onto a clean head, run/monitor CI and automated review, then tag and publish `v0.19.0`
+- All Phase 5 work shipped in `v0.19.0` with the extraction worker, `quaid extraction status`, `quaid extract`, DAB §8 benchmark wiring, and the extraction/integration proof surfaces
 
 ### Success criteria
 - LoCoMo benchmark score > 40% (from 0.1% baseline)
@@ -91,13 +86,36 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - Non-blocking - ingest latency unchanged
 - `quaid query "what did we decide about X last week"` returns relevant facts
 
-**Current truth boundary:** the repo now carries a manual/hosted-smoke DAB §8 hook, but the authoritative regression gate still requires a full representative Unix hardware run because the always-on CI fleet does not match that hardware profile yet.
+**Current truth boundary:** the repo carries a manual/hosted-smoke DAB §8 hook. The authoritative regression gate still requires a full representative Unix hardware run because the always-on CI fleet does not match that hardware profile yet.
 
-### Next design / delivery questions
-- What is the final 3-5 turn extraction boundary? (Strict session window, time window, or both?)
-- How does contradiction resolution interact with ADD-only immutability once extracted facts begin superseding each other automatically?
-- Model download: lazy (first use) or eager (at `extraction.enabled`)?
-- What structured format should extracted facts persist with, and what confidence metadata should survive review?
+---
+
+## Phase 5b - Daemon runtime and HTTP/SSE transport
+
+**Priority: current release lane**
+**Target: v0.21.0**
+**Issues: #175 (multi-agent HTTP transport), #177 (standalone extraction worker)**
+
+### What it needs to achieve
+
+`quaid serve` couples the background runtime to the stdio MCP transport: when the MCP client closes stdin, the workers die with it. This phase separates the runtime from the transport so vault sync, the extraction worker, and all supervised duties survive MCP client disconnects.
+
+### Shipped on this branch (pre-tag v0.21.0)
+
+- `quaid daemon run` — foreground entry point for launchd/systemd; owns the full background runtime and never opens stdio MCP; optionally hosts HTTP/SSE via `--http`
+- `quaid daemon install|uninstall|start|stop|restart|status|logs` — platform service lifecycle (macOS launchd, Linux systemd)
+- `quaid status` — top-level process overview (session type, PID, DB path, transports, activity)
+- `quaid serve --http` — opt-in HTTP/SSE MCP transport on loopback (v1: `--trust-loopback` or `--token-file`); stdio behavior unchanged
+- Session-type expansion: `daemon`, `serve_host`, `serve`, `cli` — exactly one process holds the runtime-host lease per database
+- `RuntimeOwnsCollectionError` replaces `ServeOwnsCollectionError` in ownership predicates and error payloads
+- No new MCP tools; the 24-tool surface is unchanged
+
+### Release truth
+- The latest public binaries and `install.sh` resolve to `v0.20.0`
+- This branch prepares `v0.21.0`; build from source if you need the daemon follow-on before the tag exists
+
+### Remaining release work
+- Tag and publish `v0.21.0`
 
 ---
 
@@ -223,7 +241,7 @@ Both are right in different contexts. A future feature worth considering:
 
 `quaid eval --against-history` - run your N most recent queries against current binary, compare to stored baseline, report regressions. Each user gets their own personalized regression detector.
 
-Not on the current roadmap but worth an OpenSpec after the `v0.19.0` extraction follow-on is shipped.
+Not on the current roadmap but worth an OpenSpec after the `v0.21.0` daemon follow-on is shipped.
 
 ---
 
@@ -233,7 +251,7 @@ Not on the current roadmap but worth an OpenSpec after the `v0.19.0` extraction 
 |----------|-------|---------|-----------|
 | 1 | #137 ✅ | Namespace isolation | — |
 | 2 | #134 | Large corpus performance | — |
-| 3 | #105 | Conversation memory foundations (`v0.18.0`) + SLM extraction follow-on (`v0.19.0`) | #137 |
+| 3 | #105 | Conversation memory foundations (`v0.18.0`) + SLM extraction follow-on (`v0.19.0`) ✅ | #137 |
 | 4 | #135 | Contradiction resolution | #105 |
 | 5 | #107 | Entity extraction | #105 (coordinate) |
 | 6 | #72 | Self-wiring knowledge graph | #107 |

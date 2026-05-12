@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. The latest public release is `v0.18.0`; this branch prepares `v0.19.0` by expanding the MCP surface from 22 to 24 tools and adding the conversation-memory extraction + correction follow-on (worker, CLI/tool surfaces, and benchmark/integration gates).
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. The latest public release is `v0.20.0`; this branch prepares `v0.21.0` by adding daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport.
 
 ## What it does
 
@@ -15,9 +15,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **The latest public release is `v0.18.0`, and this branch prepares `v0.19.0`.** The branch expands the shipped 22-tool MCP surface to 24 tools and adds the conversation-memory extraction + correction follow-on: the extraction worker, correction dialogue, queue/status CLI, and benchmark/integration gates.
+> **The latest public release is `v0.20.0`, and this branch prepares `v0.21.0`.** The branch adds a detached background daemon (`quaid daemon run`, managed via launchd on macOS and systemd on Linux), `quaid daemon install|uninstall|start|stop|restart|status|logs`, the new `quaid status` top-level command, and an opt-in HTTP/SSE MCP transport (`quaid serve --http`). The 24-tool MCP surface is unchanged.
 >
-> Published GitHub Release binaries and `install.sh` currently resolve to `v0.18.0`. Build from source if you need the unreleased `v0.19.0` extraction follow-on before the tag exists. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
+> Published GitHub Release binaries and `install.sh` currently resolve to `v0.20.0`. Build from source if you need the unreleased `v0.21.0` daemon follow-on before the tag exists. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
 
 ---
 
@@ -25,14 +25,14 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect the unreleased `v0.19.0` branch state, including the conversation-memory extraction follow-on |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — the latest published tag is `v0.18.0`; use source builds for the unreleased `v0.19.0` extraction lane |
+| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect the unreleased `v0.21.0` branch state, including daemon runtime and HTTP/SSE transport |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — the latest published tag is `v0.20.0`; use source builds for the unreleased `v0.21.0` daemon lane |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
 > **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
 >
-> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.19.0` conversation-memory extraction follow-on before the tag exists.
+> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.21.0` daemon follow-on before the tag exists.
 
 ---
 
@@ -69,7 +69,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first memory store
 
-> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the branch-only `v0.19.0` extraction follow-on before it is published; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the branch-only `v0.21.0` daemon follow-on before it is published; see [Status](#status) and [Install options](#install-options) above.
 
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
@@ -188,7 +188,7 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Collections + namespaces (3):** `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`
 
-The latest public GitHub Release (`v0.18.0`) exposes 22 tools. This branch expands that surface to 24 tools while adding the unreleased `v0.19.0` extraction worker, correction dialogue, CLI, and benchmark follow-on. See [spec.md](spec.md#mcp-server) for tool signatures.
+The latest public GitHub Release (`v0.20.0`) exposes 24 tools. This branch prepares `v0.21.0`, which keeps the 24-tool MCP surface and adds daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ### Capture a conversation on this branch
 
@@ -198,7 +198,53 @@ quaid call memory_add_turn '{"session_id":"demo","role":"assistant","content":"G
 quaid call memory_close_session '{"session_id":"demo"}'
 ```
 
-Those calls append turns to `conversations/YYYY-MM-DD/<session-id>.md` and queue extraction work. On this branch, the capture layer, extraction worker, fact-page write path, and benchmark/integration proofs are landed; the unreleased part is the `v0.19.0` tag, not the implementation.
+Those calls append turns to `conversations/YYYY-MM-DD/<session-id>.md` and queue extraction work. The capture layer, extraction worker, fact-page write path, and benchmark/integration proofs are all landed and available in the published `v0.20.0` release.
+
+---
+
+## Background daemon (v0.21.0 branch)
+
+> **Pre-release.** The daemon commands below are landed on this branch and are available via source builds. Published GitHub Release binaries resolve to `v0.20.0` and do not include them.
+
+`quaid serve` is the right choice for interactive sessions. For daily use — where vault sync, the extraction worker, and the MCP server should keep running after you close your terminal — install the background daemon instead.
+
+### Install
+
+```bash
+# macOS (launchd) or Linux (systemd user unit)
+quaid daemon install
+
+# Also expose HTTP/SSE MCP transport on loopback
+quaid daemon install --http --port 3112 --trust-loopback
+```
+
+The installed daemon runs `quaid daemon run` under your login session. On macOS, logs go to `~/Library/Logs/quaid-daemon.{out,err}.log`. On Linux, logs are in the systemd user journal.
+
+### Manage the daemon
+
+```bash
+quaid daemon start
+quaid daemon stop
+quaid daemon restart
+quaid daemon status      # exit 0 if running
+quaid daemon logs        # tail recent output
+quaid daemon uninstall   # remove unit and stop
+```
+
+### Process-level overview
+
+```bash
+quaid status             # session type, owning PID, DB path, transports, activity
+quaid status --json      # machine-readable
+```
+
+`quaid status` is distinct from `quaid stats` (which reports page counts and index sizes).
+
+### HTTP/SSE transport
+
+`quaid serve --http` and `quaid daemon run --http` expose an MCP-over-HTTP/SSE listener in-process. In v1 the listener binds loopback only (`127.0.0.1`). Pass `--trust-loopback` to allow unauthenticated loopback calls (equivalent security to stdio). Non-loopback binds and loopback-without-trust both require `--token-file`. See [docs/operator-guide-daemon.md](operator-guide-daemon.md) for the full security policy and token setup.
+
+> **Note.** `quaid serve` (without `--http`) is unchanged: it remains stdio-only and fully backward-compatible. The HTTP transport is strictly opt-in.
 
 ---
 
@@ -424,7 +470,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands first shipped in `v0.9.6` and remain part of the published `v0.18.0` vault-sync surface. The `v0.19.0` lane keeps them in place — including same-root single-file `quaid put` proxying on Unix — while adding the extraction follow-on elsewhere in this guide.
+> These commands first shipped in `v0.9.6` and remain part of the published `v0.20.0` vault-sync surface. The `v0.21.0` lane keeps them in place — including same-root single-file `quaid put` proxying on Unix — while adding the daemon follow-on elsewhere in this guide.
 
 ### Attach a vault
 

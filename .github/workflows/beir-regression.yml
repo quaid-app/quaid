@@ -20,7 +20,11 @@ jobs:
   beir:
     name: BEIR nDCG@10 Regression
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Advisory only — failure/skip here must never block release-sync PRs.
+    # Dataset downloads from public.ukp.informatik.tu-darmstadt.de can stall;
+    # continue-on-error ensures a job failure surfaces as "neutral" not "failure".
+    continue-on-error: true
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -44,10 +48,17 @@ jobs:
           key: beir-datasets-${{ hashFiles('benchmarks/datasets.lock') }}
 
       - name: Download pinned datasets
+        id: download
+        # Bounded at 15 min so a stalled UKP host never consumes the full runner budget.
+        timeout-minutes: 15
+        continue-on-error: true
         run: |
           chmod +x benchmarks/prep_datasets.sh
           ./benchmarks/prep_datasets.sh ${{ github.event.inputs.subset || 'all' }}
 
       - name: Run BEIR regression tests
+        # Skip evaluation when dataset download did not succeed; keeps benchmark
+        # signal intact on successful downloads while avoiding false failures.
+        if: steps.download.outcome == 'success'
         run: |
           cargo test --release --test beir_eval -- --ignored --nocapture

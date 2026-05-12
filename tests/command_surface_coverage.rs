@@ -299,6 +299,35 @@ fn stats_compact_validate_and_gaps_commands_cover_reporting_surface() {
 }
 
 #[test]
+fn daemon_status_status_and_serve_http_fail_closed_run_through_main_dispatch() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = init_db(&dir);
+    let home_dir = dir.path().join("home");
+    fs::create_dir_all(&home_dir).unwrap();
+
+    let status = run_quaid_in_dir(&db_path, dir.path(), &["status", "--json"], &home_dir);
+    assert_eq!(status.status.code(), Some(2));
+    let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["daemon"]["installed"], false);
+    assert_eq!(status_json["daemon"]["running"], false);
+
+    let daemon_status = run_quaid_in_dir(
+        &db_path,
+        dir.path(),
+        &["daemon", "status", "--json"],
+        &home_dir,
+    );
+    assert_eq!(daemon_status.status.code(), Some(2));
+    let daemon_json: Value = serde_json::from_slice(&daemon_status.stdout).unwrap();
+    assert_eq!(daemon_json["installed"], false);
+    assert_eq!(daemon_json["running"], false);
+
+    let serve_http = run_quaid(&db_path, &["serve", "--http"]);
+    assert!(!serve_http.status.success());
+    assert!(String::from_utf8_lossy(&serve_http.stderr).contains("requires --trust-loopback"));
+}
+
+#[test]
 fn ingest_command_accepts_markdown_sources() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = init_db(&dir);

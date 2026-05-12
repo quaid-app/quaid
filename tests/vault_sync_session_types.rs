@@ -28,9 +28,23 @@ use std::thread;
 use rusqlite::params;
 
 use quaid::core::vault_sync::{
-    find_active_daemon_session, find_active_runtime_host, heartbeat_session, register_session,
-    sweep_stale_sessions, try_promote_to_serve_host, SessionType,
+    find_active_daemon_session, find_active_runtime_host, heartbeat_session, register_cli_session,
+    register_session, start_daemon_runtime, start_serve_runtime, sweep_stale_sessions,
+    try_promote_to_serve_host, SessionType,
 };
+
+#[test]
+fn session_type_maps_to_db_strings_and_runtime_host_flags() {
+    assert_eq!(SessionType::Daemon.to_db_str(), "daemon");
+    assert_eq!(SessionType::ServeHost.to_db_str(), "serve_host");
+    assert_eq!(SessionType::Serve.to_db_str(), "serve");
+    assert_eq!(SessionType::Cli.to_db_str(), "cli");
+
+    assert!(SessionType::Daemon.is_runtime_host());
+    assert!(SessionType::ServeHost.is_runtime_host());
+    assert!(!SessionType::Serve.is_runtime_host());
+    assert!(!SessionType::Cli.is_runtime_host());
+}
 
 #[test]
 fn register_session_persists_correct_session_type_for_each_variant() {
@@ -57,6 +71,22 @@ fn register_session_persists_correct_session_type_for_each_variant() {
             .unwrap();
         assert_eq!(actual, expected, "session_id={sid}");
     }
+}
+
+#[test]
+fn register_cli_session_persists_cli_role() {
+    let conn = open_test_db();
+
+    let session_id = register_cli_session(&conn).unwrap();
+
+    let session_type: String = conn
+        .query_row(
+            "SELECT session_type FROM serve_sessions WHERE session_id = ?1",
+            [&session_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(session_type, "cli");
 }
 
 #[test]
@@ -147,6 +177,22 @@ fn find_active_daemon_session_returns_only_live_daemons() {
 }
 
 #[test]
+fn find_active_helpers_ignore_stale_runtime_hosts() {
+    let conn = open_test_db();
+    let daemon_id = register_session(&conn, SessionType::Daemon).unwrap();
+    conn.execute(
+        "UPDATE serve_sessions
+         SET heartbeat_at = datetime('now', '-2 hours')
+         WHERE session_id = ?1",
+        [&daemon_id],
+    )
+    .unwrap();
+
+    assert!(find_active_daemon_session(&conn).unwrap().is_none());
+    assert!(find_active_runtime_host(&conn).unwrap().is_none());
+}
+
+#[test]
 fn find_active_runtime_host_prefers_daemon_over_serve_host() {
     let conn = open_test_db();
     assert!(find_active_runtime_host(&conn).unwrap().is_none());
@@ -213,6 +259,22 @@ fn try_promote_to_serve_host_refused_when_daemon_live() {
         )
         .unwrap();
     assert_eq!(actual, "serve");
+}
+
+#[test]
+fn try_promote_to_serve_host_rejects_missing_or_non_promotable_sessions() {
+    let conn = open_test_db();
+
+    let missing = try_promote_to_serve_host(&conn, "missing-session").unwrap_err();
+    assert!(missing
+        .to_string()
+        .contains("session_id=missing-session not found"));
+
+    let cli_id = register_session(&conn, SessionType::Cli).unwrap();
+    let cli_error = try_promote_to_serve_host(&conn, &cli_id).unwrap_err();
+    assert!(cli_error
+        .to_string()
+        .contains("caller session_type=cli is not promotable"));
 }
 
 #[test]
@@ -351,4 +413,74 @@ fn try_promote_to_serve_host_concurrent_elects_exactly_one_winner() {
         )
         .unwrap();
     assert_eq!(host_count, 1);
+}
+
+#[test]
+fn start_serve_runtime_returns_transport_only_when_daemon_is_live() {
+    let (_dir, db_path, conn) = fixtures::open_test_db_file();
+    let daemon_session = register_session(&conn, SessionType::Daemon).unwrap();
+    drop(conn);
+
+    let runtime = start_serve_runtime(db_path.clone()).unwrap();
+    let serve_session = runtime.session_id.clone();
+
+    let conn = quaid::core::db::open(&db_path).unwrap();
+    let serve_type: String = conn
+        .query_row(
+            "SELECT session_type FROM serve_sessions WHERE session_id = ?1",
+            [&serve_session],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(serve_type, "serve");
+
+    drop(runtime);
+
+    let remaining_transport_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_id = ?1",
+            [&serve_session],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let daemon_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_id = ?1",
+            [&daemon_session],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining_transport_rows, 0);
+    assert_eq!(daemon_rows, 1);
+}
+
+#[test]
+fn start_daemon_runtime_refuses_existing_live_daemon() {
+    let (_dir, db_path, conn) = fixtures::open_test_db_file();
+    let daemon_session = register_session(&conn, SessionType::Daemon).unwrap();
+    drop(conn);
+
+    let error = match start_daemon_runtime(db_path.clone()) {
+        Ok(_) => panic!("second daemon runtime should be refused"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("DaemonAlreadyRunningError"));
+    let conn = quaid::core::db::open(&db_path).unwrap();
+    let daemon_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_type = 'daemon'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let existing_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_id = ?1",
+            [&daemon_session],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(daemon_rows, 1);
+    assert_eq!(existing_rows, 1);
 }

@@ -148,9 +148,15 @@ fn daemon_unit_status() -> UnitState {
 
 fn read_last_extraction_at(db: &Connection) -> Result<Option<String>> {
     let row: Option<String> = db
-        .query_row("SELECT MAX(updated_at) FROM extraction_queue", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT MAX(CASE
+                        WHEN scheduled_for > enqueued_at THEN scheduled_for
+                        ELSE enqueued_at
+                    END)
+             FROM extraction_queue",
+            [],
+            |row| row.get(0),
+        )
         .ok()
         .flatten();
     Ok(row)

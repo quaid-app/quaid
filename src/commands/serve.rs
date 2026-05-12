@@ -12,6 +12,10 @@ use crate::mcp::HttpConfig;
 /// port. Mutually exclusive: stdio and HTTP are not opened in the same
 /// invocation.
 pub async fn run(db: Connection, http_config: Option<HttpConfig>) -> Result<()> {
+    if let Some(config) = http_config.as_ref() {
+        crate::mcp::http::bind_with_token_guard(config)?;
+    }
+
     let db_path = crate::core::vault_sync::database_path(&db)?;
     // `start_serve_runtime` registers as `serve` and attempts to promote
     // to `serve_host`. If a `daemon` is live it returns a transport-only

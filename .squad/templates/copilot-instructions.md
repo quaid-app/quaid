@@ -21,17 +21,25 @@ Before starting work, check your capability profile in `.squad/team.md` under th
   🤖 This issue doesn't match my capability profile (reason: {why}). Suggesting reassignment to a squad member.
   ```
 
+## Project Testing Rules
+
+- Add new test coverage under organized files in `tests/...`; do not add new inline `#[cfg(test)] mod tests` blocks to production source files in `src/...`.
+- Prefer subprocess or public-API integration tests for CLI/parser/runtime behavior. Do not add test-only production seams just to improve coverage unless the seam is part of the production design.
+
 ## Branch Naming
 
 Use the squad branch convention:
+
 ```
 squad/{issue-number}-{kebab-case-slug}
 ```
+
 Example: `squad/42-fix-login-validation`
 
 ## PR Guidelines
 
 When opening a PR:
+
 - Reference the issue: `Closes #{issue-number}`
 - If the issue had a `squad:{member}` label, mention the member: `Working as {member} ({role})`
 - If this is a 🟡 needs-review task, add to the PR description: `⚠️ This task was flagged as "needs review" — please have a squad member review before merging.`
@@ -40,7 +48,9 @@ When opening a PR:
 ## Decisions
 
 If you make a decision that affects other team members, write it to:
+
 ```
 .squad/decisions/inbox/copilot-{brief-slug}.md
 ```
+
 The Scribe will merge it into the shared decisions file.

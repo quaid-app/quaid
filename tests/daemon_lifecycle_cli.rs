@@ -190,10 +190,10 @@ fn daemon_start_stop_restart_and_logs_dispatch_to_platform() {
     let install = platform.run(&db_path, &["daemon", "install"]);
     assert!(install.status.success());
 
-    for args in [
-        &["daemon", "start"][..],
-        &["daemon", "stop"][..],
-        &["daemon", "restart"][..],
+    for (args, expected_stdout) in [
+        (&["daemon", "start"][..], "daemon_started"),
+        (&["daemon", "stop"][..], "daemon_stopped"),
+        (&["daemon", "restart"][..], "daemon_restarted"),
     ] {
         let output = platform.run(&db_path, args);
         assert!(
@@ -201,6 +201,7 @@ fn daemon_start_stop_restart_and_logs_dispatch_to_platform() {
             "{args:?} stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(String::from_utf8_lossy(&output.stdout).contains(expected_stdout));
     }
 
     #[cfg(target_os = "macos")]
@@ -222,7 +223,18 @@ fn daemon_start_stop_restart_and_logs_dispatch_to_platform() {
     {
         assert!(log.contains("systemctl:--user start quaid-daemon.service"));
         assert!(log.contains("systemctl:--user stop quaid-daemon.service"));
-        assert!(log.contains("systemctl:--user restart quaid-daemon.service"));
+        assert_eq!(
+            log.matches("systemctl:--user start quaid-daemon.service")
+                .count(),
+            2,
+            "restart dispatch should issue a second start after stop"
+        );
+        assert_eq!(
+            log.matches("systemctl:--user stop quaid-daemon.service")
+                .count(),
+            2,
+            "restart dispatch should issue a second stop before start"
+        );
         assert!(log.contains("journalctl:--user -u quaid-daemon.service -n 200 --no-pager"));
     }
 }

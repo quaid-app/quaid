@@ -6,9 +6,11 @@ guide:
   accentBar: true
 ---
 
-`quaid serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Seventeen `memory_*` tools cover the read, write, graph, intelligence, and stats surfaces. This page is the canonical catalog.
+`quaid serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Twenty-four `memory_*` tools cover the read, write, graph, intelligence, conversation memory, and namespace surfaces. This page is the canonical catalog.
 
-The transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
+> **Version note.** The 24-tool stdio surface, HTTP/SSE transport, and `quaid daemon` lifecycle commands are all available in the current published release (`v0.21.0`).
+
+The default transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http` in `v0.21.0`. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
 
 > **Platform note.** `quaid serve` and all MCP tools are cross-platform. Live vault-sync watcher threads (automatic reconcile on file edits) start only on Unix (macOS / Linux) and are simply not started on Windows — MCP tool calls continue to work normally on all platforms.
 
@@ -40,6 +42,13 @@ The transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom r
 | `memory_stats` | Memory statistics | – |
 | `memory_collections` | List collection status | – |
 | `memory_raw` | Store raw structured data | ✓ |
+| `memory_add_turn` | Append a turn to a conversation session | ✓ |
+| `memory_close_session` | Close a conversation session for extraction | ✓ |
+| `memory_close_action` | Mark an action-item page done or cancelled | ✓ |
+| `memory_correct` | Start a guided fact-correction dialogue | ✓ |
+| `memory_correct_continue` | Advance or abandon an open correction dialogue | ✓ |
+| `memory_namespace_create` | Create an isolated namespace | ✓ |
+| `memory_namespace_destroy` | Destroy a namespace and its contents | ✓ |
 
 ## Read tools
 
@@ -69,8 +78,10 @@ Errors: `NotFound`, `Ambiguity`.
 | ----- | ---- | :------: | ------- |
 | `query` | string | yes | – |
 | `collection` | string | no | – |
+| `namespace` | string | no | – |
 | `wing` | string | no | – |
 | `limit` | u32 | no | 10 |
+| `include_superseded` | boolean | no | `false` |
 
 Returns a JSON array of `{slug, title, snippet, score}`.
 
@@ -82,9 +93,11 @@ Returns a JSON array of `{slug, title, snippet, score}`.
 | ----- | ---- | :------: | ------- |
 | `query` | string | yes | – |
 | `collection` | string | no | – |
+| `namespace` | string | no | – |
 | `wing` | string | no | – |
 | `limit` | u32 | no | 10 |
 | `depth` | string | no | – (set to `"auto"` for progressive expansion) |
+| `include_superseded` | boolean | no | `false` |
 
 Returns a ranked, fused result list with optional progressive context up to the active token budget.
 
@@ -95,6 +108,7 @@ Returns a ranked, fused result list with optional progressive context up to the 
 | Param | Type | Required | Default |
 | ----- | ---- | :------: | ------- |
 | `collection` | string | no | – |
+| `namespace` | string | no | – |
 | `wing` | string | no | – |
 | `page_type` | string | no | – |
 | `limit` | u32 | no | 50 |
@@ -110,6 +124,7 @@ Returns a ranked, fused result list with optional progressive context up to the 
 | `slug` | string | yes | – |
 | `content` | string | yes | Full page markdown (frontmatter + body) |
 | `expected_version` | i64 | no (required for safe updates) | OCC: must match current `version` |
+| `namespace` | string | no | Write into a named namespace; omit for global memory |
 
 Errors: `Conflict` on OCC violation; `CollectionReadOnlyError` if the target collection is not writable; `CollectionRestoringError` while a collection is mid-restore.
 
@@ -243,6 +258,112 @@ No parameters. Returns counts (pages, links, embeddings, gaps), the active embed
 > List collection status for MCP clients.
 
 No parameters. Returns one entry per attached collection with state, ignore-pattern diagnostics, and recovery flags.
+
+## Conversation memory tools
+
+These tools store and process conversation turns. Turns are batched under a `session_id`; closing a session queues the conversation for knowledge extraction into pages.
+
+### `memory_add_turn`
+
+> Append a turn to a conversation session.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `session_id` | string | yes | – |
+| `role` | string | yes | `"user"`, `"assistant"`, or `"system"` |
+| `content` | string | yes | – |
+| `timestamp` | ISO-8601 | no | server time |
+| `metadata` | object | no | – |
+| `namespace` | string | no | – |
+
+```json
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{
+  "name":"memory_add_turn",
+  "arguments":{
+    "session_id":"sess-abc123",
+    "role":"user",
+    "content":"What did we decide about the API rate limits?"
+  }
+}}
+```
+
+### `memory_close_session`
+
+> Close a session and queue it for knowledge extraction.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `session_id` | string | yes |
+| `namespace` | string | no |
+
+Returns the queue position for the extraction job. Calling `memory_close_session` again on the same session reports the current queue position without re-enqueuing.
+
+### `memory_close_action`
+
+> Mark an `action_item` page as done or cancelled.
+
+| Param | Type | Required | Notes |
+| ----- | ---- | :------: | ----- |
+| `slug` | string | yes | Must be an `action_item` page |
+| `status` | string | yes | `"done"` or `"cancelled"` |
+| `note` | string | no | Appended to the page's truth body |
+
+Errors: `KindError` if the page is not an `action_item`; `Conflict` on OCC violation.
+
+### `memory_correct`
+
+> Start a guided fact-correction dialogue on a page.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `fact_slug` | string | yes |
+| `correction` | string | yes |
+
+Returns a `correction_id` and a prompt asking the agent to confirm or refine the proposed change. Advance or abandon the dialogue with `memory_correct_continue`.
+
+### `memory_correct_continue`
+
+> Advance or abandon an open correction dialogue.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `correction_id` | string | yes |
+| `response` | string | no |
+| `abandon` | boolean | no |
+
+Set `abandon: true` to discard the dialogue without writing changes.
+
+## Namespace tools
+
+Namespaces provide isolated scopes within the same database — useful for per-project or per-client memory partitions. Pages written with a `namespace` are invisible to queries that don't specify that namespace.
+
+### `memory_namespace_create`
+
+> Create a namespace.
+
+| Param | Type | Required | Default |
+| ----- | ---- | :------: | ------- |
+| `id` | string | yes | – |
+| `ttl_hours` | float | no | – (no expiry) |
+
+When `ttl_hours` is set, the namespace and all its pages are automatically destroyed after the TTL elapses.
+
+```json
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{
+  "name":"memory_namespace_create",
+  "arguments":{"id":"project-alpha","ttl_hours":720}
+}}
+```
+
+### `memory_namespace_destroy`
+
+> Destroy a namespace and all pages within it.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `id` | string | yes |
+
+This is irreversible. Pages in the namespace are permanently removed.
 
 ## JSON-RPC envelope
 

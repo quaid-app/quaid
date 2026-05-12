@@ -23,7 +23,7 @@ Most agent memory systems require a cloud service, a running database, or an API
 
 - **Local-first** — single SQLite file, no cloud dependency, works offline
 - **PARA-native** — organizes memory as a knowledge base (Projects, Areas, Resources, Archives), not a flat list of facts
-- **22 MCP tools in the latest public release (`v0.18.0`)** — this unreleased `v0.19.0` branch expands that surface to 24 tools with conversation-memory extraction and correction follow-on work
+- **24 MCP tools, daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport in the current published release (`v0.21.0`)**
 - **Hybrid retrieval** — FTS5 full-text + local BGE vector embeddings, combined via RRF
 - **Verified by benchmarks** — [193/215 (90%) on DAB](https://quaid-app.github.io/quaid-evals), P@5 on MSMARCO ahead of BM25 baseline
 
@@ -69,7 +69,7 @@ Add to your `.mcp.json`:
 }
 ```
 
-Your agent gets the 24-tool branch MCP surface when you build from source. The latest public release (`v0.18.0`) still exposes 22 tools until `v0.19.0` is tagged.
+The current published release (`v0.21.0`) exposes 24 MCP tools over stdio and adds an opt-in HTTP/SSE transport via `quaid serve --http` or `quaid daemon run --http`.
 
 ---
 
@@ -86,13 +86,13 @@ Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the 
 ### Download a binary
 
 ```bash
-VERSION="<published-tag>"   # for example: v0.18.0
+VERSION="<published-tag>"   # for example: v0.21.0
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
 ```
 
-Use a published tag here. GitHub Releases currently publish `v0.18.0`; build from source if you need the unreleased `v0.19.0` conversation-memory extraction follow-on before the tag exists.
+Use a published tag here. GitHub Releases publish `v0.21.0`, including daemon runtime and HTTP/SSE transport.
 
 ### Build from source
 
@@ -115,7 +115,7 @@ Two ideas borrowed from Andrej Karpathy's compiled knowledge model:
 
 **Timeline (below the line)** — append-only, never rewritten. What happened and when.
 
-Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 22 tools in the latest public release, 24 on this branch — with no REST API and no network dependency.
+Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 24 tools in the current published release (`v0.21.0`) — with no REST API and no network dependency. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http`.
 
 **Hybrid retrieval:** FTS5 keyword search for exact recall (names, slugs, tags) combined with local BGE vector embeddings for semantic search. Set-union merge, exact-match short-circuit.
 
@@ -161,15 +161,31 @@ quaid check --all
 # Knowledge gaps
 quaid gaps
 
-# Start MCP server
+# Start MCP server (stdio, default)
 quaid serve
+
+# Start MCP server with opt-in HTTP/SSE transport (available in v0.21.0)
+quaid serve --http --port 3112 --trust-loopback
+
+# Install background daemon (macOS launchd or Linux systemd)
+quaid daemon install
+quaid daemon install --http --port 3112 --trust-loopback   # daemon + HTTP/SSE
+
+# Daemon lifecycle
+quaid daemon start
+quaid daemon stop
+quaid daemon status
+quaid daemon logs
+
+# Process-level status overview (daemon, transports, activity)
+quaid status
 ```
 
 ---
 
 ## MCP tools
 
-The latest public release (`v0.18.0`) exposes 22 MCP tools. This unreleased `v0.19.0` branch expands that surface to 24 tools by adding correction dialogue on top of the conversation-memory extraction follow-on; published install commands should still use a real release tag until `v0.19.0` exists:
+The current published release (`v0.21.0`) exposes 24 MCP tools over stdio, plus daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport:
 
 | Category | Tools |
 |----------|-------|

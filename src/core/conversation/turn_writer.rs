@@ -376,7 +376,9 @@ fn write_new_file(
 
 fn append_turn_block(full_path: &Path, turn: &Turn) -> Result<(), TurnWriteError> {
     let mut file = OpenOptions::new().append(true).open(full_path)?;
-    file.write_all(b"\n---\n\n")?;
+    writeln!(file)?;
+    writeln!(file, "{}", format::TURN_BOUNDARY)?;
+    writeln!(file)?;
     file.write_all(format::render_turn_block(turn).as_bytes())?;
     file.sync_all()?;
     Ok(())

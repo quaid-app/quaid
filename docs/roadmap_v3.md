@@ -9,7 +9,7 @@ aliases: [quaid-roadmap]
 # Quaid Product Roadmap
 
 **Last updated:** May 12, 2026
-**Latest public release:** v0.22.1
+**Latest public release:** v0.22.2
 **Current release lane:** v0.23.0
 **Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
 
@@ -110,7 +110,7 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - No new MCP tools; the 24-tool surface is unchanged
 
 ### Release truth
-- First shipped in `v0.21.0`; GitHub Releases and `install.sh` now resolve to `v0.22.1`.
+- First shipped in `v0.21.0`; GitHub Releases and `install.sh` now resolve to `v0.22.2`.
 
 ---
 

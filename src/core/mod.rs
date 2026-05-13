@@ -22,6 +22,8 @@ pub mod collections;
 pub mod conversation;
 /// SQLite connection setup, schema init, WAL, and `sqlite-vec` loading.
 pub mod db;
+/// Regex-based entity-pattern extraction routed to assertions only.
+pub mod entities;
 /// Stat-based file state tracking for detecting external edits.
 pub mod file_state;
 /// Filesystem-safety helpers: atomic writes, permission checks, path scoping.

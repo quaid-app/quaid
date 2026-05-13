@@ -69,30 +69,30 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 6. Entity-pattern config and resolver
 
-- [ ] 6.1 Add `EntityPattern { regex, relationship, subject_type, object_type, weight }` and `EntityMatch` types
-- [ ] 6.2 Embed default pattern YAML via `include_str!`; cover `works_at`, `founded`, `invested_in`, `acquired`, and `leads`
-- [ ] 6.3 Implement `load_patterns()` for extraction commands: prefer `~/.quaid/entity-patterns.yaml`, fall back to embedded defaults, compile regexes once, reject malformed patterns before page mutation
-- [ ] 6.4 Implement role/type hint defaults by relationship, with user pattern hints overriding defaults
-- [ ] 6.5 Implement collection-local `resolve_entity_surface(surface, role_hint, source_collection_id, conn)` using exact slug, role-prefixed slug, case-insensitive title, and unique basename strategies
-- [ ] 6.6 Unit tests: defaults load, user overrides defaults, malformed YAML/regex fails before mutation, wrong capture-group count rejected, role-prefixed slug resolution, title resolution, basename resolution, and ambiguity returns unresolved
+- [x] 6.1 Add `EntityPattern { regex, relationship, subject_type, object_type, weight }` and `EntityMatch` types
+- [x] 6.2 Embed default pattern YAML via `include_str!`; cover `works_at`, `founded`, `invested_in`, `acquired`, and `leads`
+- [x] 6.3 Implement `load_patterns()` for extraction commands: prefer `~/.quaid/entity-patterns.yaml`, fall back to embedded defaults, compile regexes once, reject malformed patterns before page mutation
+- [x] 6.4 Implement role/type hint defaults by relationship, with user pattern hints overriding defaults
+- [x] 6.5 Implement collection-local `resolve_entity_surface(surface, role_hint, source_collection_id, conn)` using exact slug, role-prefixed slug, case-insensitive title, and unique basename strategies
+- [x] 6.6 Unit tests: defaults load, user overrides defaults, malformed YAML/regex fails before mutation, wrong capture-group count rejected, role-prefixed slug resolution, title resolution, basename resolution, and ambiguity returns unresolved
 
 ## 7. Entity-pattern extraction and routing
 
-- [ ] 7.1 Implement `extract_entities(page_content, patterns, deadline) -> Vec<EntityMatch>` with a 5 ms page-level deadline checked between patterns
-- [ ] 7.2 Record a `knowledge_gap` when extraction exceeds budget and skip remaining patterns for that page
-- [ ] 7.3 Implement `route_entity_matches(conn, source_page_id, source_collection_id, matches)`
+- [x] 7.1 Implement `extract_entities(page_content, patterns, deadline) -> Vec<EntityMatch>` with a 5 ms page-level deadline checked between patterns
+- [x] 7.2 Record a `knowledge_gap` when extraction exceeds budget and skip remaining patterns for that page
+- [x] 7.3 Implement `route_entity_matches(conn, source_page_id, source_collection_id, matches)`
   > **Scope note (Leela, 2026-05-12 — Nibbler blocker resolved):** Per Decision 11, all entity-pattern matches are routed to `assertions` only in this change. Durable `entity_pattern` edges in `links` require source-page provenance and proven retraction semantics, which are deferred to a follow-on change.
-- [ ] 7.4 Route ALL entity-pattern matches (resolved or not) to `assertions` with `asserted_by='agent'`, `confidence=pattern.weight`, and dedup on `(page_id, subject, predicate, object)`; do NOT insert `links` rows with `source_kind='entity_pattern'` in this change
-- [ ] 7.5 Route unresolved or ambiguous matches to `assertions` with `asserted_by='agent'`, `confidence=pattern.weight`, and dedup on `(page_id, subject, predicate, object)` (same routing as resolved matches in this change)
-- [ ] 7.6 Wire extraction after page writes; failures should not corrupt page writes, and malformed pattern config should fail before page mutation
-- [ ] 7.7 Add static/debug validation that `src/core/entities.rs` does not call embedding/inference or network APIs
-- [ ] 7.8 Unit tests: budget enforcement, no-LLM/no-inference proof, assertions-only routing (no `entity_pattern` links rows), ambiguity handling, idempotent re-ingest, and pattern weight propagation to assertion confidence
+- [x] 7.4 Route ALL entity-pattern matches (resolved or not) to `assertions` with `asserted_by='agent'`, `confidence=pattern.weight`, and dedup on `(page_id, subject, predicate, object)`; do NOT insert `links` rows with `source_kind='entity_pattern'` in this change
+- [x] 7.5 Route unresolved or ambiguous matches to `assertions` with `asserted_by='agent'`, `confidence=pattern.weight`, and dedup on `(page_id, subject, predicate, object)` (same routing as resolved matches in this change)
+- [x] 7.6 Wire extraction after page writes; failures should not corrupt page writes, and malformed pattern config should fail before page mutation
+- [x] 7.7 Add static/debug validation that `src/core/entities.rs` does not call embedding/inference or network APIs
+- [x] 7.8 Unit tests: budget enforcement, no-LLM/no-inference proof, assertions-only routing (no `entity_pattern` links rows), ambiguity handling, idempotent re-ingest, and pattern weight propagation to assertion confidence
 
 ## 8. `quaid graph extract-entities` opt-in backfill command
 
-- [ ] 8.1 Add `extract-entities` subcommand under `quaid graph` without adding automatic schema migration/backfill behavior
-- [ ] 8.2 Iterate all pages, run `extract_entities` + `route_entity_matches` per page, and report progress/summary counts
-- [ ] 8.3 Integration test: 100-page fixture, command writes expected edges/assertions and is idempotent on re-run
+- [x] 8.1 Add `extract-entities` subcommand under `quaid graph` without adding automatic schema migration/backfill behavior
+- [x] 8.2 Iterate all pages, run `extract_entities` + `route_entity_matches` per page, and report progress/summary counts
+- [x] 8.3 Integration test: 100-page fixture, command writes expected edges/assertions and is idempotent on re-run
 
 ## 9. Graph-aware retrieval
 

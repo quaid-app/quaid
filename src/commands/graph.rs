@@ -1,11 +1,60 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
+use clap::{Args, Subcommand};
 use rusqlite::Connection;
 
+use crate::core::entities;
 use crate::core::graph::{self, GraphError, TemporalFilter};
 use crate::core::vault_sync;
+
+/// Top-level args for the `quaid graph` command.
+///
+/// `quaid graph <slug>` keeps its existing single-page neighbourhood behaviour.
+/// `quaid graph extract-entities` opts in to the bulk entity-pattern backfill
+/// (Wave 5 / task 8.1) without performing it automatically as part of any
+/// schema initialisation path.
+#[derive(Args)]
+pub struct GraphArgs {
+    /// Optional subcommand. Defaults to neighbourhood rendering for `slug`.
+    #[command(subcommand)]
+    pub action: Option<GraphAction>,
+
+    /// Page slug for the default neighbourhood view.
+    pub slug: Option<String>,
+
+    /// Maximum BFS depth for the neighbourhood view.
+    #[arg(long, default_value = "2")]
+    pub depth: u32,
+
+    /// Temporal filter: `current` (default) or `all`/`history`.
+    #[arg(long, default_value = "current")]
+    pub temporal: String,
+}
+
+/// Subcommands attached to `quaid graph`.
+#[derive(Subcommand)]
+pub enum GraphAction {
+    /// Opt-in backfill: run entity-pattern extraction across every page.
+    ///
+    /// This command is NEVER invoked by schema init or schema-mismatch
+    /// handling; users must opt in explicitly. Idempotent on re-run.
+    ExtractEntities,
+}
+
+/// CLI entry point dispatched from `main.rs`.
+pub fn run_cli(db: &Connection, args: GraphArgs, json: bool) -> Result<()> {
+    match args.action {
+        Some(GraphAction::ExtractEntities) => run_extract_entities(db, json, &mut io::stdout()),
+        None => {
+            let slug = args
+                .slug
+                .ok_or_else(|| anyhow!("slug is required when no subcommand is given"))?;
+            run(db, &slug, args.depth, &args.temporal, json)
+        }
+    }
+}
 
 /// Run the `quaid graph` command, writing output to stdout.
 pub fn run(db: &Connection, slug: &str, depth: u32, temporal: &str, json: bool) -> Result<()> {
@@ -121,6 +170,82 @@ fn write_children<'a, W: Write>(
         active_path.push(child_slug);
         write_children(out, child_slug, edges_by_from, depth + 1, active_path)?;
         active_path.pop();
+    }
+
+    Ok(())
+}
+
+/// Run `quaid graph extract-entities`: load patterns once, iterate every page,
+/// and route matches to assertions. Writing-mode commands validate the active
+/// pattern set up-front (task 7.6 — malformed YAML/regex/capture/weight fails
+/// before any mutation).
+pub fn run_extract_entities<W: Write>(db: &Connection, json: bool, out: &mut W) -> Result<()> {
+    let patterns = entities::load_patterns(db).map_err(|err| anyhow!(err.to_string()))?;
+
+    let mut stmt = db.prepare(
+        "SELECT p.id, p.collection_id, p.slug, p.compiled_truth \
+         FROM pages p \
+         WHERE p.superseded_by IS NULL \
+         ORDER BY p.id",
+    )?;
+    let rows: Vec<(i64, i64, String, String)> = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<_, _>>()?;
+
+    let mut pages_seen = 0_usize;
+    let mut assertions_inserted = 0_usize;
+    let mut matches_total = 0_usize;
+    let mut over_budget_pages = 0_usize;
+    let mut errors = 0_usize;
+
+    for (page_id, collection_id, slug, compiled_truth) in rows {
+        pages_seen += 1;
+        let outcome =
+            entities::extract_entities(&compiled_truth, &patterns, entities::EXTRACTION_BUDGET);
+        if outcome.over_budget {
+            over_budget_pages += 1;
+        }
+        match entities::run_for_page(
+            db,
+            page_id,
+            collection_id,
+            &slug,
+            &compiled_truth,
+            &patterns,
+        ) {
+            Ok(summary) => {
+                matches_total += summary.matches_seen;
+                assertions_inserted += summary.assertions_inserted;
+            }
+            Err(_) => {
+                errors += 1;
+            }
+        }
+    }
+
+    if json {
+        let summary = serde_json::json!({
+            "pages_seen": pages_seen,
+            "matches_total": matches_total,
+            "assertions_inserted": assertions_inserted,
+            "over_budget_pages": over_budget_pages,
+            "errors": errors,
+            "patterns_loaded": patterns.len(),
+        });
+        writeln!(out, "{}", serde_json::to_string_pretty(&summary)?)?;
+    } else {
+        writeln!(
+            out,
+            "quaid graph extract-entities\n  patterns_loaded:     {}\n  pages_seen:          {}\n  matches_total:       {}\n  assertions_inserted: {}\n  over_budget_pages:   {}\n  errors:              {}",
+            patterns.len(),
+            pages_seen,
+            matches_total,
+            assertions_inserted,
+            over_budget_pages,
+            errors,
+        )?;
     }
 
     Ok(())

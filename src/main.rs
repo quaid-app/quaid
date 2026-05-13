@@ -206,13 +206,7 @@ enum Commands {
         detail: Option<String>,
     },
     /// N-hop graph neighbourhood
-    Graph {
-        slug: String,
-        #[arg(long, default_value = "2")]
-        depth: u32,
-        #[arg(long, default_value = "current")]
-        temporal: String,
-    },
+    Graph(commands::graph::GraphArgs),
     /// Check for contradictions using assertions from frontmatter or ## Assertions sections
     Check {
         slug: Option<String>,
@@ -470,11 +464,7 @@ async fn main() -> Result<()> {
             source,
             detail,
         } => commands::timeline::add(&db, &slug, &date, &summary, source, detail),
-        Commands::Graph {
-            slug,
-            depth,
-            temporal,
-        } => commands::graph::run(&db, &slug, depth, &temporal, cli.json),
+        Commands::Graph(args) => commands::graph::run_cli(&db, args, cli.json),
         Commands::Check { slug, all, r#type } => {
             commands::check::run(&db, slug, all, r#type, cli.json)
         }

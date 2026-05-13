@@ -30,7 +30,9 @@ use uuid::Uuid;
 use crate::core::fs_safety;
 use crate::core::supersede;
 use crate::core::types::{frontmatter_get_string, Frontmatter};
-use crate::core::{file_state, links, markdown, page_uuid, palace, raw_imports, vault_sync};
+use crate::core::{
+    entities, file_state, links, markdown, page_uuid, palace, raw_imports, vault_sync,
+};
 
 #[derive(Debug, Clone)]
 struct PreparedPut {
@@ -254,6 +256,10 @@ fn put_from_string_with_output(
     let summary = markdown::extract_summary(&compiled_truth);
     links::validate_graph_frontmatter(&frontmatter)
         .map_err(|err| anyhow::anyhow!("malformed frontmatter graph input: {err}"))?;
+    // Entity-pattern validation must fail BEFORE any page mutation
+    // (task 7.6 — malformed YAML/regex/capture/weight fails closed).
+    let _entity_patterns_validated = entities::load_patterns(db)
+        .map_err(|err| anyhow::anyhow!("entity pattern load failed: {err}"))?;
     let op_kind = if expected_version.is_some() {
         crate::core::collections::OpKind::WriteUpdate
     } else {
@@ -680,6 +686,21 @@ fn stage_page_record(
         &prepared.timeline,
     )
     .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))?;
+
+    // Entity-pattern extraction (Wave 5 / task 7.6). Patterns were validated
+    // upfront in `put_from_string_with_namespace`; reloading here is a cheap
+    // no-op against the embedded YAML. Failures are swallowed so they cannot
+    // corrupt the page write.
+    if let Ok(patterns) = entities::load_patterns(tx) {
+        entities::try_run_for_page(
+            tx,
+            page_id,
+            prepared.collection_id,
+            &prepared.slug,
+            &prepared.compiled_truth,
+            &patterns,
+        );
+    }
 
     Ok(StagedPageRecord {
         page_id,

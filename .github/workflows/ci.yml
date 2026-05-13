@@ -148,8 +148,11 @@ jobs:
       - name: Run tests (default / airgapped channel)
         run: cargo test --verbose
 
+      - name: Free target space before online channel tests
+        run: cargo clean
+
       - name: Run tests (online channel)
-        run: cargo test --verbose --no-default-features --features bundled,online-model,test-harness
+        run: cargo test --verbose -j 1 --no-default-features --features bundled,online-model,test-harness
         env:
           QUAID_FORCE_HASH_SHIM: "1"
 

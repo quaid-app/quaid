@@ -139,7 +139,29 @@ fn render_text_graph<W: Write>(
     }
 
     let mut active_path = vec![root_slug];
-    write_children(out, root_slug, &edges_by_from, 1, &mut active_path)
+    write_children(out, root_slug, &edges_by_from, 1, &mut active_path)?;
+
+    // Append a path explanation block for every reachable non-root node so
+    // operators can see exactly which edges connect a hit to the root.
+    let mut sorted: Vec<(&String, &Vec<(String, String, String)>)> = result.paths.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut printed_header = false;
+    for (slug, path) in sorted {
+        if path.is_empty() {
+            continue;
+        }
+        if !printed_header {
+            writeln!(out, "paths:")?;
+            printed_header = true;
+        }
+        let chain = path
+            .iter()
+            .map(|(from, rel, to)| format!("{from} -[{rel}]-> {to}"))
+            .collect::<Vec<_>>()
+            .join("  ");
+        writeln!(out, "  {slug}: {chain}")?;
+    }
+    Ok(())
 }
 
 fn write_children<'a, W: Write>(

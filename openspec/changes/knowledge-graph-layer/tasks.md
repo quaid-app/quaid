@@ -96,20 +96,20 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 9. Graph-aware retrieval
 
-- [ ] 9.1 Add `expand_graph(conn, candidates, depth, max_added, distance_decay) -> Vec<SearchResult>` in `src/core/search.rs` or a shared graph-ranking module
-- [ ] 9.2 Expansion walks currently active outbound links only, uses `edge_weight`, applies `distance_decay^hops`, respects max-added and max-visited caps, and deduplicates against initial candidates
-- [ ] 9.3 Update `hybrid_search` / `hybrid_search_canonical` to call graph expansion when effective depth > 0
-- [ ] 9.4 Update `progressive_retrieve` so graph-expanded candidates participate in token-budget pruning like regular candidates
-- [ ] 9.5 Add `--hops N` to `quaid query` and `quaid search`; CLI value overrides `config.graph_depth` for that invocation
-- [ ] 9.6 Unit tests: 1-hop expansion, depth bound, active temporal filter, source weight ordering, `graph_expansion_max`, `MAX_NODES`, deduplication, and depth=0 baseline behavior
+- [x] 9.1 Add `expand_graph(conn, candidates, depth, max_added, distance_decay) -> Vec<SearchResult>` in `src/core/search.rs` or a shared graph-ranking module
+- [x] 9.2 Expansion walks currently active outbound links only, uses `edge_weight`, applies `distance_decay^hops`, respects max-added and max-visited caps, and deduplicates against initial candidates
+- [x] 9.3 Update `hybrid_search` / `hybrid_search_canonical` to call graph expansion when effective depth > 0
+- [x] 9.4 Update `progressive_retrieve` so graph-expanded candidates participate in token-budget pruning like regular candidates
+- [x] 9.5 Add `--hops N` to `quaid query` and `quaid search`; CLI value overrides `config.graph_depth` for that invocation
+- [x] 9.6 Unit tests: 1-hop expansion, depth bound, active temporal filter, source weight ordering, `graph_expansion_max`, `MAX_NODES`, deduplication, and depth=0 baseline behavior
 
 ## 10. Graph path explanations
 
-- [ ] 10.1 Extend `GraphResult` with `paths: HashMap<String, Vec<(String, String, String)>>` keyed by reachable slug
-- [ ] 10.2 Update `neighborhood_graph` BFS to track the first path used to reach each node; root path is empty
-- [ ] 10.3 Update `memory_graph` output schema in `src/mcp/tools/links.rs`; no compatibility mode required pre-release
-- [ ] 10.4 Update `quaid graph` text and JSON rendering to include paths
-- [ ] 10.5 Integration test: `quaid graph alice --depth 2` returns expected path triples for a known 2-hop fixture
+- [x] 10.1 Extend `GraphResult` with `paths: HashMap<String, Vec<(String, String, String)>>` keyed by reachable slug
+- [x] 10.2 Update `neighborhood_graph` BFS to track the first path used to reach each node; root path is empty
+- [x] 10.3 Update `memory_graph` output schema in `src/mcp/tools/links.rs`; no compatibility mode required pre-release
+- [x] 10.4 Update `quaid graph` text and JSON rendering to include paths
+- [x] 10.5 Integration test: `quaid graph alice --depth 2` returns expected path triples for a known 2-hop fixture
 
 ## 11. Roundtrip and integration tests
 

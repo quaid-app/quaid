@@ -5,7 +5,7 @@
 //! See also: `links` for link insertion and temporal validity helpers, and
 //! `supersede` for the head-only chain semantics this traversal honours.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -57,6 +57,13 @@ pub struct GraphResult {
     pub nodes: Vec<GraphNode>,
     /// All edges between the returned nodes.
     pub edges: Vec<GraphEdge>,
+    /// First-discovered BFS path used to reach each node, keyed by node slug.
+    ///
+    /// Each entry is the ordered list of `(from_slug, relationship, to_slug)`
+    /// triples traversed from the BFS root to the node. The root slug maps to
+    /// an empty list. Nodes reached via the `superseded_by` chain use the
+    /// `superseded_by` relationship label.
+    pub paths: HashMap<String, Vec<(String, String, String)>>,
 }
 
 /// Errors that can occur during graph traversal.
@@ -152,17 +159,23 @@ fn neighborhood_graph_from_root(
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut visited: HashSet<i64> = HashSet::new();
+    let mut paths: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
 
     // Seed BFS with root
     visited.insert(root_page_id);
     nodes.push(GraphNode {
-        slug: root_slug,
+        slug: root_slug.clone(),
         node_type: root.0,
         title: root.1,
     });
+    paths.insert(root_slug, Vec::new());
 
     if effective_depth == 0 {
-        return Ok(GraphResult { nodes, edges });
+        return Ok(GraphResult {
+            nodes,
+            edges,
+            paths,
+        });
     }
 
     // BFS frontier: (page_id, current_depth)
@@ -245,6 +258,8 @@ fn neighborhood_graph_from_root(
                 continue;
             }
 
+            let rel_label = rel.clone();
+
             if seen_edges.insert(format!("link:{link_id}")) {
                 if edges.len() >= MAX_EDGES {
                     break 'bfs;
@@ -263,10 +278,14 @@ fn neighborhood_graph_from_root(
                     break 'bfs;
                 }
                 nodes.push(GraphNode {
-                    slug: to_slug,
+                    slug: to_slug.clone(),
                     node_type: to_type,
                     title: to_title,
                 });
+                let parent_path = paths.get(&current_slug).cloned().unwrap_or_default();
+                let mut child_path = parent_path;
+                child_path.push((current_slug.clone(), rel_label, to_slug.clone()));
+                paths.insert(to_slug, child_path);
                 queue.push_back((target_id, current_depth + 1));
             }
         }
@@ -296,6 +315,14 @@ fn neighborhood_graph_from_root(
                     node_type: to_type,
                     title: to_title,
                 });
+                let parent_path = paths.get(&current_slug).cloned().unwrap_or_default();
+                let mut child_path = parent_path;
+                child_path.push((
+                    current_slug.clone(),
+                    "superseded_by".to_string(),
+                    to_slug.clone(),
+                ));
+                paths.insert(to_slug, child_path);
                 queue.push_back((target_id, current_depth + 1));
             }
         }
@@ -325,12 +352,24 @@ fn neighborhood_graph_from_root(
                     node_type: from_type,
                     title: from_title,
                 });
+                let parent_path = paths.get(&current_slug).cloned().unwrap_or_default();
+                let mut child_path = parent_path;
+                child_path.push((
+                    from_slug.clone(),
+                    "superseded_by".to_string(),
+                    current_slug.clone(),
+                ));
+                paths.insert(from_slug, child_path);
                 queue.push_back((from_id, current_depth + 1));
             }
         }
     }
 
-    Ok(GraphResult { nodes, edges })
+    Ok(GraphResult {
+        nodes,
+        edges,
+        paths,
+    })
 }
 
 fn supersede_successors(

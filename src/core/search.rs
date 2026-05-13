@@ -8,7 +8,7 @@
 //! the vector backend, and `progressive` for the token-budget expansion step
 //! that consumes these results.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
@@ -67,6 +67,10 @@ pub struct HybridSearch<'a> {
     pub canonical: bool,
     /// Maximum number of rows to return after the merge step.
     pub limit: usize,
+    /// Optional graph-expansion depth override. When `None`, the depth is
+    /// read from `config.graph_depth` (default `1`). Set `Some(0)` to
+    /// disable graph expansion for this invocation.
+    pub hops: Option<u32>,
 }
 
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
@@ -93,7 +97,10 @@ pub fn hybrid_search(
             conn,
             q.canonical,
         )? {
-            return Ok(vec![result]);
+            let mut results = vec![result];
+            apply_graph_expansion(conn, &mut results, q.hops, q.collection)?;
+            results.truncate(q.limit);
+            return Ok(results);
         }
     }
 
@@ -140,8 +147,261 @@ pub fn hybrid_search(
         SearchMergeStrategy::SetUnion => merge_set_union(&fts_results, &vec_results),
         SearchMergeStrategy::Rrf => merge_rrf(&fts_results, &vec_results),
     };
+
+    apply_graph_expansion(conn, &mut merged, q.hops, q.collection)?;
+
     merged.truncate(q.limit);
     Ok(merged)
+}
+
+/// Bounded outbound graph expansion knobs.
+#[derive(Debug, Clone, Copy)]
+pub struct GraphExpansionConfig {
+    /// Maximum BFS depth to walk from each candidate.
+    pub depth: u32,
+    /// Multiplicative score penalty applied per hop (`decay^hops`).
+    pub distance_decay: f64,
+    /// Hard cap on how many new candidates expansion may add.
+    pub max_added: usize,
+}
+
+impl GraphExpansionConfig {
+    /// Read all graph-expansion knobs from the `config` table, falling back
+    /// to the v10-seeded defaults when a key is missing or unparseable.
+    pub fn from_config(conn: &Connection) -> Result<Self, SearchError> {
+        Ok(Self {
+            depth: read_config_u32(conn, "graph_depth", 1)?,
+            distance_decay: read_config_f64(conn, "graph_distance_decay", 0.5)?,
+            max_added: read_config_usize(conn, "graph_expansion_max", 50)?,
+        })
+    }
+}
+
+fn read_config_u32(conn: &Connection, key: &str, default: u32) -> Result<u32, SearchError> {
+    let value: Option<String> =
+        match conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
+            row.get(0)
+        }) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) => return Err(SearchError::from(err)),
+        };
+    Ok(value.and_then(|v| v.parse().ok()).unwrap_or(default))
+}
+
+fn read_config_f64(conn: &Connection, key: &str, default: f64) -> Result<f64, SearchError> {
+    let value: Option<String> =
+        match conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
+            row.get(0)
+        }) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) => return Err(SearchError::from(err)),
+        };
+    Ok(value.and_then(|v| v.parse().ok()).unwrap_or(default))
+}
+
+fn read_config_usize(conn: &Connection, key: &str, default: usize) -> Result<usize, SearchError> {
+    let value: Option<String> =
+        match conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
+            row.get(0)
+        }) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) => return Err(SearchError::from(err)),
+        };
+    Ok(value.and_then(|v| v.parse().ok()).unwrap_or(default))
+}
+
+/// Apply bounded outbound graph expansion to a ranked candidate list in
+/// place. The effective depth is `hops_override` when provided, otherwise
+/// `config.graph_depth`. When the effective depth is `0`, the function
+/// returns immediately and `merged` is left untouched (baseline behaviour).
+///
+/// Newly discovered candidates are appended in score-descending order and
+/// then the full list is re-sorted by score so graph hits compete with the
+/// original top-K.
+fn apply_graph_expansion(
+    conn: &Connection,
+    merged: &mut Vec<SearchResult>,
+    hops_override: Option<u32>,
+    collection_filter: Option<i64>,
+) -> Result<(), SearchError> {
+    if merged.is_empty() {
+        return Ok(());
+    }
+    let cfg = GraphExpansionConfig::from_config(conn)?;
+    let depth = hops_override.unwrap_or(cfg.depth);
+    if depth == 0 {
+        return Ok(());
+    }
+    let added = expand_graph(
+        conn,
+        merged,
+        depth,
+        cfg.max_added,
+        cfg.distance_decay,
+        collection_filter,
+    )?;
+    if added.is_empty() {
+        return Ok(());
+    }
+    merged.extend(added);
+    merged.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.slug.cmp(&right.slug))
+    });
+    Ok(())
+}
+
+/// Hard safety cap on the cumulative nodes visited during graph expansion,
+/// regardless of `graph_expansion_max`.
+const GRAPH_EXPANSION_MAX_NODES: usize = 1000;
+
+/// Walk outbound `links` from each candidate up to `depth` hops, scoring
+/// each newly discovered slug as `parent_score * edge_weight * decay^hops`.
+///
+/// Slugs already present in `candidates` are not re-added. The expansion is
+/// capped at `max_added` new entries and `GRAPH_EXPANSION_MAX_NODES`
+/// cumulative visited nodes. When a slug is reachable through several
+/// parents, the highest score wins.
+pub fn expand_graph(
+    conn: &Connection,
+    candidates: &[SearchResult],
+    depth: u32,
+    max_added: usize,
+    distance_decay: f64,
+    collection_filter: Option<i64>,
+) -> Result<Vec<SearchResult>, SearchError> {
+    if candidates.is_empty() || depth == 0 || max_added == 0 {
+        return Ok(Vec::new());
+    }
+
+    let canonical = candidates
+        .first()
+        .map(|c| c.slug.contains("::"))
+        .unwrap_or(false);
+
+    let initial_slugs: HashSet<String> = candidates.iter().map(|c| c.slug.clone()).collect();
+    let mut best: HashMap<String, SearchResult> = HashMap::new();
+    let mut visited: HashSet<String> = initial_slugs.clone();
+    let mut total_visited: usize = candidates.len();
+
+    let target_slug_expr = if canonical {
+        "c2.name || '::' || p2.slug"
+    } else {
+        "p2.slug"
+    };
+    let collection_join = if canonical {
+        " JOIN collections c2 ON c2.id = p2.collection_id"
+    } else {
+        ""
+    };
+    let collection_clause = if collection_filter.is_some() {
+        " AND p2.collection_id = ?3"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT {target_slug_expr}, p2.title, p2.summary, p2.wing, l.edge_weight \
+         FROM links l \
+         JOIN pages p1 ON l.from_page_id = p1.id \
+         JOIN pages p2 ON l.to_page_id = p2.id{collection_join} \
+         WHERE p1.collection_id = ?1 AND p1.slug = ?2 \
+           AND p2.superseded_by IS NULL \
+           AND (l.valid_from IS NULL OR l.valid_from <= date('now')) \
+           AND (l.valid_until IS NULL OR l.valid_until >= date('now'))\
+           {collection_clause}"
+    );
+
+    let mut frontier: Vec<(String, f64)> = candidates
+        .iter()
+        .map(|c| (c.slug.clone(), c.score))
+        .collect();
+
+    'outer: for hop in 1..=depth {
+        if frontier.is_empty() {
+            break;
+        }
+        let hop_decay = distance_decay.powi(hop as i32);
+        let mut next_frontier: Vec<(String, f64)> = Vec::new();
+
+        for (parent_slug, parent_score) in &frontier {
+            let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, parent_slug) else {
+                continue;
+            };
+            let mut stmt = conn.prepare_cached(&sql)?;
+            let row_fn = |row: &rusqlite::Row<'_>| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            };
+            let rows: Vec<(String, String, String, String, f64)> =
+                if let Some(cid) = collection_filter {
+                    stmt.query_map(rusqlite::params![collection_id, resolved_slug, cid], row_fn)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                } else {
+                    stmt.query_map(rusqlite::params![collection_id, resolved_slug], row_fn)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                };
+            for row in rows {
+                let (target_slug, title, summary, wing, edge_weight) = row;
+                if initial_slugs.contains(&target_slug) {
+                    continue;
+                }
+                let score = parent_score * edge_weight * hop_decay;
+                best.entry(target_slug.clone())
+                    .and_modify(|existing| {
+                        if score > existing.score {
+                            existing.score = score;
+                        }
+                    })
+                    .or_insert(SearchResult {
+                        slug: target_slug.clone(),
+                        title,
+                        summary,
+                        score,
+                        wing,
+                    });
+                if visited.insert(target_slug.clone()) {
+                    total_visited += 1;
+                    if total_visited >= GRAPH_EXPANSION_MAX_NODES {
+                        break 'outer;
+                    }
+                    next_frontier.push((target_slug, score));
+                }
+            }
+        }
+
+        frontier = next_frontier;
+    }
+
+    let mut additions: Vec<SearchResult> = best.into_values().collect();
+    additions.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.slug.cmp(&right.slug))
+    });
+    additions.truncate(max_added);
+    Ok(additions)
+}
+
+fn resolve_slug_key(conn: &Connection, slug: &str) -> Option<(i64, String)> {
+    match collections::parse_slug(conn, slug, OpKind::Read).ok()? {
+        SlugResolution::Resolved {
+            collection_id,
+            slug,
+            ..
+        } => Some((collection_id, slug)),
+        SlugResolution::NotFound { .. } | SlugResolution::Ambiguous { .. } => None,
+    }
 }
 
 fn has_natural_language_terms(fts_safe: &str) -> bool {

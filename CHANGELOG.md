@@ -4,6 +4,20 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
+## v0.22.2 — conversation turn delimiter fix
+
+### Fixed
+
+- **Conversation capture stability.** `memory_add_turn` and
+  `memory_close_session` now handle conversation content that contains Markdown
+  horizontal rules (`---`). New conversation day-files use an unambiguous
+  Quaid turn boundary marker while the parser remains compatible with existing
+  legacy turn files.
+
+### Migration
+
+- No schema migration. Existing v0.22.x databases remain compatible.
+
 ## v0.22.1 — beta regression fixes
 
 ### Fixed

@@ -4,6 +4,27 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
+## v0.22.1 — beta regression fixes
+
+### Fixed
+
+- **Vault import / export parity.** `related:` frontmatter now accepts either a
+  scalar string or a YAML list, so Obsidian/DAB-style scalar relationships no
+  longer abort collection attach or create export deltas.
+- **PARA type inference.** Collection ingest now recognizes both singular and
+  plural PARA folder names (`project(s)`, `area(s)`, `resource(s)`,
+  `archive(s)`) after numeric-prefix stripping.
+- **MCP runtime shutdown.** `quaid serve` and foreground `quaid daemon run`
+  handle SIGTERM/SIGINT by dropping owned runtime workers and unregistering
+  their `serve_sessions` rows without touching unrelated processes.
+- **Embedding batch stability.** Bulk `quaid embed` scans pages in bounded
+  batches (default 32) and adds `--batch-size N` validation to reduce first-run
+  memory pressure on larger vaults while preserving idempotent reruns.
+
+### Migration
+
+- No schema migration. Existing v0.22.0 databases remain compatible.
+
 ## v0.22.0 — knowledge graph layer (pre-release v9 → v10)
 
 ### Schema

@@ -2750,8 +2750,6 @@ fn apply_reingest(
     let absolute_path = root_path.join(relative_path);
     let raw_bytes = fs::read(&absolute_path)?;
     let parsed = parse_vault_file(&raw_bytes, &absolute_path, root_path)?;
-    links::validate_graph_frontmatter(&parsed.frontmatter)
-        .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?;
     let current_page =
         load_existing_page_identity(conn, collection_id, existing_page_id, &parsed.slug)?;
 
@@ -2929,13 +2927,15 @@ fn apply_reingest(
         &raw_bytes,
     )?;
     raw_imports::enqueue_embedding_job(&tx, page_id)?;
-    links::sync_page_graph_artifacts(
+    let diagnostic_context = absolute_path.to_string_lossy();
+    links::sync_page_graph_artifacts_tolerant(
         &tx,
         page_id,
         collection_id,
         &parsed.frontmatter,
         &parsed.compiled_truth,
         &parsed.timeline,
+        diagnostic_context.as_ref(),
     )
     .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?;
     tx.commit()?;
@@ -3043,10 +3043,10 @@ fn infer_type_from_path(file_path: &Path, root_path: &Path) -> Option<String> {
     let normalized = strip_numeric_prefix(&folder).to_lowercase();
 
     match normalized.as_str() {
-        "projects" => Some("project".to_string()),
-        "areas" => Some("area".to_string()),
-        "resources" => Some("resource".to_string()),
-        "archives" => Some("archive".to_string()),
+        "project" | "projects" => Some("project".to_string()),
+        "area" | "areas" => Some("area".to_string()),
+        "resource" | "resources" => Some("resource".to_string()),
+        "archive" | "archives" => Some("archive".to_string()),
         "journal" | "journals" => Some("journal".to_string()),
         "people" => Some("person".to_string()),
         "companies" | "orgs" => Some("company".to_string()),
@@ -3061,7 +3061,7 @@ fn strip_numeric_prefix(name: &str) -> &str {
         index += 1;
     }
 
-    if index > 0 && index < bytes.len() && bytes[index] == b'.' {
+    if index > 0 && index < bytes.len() && matches!(bytes[index], b'.' | b'-' | b'_') {
         index += 1;
         while index < bytes.len() && bytes[index].is_ascii_whitespace() {
             index += 1;
@@ -6101,12 +6101,13 @@ mod tests {
         assert_eq!(strip_numeric_prefix("01. Folder"), "Folder");
         assert_eq!(strip_numeric_prefix("123. Area"), "Area");
         assert_eq!(strip_numeric_prefix("9. Thing"), "Thing");
+        assert_eq!(strip_numeric_prefix("1-projects"), "projects");
+        assert_eq!(strip_numeric_prefix("2_areas"), "areas");
     }
 
     #[test]
     fn strip_numeric_prefix_leaves_non_numeric_name_unchanged() {
         assert_eq!(strip_numeric_prefix("Projects"), "Projects");
-        assert_eq!(strip_numeric_prefix("01-not-standard"), "01-not-standard");
         assert_eq!(strip_numeric_prefix(""), "");
     }
 

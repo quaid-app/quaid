@@ -103,7 +103,7 @@ If exactly one page resolves for both endpoints, write a `links` row from the re
 
 **Why:** Search stays one entry point. `hybrid_search` first produces FTS5 + vector candidates, then a bounded graph-expansion pass walks outward from those candidates and scores expansions by `(parent_score) × edge_weight × distance_decay^hops`. This treats the graph as a recall booster and re-ranker around already relevant pages rather than an independent result source.
 
-**Bounds:** Default depth is 1. CLI/config allow 0–3. Expansion caps new candidates via `graph_expansion_max` and caps visited nodes via the graph module's `MAX_NODES` safety limit.
+**Bounds:** Default depth is 0 until the DAB §4 / MSMARCO benchmark gate publishes passing numbers. CLI/config allow 0–3. Expansion caps new candidates via `graph_expansion_max` and caps visited nodes via the graph module's `MAX_NODES` safety limit.
 
 ### Decision 10 — Graph path output changes the pre-release contract.
 

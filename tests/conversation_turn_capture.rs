@@ -112,6 +112,115 @@ fn parse_render_round_trip_preserves_turn_metadata_and_cursor() {
 }
 
 #[test]
+fn parse_legacy_turns_preserves_horizontal_rules_inside_content() {
+    let rendered = concat!(
+        "---\n",
+        "type: conversation\n",
+        "session_id: session-1\n",
+        "date: 2026-05-03\n",
+        "started_at: 2026-05-03T09:14:22Z\n",
+        "status: open\n",
+        "last_extracted_at: null\n",
+        "last_extracted_turn: 0\n",
+        "---\n\n",
+        "## Turn 1 · user · 2026-05-03T09:14:22Z\n\n",
+        "This turn contains a Markdown rule.\n",
+        "---\n",
+        "It is still part of the first turn.\n\n",
+        "---\n\n",
+        "## Turn 2 · assistant · 2026-05-03T09:14:23Z\n\n",
+        "second turn\n"
+    );
+
+    let parsed = parse_str(rendered).unwrap();
+
+    assert_eq!(parsed.turns.len(), 2);
+    assert_eq!(
+        parsed.turns[0].content,
+        "This turn contains a Markdown rule.\n---\nIt is still part of the first turn."
+    );
+    assert!(render(&parsed).contains("<!-- quaid-turn-boundary -->"));
+}
+
+#[test]
+fn parse_legacy_turns_ignores_boundary_shapes_inside_nested_code_fences() {
+    let rendered = concat!(
+        "---\n",
+        "type: conversation\n",
+        "session_id: session-1\n",
+        "date: 2026-05-03\n",
+        "started_at: 2026-05-03T09:14:22Z\n",
+        "status: open\n",
+        "last_extracted_at: null\n",
+        "last_extracted_turn: 0\n",
+        "---\n\n",
+        "## Turn 1 · user · 2026-05-03T09:14:22Z\n\n",
+        "````markdown\n",
+        "```yaml\n",
+        "---\n\n",
+        "## Turn 2 · assistant · 2026-05-03T09:14:23Z\n\n",
+        "not a real turn\n",
+        "```\n",
+        "````\n\n",
+        "---\n\n",
+        "## Turn 2 · assistant · 2026-05-03T09:14:24Z\n\n",
+        "real second turn\n"
+    );
+
+    let parsed = parse_str(rendered).unwrap();
+
+    assert_eq!(parsed.turns.len(), 2);
+    assert!(parsed.turns[0].content.contains("not a real turn"));
+    assert_eq!(parsed.turns[1].content, "real second turn");
+}
+
+#[test]
+fn memory_add_turn_handles_many_turns_with_horizontal_rules_in_content() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, _db_path, server) = open_turn_server(vault_root.path());
+
+    for ordinal in 1_i64..=50 {
+        let content = format!(
+            "Turn {ordinal}: benchmark transcript segment\n---\ncontent after horizontal rule"
+        );
+        let result = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "horizontal-rule-session".to_string(),
+                role: "user".to_string(),
+                content,
+                timestamp: Some(format!("2026-05-03T09:{ordinal:02}:00Z")),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        let expected_turn_id = format!("horizontal-rule-session:{ordinal}");
+        assert_eq!(payload["turn_id"].as_str(), Some(expected_turn_id.as_str()));
+    }
+
+    let close_result = server
+        .memory_close_session(MemoryCloseSessionInput {
+            session_id: "horizontal-rule-session".to_string(),
+            namespace: None,
+        })
+        .unwrap();
+    let close_payload: serde_json::Value =
+        serde_json::from_str(&extract_text(&close_result)).unwrap();
+    assert!(close_payload["closed_at"].as_str().is_some());
+
+    let parsed = parse(
+        &vault_root
+            .path()
+            .join("conversations")
+            .join("2026-05-03")
+            .join("horizontal-rule-session.md"),
+    )
+    .unwrap();
+    assert_eq!(parsed.turns.len(), 50);
+    assert!(parsed.turns[49].content.contains("---\ncontent after"));
+}
+
+#[test]
 fn append_turn_is_durable_before_return_and_continues_ordinals_across_days() {
     let vault_root = tempfile::TempDir::new().unwrap();
     let (_db_dir, _db_path, conn) = open_turn_db(vault_root.path());

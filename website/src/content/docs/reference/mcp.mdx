@@ -8,9 +8,9 @@ guide:
 
 `quaid serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Twenty-four `memory_*` tools cover the read, write, graph, intelligence, conversation memory, and namespace surfaces. This page is the canonical catalog.
 
-> **Version note.** The 24-tool stdio surface, graph path output, HTTP/SSE transport, and `quaid daemon` lifecycle commands are all available in the current published release (`v0.22.1`).
+> **Version note.** The 24-tool stdio surface, graph path output, HTTP/SSE transport, and `quaid daemon` lifecycle commands are all available in the current published release (`v0.22.2`).
 
-The default transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http` in `v0.22.1`. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
+The default transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http` in `v0.22.2`. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
 
 > **Platform note.** `quaid serve` and all MCP tools are cross-platform. Live vault-sync watcher threads (automatic reconcile on file edits) start only on Unix (macOS / Linux) and are simply not started on Windows — MCP tool calls continue to work normally on all platforms.
 
@@ -268,7 +268,7 @@ No parameters. Returns one entry per attached collection with state, ignore-patt
 
 ## Conversation memory tools
 
-These tools store and process conversation turns. Turns are batched under a `session_id`; closing a session queues the conversation for knowledge extraction into pages.
+These tools store and process conversation turns. Turns are batched under a `session_id`; closing a session queues the conversation for knowledge extraction into pages. Turn content may contain ordinary Markdown horizontal rules (`---`); Quaid uses an internal turn boundary marker so content delimiters are not confused with stored turn separators.
 
 ### `memory_add_turn`
 

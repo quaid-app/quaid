@@ -6,8 +6,8 @@
 //! On-disk conversation Markdown format.
 //!
 //! Defines the canonical YAML-frontmatter + `## Turn N · role ·
-//! timestamp` body shape that every conversation day-file uses, plus
-//! the path scheme that lays them out as
+//! timestamp` body shape that every conversation day-file uses, plus an
+//! unambiguous marker between turn blocks and the path scheme that lays them out as
 //! `[<namespace>/]conversations/<date>/<session>.md`. Provides both
 //! directions of the round-trip — `parse` / `parse_str` and
 //! `render` / `render_turn_block` — so writers and readers stay
@@ -31,6 +31,8 @@ use crate::core::{collections, namespace};
 
 const HEADING_SEPARATOR: &str = " · ";
 const METADATA_FENCE_OPEN: &str = "```json turn-metadata";
+pub(crate) const TURN_BOUNDARY: &str = "<!-- quaid-turn-boundary -->";
+const LEGACY_TURN_BOUNDARY: &str = "---";
 
 /// Errors surfaced by conversation parse/render and path helpers.
 #[derive(Debug, Error)]
@@ -195,7 +197,9 @@ pub fn render(file: &ConversationFile) -> String {
 
     for (index, turn) in file.turns.iter().enumerate() {
         if index > 0 {
-            out.push_str("\n---\n\n");
+            out.push('\n');
+            out.push_str(TURN_BOUNDARY);
+            out.push_str("\n\n");
         }
         out.push_str(&render_turn_block(turn));
     }
@@ -496,16 +500,36 @@ fn parse_turn_block(
     }
 
     let mut end = start + 1;
-    let mut in_code_fence = false;
+    let mut code_fence: Option<CodeFence> = None;
     while end < lines.len() {
         let line = lines[end].trim_end();
-        if line.starts_with("```") {
-            in_code_fence = !in_code_fence;
-        }
-        if !in_code_fence && line == "---" {
+        if let Some(open_fence) = code_fence {
+            if code_fence_marker(line).is_some_and(|closing_fence| closing_fence.closes(open_fence))
+            {
+                code_fence = None;
+            }
+        } else if let Some(open_fence) = code_fence_marker(line) {
+            code_fence = Some(open_fence);
+        } else if is_turn_boundary(lines, end) {
             break;
         }
         end += 1;
+    }
+
+    fn is_turn_boundary(lines: &[String], index: usize) -> bool {
+        let line = lines[index].trim_end();
+        line == TURN_BOUNDARY
+            || (line == LEGACY_TURN_BOUNDARY && followed_by_turn_heading(lines, index + 1))
+    }
+
+    fn followed_by_turn_heading(lines: &[String], mut index: usize) -> bool {
+        while index < lines.len() && lines[index].trim().is_empty() {
+            index += 1;
+        }
+        lines
+            .get(index)
+            .map(|line| line.trim_end().starts_with("## Turn "))
+            .unwrap_or(false)
     }
 
     let mut block_lines = lines[start + 1..end].to_vec();
@@ -530,6 +554,32 @@ fn parse_turn_block(
         },
         next_index,
     ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CodeFence {
+    marker: u8,
+    len: usize,
+}
+
+impl CodeFence {
+    fn closes(self, open: Self) -> bool {
+        self.marker == open.marker && self.len >= open.len
+    }
+}
+
+fn code_fence_marker(line: &str) -> Option<CodeFence> {
+    let trimmed = line.trim_start();
+    let marker = trimmed.as_bytes().first().copied()?;
+    if marker != b'`' && marker != b'~' {
+        return None;
+    }
+    let len = trimmed
+        .as_bytes()
+        .iter()
+        .take_while(|byte| **byte == marker)
+        .count();
+    (len >= 3).then_some(CodeFence { marker, len })
 }
 
 fn split_content_and_metadata(

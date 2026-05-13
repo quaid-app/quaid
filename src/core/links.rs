@@ -1,5 +1,3 @@
-// Consumers (commands/, mcp/) not yet wired — remove when they are.
-#![allow(dead_code)]
 #![expect(
     clippy::expect_used,
     reason = "addressed in remove-production-panic-paths"
@@ -408,6 +406,9 @@ pub enum DerivedEdgeError {
 
     #[error("source_kind `{0}` is not a derived edge kind")]
     NonDerivedKind(String),
+
+    #[error("malformed frontmatter graph input: {0}")]
+    FrontmatterParse(#[from] FrontmatterParseError),
 }
 
 /// Upsert a single derived edge using the partial unique index
@@ -656,6 +657,64 @@ fn log_unresolved_target(
         "derived {source_kind} edge target `{target}` did not resolve in source collection"
     );
     log_gap_for_page(page_id, &query, &context, None, conn)
+}
+
+/// Validate the graph-relevant fields of a frontmatter document without
+/// touching the database.
+///
+/// Write paths MUST call this (or `expand_frontmatter_edges` directly) BEFORE
+/// inserting/updating the page row so that malformed `links:`, `parent:`,
+/// `children:`, or `related:` entries fail closed before any mutation.
+pub fn validate_graph_frontmatter(frontmatter: &Frontmatter) -> Result<(), FrontmatterParseError> {
+    expand_frontmatter_edges(frontmatter).map(|_| ())
+}
+
+/// Replace the `tags` rows for a single source page with the incoming list.
+///
+/// Deletes every existing row for `page_id`, then re-inserts the supplied
+/// labels in iteration order, deduplicated via the `(page_id, tag)` unique
+/// constraint. Empty labels are skipped. This is the Wave 3 sync semantic:
+/// frontmatter is the source of truth and replaces the side table on every
+/// page write.
+pub fn sync_page_tags(
+    conn: &Connection,
+    page_id: i64,
+    tags: &[String],
+) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM tags WHERE page_id = ?1", params![page_id])?;
+    for tag in tags {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO tags (page_id, tag) VALUES (?1, ?2)",
+            params![page_id, trimmed],
+        )?;
+    }
+    Ok(())
+}
+
+/// Unified Wave 3 side-table sync invoked after every page insert/update.
+///
+/// Runs `sync_frontmatter_edges`, `sync_wikilink_edges`, and `sync_page_tags`
+/// inside the caller's transaction. The caller is responsible for invoking
+/// `validate_graph_frontmatter` BEFORE staging the page row so that malformed
+/// graph frontmatter fails closed before any mutation.
+pub fn sync_page_graph_artifacts(
+    conn: &Connection,
+    page_id: i64,
+    collection_id: i64,
+    frontmatter: &Frontmatter,
+    compiled_truth: &str,
+    timeline: &str,
+) -> Result<(), DerivedEdgeError> {
+    let edges = expand_frontmatter_edges(frontmatter)?;
+    sync_frontmatter_edges(conn, page_id, collection_id, &edges)?;
+    sync_wikilink_edges(conn, page_id, collection_id, compiled_truth, timeline)?;
+    let tags = expand_frontmatter_tags(frontmatter);
+    sync_page_tags(conn, page_id, &tags)?;
+    Ok(())
 }
 
 #[cfg(test)]

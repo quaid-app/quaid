@@ -11,7 +11,9 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value as JsonValue;
 
 use crate::core::types::frontmatter_get_string;
-use crate::core::{markdown, novelty, page_uuid, palace, raw_imports, supersede, vault_sync};
+use crate::core::{
+    links, markdown, novelty, page_uuid, palace, raw_imports, supersede, vault_sync,
+};
 
 pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let file = Path::new(path);
@@ -20,6 +22,8 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let (frontmatter, body) = markdown::parse_frontmatter(&raw);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
+    links::validate_graph_frontmatter(&frontmatter)
+        .map_err(|err| anyhow::anyhow!("malformed frontmatter graph input: {err}"))?;
     let slug = frontmatter_get_string(&frontmatter, "slug").unwrap_or_else(|| {
         file.file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -113,6 +117,8 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             |row| row.get(0),
         )?;
         supersede::reconcile_supersede_chain(db, 1, "", page_id, &slug, supersedes.as_deref())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        links::sync_page_graph_artifacts(db, page_id, 1, &frontmatter, &compiled_truth, &timeline)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         raw_imports::rotate_active_raw_import(db, page_id, path, &raw_bytes)?;
         println!("Ingested {slug}");

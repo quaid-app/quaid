@@ -25,6 +25,7 @@ use crate::core::conversation::file_edit::{
 use crate::core::file_state::{self, FileStat};
 #[cfg(unix)]
 use crate::core::ignore_patterns;
+use crate::core::links;
 use crate::core::markdown;
 use crate::core::page_uuid;
 use crate::core::palace;
@@ -2749,6 +2750,8 @@ fn apply_reingest(
     let absolute_path = root_path.join(relative_path);
     let raw_bytes = fs::read(&absolute_path)?;
     let parsed = parse_vault_file(&raw_bytes, &absolute_path, root_path)?;
+    links::validate_graph_frontmatter(&parsed.frontmatter)
+        .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?;
     let current_page =
         load_existing_page_identity(conn, collection_id, existing_page_id, &parsed.slug)?;
 
@@ -2926,6 +2929,15 @@ fn apply_reingest(
         &raw_bytes,
     )?;
     raw_imports::enqueue_embedding_job(&tx, page_id)?;
+    links::sync_page_graph_artifacts(
+        &tx,
+        page_id,
+        collection_id,
+        &parsed.frontmatter,
+        &parsed.compiled_truth,
+        &parsed.timeline,
+    )
+    .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?;
     tx.commit()?;
 
     Ok(ApplyReingestOutcome { created })

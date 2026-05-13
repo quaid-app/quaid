@@ -29,8 +29,8 @@ use uuid::Uuid;
 #[cfg(unix)]
 use crate::core::fs_safety;
 use crate::core::supersede;
-use crate::core::types::frontmatter_get_string;
-use crate::core::{file_state, markdown, page_uuid, palace, raw_imports, vault_sync};
+use crate::core::types::{frontmatter_get_string, Frontmatter};
+use crate::core::{file_state, links, markdown, page_uuid, palace, raw_imports, vault_sync};
 
 #[derive(Debug, Clone)]
 struct PreparedPut {
@@ -44,6 +44,7 @@ struct PreparedPut {
     summary: String,
     compiled_truth: String,
     timeline: String,
+    frontmatter: Frontmatter,
     frontmatter_json: String,
     supersedes: Option<String>,
     wing: String,
@@ -251,6 +252,8 @@ fn put_from_string_with_output(
     let (frontmatter, body) = markdown::parse_frontmatter(content);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
+    links::validate_graph_frontmatter(&frontmatter)
+        .map_err(|err| anyhow::anyhow!("malformed frontmatter graph input: {err}"))?;
     let op_kind = if expected_version.is_some() {
         crate::core::collections::OpKind::WriteUpdate
     } else {
@@ -321,6 +324,7 @@ fn put_from_string_with_output(
                 summary: summary.clone(),
                 compiled_truth: compiled_truth.clone(),
                 timeline: timeline.clone(),
+                frontmatter: frontmatter.clone(),
                 frontmatter_json: serde_json::to_string(&frontmatter)?,
                 supersedes,
                 wing: wing.clone(),
@@ -664,6 +668,16 @@ fn stage_page_record(
         page_id,
         &prepared.slug,
         prepared.supersedes.as_deref(),
+    )
+    .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))?;
+
+    links::sync_page_graph_artifacts(
+        tx,
+        page_id,
+        prepared.collection_id,
+        &prepared.frontmatter,
+        &prepared.compiled_truth,
+        &prepared.timeline,
     )
     .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))?;
 

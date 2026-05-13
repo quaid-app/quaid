@@ -59,13 +59,13 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 5. Wire structured side-table sync into write paths
 
-- [ ] 5.1 Wire structured frontmatter persistence and side-table sync into `commands/put.rs`
-- [ ] 5.2 Wire structured frontmatter persistence and side-table sync into single-file ingest (`commands/ingest.rs`)
-- [ ] 5.3 Wire structured frontmatter persistence and side-table sync into directory import/export (`src/core/migrate.rs` import/export helpers)
-- [ ] 5.4 Wire structured frontmatter persistence and side-table sync into vault sync / reconciler write paths (`src/core/vault_sync/mod.rs` — page insert callsites at ~lines 3483, 4255, 4304)
-- [ ] 5.5 Wire structured frontmatter persistence and side-table sync into MCP `memory_put` (`src/mcp/tools/pages.rs`)
-- [ ] 5.6 Keep frontmatter edges, wikilink edges, tags, raw imports, file state, and embedding jobs transactionally consistent with the page write where practical
-- [ ] 5.7 Integration tests: write/import pages with frontmatter links, wikilinks, and tags; verify pages, links, tags, and exports remain in sync across re-ingest
+- [x] 5.1 Wire structured frontmatter persistence and side-table sync into `commands/put.rs`
+- [x] 5.2 Wire structured frontmatter persistence and side-table sync into single-file ingest (`commands/ingest.rs`)
+- [x] 5.3 Wire structured frontmatter persistence and side-table sync into directory import/export (`src/core/migrate.rs` import/export helpers)
+- [x] 5.4 Wire structured frontmatter persistence and side-table sync into vault sync / reconciler write paths (`src/core/vault_sync/mod.rs` — page insert callsites at ~lines 3483, 4255, 4304)
+- [x] 5.5 Wire structured frontmatter persistence and side-table sync into MCP `memory_put` (`src/mcp/tools/pages.rs`)
+- [x] 5.6 Keep frontmatter edges, wikilink edges, tags, raw imports, file state, and embedding jobs transactionally consistent with the page write where practical
+- [x] 5.7 Integration tests: write/import pages with frontmatter links, wikilinks, and tags; verify pages, links, tags, and exports remain in sync across re-ingest
 
 ## 6. Entity-pattern config and resolver
 

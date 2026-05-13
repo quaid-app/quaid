@@ -3061,7 +3061,7 @@ fn strip_numeric_prefix(name: &str) -> &str {
         index += 1;
     }
 
-    if index > 0 && index < bytes.len() && bytes[index] == b'.' {
+    if index > 0 && index < bytes.len() && matches!(bytes[index], b'.' | b'-' | b'_') {
         index += 1;
         while index < bytes.len() && bytes[index].is_ascii_whitespace() {
             index += 1;
@@ -6101,12 +6101,13 @@ mod tests {
         assert_eq!(strip_numeric_prefix("01. Folder"), "Folder");
         assert_eq!(strip_numeric_prefix("123. Area"), "Area");
         assert_eq!(strip_numeric_prefix("9. Thing"), "Thing");
+        assert_eq!(strip_numeric_prefix("1-projects"), "projects");
+        assert_eq!(strip_numeric_prefix("2_areas"), "areas");
     }
 
     #[test]
     fn strip_numeric_prefix_leaves_non_numeric_name_unchanged() {
         assert_eq!(strip_numeric_prefix("Projects"), "Projects");
-        assert_eq!(strip_numeric_prefix("01-not-standard"), "01-not-standard");
         assert_eq!(strip_numeric_prefix(""), "");
     }
 

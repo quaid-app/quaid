@@ -106,11 +106,17 @@ pub fn expand_frontmatter_edges(
     }
 
     if let Some(value) = frontmatter.get("children") {
-        expand_list_relationship_field("children", CHILD_RELATIONSHIP, value, &mut edges)?;
+        expand_list_relationship_field("children", CHILD_RELATIONSHIP, value, &mut edges, false)?;
     }
 
     if let Some(value) = frontmatter.get("related") {
-        expand_list_relationship_field("related", DEFAULT_LINK_RELATIONSHIP, value, &mut edges)?;
+        expand_list_relationship_field(
+            "related",
+            DEFAULT_LINK_RELATIONSHIP,
+            value,
+            &mut edges,
+            true,
+        )?;
     }
 
     Ok(edges)
@@ -204,6 +210,7 @@ fn expand_list_relationship_field(
     relationship: &str,
     value: &JsonValue,
     edges: &mut Vec<FrontmatterLink>,
+    allow_scalar: bool,
 ) -> Result<(), FrontmatterParseError> {
     match value {
         JsonValue::Array(items) => {
@@ -220,7 +227,7 @@ fn expand_list_relationship_field(
             }
             Ok(())
         }
-        JsonValue::String(raw) => {
+        JsonValue::String(raw) if allow_scalar => {
             edges.push(make_string_edge(field, raw, relationship)?);
             Ok(())
         }

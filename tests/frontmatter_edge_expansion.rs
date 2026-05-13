@@ -186,6 +186,18 @@ fn links_field_must_be_a_list_not_a_scalar() {
 }
 
 #[test]
+fn children_field_must_be_a_list_not_a_scalar() {
+    let frontmatter = fm("children: companies/brex\n");
+    let err = expand_frontmatter_edges(&frontmatter).expect_err("scalar children must reject");
+    assert!(matches!(err, FrontmatterParseError::InvalidShape { .. }));
+    let msg = err.to_string();
+    assert!(
+        msg.contains("children"),
+        "actionable field name in error: {msg}"
+    );
+}
+
+#[test]
 fn object_link_missing_target_is_rejected() {
     let frontmatter = fm("links:\n  - type: founded\n");
     let err = expand_frontmatter_edges(&frontmatter).expect_err("missing target must reject");

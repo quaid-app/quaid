@@ -134,7 +134,7 @@ Generate or refresh embeddings.
 ```bash
 quaid embed people/alice          # one page
 quaid embed --stale                # only re-embed pages whose chunks changed
-quaid embed --all                  # rebuild every embedding
+quaid embed --all                  # scan every page; skip current chunks
 quaid embed --all --batch-size 16  # scan pages in smaller batches
 ```
 

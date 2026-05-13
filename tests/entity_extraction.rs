@@ -564,6 +564,49 @@ fn partial_over_budget_route_preserves_existing_entity_assertions() {
     assert_eq!(retained, 2);
 }
 
+#[test]
+fn over_budget_run_for_page_logs_gap_and_preserves_existing_entity_assertions() {
+    let conn = open_test_db();
+    let source = insert_page(&conn, "sources/note", "Note", "Alice founded Brex.");
+    insert_page(&conn, "people/alice", "Alice", "body");
+    insert_page(&conn, "companies/brex", "Brex", "body");
+    let patterns = entities::load_patterns_from(None, &conn).unwrap();
+
+    entities::run_for_page(
+        &conn,
+        source,
+        1,
+        "sources/note",
+        "Alice founded Brex.",
+        &patterns,
+    )
+    .unwrap();
+    let summary = entities::run_for_page_with_deadline(
+        &conn,
+        source,
+        1,
+        "sources/note",
+        "Alice founded Brex.",
+        &patterns,
+        Duration::from_nanos(0),
+    )
+    .unwrap();
+    assert_eq!(summary.matches_seen, 0);
+
+    let retained: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assertions WHERE page_id = ?1 AND object = 'brex'",
+            [source],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let gaps: i64 = conn
+        .query_row("SELECT COUNT(*) FROM knowledge_gaps", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(retained, 1);
+    assert_eq!(gaps, 1);
+}
+
 // ── 7.7: no LLM / no inference / no network in extraction code ─
 
 #[test]

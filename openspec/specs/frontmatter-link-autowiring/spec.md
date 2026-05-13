@@ -34,7 +34,7 @@ On every page write or ingest, the system SHALL parse the `links:` frontmatter f
 - **THEN** no row is inserted into `links` for that entry, and a `knowledge_gap` row is recorded with context containing the unresolved target
 
 ### Requirement: Frontmatter `parent`, `children`, and `related` fields produce fixed relationship types
-The system SHALL parse `parent:` (single string), `children:` (list of strings), and `related:` (list of strings) frontmatter fields. Each resolvable value SHALL produce a `links` row with `source_kind = 'frontmatter'`, `edge_weight = config.edge_weight_frontmatter`, and `relationship` equal to `'parent'`, `'child'`, or `'related'` respectively.
+The system SHALL parse `parent:` as a single string, `children:` as a list of strings, and `related:` as either a list of strings or a single string coerced to a one-item list. Each resolvable value SHALL produce a `links` row with `source_kind = 'frontmatter'`, `edge_weight = config.edge_weight_frontmatter`, and `relationship` equal to `'parent'`, `'child'`, or `'related'` respectively. Unresolvable values SHALL follow the existing unresolved-target gap behavior without aborting otherwise valid page ingest.
 
 #### Scenario: `parent` field produces a single typed edge
 - **WHEN** a page is written with frontmatter `parent: programs/yc-w17`
@@ -43,6 +43,15 @@ The system SHALL parse `parent:` (single string), `children:` (list of strings),
 #### Scenario: `children` field produces one edge per entry
 - **WHEN** a page is written with frontmatter `children: [companies/brex, companies/scale]`
 - **THEN** the `links` table contains exactly two rows from that page with `relationship = 'child'` and `source_kind = 'frontmatter'`
+
+#### Scenario: Scalar `related` field is coerced to one edge
+- **WHEN** a page is written with frontmatter `related: karpathy-llm-wiki-workflow-breakdown`
+- **THEN** ingest treats it as `related: [karpathy-llm-wiki-workflow-breakdown]`
+- **AND** collection attach does not fail with a list-of-strings validation error
+
+#### Scenario: List `related` field remains supported
+- **WHEN** a page is written with frontmatter `related: [companies/brex, companies/scale]`
+- **THEN** the `links` table contains exactly two rows from that page with `relationship = 'related'` and `source_kind = 'frontmatter'`
 
 ### Requirement: Body-content wikilinks produce soft graph edges
 The system SHALL extract `[[slug]]` patterns from page body content and create derived `links` rows with `source_kind = 'wiki_link'` and `edge_weight = config.edge_weight_wikilink` (default `0.5`). Wikilink-derived rows SHALL be synced on write so removed wikilinks remove their derived rows for the source page.

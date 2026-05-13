@@ -601,7 +601,7 @@ fn strip_numeric_prefix(name: &str) -> &str {
     while index < bytes.len() && bytes[index].is_ascii_digit() {
         index += 1;
     }
-    if index > 0 && index < bytes.len() && bytes[index] == b'.' {
+    if index > 0 && index < bytes.len() && matches!(bytes[index], b'.' | b'-' | b'_') {
         index += 1;
         while index < bytes.len() && bytes[index].is_ascii_whitespace() {
             index += 1;

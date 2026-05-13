@@ -144,6 +144,9 @@ enum Commands {
         all: bool,
         #[arg(long)]
         stale: bool,
+        /// Maximum number of pages to scan per batch for bulk embedding
+        #[arg(long)]
+        batch_size: Option<usize>,
     },
     /// Create a typed temporal link between pages
     Link {
@@ -444,7 +447,12 @@ async fn main() -> Result<()> {
         } => commands::export::run(&db, &path, raw, import_id),
         Commands::Extraction { action } => commands::extraction::run(&db, action),
         Commands::Extract(args) => commands::extract::run(&db, args),
-        Commands::Embed { slug, all, stale } => commands::embed::run(&db, slug, all, stale),
+        Commands::Embed {
+            slug,
+            all,
+            stale,
+            batch_size,
+        } => commands::embed::run_with_batch(&db, slug, all, stale, batch_size),
         Commands::Link {
             from,
             to,

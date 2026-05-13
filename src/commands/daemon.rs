@@ -157,17 +157,20 @@ async fn run_foreground(db: Connection, http_config: Option<HttpConfig>) -> Resu
         runtime.session_id
     );
 
-    install_signal_handler(&runtime);
-
     if let Some(config) = http_config {
         let db_path_for_factory = db_path.clone();
         let factory =
             move || crate::core::db::open(&db_path_for_factory).map_err(anyhow::Error::from);
         // Block on the SSE listener; the supervisor + worker run in
         // their own threads owned by `runtime`.
-        if let Err(err) = crate::mcp::http::run_http(factory, config).await {
-            eprintln!("daemon_http_transport_failed error={err}");
-            return Ok(1);
+        tokio::select! {
+            result = crate::mcp::http::run_http(factory, config) => {
+                if let Err(err) = result {
+                    eprintln!("daemon_http_transport_failed error={err}");
+                    return Ok(1);
+                }
+            }
+            () = wait_for_runtime(&runtime) => {}
         }
     } else {
         // No transport: block until the supervisor thread joins (SIGTERM).
@@ -178,67 +181,39 @@ async fn run_foreground(db: Connection, http_config: Option<HttpConfig>) -> Resu
     Ok(0)
 }
 
-/// Install a SIGTERM/SIGINT handler that sets the runtime's stop flag.
-///
-/// Signal handling lives behind a one-off `tokio::spawn` so it doesn't
-/// block the foreground task. On non-Unix platforms this is a no-op —
-/// `quaid daemon run` is only supported on Unix today.
-#[allow(unused_variables, reason = "runtime is unused on non-Unix targets")]
-fn install_signal_handler(runtime: &vault_sync::ServeRuntime) {
-    #[cfg(unix)]
-    {
-        // We can't move the `Arc<AtomicBool>` out of `ServeRuntime`
-        // directly (the field is private), but the existing Drop impl
-        // already sets stop=true. The signal handler simply causes the
-        // process to begin tearing down by panicking the main task —
-        // which is too coarse. Instead, we rely on tokio's signal
-        // helpers to await the signal, then return from the foreground
-        // task naturally so Drop fires in order.
-        let stop_signaled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop_clone = std::sync::Arc::clone(&stop_signaled);
-        tokio::spawn(async move {
-            if let Ok(mut sigterm) =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            {
-                if sigterm.recv().await.is_some() {
-                    stop_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-        });
-        // SIGINT mirrors SIGTERM so a Ctrl-C from the operator behaves
-        // identically when running interactively.
-        let stop_clone2 = std::sync::Arc::clone(&stop_signaled);
-        tokio::spawn(async move {
-            if let Ok(mut sigint) =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            {
-                if sigint.recv().await.is_some() {
-                    stop_clone2.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-        });
-    }
-}
-
 /// Block until the supervisor thread exits. Used when no MCP transport
 /// is open and we still need the foreground task to wait for shutdown.
 async fn wait_for_runtime(_runtime: &vault_sync::ServeRuntime) {
-    // The supervisor thread holds the workers; once SIGTERM hits the
-    // process and Drop runs on `runtime` we want to keep this future
-    // alive long enough for it to fire. The simplest correct behavior
-    // is to wait on SIGTERM ourselves and return.
     #[cfg(unix)]
     {
-        if let Ok(mut sigterm) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            let _ = sigterm.recv().await;
-            return;
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(_) => {
+                    std::future::pending::<()>().await;
+                    return;
+                }
+            };
+        let mut sigint =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                Ok(signal) => signal,
+                Err(_) => {
+                    let _ = sigterm.recv().await;
+                    return;
+                }
+            };
+
+        tokio::select! {
+            _ = sigterm.recv() => {}
+            _ = sigint.recv() => {}
         }
     }
-    // Fallback: block forever on a stalled future (the supervisor
-    // thread keeps the process alive; Ctrl-C tears the binary down).
-    std::future::pending::<()>().await;
+    #[cfg(not(unix))]
+    {
+        // Fallback: block forever on a stalled future (the supervisor
+        // thread keeps the process alive; Ctrl-C tears the binary down).
+        std::future::pending::<()>().await;
+    }
 }
 
 fn install_action(

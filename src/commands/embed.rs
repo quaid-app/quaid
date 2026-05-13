@@ -6,13 +6,32 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::commands::get::{get_page, get_page_by_key};
+use crate::commands::get::get_page_by_key;
 use crate::core::chunking::chunk_page;
 use crate::core::collections::OpKind;
 use crate::core::inference::{embed, embedding_to_blob};
 use crate::core::vault_sync;
 
+const DEFAULT_BATCH_SIZE: usize = 32;
+
+#[derive(Debug, Clone)]
+struct PageRef {
+    id: i64,
+    collection_id: i64,
+    slug: String,
+}
+
 pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Result<()> {
+    run_with_batch(db, slug, all, stale, None)
+}
+
+pub fn run_with_batch(
+    db: &Connection,
+    slug: Option<String>,
+    all: bool,
+    stale: bool,
+    batch_size: Option<usize>,
+) -> Result<()> {
     // Modes are mutually exclusive: exactly one of <SLUG>, --all, or --stale.
     if slug.is_some() && (all || stale) {
         anyhow::bail!(
@@ -22,6 +41,8 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
     if all && stale {
         anyhow::bail!("--all and --stale are mutually exclusive");
     }
+    let batch_size = batch_size.unwrap_or(DEFAULT_BATCH_SIZE);
+    anyhow::ensure!(batch_size > 0, "--batch-size must be greater than 0");
 
     let (model_name, vec_table) = active_model(db)?;
     anyhow::ensure!(
@@ -42,47 +63,56 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
     } else {
         let mut embedded_pages = 0_usize;
         let mut embedded_chunks = 0_usize;
+        let mut last_page_id = 0_i64;
 
-        for slug in page_slugs(db)? {
-            let page = match get_page(db, &slug) {
-                Ok(p) => p,
-                Err(e) => {
+        loop {
+            let page_refs = page_refs_after(db, last_page_id, batch_size)?;
+            if page_refs.is_empty() {
+                break;
+            }
+
+            for page_ref in page_refs {
+                last_page_id = page_ref.id;
+                let page = match get_page_by_key(db, page_ref.collection_id, &page_ref.slug) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!(
+                            "{}",
+                            format_embed_warning(
+                                &page_ref.slug,
+                                lookup_source_path_by_page_id(db, page_ref.id).as_deref(),
+                                &e
+                            )
+                        );
+                        continue;
+                    }
+                };
+                let chunks = chunk_page(&page);
+
+                if chunks.is_empty() {
+                    continue;
+                }
+
+                if !page_needs_refresh(db, page_ref.id, &model_name, &chunks)? {
+                    continue;
+                }
+
+                if let Err(e) =
+                    replace_page_embeddings(db, page_ref.id, &model_name, &vec_table, &chunks)
+                {
                     eprintln!(
                         "{}",
-                        format_embed_warning(&slug, lookup_source_path(db, &slug).as_deref(), &e)
+                        format_embed_warning(
+                            &page_ref.slug,
+                            lookup_source_path_by_page_id(db, page_ref.id).as_deref(),
+                            &e
+                        )
                     );
                     continue;
                 }
-            };
-            let page_id = match page_id(db, &slug) {
-                Ok(id) => id,
-                Err(e) => {
-                    eprintln!(
-                        "{}",
-                        format_embed_warning(&slug, lookup_source_path(db, &slug).as_deref(), &e)
-                    );
-                    continue;
-                }
-            };
-            let chunks = chunk_page(&page);
-
-            if chunks.is_empty() {
-                continue;
+                embedded_pages += 1;
+                embedded_chunks += chunks.len();
             }
-
-            if !page_needs_refresh(db, page_id, &model_name, &chunks)? {
-                continue;
-            }
-
-            if let Err(e) = replace_page_embeddings(db, page_id, &model_name, &vec_table, &chunks) {
-                eprintln!(
-                    "{}",
-                    format_embed_warning(&slug, lookup_source_path(db, &slug).as_deref(), &e)
-                );
-                continue;
-            }
-            embedded_pages += 1;
-            embedded_chunks += chunks.len();
         }
 
         (embedded_pages, embedded_chunks)
@@ -109,22 +139,23 @@ fn active_model(db: &Connection) -> Result<(String, String)> {
     .map_err(Into::into)
 }
 
-fn page_slugs(db: &Connection) -> Result<Vec<String>> {
-    let mut stmt = db.prepare("SELECT slug FROM pages ORDER BY slug")?;
-    let rows = stmt.query_map([], |row| row.get(0))?;
+fn page_refs_after(db: &Connection, last_page_id: i64, batch_size: usize) -> Result<Vec<PageRef>> {
+    let limit = i64::try_from(batch_size)?;
+    let mut stmt =
+        db.prepare("SELECT id, collection_id, slug FROM pages WHERE id > ?1 ORDER BY id LIMIT ?2")?;
+    let rows = stmt.query_map(rusqlite::params![last_page_id, limit], |row| {
+        Ok(PageRef {
+            id: row.get(0)?,
+            collection_id: row.get(1)?,
+            slug: row.get(2)?,
+        })
+    })?;
 
-    let mut slugs = Vec::new();
+    let mut page_refs = Vec::new();
     for row in rows {
-        slugs.push(row?);
+        page_refs.push(row?);
     }
-    Ok(slugs)
-}
-
-fn page_id(db: &Connection, slug: &str) -> Result<i64> {
-    db.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
-        row.get(0)
-    })
-    .map_err(Into::into)
+    Ok(page_refs)
 }
 
 fn page_id_by_key(db: &Connection, collection_id: i64, slug: &str) -> Result<i64> {
@@ -178,17 +209,14 @@ fn page_needs_refresh(
         }))
 }
 
-/// Best-effort lookup of the source file path for a given slug via the active
-/// raw_imports row. Returns `None` when no matching row can be found.
-fn lookup_source_path(db: &Connection, slug: &str) -> Option<String> {
+fn lookup_source_path_by_page_id(db: &Connection, page_id: i64) -> Option<String> {
     db.query_row(
-        "SELECT ri.file_path
-         FROM raw_imports ri
-         JOIN pages p ON p.id = ri.page_id
-         WHERE p.slug = ?1 AND ri.is_active = 1
-         ORDER BY ri.created_at DESC, ri.id DESC
+        "SELECT file_path
+         FROM raw_imports
+         WHERE page_id = ?1 AND is_active = 1
+         ORDER BY created_at DESC, id DESC
          LIMIT 1",
-        [slug],
+        [page_id],
         |row| row.get(0),
     )
     .ok()
@@ -354,6 +382,15 @@ mod tests {
             ],
         )
         .expect("insert page");
+    }
+
+    fn lookup_source_path_for_slug(conn: &Connection, slug: &str) -> Option<String> {
+        let page_id = conn
+            .query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
+                row.get(0)
+            })
+            .ok()?;
+        lookup_source_path_by_page_id(conn, page_id)
     }
 
     #[test]
@@ -658,14 +695,14 @@ mod tests {
         )
         .expect("insert raw import row");
 
-        let result = lookup_source_path(&conn, "people/alice");
+        let result = lookup_source_path_for_slug(&conn, "people/alice");
         assert_eq!(
             result.as_deref(),
             Some("/notes/2024-01-meeting.md"),
             "should find file_path for frontmatter slug that differs from filename"
         );
 
-        let miss = lookup_source_path(&conn, "notes/2024-01-meeting");
+        let miss = lookup_source_path_for_slug(&conn, "notes/2024-01-meeting");
         assert_eq!(
             miss, None,
             "filename-derived slug should not match when only the resolved page slug exists"
@@ -686,7 +723,7 @@ mod tests {
         crate::commands::ingest::run(&conn, file_path.to_str().expect("utf8 path"), false)
             .expect("ingest file");
 
-        let result = lookup_source_path(&conn, "people/alice");
+        let result = lookup_source_path_for_slug(&conn, "people/alice");
         assert_eq!(
             result.as_deref(),
             file_path.to_str(),
@@ -721,7 +758,7 @@ mod tests {
             .expect("second ingest");
 
         assert_eq!(
-            lookup_source_path(&conn, "note").as_deref(),
+            lookup_source_path_for_slug(&conn, "note").as_deref(),
             second_path.to_str()
         );
     }
@@ -749,7 +786,7 @@ mod tests {
             .expect("reingest moved file");
 
         assert_eq!(
-            lookup_source_path(&conn, "note").as_deref(),
+            lookup_source_path_for_slug(&conn, "note").as_deref(),
             moved_path.to_str()
         );
     }

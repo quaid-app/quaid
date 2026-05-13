@@ -104,7 +104,7 @@ Single-file ingestion with SHA-256 idempotency. Re-running on the same file is a
 
 ### `import <PATH>`
 
-Batch import a markdown directory. Page types are inferred from a PARA-style folder layout (`projects/`, `areas/`, `resources/`, `archives/`).
+Batch import a markdown directory. Page types are inferred from a PARA-style folder layout (`project(s)/`, `area(s)/`, `resource(s)/`, `archive(s)/`) after stripping numeric prefixes such as `1-projects/`.
 
 | Flag | Type | Default |
 | ---- | ---- | ------- |
@@ -129,11 +129,13 @@ Generate or refresh embeddings.
 | ---- | ---- | ------- |
 | `--all` | flag | false |
 | `--stale` | flag | false |
+| `--batch-size <N>` | usize | 32 |
 
 ```bash
 quaid embed people/alice          # one page
 quaid embed --stale                # only re-embed pages whose chunks changed
-quaid embed --all                  # rebuild every embedding
+quaid embed --all                  # scan every page; skip current chunks
+quaid embed --all --batch-size 16  # scan pages in smaller batches
 ```
 
 ## Graph — links and backlinks

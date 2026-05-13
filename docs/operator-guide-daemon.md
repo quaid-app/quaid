@@ -124,6 +124,8 @@ You can run `quaid serve` while a daemon is installed; it will detect the live `
 
 If you stop the daemon (`quaid daemon stop`) while `quaid serve` is running, the next `quaid serve` invocation after the daemon's session-row sweep window (~15s) will auto-promote to `serve_host` and take over runtime ownership.
 
+Foreground runtimes (`quaid serve` and `quaid daemon run`) handle SIGTERM/SIGINT by stopping owned workers and unregistering their `serve_sessions` row. Use the platform service manager (`quaid daemon stop`) for installed daemons; use a direct signal only for foreground/manual processes.
+
 ---
 
 ## Troubleshooting

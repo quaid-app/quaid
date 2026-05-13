@@ -138,6 +138,16 @@ fn related_field_produces_related_edges_for_each_entry() {
 }
 
 #[test]
+fn scalar_related_field_is_coerced_to_one_related_edge() {
+    let frontmatter = fm("related: karpathy-llm-wiki-workflow-breakdown\n");
+    let edges = expand_frontmatter_edges(&frontmatter).expect("scalar related parses");
+    assert_eq!(
+        edges,
+        vec![link("karpathy-llm-wiki-workflow-breakdown", "related")]
+    );
+}
+
+#[test]
 fn fixed_fields_normalize_targets_via_resolve_slug() {
     let frontmatter = fm("parent: 'Programs/YC W17'\n");
     let edges = expand_frontmatter_edges(&frontmatter).expect("edges parse");
@@ -171,6 +181,18 @@ fn links_field_must_be_a_list_not_a_scalar() {
     let msg = err.to_string();
     assert!(
         msg.contains("links"),
+        "actionable field name in error: {msg}"
+    );
+}
+
+#[test]
+fn children_field_must_be_a_list_not_a_scalar() {
+    let frontmatter = fm("children: companies/brex\n");
+    let err = expand_frontmatter_edges(&frontmatter).expect_err("scalar children must reject");
+    assert!(matches!(err, FrontmatterParseError::InvalidShape { .. }));
+    let msg = err.to_string();
+    assert!(
+        msg.contains("children"),
         "actionable field name in error: {msg}"
     );
 }

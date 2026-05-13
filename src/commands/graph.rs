@@ -143,7 +143,7 @@ fn render_text_graph<W: Write>(
 
     // Append a path explanation block for every reachable non-root node so
     // operators can see exactly which edges connect a hit to the root.
-    let mut sorted: Vec<(&String, &Vec<(String, String, String)>)> = result.paths.iter().collect();
+    let mut sorted: Vec<_> = result.paths.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut printed_header = false;
     for (slug, path) in sorted {

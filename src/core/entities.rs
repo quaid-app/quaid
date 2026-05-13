@@ -195,7 +195,9 @@ pub fn load_patterns_from(
 
     let mut compiled = Vec::with_capacity(raw.len());
     for entry in raw {
-        compiled.push(compile_pattern(entry, default_weight)?);
+        let mut pattern = compile_pattern(entry, default_weight)?;
+        apply_role_defaults(&mut pattern);
+        compiled.push(pattern);
     }
     Ok(compiled)
 }
@@ -365,7 +367,7 @@ pub fn resolve_entity_surface(
     }
 
     // (3) Case-insensitive title match.
-    if let Some(row) = lookup_by_title_ci(conn, source_collection_id, trimmed)? {
+    if let Some(row) = lookup_by_title_ci(conn, source_collection_id, trimmed, role_hint)? {
         return Ok(row);
     }
 
@@ -373,7 +375,7 @@ pub fn resolve_entity_surface(
     let candidate_basename = basename(&normalized);
     if !candidate_basename.is_empty() {
         if let Some(row) =
-            lookup_by_basename_unique(conn, source_collection_id, &candidate_basename)?
+            lookup_by_basename_unique(conn, source_collection_id, candidate_basename, role_hint)?
         {
             return Ok(row);
         }
@@ -418,14 +420,21 @@ fn lookup_by_title_ci(
     conn: &Connection,
     collection_id: i64,
     title: &str,
+    role_hint: Option<&str>,
 ) -> Result<Option<SurfaceResolution>, rusqlite::Error> {
+    let role_prefix = role_hint.map(role_slug_prefix);
     let mut stmt = conn.prepare(
-        "SELECT id, slug FROM pages WHERE collection_id = ?1 AND LOWER(title) = LOWER(?2) LIMIT 2",
+        "SELECT id, slug FROM pages
+         WHERE collection_id = ?1
+           AND LOWER(title) = LOWER(?2)
+           AND (?3 IS NULL OR slug LIKE ?3 || '/%')
+         LIMIT 2",
     )?;
     let rows: Vec<(i64, String)> = stmt
-        .query_map(params![collection_id, title], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?
+        .query_map(
+            params![collection_id, title, role_prefix.as_deref()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?
         .collect::<Result<_, _>>()?;
     if rows.len() == 1 {
         let (page_id, slug) = rows.into_iter().next().expect("len==1");
@@ -439,17 +448,25 @@ fn lookup_by_basename_unique(
     conn: &Connection,
     collection_id: i64,
     basename: &str,
+    role_hint: Option<&str>,
 ) -> Result<Option<SurfaceResolution>, rusqlite::Error> {
     let pattern_with_prefix = format!("%/{basename}");
+    let role_prefix = role_hint.map(role_slug_prefix);
     let mut stmt = conn.prepare(
         "SELECT id, slug FROM pages \
          WHERE collection_id = ?1 \
-           AND (slug = ?2 OR slug LIKE ?3) \
-         LIMIT 2",
+            AND (slug = ?2 OR slug LIKE ?3) \
+           AND (?4 IS NULL OR slug LIKE ?4 || '/%') \
+          LIMIT 2",
     )?;
     let rows: Vec<(i64, String)> = stmt
         .query_map(
-            params![collection_id, basename, pattern_with_prefix],
+            params![
+                collection_id,
+                basename,
+                pattern_with_prefix,
+                role_prefix.as_deref()
+            ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?
         .collect::<Result<_, _>>()?;
@@ -459,6 +476,10 @@ fn lookup_by_basename_unique(
     } else {
         Ok(None)
     }
+}
+
+fn role_slug_prefix(role: &str) -> String {
+    pluralise_role(role)
 }
 
 /// Summary counts produced by `route_entity_matches`.
@@ -474,14 +495,24 @@ pub struct RoutingSummary {
     pub unresolved: usize,
 }
 
+struct AssertionCandidate {
+    subject: String,
+    predicate: String,
+    object: String,
+    confidence: f64,
+    evidence_text: String,
+}
+
 /// Route every `EntityMatch` to the `assertions` side table (task 7.3–7.5).
 ///
 /// Per Decision 11 this change writes assertions only — **no `links` rows are
 /// inserted with `source_kind = 'entity_pattern'`**. Resolved endpoint info is
 /// recorded in `evidence_text` for downstream consumers.
 ///
-/// Idempotency: duplicates are prevented by checking
-/// `(page_id, subject, predicate, object)` before insert.
+/// Idempotency/retraction: each run syncs the live assertion set for this
+/// source page and `entity_pattern`, inserting missing assertions, updating
+/// retained evidence, and deleting stale entity-pattern assertions that no
+/// longer appear in the page text.
 pub fn route_entity_matches(
     conn: &Connection,
     source_page_id: i64,
@@ -490,6 +521,7 @@ pub fn route_entity_matches(
 ) -> Result<RoutingSummary, EntityError> {
     let mut summary = RoutingSummary::default();
     let mut seen_in_batch: HashSet<(String, String, String)> = HashSet::new();
+    let mut candidates = Vec::new();
 
     for m in matches {
         summary.matches_seen += 1;
@@ -530,21 +562,48 @@ pub fn route_entity_matches(
             continue;
         }
 
-        // Persistent idempotency: skip if an identical assertion already exists.
+        let evidence_text = render_evidence(&subject_res, &object_res, m);
+        candidates.push(AssertionCandidate {
+            subject: subject_norm,
+            predicate: m.relationship.clone(),
+            object: object_norm,
+            confidence: m.weight,
+            evidence_text,
+        });
+    }
+
+    for candidate in &candidates {
+        // Persistent idempotency: skip insert if an identical assertion already exists.
         let existing: Option<i64> = conn
             .query_row(
                 "SELECT id FROM assertions \
-                 WHERE page_id = ?1 AND subject = ?2 AND predicate = ?3 AND object = ?4 \
+                 WHERE page_id = ?1
+                   AND subject = ?2
+                   AND predicate = ?3
+                   AND object = ?4
+                   AND asserted_by = 'agent'
+                   AND source_ref = 'entity_pattern' \
                  LIMIT 1",
-                params![source_page_id, &subject_norm, &m.relationship, &object_norm],
+                params![
+                    source_page_id,
+                    &candidate.subject,
+                    &candidate.predicate,
+                    &candidate.object
+                ],
                 |row| row.get(0),
             )
             .optional()?;
-        if existing.is_some() {
+
+        if let Some(assertion_id) = existing {
+            conn.execute(
+                "UPDATE assertions
+                 SET confidence = ?2, evidence_text = ?3
+                 WHERE id = ?1",
+                params![assertion_id, candidate.confidence, &candidate.evidence_text],
+            )?;
             continue;
         }
 
-        let evidence = render_evidence(&subject_res, &object_res, m);
         conn.execute(
             "INSERT INTO assertions (
                 page_id, subject, predicate, object, valid_from, valid_until,
@@ -552,17 +611,46 @@ pub fn route_entity_matches(
              ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, 'agent', 'entity_pattern', ?6)",
             params![
                 source_page_id,
-                &subject_norm,
-                &m.relationship,
-                &object_norm,
-                m.weight,
-                evidence,
+                &candidate.subject,
+                &candidate.predicate,
+                &candidate.object,
+                candidate.confidence,
+                &candidate.evidence_text,
             ],
         )?;
         summary.assertions_inserted += 1;
     }
 
+    delete_stale_entity_assertions(conn, source_page_id, &seen_in_batch)?;
+
     Ok(summary)
+}
+
+fn delete_stale_entity_assertions(
+    conn: &Connection,
+    source_page_id: i64,
+    desired_keys: &HashSet<(String, String, String)>,
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, subject, predicate, object
+         FROM assertions
+         WHERE page_id = ?1
+           AND asserted_by = 'agent'
+           AND source_ref = 'entity_pattern'",
+    )?;
+    let rows: Vec<(i64, String, String, String)> = stmt
+        .query_map([source_page_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+
+    for (id, subject, predicate, object) in rows {
+        if !desired_keys.contains(&(subject, predicate, object)) {
+            conn.execute("DELETE FROM assertions WHERE id = ?1", [id])?;
+        }
+    }
+    Ok(())
 }
 
 fn canonical_surface(surface: &str) -> String {
@@ -581,11 +669,11 @@ fn render_evidence(
 ) -> String {
     let subj = match subject {
         SurfaceResolution::Resolved { slug, .. } => format!("resolved:{slug}"),
-        SurfaceResolution::Unresolved => format!("unresolved:{}", m.subject_surface),
+        SurfaceResolution::Unresolved => "unresolved".to_owned(),
     };
     let obj = match object {
         SurfaceResolution::Resolved { slug, .. } => format!("resolved:{slug}"),
-        SurfaceResolution::Unresolved => format!("unresolved:{}", m.object_surface),
+        SurfaceResolution::Unresolved => "unresolved".to_owned(),
     };
     format!(
         "entity_pattern[{}] subject={subj} object={obj}",

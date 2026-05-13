@@ -109,6 +109,24 @@ fn user_override_replaces_defaults() {
 }
 
 #[test]
+fn user_override_without_hints_gets_relationship_role_defaults() {
+    let tmp = std::env::temp_dir().join(format!(
+        "quaid-entity-default-hints-{}.yaml",
+        std::process::id()
+    ));
+    std::fs::write(
+        &tmp,
+        "- regex: \"([A-Z][a-z]+)\\\\s+founded\\\\s+([A-Z][a-z]+)\"\n  relationship: founded\n",
+    )
+    .unwrap();
+    let conn = open_test_db();
+    let patterns = entities::load_patterns_from(Some(&tmp), &conn).unwrap();
+    assert_eq!(patterns[0].subject_type.as_deref(), Some("person"));
+    assert_eq!(patterns[0].object_type.as_deref(), Some("company"));
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
 fn malformed_yaml_fails_before_mutation() {
     let tmp =
         std::env::temp_dir().join(format!("quaid-entity-bad-yaml-{}.yaml", std::process::id()));
@@ -207,6 +225,22 @@ fn resolver_unique_basename() {
 }
 
 #[test]
+fn resolver_title_fallback_respects_role_hint() {
+    let conn = open_test_db();
+    insert_page(&conn, "teams/delta", "Delta", "body");
+    let res = entities::resolve_entity_surface("Delta", Some("company"), 1, &conn).unwrap();
+    assert!(matches!(res, SurfaceResolution::Unresolved));
+}
+
+#[test]
+fn resolver_basename_fallback_respects_role_hint() {
+    let conn = open_test_db();
+    insert_page(&conn, "teams/delta", "Team Delta", "body");
+    let res = entities::resolve_entity_surface("delta", Some("company"), 1, &conn).unwrap();
+    assert!(matches!(res, SurfaceResolution::Unresolved));
+}
+
+#[test]
 fn resolver_ambiguous_returns_unresolved() {
     let conn = open_test_db();
     insert_page(&conn, "people/acme", "Acme", "body");
@@ -263,8 +297,11 @@ fn budget_overrun_logs_knowledge_gap() {
     // directly with 0-budget and confirming the over_budget surface; then
     // exercise the real path via run_for_page (which uses 5ms) — that
     // typical case should NOT log a gap on tiny input.
-    let outcome =
-        entities::extract_entities("hello world", &[pattern.clone()], Duration::from_nanos(0));
+    let outcome = entities::extract_entities(
+        "hello world",
+        std::slice::from_ref(&pattern),
+        Duration::from_nanos(0),
+    );
     assert!(outcome.over_budget);
 
     // Force the wired gap-logging via the helper for budget overrun.
@@ -339,10 +376,43 @@ fn unresolved_match_still_inserts_assertion_no_link() {
 }
 
 #[test]
+fn unresolved_evidence_does_not_include_raw_capture_text() {
+    let conn = open_test_db();
+    let source = insert_page(
+        &conn,
+        "sources/note",
+        "Note",
+        "Alice founded SecretStealthProject.",
+    );
+    insert_page(&conn, "people/alice", "Alice", "body");
+
+    let patterns = entities::load_patterns_from(None, &conn).unwrap();
+    entities::run_for_page(
+        &conn,
+        source,
+        1,
+        "sources/note",
+        "Alice founded SecretStealthProject.",
+        &patterns,
+    )
+    .unwrap();
+
+    let evidence: String = conn
+        .query_row(
+            "SELECT evidence_text FROM assertions WHERE page_id = ?1 AND predicate = 'founded'",
+            [source],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(evidence.contains("object=unresolved"));
+    assert!(!evidence.contains("SecretStealthProject"));
+}
+
+#[test]
 fn pattern_weight_propagates_to_assertion_confidence() {
     let conn = open_test_db();
     let source = insert_page(&conn, "sources/note", "Note", "Alice founded Brex.");
-    let patterns = vec![EntityPattern {
+    let patterns = [EntityPattern {
         regex: regex::Regex::new(r"(\w+) founded (\w+)").unwrap(),
         relationship: "founded".to_owned(),
         subject_type: None,
@@ -394,6 +464,52 @@ fn idempotent_reingest_does_not_duplicate_assertions() {
     // First call inserts; subsequent calls must be no-ops on the same (page,
     // subject, predicate, object) key.
     assert_eq!(n, 1);
+}
+
+#[test]
+fn reingest_removes_entity_assertions_no_longer_in_page_text() {
+    let conn = open_test_db();
+    let source = insert_page(&conn, "sources/note", "Note", "Alice founded Brex.");
+    insert_page(&conn, "people/alice", "Alice", "body");
+    insert_page(&conn, "companies/brex", "Brex", "body");
+    insert_page(&conn, "companies/stripe", "Stripe", "body");
+    let patterns = entities::load_patterns_from(None, &conn).unwrap();
+
+    entities::run_for_page(
+        &conn,
+        source,
+        1,
+        "sources/note",
+        "Alice founded Brex.",
+        &patterns,
+    )
+    .unwrap();
+    entities::run_for_page(
+        &conn,
+        source,
+        1,
+        "sources/note",
+        "Alice founded Stripe.",
+        &patterns,
+    )
+    .unwrap();
+
+    let stale: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assertions WHERE page_id = ?1 AND object = 'brex'",
+            [source],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let current: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assertions WHERE page_id = ?1 AND object = 'stripe'",
+            [source],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stale, 0);
+    assert_eq!(current, 1);
 }
 
 // ── 7.7: no LLM / no inference / no network in extraction code ─

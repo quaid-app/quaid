@@ -512,6 +512,44 @@ fn reingest_removes_entity_assertions_no_longer_in_page_text() {
     assert_eq!(current, 1);
 }
 
+#[test]
+fn over_budget_reingest_preserves_existing_entity_assertions() {
+    let conn = open_test_db();
+    let source = insert_page(&conn, "sources/note", "Note", "Alice founded Brex.");
+    insert_page(&conn, "people/alice", "Alice", "body");
+    insert_page(&conn, "companies/brex", "Brex", "body");
+    let patterns = entities::load_patterns_from(None, &conn).unwrap();
+
+    entities::run_for_page(
+        &conn,
+        source,
+        1,
+        "sources/note",
+        "Alice founded Brex.",
+        &patterns,
+    )
+    .unwrap();
+    entities::run_for_page_with_deadline(
+        &conn,
+        source,
+        1,
+        "sources/note",
+        "Alice founded Brex.",
+        &patterns,
+        Duration::from_nanos(0),
+    )
+    .unwrap();
+
+    let current: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assertions WHERE page_id = ?1 AND object = 'brex'",
+            [source],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(current, 1);
+}
+
 // ── 7.7: no LLM / no inference / no network in extraction code ─
 
 #[test]

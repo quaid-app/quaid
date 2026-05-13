@@ -519,6 +519,25 @@ pub fn route_entity_matches(
     source_collection_id: i64,
     matches: &[EntityMatch],
 ) -> Result<RoutingSummary, EntityError> {
+    route_entity_matches_inner(conn, source_page_id, source_collection_id, matches, true)
+}
+
+fn route_entity_matches_preserving_stale(
+    conn: &Connection,
+    source_page_id: i64,
+    source_collection_id: i64,
+    matches: &[EntityMatch],
+) -> Result<RoutingSummary, EntityError> {
+    route_entity_matches_inner(conn, source_page_id, source_collection_id, matches, false)
+}
+
+fn route_entity_matches_inner(
+    conn: &Connection,
+    source_page_id: i64,
+    source_collection_id: i64,
+    matches: &[EntityMatch],
+    delete_stale: bool,
+) -> Result<RoutingSummary, EntityError> {
     let mut summary = RoutingSummary::default();
     let mut seen_in_batch: HashSet<(String, String, String)> = HashSet::new();
     let mut candidates = Vec::new();
@@ -621,7 +640,9 @@ pub fn route_entity_matches(
         summary.assertions_inserted += 1;
     }
 
-    delete_stale_entity_assertions(conn, source_page_id, &seen_in_batch)?;
+    if delete_stale {
+        delete_stale_entity_assertions(conn, source_page_id, &seen_in_batch)?;
+    }
 
     Ok(summary)
 }
@@ -695,7 +716,29 @@ pub fn run_for_page(
     compiled_truth: &str,
     patterns: &[EntityPattern],
 ) -> Result<RoutingSummary, EntityError> {
-    let outcome = extract_entities(compiled_truth, patterns, EXTRACTION_BUDGET);
+    run_for_page_with_deadline(
+        conn,
+        page_id,
+        collection_id,
+        page_slug,
+        compiled_truth,
+        patterns,
+        EXTRACTION_BUDGET,
+    )
+}
+
+/// Same as `run_for_page` but with an explicit extraction deadline. This is
+/// used by command/backfill callers that need deterministic budget behavior.
+pub fn run_for_page_with_deadline(
+    conn: &Connection,
+    page_id: i64,
+    collection_id: i64,
+    page_slug: &str,
+    compiled_truth: &str,
+    patterns: &[EntityPattern],
+    deadline: Duration,
+) -> Result<RoutingSummary, EntityError> {
+    let outcome = extract_entities(compiled_truth, patterns, deadline);
     if outcome.over_budget {
         let context = format!(
             "entity-pattern extraction exceeded 5ms budget on page {page_slug} \
@@ -710,6 +753,12 @@ pub fn run_for_page(
             None,
             conn,
         )?;
+        return route_entity_matches_preserving_stale(
+            conn,
+            page_id,
+            collection_id,
+            &outcome.matches,
+        );
     }
     route_entity_matches(conn, page_id, collection_id, &outcome.matches)
 }

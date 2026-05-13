@@ -15,7 +15,7 @@ quaid init ~/memory.db
 quaid import ~/Documents/Obsidian --db ~/memory.db
 ```
 
-`import` walks the directory, infers `type` from a PARA-style folder layout (`projects/`, `areas/`, `resources/`, `archives/`) when frontmatter doesn't declare it, and writes one page per `.md` file. SHA-256 idempotency means re-running on the same content is a no-op.
+`import` walks the directory, infers `type` from a PARA-style folder layout (`project(s)/`, `area(s)/`, `resource(s)/`, `archive(s)/`) when frontmatter doesn't declare it, and writes one page per `.md` file. Numeric prefixes such as `1-projects/` are stripped before inference. SHA-256 idempotency means re-running on the same content is a no-op.
 
 ## Validate without writing
 
@@ -44,7 +44,7 @@ See [Manage collections](/how-to/collections/) for the full vault-sync surface.
 
 - `title` — required (falls back to first H1, then filename).
 - `type` — required (or inferable from path).
-- `tags`, `summary`, `links` — preserved.
+- `tags`, `summary`, `links`, `related` — preserved. `related` may be a single string or a YAML list.
 
 Unknown fields are stored verbatim in `pages.frontmatter` and round-tripped on export.
 

@@ -138,6 +138,16 @@ fn related_field_produces_related_edges_for_each_entry() {
 }
 
 #[test]
+fn scalar_related_field_is_coerced_to_one_related_edge() {
+    let frontmatter = fm("related: karpathy-llm-wiki-workflow-breakdown\n");
+    let edges = expand_frontmatter_edges(&frontmatter).expect("scalar related parses");
+    assert_eq!(
+        edges,
+        vec![link("karpathy-llm-wiki-workflow-breakdown", "related")]
+    );
+}
+
+#[test]
 fn fixed_fields_normalize_targets_via_resolve_slug() {
     let frontmatter = fm("parent: 'Programs/YC W17'\n");
     let edges = expand_frontmatter_edges(&frontmatter).expect("edges parse");

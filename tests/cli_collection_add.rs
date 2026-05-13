@@ -18,6 +18,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use quaid::commands::collection::{run, CollectionAction, CollectionAddArgs};
+use quaid::core::migrate::export_dir;
 
 #[path = "common/collection_fixtures.rs"]
 mod fixtures;
@@ -174,6 +175,131 @@ fn add_attaches_collection_and_cleans_short_lived_lease_residue() {
         )
         .unwrap();
     assert_eq!(page_count, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn add_preserves_para_type_inference_for_singular_and_plural_folders() {
+    let (_dir, conn) = open_test_db_file();
+    let root = tempfile::TempDir::new().unwrap();
+    let cases = [
+        ("1. Projects/alpha.md", "project"),
+        ("2. Area/health.md", "area"),
+        ("3. Resource/rust.md", "resource"),
+        ("4. Archive/done.md", "archive"),
+    ];
+    for (relative_path, _expected_type) in cases {
+        let path = root.path().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "---\ntitle: Note\n---\nhello\n").unwrap();
+    }
+
+    run(
+        &conn,
+        CollectionAction::Add(CollectionAddArgs {
+            name: "work".to_owned(),
+            path: root.path().to_path_buf(),
+            read_only: false,
+            writable: false,
+            write_quaid_id: false,
+            namespace: None,
+        }),
+        true,
+    )
+    .unwrap();
+
+    for (relative_path, expected_type) in cases {
+        let slug = relative_path.trim_end_matches(".md");
+        let page_type: String = conn
+            .query_row("SELECT type FROM pages WHERE slug = ?1", [slug], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(page_type, expected_type, "type for {slug}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn add_and_export_preserve_page_with_scalar_related_frontmatter() {
+    let (_dir, conn) = open_test_db_file();
+    let root = tempfile::TempDir::new().unwrap();
+    fs::write(
+        root.path().join("target.md"),
+        "---\ntitle: Target\n---\nhello\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("source.md"),
+        "---\ntitle: Source\nrelated: target\n---\nhello\n",
+    )
+    .unwrap();
+
+    run(
+        &conn,
+        CollectionAction::Add(CollectionAddArgs {
+            name: "work".to_owned(),
+            path: root.path().to_path_buf(),
+            read_only: false,
+            writable: false,
+            write_quaid_id: false,
+            namespace: None,
+        }),
+        true,
+    )
+    .unwrap();
+
+    let page_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(page_count, 2);
+
+    let export_root = tempfile::TempDir::new().unwrap();
+    let exported = export_dir(&conn, export_root.path()).unwrap();
+    assert_eq!(exported, 2);
+    assert!(export_root.path().join("source.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn add_and_export_preserve_page_with_invalid_optional_graph_frontmatter() {
+    let (_dir, conn) = open_test_db_file();
+    let root = tempfile::TempDir::new().unwrap();
+    fs::write(
+        root.path().join("source.md"),
+        "---\ntitle: Source\nchildren: 42\ntags: [kept]\n---\nhello\n",
+    )
+    .unwrap();
+
+    run(
+        &conn,
+        CollectionAction::Add(CollectionAddArgs {
+            name: "work".to_owned(),
+            path: root.path().to_path_buf(),
+            read_only: false,
+            writable: false,
+            write_quaid_id: false,
+            namespace: None,
+        }),
+        true,
+    )
+    .unwrap();
+
+    let page_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(page_count, 1);
+    let tag_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tags WHERE tag = 'kept'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(tag_count, 1);
+
+    let export_root = tempfile::TempDir::new().unwrap();
+    let exported = export_dir(&conn, export_root.path()).unwrap();
+    assert_eq!(exported, 1);
+    assert!(export_root.path().join("source.md").exists());
 }
 
 #[cfg(unix)]

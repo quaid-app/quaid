@@ -220,10 +220,14 @@ fn expand_list_relationship_field(
             }
             Ok(())
         }
+        JsonValue::String(raw) => {
+            edges.push(make_string_edge(field, raw, relationship)?);
+            Ok(())
+        }
         JsonValue::Null => Ok(()),
         other => Err(FrontmatterParseError::InvalidShape {
             field: field.to_string(),
-            expected: "list of strings".to_string(),
+            expected: "list of strings or string".to_string(),
             found: shape_label(other),
         }),
     }
@@ -710,6 +714,37 @@ pub fn sync_page_graph_artifacts(
     timeline: &str,
 ) -> Result<(), DerivedEdgeError> {
     let edges = expand_frontmatter_edges(frontmatter)?;
+    sync_frontmatter_edges(conn, page_id, collection_id, &edges)?;
+    sync_wikilink_edges(conn, page_id, collection_id, compiled_truth, timeline)?;
+    let tags = expand_frontmatter_tags(frontmatter);
+    sync_page_tags(conn, page_id, &tags)?;
+    Ok(())
+}
+
+/// Best-effort graph artifact sync for collection reconciliation.
+///
+/// Collection attach/sync must not drop an otherwise valid markdown page just
+/// because optional graph frontmatter is malformed. When frontmatter edge
+/// parsing fails, this logs the field-level diagnostic, clears stale
+/// frontmatter-derived edges for the page, and still syncs wikilinks and tags.
+pub fn sync_page_graph_artifacts_tolerant(
+    conn: &Connection,
+    page_id: i64,
+    collection_id: i64,
+    frontmatter: &Frontmatter,
+    compiled_truth: &str,
+    timeline: &str,
+    diagnostic_context: &str,
+) -> Result<(), DerivedEdgeError> {
+    let edges = match expand_frontmatter_edges(frontmatter) {
+        Ok(edges) => edges,
+        Err(err) => {
+            eprintln!(
+                "WARN: malformed_frontmatter_graph_input context={diagnostic_context} error={err}"
+            );
+            Vec::new()
+        }
+    };
     sync_frontmatter_edges(conn, page_id, collection_id, &edges)?;
     sync_wikilink_edges(conn, page_id, collection_id, compiled_truth, timeline)?;
     let tags = expand_frontmatter_tags(frontmatter);

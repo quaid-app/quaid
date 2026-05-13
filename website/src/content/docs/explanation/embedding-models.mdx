@@ -87,4 +87,4 @@ Out of scope. The whole point of Quaid is that the memory doesn't talk to the ne
 
 ## Stale embeddings
 
-When `memory_put` updates a page, the embedding job queue (`embedding_jobs`) re-chunks and re-embeds whatever changed. If you suspect drift — a model upgrade, a chunking-strategy change, an aborted batch — `quaid embed --stale` re-embeds only chunks whose `content_hash` no longer matches; `quaid embed --all` rebuilds everything.
+When `memory_put` updates a page, the embedding job queue (`embedding_jobs`) re-chunks and re-embeds whatever changed. If you suspect drift — a model upgrade, a chunking-strategy change, an aborted batch — `quaid embed --stale` re-embeds only chunks whose `content_hash` no longer matches; `quaid embed --all` rebuilds everything. Bulk embed scans pages in bounded batches (default 32); use `--batch-size N` to reduce peak memory on constrained machines.

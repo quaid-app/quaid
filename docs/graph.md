@@ -34,6 +34,8 @@ children:
   - companies/brex
 related:
   - people/bob
+# or, for a single related page:
+# related: people/carol
 tags: [fintech, yc-w17]
 ---
 ```
@@ -46,7 +48,7 @@ Behavior:
 | `links:` string form | `related` | `frontmatter` | – |
 | `parent:` | `parent` | `frontmatter` | Single string |
 | `children:` | `child` | `frontmatter` | YAML list |
-| `related:` | `related` | `frontmatter` | YAML list |
+| `related:` | `related` | `frontmatter` | YAML string or list |
 | `tags:` | – | – | Populates `tags` table only |
 
 Slug normalization (`resolve_slug`) is applied to every target. Unresolved

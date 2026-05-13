@@ -41,12 +41,12 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 3. Frontmatter edge and tag expansion
 
-- [ ] 3.1 Add `FrontmatterLink { target, relationship, valid_from, valid_until }` type
-- [ ] 3.2 Implement `expand_frontmatter_edges(frontmatter: &FrontmatterDocument) -> Result<Vec<FrontmatterLink>>`
-- [ ] 3.3 Support canonical `links:` object form, string shorthand, `parent:`, `children:`, and `related:` fixed relationship fields
-- [ ] 3.4 Reject malformed link entries with an actionable parse error in validate/write paths
-- [ ] 3.5 Implement `expand_frontmatter_tags(frontmatter: &FrontmatterDocument) -> Vec<String>` supporting YAML lists and comma-separated scalar strings
-- [ ] 3.6 Unit tests: object-form links, string-form links, mixed lists, temporal fields, parent/children/related, malformed entries, list tags, scalar tags, and tags-not-edges behavior
+- [x] 3.1 Add `FrontmatterLink { target, relationship, valid_from, valid_until }` type
+- [x] 3.2 Implement `expand_frontmatter_edges(frontmatter: &FrontmatterDocument) -> Result<Vec<FrontmatterLink>>`
+- [x] 3.3 Support canonical `links:` object form, string shorthand, `parent:`, `children:`, and `related:` fixed relationship fields
+- [x] 3.4 Reject malformed link entries with an actionable parse error in validate/write paths
+- [x] 3.5 Implement `expand_frontmatter_tags(frontmatter: &FrontmatterDocument) -> Vec<String>` supporting YAML lists and comma-separated scalar strings
+- [x] 3.6 Unit tests: object-form links, string-form links, mixed lists, temporal fields, parent/children/related, malformed entries, list tags, scalar tags, and tags-not-edges behavior
 
 ## 4. Derived edge upsert and sync
 

@@ -22,5 +22,5 @@
 
 - [x] 4.1 Update changelog/docs for v0.22.1 beta regression fixes.
 - [x] 4.2 Run focused tests for changed areas, then full release validation.
-- [ ] 4.3 Open and merge a PR for the OpenSpec and implementation.
-- [ ] 4.4 Tag and publish v0.22.1, verify release assets, and comment/close issues #190-#195 as appropriate.
+- [x] 4.3 Open and merge a PR for the OpenSpec and implementation.
+- [x] 4.4 Tag and publish v0.22.1, verify release assets, and comment/close issues #190-#195 as appropriate.

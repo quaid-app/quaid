@@ -54,7 +54,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
     href="/agents/quickstart/"
     linkText="Open the agent quickstart"
   >
-    <p>Twenty-four <code>memory_*</code> tools, plus daemon lifecycle commands (<code>quaid daemon</code>), <code>quaid status</code>, and an opt-in HTTP/SSE MCP transport — all available in the current published release (<code>v0.21.0</code>). Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
+    <p>Twenty-four <code>memory_*</code> tools, knowledge-graph path output, daemon lifecycle commands (<code>quaid daemon</code>), <code>quaid status</code>, and an opt-in HTTP/SSE MCP transport — all available in the current published release (<code>v0.22.0</code>). Same surface humans use; same data, same contracts. Privacy-safe gap logging, OCC-protected writes, and a sensitivity contract that keeps raw queries from ever leaving the machine by accident.</p>
   </AudienceCard>
 </div>
 
@@ -80,9 +80,9 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 
 <div class="gb-guide-grid gb-guide-grid--three">
   <GuideMetricCard value="27" label="CLI commands" note="Read, write, graph, intelligence, collections, system." />
-  <GuideMetricCard value="24" label="Public MCP tools" note="Available in the current published release (`v0.21.0`)." />
+  <GuideMetricCard value="24" label="Public MCP tools" note="Available in the current published release (`v0.22.0`)." />
   <GuideMetricCard value="8" label="Embedded skills" note="Ingest, query, maintain, enrich, briefing, alerts, research, upgrade." />
-  <GuideMetricCard value="1" label="Static binary" note="No Docker, no Python, no cloud. Background daemon (`quaid daemon install`) available in `v0.21.0`." />
+  <GuideMetricCard value="1" label="Static binary" note="No Docker, no Python, no cloud. Background daemon (`quaid daemon install`) available in `v0.22.0`." />
   <GuideMetricCard value="0" label="API keys required" note="The model runs on your CPU. Nothing transits your network." />
 </div>
 
@@ -123,7 +123,7 @@ quaid init ~/memory.db
 # Attach your notes as a live-sync collection
 quaid collection add notes ~/notes --db ~/memory.db
 
-# Expose Quaid's 24 MCP tools over stdio (v0.21.0; opt-in HTTP/SSE transport via --http flag)
+# Expose Quaid's 24 MCP tools over stdio (v0.22.0; opt-in HTTP/SSE transport via --http flag)
 QUAID_DB=~/memory.db quaid serve
 ```
 

@@ -9,8 +9,8 @@ aliases: [quaid-roadmap]
 # Quaid Product Roadmap
 
 **Last updated:** May 12, 2026
-**Latest public release:** v0.21.0
-**Current release lane:** v0.22.0
+**Latest public release:** v0.22.0
+**Current release lane:** v0.23.0
 **Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
 
 ---
@@ -110,7 +110,7 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - No new MCP tools; the 24-tool surface is unchanged
 
 ### Release truth
-- `v0.21.0` is published. GitHub Releases and `install.sh` resolve to `v0.21.0`.
+- First shipped in `v0.21.0`; GitHub Releases and `install.sh` now resolve to `v0.22.0`.
 
 ---
 
@@ -236,7 +236,7 @@ Both are right in different contexts. A future feature worth considering:
 
 `quaid eval --against-history` - run your N most recent queries against current binary, compare to stored baseline, report regressions. Each user gets their own personalized regression detector.
 
-Not on the current roadmap but worth an OpenSpec after the `v0.21.0` daemon surface is stable.
+Not on the current roadmap but worth an OpenSpec after the daemon surface is stable.
 
 ---
 

@@ -4,7 +4,7 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
-## Unreleased — knowledge graph layer (pre-release v9 → v10)
+## v0.22.0 — knowledge graph layer (pre-release v9 → v10)
 
 ### Schema
 

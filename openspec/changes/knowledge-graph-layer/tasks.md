@@ -15,13 +15,13 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 1. Pre-release schema reset to v10
 
-- [ ] 1.1 Update `src/schema.sql`: add `links.edge_weight REAL NOT NULL DEFAULT 1.0`
-- [ ] 1.2 Update `links.source_kind` CHECK constraint to allow `('wiki_link', 'programmatic', 'frontmatter', 'entity_pattern')`
-- [ ] 1.3 Add partial unique index `idx_links_unique_derived_edge` on `(from_page_id, to_page_id, relationship, source_kind)` where `source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern')`
-- [ ] 1.4 Seed graph config defaults in the existing `config` table: `graph_depth='1'`, `graph_distance_decay='0.5'`, `graph_expansion_max='50'`, `edge_weight_frontmatter='1.0'`, `edge_weight_entity_pattern='0.7'`, `edge_weight_wikilink='0.5'`
-- [ ] 1.5 Bump `SCHEMA_VERSION`, `config.version`, `quaid_config.schema_version`, and schema-version tests to `10` (baseline is v9)
-- [ ] 1.6 Verify no v9 → v10 migration or rollback path is added; existing v9 DBs must continue to fail with the schema-mismatch/re-init message
-- [ ] 1.7 Unit tests: fresh v10 schema accepts `frontmatter`/`entity_pattern` in CHECK constraint, rejects invalid `source_kind`, preserves multiple duplicate-key `programmatic` temporal links, and enforces uniqueness for derived sources
+- [x] 1.1 Update `src/schema.sql`: add `links.edge_weight REAL NOT NULL DEFAULT 1.0`
+- [x] 1.2 Update `links.source_kind` CHECK constraint to allow `('wiki_link', 'programmatic', 'frontmatter', 'entity_pattern')`
+- [x] 1.3 Add partial unique index `idx_links_unique_derived_edge` on `(from_page_id, to_page_id, relationship, source_kind)` where `source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern')`
+- [x] 1.4 Seed graph config defaults in the existing `config` table: `graph_depth='1'`, `graph_distance_decay='0.5'`, `graph_expansion_max='50'`, `edge_weight_frontmatter='1.0'`, `edge_weight_entity_pattern='0.7'`, `edge_weight_wikilink='0.5'`
+- [x] 1.5 Bump `SCHEMA_VERSION`, `config.version`, `quaid_config.schema_version`, and schema-version tests to `10` (baseline is v9)
+- [x] 1.6 Verify no v9 → v10 migration or rollback path is added; existing v9 DBs must continue to fail with the schema-mismatch/re-init message
+- [x] 1.7 Unit tests: fresh v10 schema accepts `frontmatter`/`entity_pattern` in CHECK constraint, rejects invalid `source_kind`, preserves multiple duplicate-key `programmatic` temporal links, and enforces uniqueness for derived sources
 
 ## 2. Structured frontmatter parsing and persistence
 
@@ -37,7 +37,7 @@ Implementation must proceed in this order. No wave may start before the previous
   > **Pre-checked:** `frontmatter_get_str` / `frontmatter_get_string` helpers already in place.
 - [x] 2.5 Update `render_page` to render structured frontmatter deterministically, including arrays and objects
   > **Pre-checked:** `render_page` already uses structured frontmatter at v9 baseline.
-- [ ] 2.6 Unit tests: arrays/objects are not skipped, scalar helpers preserve existing behavior, and structured frontmatter survives import → export → re-import
+- [x] 2.6 Unit tests: arrays/objects are not skipped, scalar helpers preserve existing behavior, and structured frontmatter survives import → export → re-import
 
 ## 3. Frontmatter edge and tag expansion
 

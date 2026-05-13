@@ -68,7 +68,7 @@ fn open_creates_all_expected_tables() {
 }
 
 #[test]
-fn open_sets_user_version_to_9() {
+fn open_sets_user_version_to_10() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("test_memory.db");
     let conn = open(db_path.to_str().unwrap()).unwrap();
@@ -76,7 +76,7 @@ fn open_sets_user_version_to_9() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn open_is_idempotent() {
     let version: i64 = conn2
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
 }
 
 #[test]

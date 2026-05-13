@@ -1,4 +1,4 @@
--- memory.db schema — Quaid v9
+-- memory.db schema — Quaid v10
 -- Embedded in binary via include_str!("schema.sql") in src/core/db.rs
 -- Standalone copy for reference and tooling.
 
@@ -233,7 +233,8 @@ CREATE TABLE IF NOT EXISTS links (
     to_page_id      INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
     relationship    TEXT    NOT NULL DEFAULT 'related',
     context         TEXT    NOT NULL DEFAULT '',
-    source_kind     TEXT    NOT NULL DEFAULT 'programmatic' CHECK(source_kind IN ('wiki_link', 'programmatic')),
+    source_kind     TEXT    NOT NULL DEFAULT 'programmatic' CHECK(source_kind IN ('wiki_link', 'programmatic', 'frontmatter', 'entity_pattern')),
+    edge_weight     REAL    NOT NULL DEFAULT 1.0,
     valid_from      TEXT    DEFAULT NULL,
     valid_until     TEXT    DEFAULT NULL,
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -244,6 +245,14 @@ CREATE INDEX IF NOT EXISTS idx_links_from    ON links(from_page_id);
 CREATE INDEX IF NOT EXISTS idx_links_to      ON links(to_page_id);
 CREATE INDEX IF NOT EXISTS idx_links_current ON links(valid_until);
 CREATE INDEX IF NOT EXISTS idx_links_source  ON links(source_kind);
+
+-- Partial unique index: derived edges (frontmatter, wiki_link, entity_pattern)
+-- collapse to a single row per (from, to, relationship, source_kind). Manual
+-- `programmatic` links are intentionally excluded so temporal duplicates remain
+-- valid history.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_links_unique_derived_edge
+    ON links(from_page_id, to_page_id, relationship, source_kind)
+    WHERE source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern');
 
 -- ============================================================
 -- assertions: heuristic contradiction detection
@@ -427,7 +436,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',               '9'),
+    ('version',               '10'),
     ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),
@@ -447,7 +456,13 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('daemon.http.enabled', 'false'),
     ('daemon.http.port', '3112'),
     ('daemon.http.bind', '127.0.0.1'),
-    ('daemon.http.trusted_loopback', 'false');
+    ('daemon.http.trusted_loopback', 'false'),
+    ('graph_depth',                  '1'),
+    ('graph_distance_decay',         '0.5'),
+    ('graph_expansion_max',          '50'),
+    ('edge_weight_frontmatter',      '1.0'),
+    ('edge_weight_entity_pattern',   '0.7'),
+    ('edge_weight_wikilink',         '0.5');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

@@ -47,7 +47,7 @@ fn quaid_config_roundtrip_preserves_values() {
             model_id: "BAAI/bge-small-en-v1.5".to_owned(),
             model_alias: "small".to_owned(),
             embedding_dim: 384,
-            schema_version: 9,
+            schema_version: 10,
         }
     );
 }

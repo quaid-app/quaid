@@ -82,17 +82,17 @@ The system SHALL enforce uniqueness for derived graph edges using a partial uniq
 - **WHEN** two manual `programmatic` links with the same `(from_page_id, to_page_id, relationship)` but different temporal ranges are inserted
 - **THEN** both rows are allowed to exist
 
-### Requirement: Pre-release v7 schema reset adds graph edge metadata
-The system SHALL bump the canonical schema from v6 to v7 without implementing a v6 → v7 data migration. Fresh v7 databases SHALL include `links.edge_weight REAL NOT NULL DEFAULT 1.0`, an extended `source_kind` CHECK constraint with `'frontmatter'` and `'entity_pattern'`, the derived-edge partial unique index, and config defaults for graph depth and edge weights. Existing v6 databases SHALL continue to be rejected by the existing schema-mismatch behavior.
+### Requirement: Pre-release v9→v10 schema reset adds graph edge metadata
+The system SHALL bump the canonical schema from v9 to v10 without implementing a v9 → v10 data migration. Fresh v10 databases SHALL include `links.edge_weight REAL NOT NULL DEFAULT 1.0`, an extended `source_kind` CHECK constraint with `'frontmatter'` and `'entity_pattern'` (the latter reserved for a follow-on change), the derived-edge partial unique index, and config defaults for graph depth and edge weights. Existing v9 databases SHALL continue to be rejected by the existing schema-mismatch behavior.
 
-#### Scenario: Fresh v7 schema accepts derived source kinds
-- **WHEN** a fresh v7 database is initialized
+#### Scenario: Fresh v10 schema accepts derived source kinds
+- **WHEN** a fresh v10 database is initialized
 - **THEN** an `INSERT INTO links (..., source_kind) VALUES (..., 'frontmatter')` succeeds and `INSERT ... 'invalid_kind'` fails the CHECK constraint
 
-#### Scenario: Existing v6 database is not migrated automatically
-- **WHEN** the v7 binary opens an existing v6 database
+#### Scenario: Existing v9 database is not migrated automatically
+- **WHEN** the v10 binary opens an existing v9 database
 - **THEN** the command fails with the existing schema-mismatch error and does not mutate the database
 
 #### Scenario: Config defaults populated at init
-- **WHEN** `quaid init` creates a fresh v7 database
+- **WHEN** `quaid init` creates a fresh v10 database
 - **THEN** the `config` table contains `graph_depth = 1`, `graph_distance_decay = 0.5`, `graph_expansion_max = 50`, `edge_weight_frontmatter = 1.0`, `edge_weight_entity_pattern = 0.7`, and `edge_weight_wikilink = 0.5`

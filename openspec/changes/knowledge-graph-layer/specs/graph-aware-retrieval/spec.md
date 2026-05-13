@@ -35,7 +35,7 @@ When `config.graph_depth` is `0`, `hybrid_search` SHALL return the FTS5 + vector
 
 #### Scenario: Disabled expansion yields baseline behaviour
 - **WHEN** `graph_depth = 0` and a query runs
-- **THEN** the result set matches the v6 `hybrid_search` output bytewise, aside from unrelated schema columns that are not part of `SearchResult`
+- **THEN** the result set matches the v9 `hybrid_search` output, aside from unrelated schema columns that are not part of `SearchResult`
 
 ### Requirement: CLI and config exposure
 The system SHALL expose graph-expansion knobs via:
@@ -51,7 +51,7 @@ The system SHALL expose graph-expansion knobs via:
 - **THEN** the expansion runs to depth 3 for this invocation only
 
 #### Scenario: Config defaults populated at init
-- **WHEN** `quaid init` creates a fresh v7 database
+- **WHEN** `quaid init` creates a fresh v10 database
 - **THEN** the `config` table contains `graph_depth = 1`, `graph_distance_decay = 0.5`, `graph_expansion_max = 50`, `edge_weight_frontmatter = 1.0`, `edge_weight_entity_pattern = 0.7`, and `edge_weight_wikilink = 0.5`
 
 ### Requirement: Graph read surfaces expose path explanations

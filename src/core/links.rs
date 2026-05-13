@@ -6,10 +6,22 @@
 )]
 
 use regex::Regex;
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use thiserror::Error;
 
+use super::gaps::{log_gap_for_page, GapsError};
 use super::types::Frontmatter;
+
+/// Derived-edge `source_kind` values that participate in the partial unique
+/// index `idx_links_unique_derived_edge`. Mirrors the schema CHECK constraint.
+pub const DERIVED_EDGE_KINDS: [&str; 3] = ["wiki_link", "frontmatter", "entity_pattern"];
+
+/// Default edge weight for wiki-link derived edges when config is unreadable.
+const DEFAULT_WIKILINK_EDGE_WEIGHT: f64 = 0.5;
+/// Default edge weight for frontmatter derived edges when config is unreadable.
+const DEFAULT_FRONTMATTER_EDGE_WEIGHT: f64 = 1.0;
 
 /// Default relationship for `links:` string-shorthand and `related:` entries.
 pub const DEFAULT_LINK_RELATIONSHIP: &str = "related";
@@ -374,6 +386,276 @@ pub fn resolve_slug(raw: &str) -> String {
         }
     }
     result
+}
+
+// ============================================================
+// Wave 2 — Derived edge upsert + sync primitives (tasks 4.1–4.6)
+// ============================================================
+
+/// Errors surfaced from derived-edge sync (`upsert_derived_edge`,
+/// `sync_frontmatter_edges`, `sync_wikilink_edges`).
+#[derive(Debug, Error)]
+#[allow(
+    missing_docs,
+    reason = "variant semantics encoded in #[error] messages"
+)]
+pub enum DerivedEdgeError {
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
+    #[error("knowledge-gap log error: {0}")]
+    Gap(#[from] GapsError),
+
+    #[error("source_kind `{0}` is not a derived edge kind")]
+    NonDerivedKind(String),
+}
+
+/// Upsert a single derived edge using the partial unique index
+/// `idx_links_unique_derived_edge` as the conflict target.
+///
+/// On conflict the row's `valid_from`, `valid_until`, `edge_weight`, and
+/// `context` are replaced with the incoming values. The `source_kind` MUST be
+/// one of [`DERIVED_EDGE_KINDS`]; `programmatic` links are deliberately not
+/// upsertable here so their temporal history is preserved.
+#[allow(clippy::too_many_arguments, reason = "matches OpenSpec contract 4.1")]
+pub fn upsert_derived_edge(
+    conn: &Connection,
+    from_page_id: i64,
+    to_page_id: i64,
+    relationship: &str,
+    source_kind: &str,
+    edge_weight: f64,
+    valid_from: Option<&str>,
+    valid_until: Option<&str>,
+    context: &str,
+) -> Result<(), DerivedEdgeError> {
+    if !DERIVED_EDGE_KINDS.contains(&source_kind) {
+        return Err(DerivedEdgeError::NonDerivedKind(source_kind.to_string()));
+    }
+
+    conn.execute(
+        "INSERT INTO links \
+            (from_page_id, to_page_id, relationship, source_kind, edge_weight, valid_from, valid_until, context) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         ON CONFLICT(from_page_id, to_page_id, relationship, source_kind) \
+            WHERE source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern') \
+         DO UPDATE SET \
+            edge_weight = excluded.edge_weight, \
+            valid_from  = excluded.valid_from, \
+            valid_until = excluded.valid_until, \
+            context     = excluded.context",
+        params![
+            from_page_id,
+            to_page_id,
+            relationship,
+            source_kind,
+            edge_weight,
+            valid_from,
+            valid_until,
+            context,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Sync frontmatter-derived edges for a single source page.
+///
+/// Upserts every incoming [`FrontmatterLink`] whose target slug resolves to a
+/// page in the same collection, then deletes any `frontmatter` rows for the
+/// same source page that are NOT in the incoming set. Unresolved targets are
+/// logged once per `(source_page, target, relationship)` triple via
+/// [`log_gap_for_page`] using a deterministic structural query string so
+/// repeated writes are deduped through the existing SHA-256 conflict key.
+///
+/// `programmatic`, `wiki_link`, and `entity_pattern` rows are never touched.
+pub fn sync_frontmatter_edges(
+    conn: &Connection,
+    page_id: i64,
+    collection_id: i64,
+    edges: &[FrontmatterLink],
+) -> Result<(), DerivedEdgeError> {
+    let weight = read_edge_weight(
+        conn,
+        "edge_weight_frontmatter",
+        DEFAULT_FRONTMATTER_EDGE_WEIGHT,
+    );
+    let source_slug = lookup_slug(conn, page_id)?;
+
+    let mut keep: HashSet<(i64, String)> = HashSet::new();
+    for edge in edges {
+        match resolve_target_in_collection(conn, collection_id, &edge.target)? {
+            Some(target_id) => {
+                upsert_derived_edge(
+                    conn,
+                    page_id,
+                    target_id,
+                    &edge.relationship,
+                    "frontmatter",
+                    weight,
+                    edge.valid_from.as_deref(),
+                    edge.valid_until.as_deref(),
+                    "",
+                )?;
+                keep.insert((target_id, edge.relationship.clone()));
+            }
+            None => {
+                log_unresolved_target(
+                    conn,
+                    page_id,
+                    source_slug.as_deref(),
+                    "frontmatter",
+                    &edge.relationship,
+                    &edge.target,
+                )?;
+            }
+        }
+    }
+
+    delete_stale_derived_rows(conn, page_id, "frontmatter", &keep)?;
+    Ok(())
+}
+
+/// Sync wiki-link derived edges for a single source page.
+///
+/// Extracts `[[slug]]` references from `compiled_truth` and `timeline`,
+/// resolves each target slug within the source page's collection, upserts a
+/// `wiki_link` edge with relationship `related` and the configured wikilink
+/// weight, then deletes any `wiki_link` rows for that source page whose
+/// target/relationship is not in the incoming set. `programmatic` and other
+/// derived kinds are never touched. Unresolved targets are logged via the
+/// same dedup-by-hash path used by frontmatter sync.
+pub fn sync_wikilink_edges(
+    conn: &Connection,
+    page_id: i64,
+    collection_id: i64,
+    compiled_truth: &str,
+    timeline: &str,
+) -> Result<(), DerivedEdgeError> {
+    let weight = read_edge_weight(conn, "edge_weight_wikilink", DEFAULT_WIKILINK_EDGE_WEIGHT);
+    let source_slug = lookup_slug(conn, page_id)?;
+
+    let mut seen_targets: HashSet<String> = HashSet::new();
+    let mut targets: Vec<String> = Vec::new();
+    for body in [compiled_truth, timeline] {
+        for raw in extract_links(body) {
+            if raw.is_empty() {
+                continue;
+            }
+            if seen_targets.insert(raw.clone()) {
+                targets.push(raw);
+            }
+        }
+    }
+
+    let mut keep: HashSet<(i64, String)> = HashSet::new();
+    for target in &targets {
+        match resolve_target_in_collection(conn, collection_id, target)? {
+            Some(target_id) => {
+                upsert_derived_edge(
+                    conn,
+                    page_id,
+                    target_id,
+                    DEFAULT_LINK_RELATIONSHIP,
+                    "wiki_link",
+                    weight,
+                    None,
+                    None,
+                    "",
+                )?;
+                keep.insert((target_id, DEFAULT_LINK_RELATIONSHIP.to_string()));
+            }
+            None => {
+                log_unresolved_target(
+                    conn,
+                    page_id,
+                    source_slug.as_deref(),
+                    "wiki_link",
+                    DEFAULT_LINK_RELATIONSHIP,
+                    target,
+                )?;
+            }
+        }
+    }
+
+    delete_stale_derived_rows(conn, page_id, "wiki_link", &keep)?;
+    Ok(())
+}
+
+fn delete_stale_derived_rows(
+    conn: &Connection,
+    page_id: i64,
+    source_kind: &str,
+    keep: &HashSet<(i64, String)>,
+) -> Result<(), DerivedEdgeError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, to_page_id, relationship \
+         FROM links \
+         WHERE from_page_id = ?1 AND source_kind = ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![page_id, source_kind], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    for (id, to_page_id, relationship) in rows {
+        if !keep.contains(&(to_page_id, relationship)) {
+            conn.execute("DELETE FROM links WHERE id = ?1", params![id])?;
+        }
+    }
+    Ok(())
+}
+
+fn resolve_target_in_collection(
+    conn: &Connection,
+    collection_id: i64,
+    slug: &str,
+) -> Result<Option<i64>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+        params![collection_id, slug],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+}
+
+fn lookup_slug(conn: &Connection, page_id: i64) -> Result<Option<String>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT slug FROM pages WHERE id = ?1",
+        params![page_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+}
+
+fn read_edge_weight(conn: &Connection, key: &str, default: f64) -> f64 {
+    conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
+        row.get::<_, String>(0)
+    })
+    .ok()
+    .and_then(|v| v.parse::<f64>().ok())
+    .unwrap_or(default)
+}
+
+fn log_unresolved_target(
+    conn: &Connection,
+    page_id: i64,
+    source_slug: Option<&str>,
+    source_kind: &str,
+    relationship: &str,
+    target: &str,
+) -> Result<(), GapsError> {
+    let source = source_slug.unwrap_or("<unknown>");
+    let query = format!("unresolved-link:{source_kind}:{source}->{target}:{relationship}");
+    let context = format!(
+        "derived {source_kind} edge target `{target}` did not resolve in source collection"
+    );
+    log_gap_for_page(page_id, &query, &context, None, conn)
 }
 
 #[cfg(test)]

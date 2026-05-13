@@ -50,12 +50,12 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 4. Derived edge upsert and sync
 
-- [ ] 4.1 Implement `upsert_derived_edge(conn, from_page_id, to_page_id, relationship, source_kind, edge_weight, valid_from, valid_until, context)` for `wiki_link`, `frontmatter`, and `entity_pattern`
-- [ ] 4.2 Use the partial-index conflict target for derived upserts; update `valid_from`, `valid_until`, `edge_weight`, and `context` on conflict
-- [ ] 4.3 Implement `sync_frontmatter_edges(conn, page_id, collection_id, edges)` that upserts incoming `frontmatter` edges and deletes stale `frontmatter` rows for the source page
-- [ ] 4.4 Implement `sync_wikilink_edges(conn, page_id, collection_id, compiled_truth, timeline)` that extracts body `[[slug]]` references, upserts `wiki_link` edges, and deletes stale `wiki_link` rows for the source page
-- [ ] 4.5 Add unresolved-target logging with de-duplication so repeated writes do not flood `knowledge_gaps`
-- [ ] 4.6 Unit tests: idempotency, stale deletion, temporal replacement, edge-weight replacement, unresolved target gap logging, and programmatic link history unaffected
+- [x] 4.1 Implement `upsert_derived_edge(conn, from_page_id, to_page_id, relationship, source_kind, edge_weight, valid_from, valid_until, context)` for `wiki_link`, `frontmatter`, and `entity_pattern`
+- [x] 4.2 Use the partial-index conflict target for derived upserts; update `valid_from`, `valid_until`, `edge_weight`, and `context` on conflict
+- [x] 4.3 Implement `sync_frontmatter_edges(conn, page_id, collection_id, edges)` that upserts incoming `frontmatter` edges and deletes stale `frontmatter` rows for the source page
+- [x] 4.4 Implement `sync_wikilink_edges(conn, page_id, collection_id, compiled_truth, timeline)` that extracts body `[[slug]]` references, upserts `wiki_link` edges, and deletes stale `wiki_link` rows for the source page
+- [x] 4.5 Add unresolved-target logging with de-duplication so repeated writes do not flood `knowledge_gaps`
+- [x] 4.6 Unit tests: idempotency, stale deletion, temporal replacement, edge-weight replacement, unresolved target gap logging, and programmatic link history unaffected
 
 ## 5. Wire structured side-table sync into write paths
 

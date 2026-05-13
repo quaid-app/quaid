@@ -29,6 +29,34 @@ Most agent memory systems require a cloud service, a running database, or an API
 
 ---
 
+## Development Benchmarks
+
+Fast feedback loop for iterative development. **No dependencies required** — corpus is generated automatically on first run.
+
+### Quick start
+
+```bash
+make bench          # build + 20 queries (~30s on M1/M3)
+make bench-no-build # query-only, no rebuild (~1s)
+make bench-setup    # force corpus rebuild
+```
+
+### What it measures
+
+20 queries (10 FTS + 10 semantic) against a 60-page synthetic corpus covering: agent memory, DeFi, stablecoin regulation, Rust performance, vector search, knowledge graphs, smart contracts, cross-chain bridges, zero-knowledge proofs, and RAG.
+
+Output shows pass/fail per query with delta from last run for instant regression detection.
+
+### Score guide
+
+| Score | Grade |
+|-------|-------|
+| 14–20 | ✅ Good |
+| 10–13 | ⚠️  Watch for regressions |
+| < 8   | 🔴 Regression gate (exits 1) |
+
+---
+
 ## Quick Start
 
 ```bash

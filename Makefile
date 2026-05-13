@@ -10,4 +10,4 @@ bench-no-build:
 
 # One-time corpus indexing (run once per machine)
 bench-setup:
-	python3 scripts/mini-bench-setup.py
+	node scripts/mini-bench-setup.mjs --quaid ./target/release/quaid

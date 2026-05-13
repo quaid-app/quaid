@@ -30,6 +30,8 @@ quaid get people/alice          # read a page
 quaid put people/alice < page.md  # write a page
 quaid link people/alice companies/acme --relationship works_at --valid-from 2024-01
 quaid graph people/alice --depth 2
+quaid graph extract-entities          # opt-in backfill: writes assertions
+quaid query "..." --hops 2     # override config.graph_depth for one call
 quaid check --all               # contradiction detection
 quaid gaps                      # knowledge gaps
 quaid serve                     # start MCP server
@@ -37,11 +39,12 @@ quaid serve                     # start MCP server
 
 ## Architecture
 
-- `src/core/` — library modules (DB, search, embeddings, parsing)
-- `src/commands/` — one file per CLI command
+- `src/core/` — library modules (DB, search, embeddings, parsing, entity extraction)
+- `src/commands/` — one file per CLI command (includes `quaid graph extract-entities`)
 - `src/mcp/server.rs` — MCP stdio server
-- `src/schema.sql` — current DDL (embedded via include_str!)
+- `src/schema.sql` — current DDL (embedded via include_str!); **v10 baseline**, no v9 → v10 migration
 - `skills/*/SKILL.md` — fat markdown skill files
+- `docs/graph.md` — knowledge-graph layer reference (frontmatter autowiring, wikilinks, entity-pattern extraction, graph-aware retrieval, path explanations)
 
 ## Constraints
 

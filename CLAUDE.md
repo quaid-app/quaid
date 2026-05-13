@@ -34,10 +34,11 @@ memory.db                  — SQLite: pages + FTS5 + vec0 + links + assertions
 | `src/core/palace.rs`      | `derive_wing(slug)`, `derive_room(content)`, `classify_intent(query)`          |
 | `src/core/novelty.rs`     | `check_novelty(content, page, db)`: Jaccard + cosine dedup                     |
 | `src/core/assertions.rs`  | `check_assertions(slug, db)`: heuristic contradiction detection                |
-| `src/core/graph.rs`       | `neighborhood_graph(slug, depth, db)`: N-hop BFS over links                    |
+| `src/core/graph.rs`       | `neighborhood_graph(slug, depth, db)`: N-hop BFS over links; emits `paths` |
 | `src/core/gaps.rs`        | `log_gap()`, `list_gaps()`, `resolve_gap()`                                    |
 | `src/core/chunking.rs`    | temporal sub-chunking: truth sections + individual timeline entries            |
-| `src/core/links.rs`       | `extract_links()`, `resolve_slug()`, temporal validity                         |
+| `src/core/links.rs`       | `extract_links()`, `resolve_slug()`, frontmatter edge/tag expansion, `upsert_derived_edge`, `sync_frontmatter_edges`, `sync_wikilink_edges` |
+| `src/core/entities.rs`    | regex entity-pattern extraction (assertions only, no `links` writes); 5 ms per-page deadline, no inference/network |
 | `src/core/migrate.rs`     | `export_dir()` plus round-trip export helpers                                  |
 | `src/core/raw_imports.rs` | Active-source rotation, retention, and byte-exact restore support              |
 | `src/mcp/server.rs`       | MCP stdio server with all tools                                                |

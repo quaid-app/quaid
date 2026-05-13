@@ -113,22 +113,22 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 11. Roundtrip and integration tests
 
-- [ ] 11.1 Extend `tests/roundtrip_semantic.rs`: structured frontmatter arrays/objects survive export → re-import with equivalent JSON values and equivalent derived edge sets
-- [ ] 11.2 Add `tests/graph_autowire.rs`: covers all scenarios in `specs/frontmatter-link-autowiring/spec.md`
-- [ ] 11.3 Add `tests/entity_extraction.rs`: covers all scenarios in `specs/entity-pattern-extraction/spec.md`
-- [ ] 11.4 Add `tests/graph_retrieval.rs`: covers all scenarios in `specs/graph-aware-retrieval/spec.md`
-- [ ] 11.5 Update existing tests that assume scalar-only `frontmatter` or unrestricted derived duplicate links
+- [x] 11.1 Extend `tests/roundtrip_semantic.rs`: structured frontmatter arrays/objects survive export → re-import with equivalent JSON values and equivalent derived edge sets
+- [x] 11.2 Add `tests/graph_autowire.rs`: covers all scenarios in `specs/frontmatter-link-autowiring/spec.md`
+- [x] 11.3 Add `tests/entity_extraction.rs`: covers all scenarios in `specs/entity-pattern-extraction/spec.md`
+- [x] 11.4 Add `tests/graph_retrieval.rs`: covers all scenarios in `specs/graph-aware-retrieval/spec.md`
+- [x] 11.5 Update existing tests that assume scalar-only `frontmatter` or unrestricted derived duplicate links
 
 ## 12. Benchmark gating
 
 - [ ] 12.1 Add a reproducible DAB §4 bge-small baseline measurement task before graph-aware retrieval is enabled by default; record numerics in `docs/benchmarks/`
 - [ ] 12.2 Add a post-change DAB §4 measurement task; target ≥ 8 point improvement and ≥ 35/50 score
 - [ ] 12.3 Add MSMARCO P@5 baseline + post-change measurement task; target ≥ 5 point improvement
-- [ ] 12.4 Wire benchmark checks into release acceptance; if thresholds miss, keep graph expansion disabled by default while retaining autowiring/graph read improvements
+- [x] 12.4 Wire benchmark checks into release acceptance; if thresholds miss, keep graph expansion disabled by default while retaining autowiring/graph read improvements
 
 ## 13. Documentation
 
-- [ ] 13.1 Update `CHANGELOG.md` with v9→v10 pre-release schema reset, no migration path, new config keys, `--hops`, `quaid graph extract-entities`, and graph path output
-- [ ] 13.2 Update `CLAUDE.md` / `AGENTS.md` key-file notes for `src/core/entities.rs`, structured frontmatter, and v10 schema
-- [ ] 13.3 Add `docs/graph.md` covering frontmatter link syntax, tag behavior, entity-pattern override YAML, graph search knobs, and path explanations
-- [ ] 13.4 Update website/reference docs for `memory_graph` response shape and graph config keys
+- [x] 13.1 Update `CHANGELOG.md` with v9→v10 pre-release schema reset, no migration path, new config keys, `--hops`, `quaid graph extract-entities`, and graph path output
+- [x] 13.2 Update `CLAUDE.md` / `AGENTS.md` key-file notes for `src/core/entities.rs`, structured frontmatter, and v10 schema
+- [x] 13.3 Add `docs/graph.md` covering frontmatter link syntax, tag behavior, entity-pattern override YAML, graph search knobs, and path explanations
+- [x] 13.4 Update website/reference docs for `memory_graph` response shape and graph config keys

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CORPUS_DIR, generateCorpus } from "./mini-bench-corpus.mjs";
+import { CORPUS_DIR, resolveCorpusDir } from "./mini-bench-corpus.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,13 +12,16 @@ const DEFAULT_QUAID = path.join(REPO_DIR, "target", "release", "quaid");
 
 function parseArgs(argv) {
   const args = {
+    corpus: CORPUS_DIR,
     db: DEFAULT_DB,
     quaid: DEFAULT_QUAID,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--db") {
+    if (arg === "--corpus") {
+      args.corpus = argv[++i];
+    } else if (arg === "--db") {
       args.db = argv[++i];
     } else if (arg === "--quaid") {
       args.quaid = argv[++i];
@@ -49,6 +52,7 @@ function fail(step, result) {
 
 const args = parseArgs(process.argv.slice(2));
 const quaid = path.resolve(args.quaid);
+let corpusDir;
 
 if (!fs.existsSync(quaid)) {
   console.error(`ERROR: quaid binary not found at ${quaid}`);
@@ -56,8 +60,14 @@ if (!fs.existsSync(quaid)) {
   process.exit(1);
 }
 
-console.log(`Generating corpus at ${CORPUS_DIR}...`);
-generateCorpus(CORPUS_DIR);
+try {
+  corpusDir = resolveCorpusDir(args.corpus);
+} catch (error) {
+  console.error(`ERROR: ${error.message}`);
+  process.exit(1);
+}
+
+console.log(`Using DAB corpus at ${corpusDir}...`);
 
 if (!fs.existsSync(args.db)) {
   console.log(`Initialising DB at ${args.db}...`);
@@ -67,8 +77,8 @@ if (!fs.existsSync(args.db)) {
   console.log(`Using existing DB at ${args.db}...`);
 }
 
-console.log(`Adding corpus collection from ${CORPUS_DIR}...`);
-const add = run(quaid, ["--db", args.db, "collection", "add", "docs", CORPUS_DIR]);
+console.log(`Adding corpus collection from ${corpusDir}...`);
+const add = run(quaid, ["--db", args.db, "collection", "add", "docs", corpusDir]);
 if (add.status !== 0) {
   const output = `${add.stdout}\n${add.stderr}`;
   if (!/already exists|collection exists|duplicate/i.test(output)) {

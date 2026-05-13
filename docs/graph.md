@@ -113,7 +113,7 @@ Seeded by `quaid init` into the `config` table:
 
 | Key | Default | Effect |
 | --- | ------- | ------ |
-| `graph_depth` | `1` | Hops walked during retrieval expansion (`0` disables it). |
+| `graph_depth` | `0` | Hops walked during retrieval expansion (`0` disables it). |
 | `graph_distance_decay` | `0.5` | Multiplied per hop into the candidate score. |
 | `graph_expansion_max` | `50` | Cap on newly added candidates per query. |
 | `edge_weight_frontmatter` | `1.0` | Default weight for `frontmatter` rows. |
@@ -138,6 +138,7 @@ Graph-aware retrieval changes the default ranking behaviour. The OpenSpec
 change carries a benchmark acceptance gate documented in
 [`benchmarks/graph_retrieval.md`](../benchmarks/graph_retrieval.md): DAB §4
 Semantic/Hybrid must improve ≥ 8 points (target ≥ 35/50) and MSMARCO P@5
-must improve ≥ 5 points over a reproducible bge-small baseline. If a
-release misses the gate, ship autowiring and `memory_graph` path output
-but set `graph_depth = 0` to keep retrieval expansion off by default.
+must improve ≥ 5 points over a reproducible bge-small baseline before
+`graph_depth` can ship default-on. Until those numbers are recorded,
+autowiring and `memory_graph` path output ship with retrieval expansion off
+by default.

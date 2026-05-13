@@ -68,7 +68,7 @@ pub struct HybridSearch<'a> {
     /// Maximum number of rows to return after the merge step.
     pub limit: usize,
     /// Optional graph-expansion depth override. When `None`, the depth is
-    /// read from `config.graph_depth` (default `1`). Set `Some(0)` to
+    /// read from `config.graph_depth` (default `0`). Set `Some(0)` to
     /// disable graph expansion for this invocation.
     pub hops: Option<u32>,
 }
@@ -170,7 +170,7 @@ impl GraphExpansionConfig {
     /// to the v10-seeded defaults when a key is missing or unparseable.
     pub fn from_config(conn: &Connection) -> Result<Self, SearchError> {
         Ok(Self {
-            depth: read_config_u32(conn, "graph_depth", 1)?,
+            depth: read_config_u32(conn, "graph_depth", 0)?,
             distance_decay: read_config_f64(conn, "graph_distance_decay", 0.5)?,
             max_added: read_config_usize(conn, "graph_expansion_max", 50)?,
         })

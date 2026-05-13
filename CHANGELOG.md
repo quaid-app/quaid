@@ -28,7 +28,7 @@ New seeded `config` keys (defaults shown):
 
 | Key | Default |
 | --- | ------- |
-| `graph_depth` | `1` |
+| `graph_depth` | `0` |
 | `graph_distance_decay` | `0.5` |
 | `graph_expansion_max` | `50` |
 | `edge_weight_frontmatter` | `1.0` |
@@ -56,7 +56,9 @@ New seeded `config` keys (defaults shown):
   `confidence=pattern.weight`. Per Decision 11, this change does **not**
   insert durable `links` rows with `source_kind='entity_pattern'`.
 - **Graph-aware retrieval.** `hybrid_search` walks outbound active edges
-  from the FTS5 + vector top-K when `config.graph_depth > 0`. Expanded
+  from the FTS5 + vector top-K when `config.graph_depth > 0`. The seeded
+  default is `0` until the benchmark gate below has published passing
+  DAB §4 / MSMARCO numbers. Expanded
   candidates score
   `parent_score × edge_weight × (graph_distance_decay ^ hops)` and
   participate in progressive token-budget pruning.
@@ -78,9 +80,10 @@ New seeded `config` keys (defaults shown):
 
 - A release shipping graph-aware retrieval as default-on must pass the
   DAB §4 (≥ 35/50, ≥ +8 points over bge-small baseline) and MSMARCO P@5
-  (≥ +5 points) gates documented in `benchmarks/graph_retrieval.md`. If
-  either threshold misses, ship the autowiring + path-output features
-  but set `graph_depth = 0` in the released DB defaults.
+  (≥ +5 points) gates documented in `benchmarks/graph_retrieval.md`. This
+  release ships autowiring + path-output features with `graph_depth = 0`
+  because the representative DAB §4 / MSMARCO measurements have not yet
+  been recorded.
 
 ### Documentation
 

@@ -457,7 +457,7 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('daemon.http.port', '3112'),
     ('daemon.http.bind', '127.0.0.1'),
     ('daemon.http.trusted_loopback', 'false'),
-    ('graph_depth',                  '1'),
+    ('graph_depth',                  '0'),
     ('graph_distance_decay',         '0.5'),
     ('graph_expansion_max',          '50'),
     ('edge_weight_frontmatter',      '1.0'),

@@ -95,4 +95,5 @@ The system SHALL bump the canonical schema from v9 to v10 without implementing a
 
 #### Scenario: Config defaults populated at init
 - **WHEN** `quaid init` creates a fresh v10 database
-- **THEN** the `config` table contains `graph_depth = 1`, `graph_distance_decay = 0.5`, `graph_expansion_max = 50`, `edge_weight_frontmatter = 1.0`, `edge_weight_entity_pattern = 0.7`, and `edge_weight_wikilink = 0.5`
+- **THEN** the `config` table contains `graph_depth = 0`, `graph_distance_decay = 0.5`, `graph_expansion_max = 50`, `edge_weight_frontmatter = 1.0`, `edge_weight_entity_pattern = 0.7`, and `edge_weight_wikilink = 0.5`
+- **AND** graph retrieval expansion remains opt-in until the benchmark gate passes

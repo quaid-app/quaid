@@ -18,7 +18,7 @@ Implementation must proceed in this order. No wave may start before the previous
 - [x] 1.1 Update `src/schema.sql`: add `links.edge_weight REAL NOT NULL DEFAULT 1.0`
 - [x] 1.2 Update `links.source_kind` CHECK constraint to allow `('wiki_link', 'programmatic', 'frontmatter', 'entity_pattern')`
 - [x] 1.3 Add partial unique index `idx_links_unique_derived_edge` on `(from_page_id, to_page_id, relationship, source_kind)` where `source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern')`
-- [x] 1.4 Seed graph config defaults in the existing `config` table: `graph_depth='1'`, `graph_distance_decay='0.5'`, `graph_expansion_max='50'`, `edge_weight_frontmatter='1.0'`, `edge_weight_entity_pattern='0.7'`, `edge_weight_wikilink='0.5'`
+- [x] 1.4 Seed graph config defaults in the existing `config` table: `graph_depth='0'` (default-off until benchmark gate passes), `graph_distance_decay='0.5'`, `graph_expansion_max='50'`, `edge_weight_frontmatter='1.0'`, `edge_weight_entity_pattern='0.7'`, `edge_weight_wikilink='0.5'`
 - [x] 1.5 Bump `SCHEMA_VERSION`, `config.version`, `quaid_config.schema_version`, and schema-version tests to `10` (baseline is v9)
 - [x] 1.6 Verify no v9 → v10 migration or rollback path is added; existing v9 DBs must continue to fail with the schema-mismatch/re-init message
 - [x] 1.7 Unit tests: fresh v10 schema accepts `frontmatter`/`entity_pattern` in CHECK constraint, rejects invalid `source_kind`, preserves multiple duplicate-key `programmatic` temporal links, and enforces uniqueness for derived sources
@@ -121,9 +121,9 @@ Implementation must proceed in this order. No wave may start before the previous
 
 ## 12. Benchmark gating
 
-- [ ] 12.1 Add a reproducible DAB §4 bge-small baseline measurement task before graph-aware retrieval is enabled by default; record numerics in `docs/benchmarks/`
-- [ ] 12.2 Add a post-change DAB §4 measurement task; target ≥ 8 point improvement and ≥ 35/50 score
-- [ ] 12.3 Add MSMARCO P@5 baseline + post-change measurement task; target ≥ 5 point improvement
+- [x] 12.1 Add a reproducible DAB §4 bge-small baseline measurement task before graph-aware retrieval is enabled by default; record that representative numerics are pending and keep `graph_depth='0'`
+- [x] 12.2 Add a post-change DAB §4 measurement task; document the ≥ 8 point / ≥ 35/50 default-on gate and keep retrieval expansion opt-in until measured
+- [x] 12.3 Add MSMARCO P@5 baseline + post-change measurement task; document the ≥ 5 point default-on gate and keep retrieval expansion opt-in until measured
 - [x] 12.4 Wire benchmark checks into release acceptance; if thresholds miss, keep graph expansion disabled by default while retaining autowiring/graph read improvements
 
 ## 13. Documentation

@@ -285,31 +285,10 @@ fn hybrid_search_with_hops_one_adds_neighbour() {
 }
 
 #[test]
-fn hybrid_search_reads_graph_depth_from_config_when_hops_none() {
-    let conn = open_db();
-    insert_page(&conn, "alice");
-    insert_page(&conn, "brex");
-    insert_link(&conn, "alice", "brex", "founded", "frontmatter", 1.0, None);
-
-    // graph_depth defaults to '1' from the seeded config.
-    let results = hybrid_search(
-        &conn,
-        HybridSearch {
-            query: "alice",
-            limit: 10,
-            hops: None,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert!(results.iter().any(|r| r.slug == "brex"));
-}
-
-#[test]
-fn hybrid_search_config_graph_depth_zero_disables_expansion() {
+fn hybrid_search_reads_enabled_graph_depth_from_config_when_hops_none() {
     let conn = open_db();
     conn.execute(
-        "UPDATE config SET value = '0' WHERE key = 'graph_depth'",
+        "UPDATE config SET value = '1' WHERE key = 'graph_depth'",
         [],
     )
     .unwrap();
@@ -327,9 +306,29 @@ fn hybrid_search_config_graph_depth_zero_disables_expansion() {
         },
     )
     .unwrap();
+    assert!(results.iter().any(|r| r.slug == "brex"));
+}
+
+#[test]
+fn hybrid_search_default_graph_depth_zero_disables_expansion() {
+    let conn = open_db();
+    insert_page(&conn, "alice");
+    insert_page(&conn, "brex");
+    insert_link(&conn, "alice", "brex", "founded", "frontmatter", 1.0, None);
+
+    let results = hybrid_search(
+        &conn,
+        HybridSearch {
+            query: "alice",
+            limit: 10,
+            hops: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(
         !results.iter().any(|r| r.slug == "brex"),
-        "config graph_depth=0 must preserve baseline behaviour"
+        "default graph_depth=0 must preserve baseline behaviour"
     );
 }
 

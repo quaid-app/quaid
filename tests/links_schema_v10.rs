@@ -208,7 +208,7 @@ fn fresh_v10_seeds_graph_config_defaults() {
             ("edge_weight_entity_pattern".to_string(), "0.7".to_string()),
             ("edge_weight_frontmatter".to_string(), "1.0".to_string()),
             ("edge_weight_wikilink".to_string(), "0.5".to_string()),
-            ("graph_depth".to_string(), "1".to_string()),
+            ("graph_depth".to_string(), "0".to_string()),
             ("graph_distance_decay".to_string(), "0.5".to_string()),
             ("graph_expansion_max".to_string(), "50".to_string()),
         ]

@@ -66,7 +66,7 @@ Recognized keys (with seeded defaults):
 | `chunk_strategy` | `section` | How pages are split before embedding. |
 | `search_merge_strategy` | `set-union` | How FTS5 and vector results are fused. |
 | `default_token_budget` | `4000` | Used by `query --depth auto`. |
-| `graph_depth` | `1` | Hops walked during `hybrid_search` graph expansion (`0` disables it). The `--hops N` CLI flag overrides this per-invocation. |
+| `graph_depth` | `0` | Hops walked during `hybrid_search` graph expansion (`0` disables it). The `--hops N` CLI flag overrides this per-invocation. |
 | `graph_distance_decay` | `0.5` | Multiplied per hop into expanded-candidate scores. |
 | `graph_expansion_max` | `50` | Per-query cap on newly added graph candidates. |
 | `edge_weight_frontmatter` | `1.0` | Default weight on derived `frontmatter` link rows. |

@@ -6,8 +6,9 @@ form of the spec requirement *"Acceptance is gated on benchmark
 improvements"* in `specs/graph-aware-retrieval/spec.md`.
 
 **Status as of 2026-05-13:** Baseline and post-change measurements have
-**not** been performed in this change. Numbers must be recorded before
-graph-aware retrieval is accepted as a default-on capability.
+**not** been performed in this change. Quaid therefore seeds
+`graph_depth = 0` and ships graph-aware retrieval as an opt-in capability
+until passing numbers are recorded.
 
 ## Thresholds
 
@@ -21,16 +22,16 @@ baseline:
 | DAB §4 Semantic / Hybrid | delta vs bge-small baseline | ≥ +8 points |
 | MSMARCO P@5 | delta vs bge-small baseline | ≥ +5 points |
 
-If either threshold misses, the release MAY still ship the autowiring,
-path-output, and `quaid graph extract-entities` features, but the graph
-expansion default MUST be turned off:
+If either threshold misses or has not been run, the release MAY still ship
+the autowiring, path-output, and `quaid graph extract-entities` features,
+but the graph expansion default MUST remain off:
 
 ```sql
 UPDATE config SET value = '0' WHERE key = 'graph_depth';
 ```
 
-The schema-side default of `1` stays as the *aspirational* default for a
-future release that passes the gate.
+The schema-side default may be raised to `1` in a future release only after
+the gate passes.
 
 ## Reproducible measurement procedure
 
@@ -67,6 +68,6 @@ The Wave 7 implementation pass did not have access to representative
 hardware or the pinned DAB §4 / MSMARCO corpora under release CI. Rather
 than fabricate numbers, this gate is encoded as a release-time procedure
 consistent with the existing manual / advisory benchmarks in
-`benchmarks/README.md`. The first release that ships the graph layer is
-expected to run the procedure above, record the numerics, and flip
-`graph_depth` to `0` if the gate misses.
+`benchmarks/README.md`. The first release that ships the graph layer keeps
+`graph_depth = 0`; a later release can record the numerics and flip the
+default to `1` if the gate passes.

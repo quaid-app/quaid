@@ -513,11 +513,18 @@ fn reingest_removes_entity_assertions_no_longer_in_page_text() {
 }
 
 #[test]
-fn over_budget_reingest_preserves_existing_entity_assertions() {
+fn partial_over_budget_route_preserves_existing_entity_assertions() {
     let conn = open_test_db();
-    let source = insert_page(&conn, "sources/note", "Note", "Alice founded Brex.");
+    let source = insert_page(
+        &conn,
+        "sources/note",
+        "Note",
+        "Alice founded Brex. Bob founded Acme.",
+    );
     insert_page(&conn, "people/alice", "Alice", "body");
     insert_page(&conn, "companies/brex", "Brex", "body");
+    insert_page(&conn, "people/bob", "Bob", "body");
+    insert_page(&conn, "companies/acme", "Acme", "body");
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
 
     entities::run_for_page(
@@ -525,29 +532,36 @@ fn over_budget_reingest_preserves_existing_entity_assertions() {
         source,
         1,
         "sources/note",
-        "Alice founded Brex.",
+        "Alice founded Brex. Bob founded Acme.",
         &patterns,
     )
     .unwrap();
-    entities::run_for_page_with_deadline(
+    let partial_summary = entities::route_entity_matches_with_sync(
         &conn,
         source,
         1,
-        "sources/note",
-        "Alice founded Brex.",
-        &patterns,
-        Duration::from_nanos(0),
+        &[EntityMatch {
+            subject_surface: "Alice".into(),
+            object_surface: "Brex".into(),
+            relationship: "founded".into(),
+            weight: 0.7,
+            subject_type: Some("person".into()),
+            object_type: Some("company".into()),
+        }],
+        entities::EntityAssertionSync::PreserveStale,
     )
     .unwrap();
+    assert_eq!(partial_summary.matches_seen, 1);
 
-    let current: i64 = conn
+    let retained: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM assertions WHERE page_id = ?1 AND object = 'brex'",
+            "SELECT COUNT(*) FROM assertions
+             WHERE page_id = ?1 AND object IN ('brex', 'acme')",
             [source],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(current, 1);
+    assert_eq!(retained, 2);
 }
 
 // ── 7.7: no LLM / no inference / no network in extraction code ─

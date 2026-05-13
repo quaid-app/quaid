@@ -495,6 +495,17 @@ pub struct RoutingSummary {
     pub unresolved: usize,
 }
 
+/// Stale-assertion behavior for an entity-pattern routing run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityAssertionSync {
+    /// Treat the provided matches as the complete page truth and delete stale
+    /// `agent`/`entity_pattern` assertions not present in this run.
+    DeleteStale,
+    /// Treat the provided matches as a partial scan and preserve existing
+    /// `agent`/`entity_pattern` assertions absent from this run.
+    PreserveStale,
+}
+
 struct AssertionCandidate {
     subject: String,
     predicate: String,
@@ -519,24 +530,22 @@ pub fn route_entity_matches(
     source_collection_id: i64,
     matches: &[EntityMatch],
 ) -> Result<RoutingSummary, EntityError> {
-    route_entity_matches_inner(conn, source_page_id, source_collection_id, matches, true)
+    route_entity_matches_with_sync(
+        conn,
+        source_page_id,
+        source_collection_id,
+        matches,
+        EntityAssertionSync::DeleteStale,
+    )
 }
 
-fn route_entity_matches_preserving_stale(
+/// Route entity matches with an explicit stale-assertion policy.
+pub fn route_entity_matches_with_sync(
     conn: &Connection,
     source_page_id: i64,
     source_collection_id: i64,
     matches: &[EntityMatch],
-) -> Result<RoutingSummary, EntityError> {
-    route_entity_matches_inner(conn, source_page_id, source_collection_id, matches, false)
-}
-
-fn route_entity_matches_inner(
-    conn: &Connection,
-    source_page_id: i64,
-    source_collection_id: i64,
-    matches: &[EntityMatch],
-    delete_stale: bool,
+    sync: EntityAssertionSync,
 ) -> Result<RoutingSummary, EntityError> {
     let mut summary = RoutingSummary::default();
     let mut seen_in_batch: HashSet<(String, String, String)> = HashSet::new();
@@ -640,7 +649,7 @@ fn route_entity_matches_inner(
         summary.assertions_inserted += 1;
     }
 
-    if delete_stale {
+    if sync == EntityAssertionSync::DeleteStale {
         delete_stale_entity_assertions(conn, source_page_id, &seen_in_batch)?;
     }
 
@@ -753,11 +762,12 @@ pub fn run_for_page_with_deadline(
             None,
             conn,
         )?;
-        return route_entity_matches_preserving_stale(
+        return route_entity_matches_with_sync(
             conn,
             page_id,
             collection_id,
             &outcome.matches,
+            EntityAssertionSync::PreserveStale,
         );
     }
     route_entity_matches(conn, page_id, collection_id, &outcome.matches)

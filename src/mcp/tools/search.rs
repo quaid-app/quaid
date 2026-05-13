@@ -51,6 +51,7 @@ impl QuaidServer {
                 include_superseded,
                 canonical: true,
                 limit,
+                hops: None,
             },
         )
         .map_err(map_search_error)?;

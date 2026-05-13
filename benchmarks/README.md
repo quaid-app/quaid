@@ -28,6 +28,8 @@ These run entirely locally with no API keys required. They are wired into CI to 
 | LongMemEval (raw-page path) | R@5 | ≥ 85% |
 | LoCoMo (raw-page path) | F1 delta vs FTS5 | ≥ +30% |
 | Ragas | context_precision, context_recall | Advisory |
+| Graph-aware retrieval (DAB §4) | Semantic / Hybrid score | ≥ 35/50 absolute AND ≥ +8 points vs bge-small baseline — see [`graph_retrieval.md`](./graph_retrieval.md) |
+| Graph-aware retrieval (MSMARCO) | P@5 | ≥ +5 points vs bge-small baseline — see [`graph_retrieval.md`](./graph_retrieval.md) |
 
 ---
 

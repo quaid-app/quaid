@@ -162,7 +162,9 @@ pub fn render_page(page: &Page) -> String {
                 out.push_str(key);
                 match render_yaml_value(value) {
                     Some(rendered) => {
-                        if rendered.contains('\n') {
+                        let force_block =
+                            matches!(value, JsonValue::Array(_) | JsonValue::Object(_));
+                        if rendered.contains('\n') || force_block {
                             out.push_str(":\n");
                             for line in rendered.lines() {
                                 out.push_str("  ");

@@ -37,6 +37,7 @@ pub async fn run(
     namespace: Option<&str>,
     include_superseded: bool,
     json: bool,
+    hops: Option<u32>,
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -50,6 +51,7 @@ pub async fn run(
             include_superseded,
             canonical: true,
             limit: limit as usize,
+            hops,
             ..Default::default()
         },
     )?;
@@ -215,6 +217,7 @@ mod tests {
             None,
             false,
             true,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -234,6 +237,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -244,7 +248,10 @@ mod tests {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
         // depth="auto" triggers read_token_budget + progressive_retrieve path
-        let result = run(&conn, "anything", "auto", 5, 0, None, None, false, false).await;
+        let result = run(
+            &conn, "anything", "auto", 5, 0, None, None, false, false, None,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -252,7 +259,10 @@ mod tests {
     async fn run_with_explicit_token_budget_uses_it() {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
-        let result = run(&conn, "query", "auto", 5, 2000, None, None, false, true).await;
+        let result = run(
+            &conn, "query", "auto", 5, 2000, None, None, false, true, None,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -280,6 +290,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -306,6 +317,7 @@ mod tests {
             None,
             false,
             true,
+            None,
         )
         .await;
         assert!(result.is_ok());

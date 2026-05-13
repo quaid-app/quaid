@@ -1,0 +1,41 @@
+# Default entity-pattern set embedded in the Quaid binary.
+#
+# Each entry must specify:
+#   regex:        Rust-compatible regex with EXACTLY two capture groups
+#                 ((subject), (object))
+#   relationship: relationship string used as the assertion predicate
+#                 (also the edge `relationship` once durable entity edges land)
+#
+# Optional fields:
+#   subject_type: role hint for resolving the subject surface (e.g. "person")
+#   object_type:  role hint for resolving the object surface  (e.g. "company")
+#   weight:       confidence/edge weight in [0.0, 1.0]
+#                 (defaults to config.edge_weight_entity_pattern)
+#
+# Surfaces are intentionally simple capitalised tokens; users override at
+# ~/.quaid/entity-patterns.yaml for richer coverage.
+
+- regex: "([A-Z][\\w'-]*(?:\\s+[A-Z][\\w'-]*)*)\\s+works\\s+at\\s+([A-Z][\\w'&-]*(?:\\s+[A-Z][\\w'&-]*)*)"
+  relationship: works_at
+  subject_type: person
+  object_type: company
+
+- regex: "([A-Z][\\w'-]*(?:\\s+[A-Z][\\w'-]*)*)\\s+founded\\s+([A-Z][\\w'&-]*(?:\\s+[A-Z][\\w'&-]*)*)"
+  relationship: founded
+  subject_type: person
+  object_type: company
+
+- regex: "([A-Z][\\w'&-]*(?:\\s+[A-Z][\\w'&-]*)*)\\s+invested\\s+in\\s+([A-Z][\\w'&-]*(?:\\s+[A-Z][\\w'&-]*)*)"
+  relationship: invested_in
+  subject_type: company
+  object_type: company
+
+- regex: "([A-Z][\\w'&-]*(?:\\s+[A-Z][\\w'&-]*)*)\\s+acquired\\s+([A-Z][\\w'&-]*(?:\\s+[A-Z][\\w'&-]*)*)"
+  relationship: acquired
+  subject_type: company
+  object_type: company
+
+- regex: "([A-Z][\\w'-]*(?:\\s+[A-Z][\\w'-]*)*)\\s+leads\\s+([A-Z][\\w'&-]*(?:\\s+[A-Z][\\w'&-]*)*)"
+  relationship: leads
+  subject_type: person
+  object_type: team

@@ -6,7 +6,7 @@
     reason = "test fixtures legitimately panic on setup failure and print diagnostics; per-site #[expect] would generate noise across thousands of test sites"
 )]
 
-//! Integration tests for the fresh v9 SQLite schema produced by
+//! Integration tests for the fresh v10 SQLite schema produced by
 //! `quaid::core::db::open`.
 //!
 //! Locks in:
@@ -19,7 +19,7 @@
 use quaid::core::db::open;
 
 #[test]
-fn fresh_v9_schema_includes_conversation_memory_artifacts_and_defaults() {
+fn fresh_v10_schema_includes_conversation_memory_artifacts_and_defaults() {
     let conn = open(":memory:").unwrap();
 
     let page_columns: Vec<String> = conn
@@ -149,13 +149,13 @@ fn fresh_v9_schema_includes_conversation_memory_artifacts_and_defaults() {
                 "0.4".to_string()
             ),
             ("memory.location".to_string(), "vault-subdir".to_string()),
-            ("version".to_string(), "9".to_string()),
+            ("version".to_string(), "10".to_string()),
         ]
     );
 }
 
 #[test]
-fn fresh_v9_schema_enforces_superseded_by_foreign_key() {
+fn fresh_v10_schema_enforces_superseded_by_foreign_key() {
     let conn = open(":memory:").unwrap();
 
     let err = conn
@@ -171,7 +171,7 @@ fn fresh_v9_schema_enforces_superseded_by_foreign_key() {
 }
 
 #[test]
-fn fresh_v9_schema_rejects_invalid_extraction_queue_trigger_kind() {
+fn fresh_v10_schema_rejects_invalid_extraction_queue_trigger_kind() {
     let conn = open(":memory:").unwrap();
 
     let err = conn
@@ -187,7 +187,7 @@ fn fresh_v9_schema_rejects_invalid_extraction_queue_trigger_kind() {
 }
 
 #[test]
-fn fresh_v9_schema_rejects_invalid_extraction_queue_status() {
+fn fresh_v10_schema_rejects_invalid_extraction_queue_status() {
     let conn = open(":memory:").unwrap();
 
     let err = conn
@@ -203,7 +203,7 @@ fn fresh_v9_schema_rejects_invalid_extraction_queue_status() {
 }
 
 #[test]
-fn fresh_v9_schema_rejects_invalid_correction_session_status() {
+fn fresh_v10_schema_rejects_invalid_correction_session_status() {
     let conn = open(":memory:").unwrap();
 
     let err = conn
@@ -216,4 +216,44 @@ fn fresh_v9_schema_rejects_invalid_correction_session_status() {
         .expect_err("invalid correction session status should fail");
 
     assert!(matches!(err, rusqlite::Error::SqliteFailure(_, _)));
+}
+
+#[test]
+fn existing_v9_database_is_rejected_without_migration() {
+    use quaid::core::types::DbError;
+    use rusqlite::Connection;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("legacy_v9.db");
+    let path_str = db_path.to_str().unwrap();
+
+    // Hand-roll a minimal "v9" footprint: legacy `config.version='9'` plus a
+    // pages row so crash-partial fresh-bootstrap recovery cannot reclaim it.
+    {
+        let conn = Connection::open(path_str).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO config (key, value) VALUES ('version', '9');
+             CREATE TABLE pages (id INTEGER PRIMARY KEY, slug TEXT);
+             INSERT INTO pages (slug) VALUES ('legacy');",
+        )
+        .unwrap();
+    }
+
+    let err = open(path_str).expect_err("v9 database must fail closed under v10");
+    assert!(
+        matches!(err, DbError::Schema { .. }),
+        "expected DbError::Schema, got: {err:?}"
+    );
+
+    // The v9 footprint must remain untouched — no migration may have run.
+    let conn = Connection::open(path_str).unwrap();
+    let stored: String = conn
+        .query_row(
+            "SELECT value FROM config WHERE key = 'version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, "9");
 }

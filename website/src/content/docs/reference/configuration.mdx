@@ -60,12 +60,18 @@ Recognized keys (with seeded defaults):
 
 | Key | Default | Effect |
 | --- | ------- | ------ |
-| `version` | `6` | Schema version mirror, kept in sync with `quaid_config.schema_version`. Don't edit by hand. |
+| `version` | `10` | Schema version mirror, kept in sync with `quaid_config.schema_version`. Don't edit by hand. |
 | `embedding_model` | `BAAI/bge-small-en-v1.5` | Mirror of the active model from `quaid_config`. Read-only; managed by `init`. |
 | `embedding_dimensions` | `384` | Mirror of the active model's vector width. |
 | `chunk_strategy` | `section` | How pages are split before embedding. |
 | `search_merge_strategy` | `set-union` | How FTS5 and vector results are fused. |
 | `default_token_budget` | `4000` | Used by `query --depth auto`. |
+| `graph_depth` | `0` | Hops walked during `hybrid_search` graph expansion (`0` disables it). The `--hops N` CLI flag overrides this per-invocation. |
+| `graph_distance_decay` | `0.5` | Multiplied per hop into expanded-candidate scores. |
+| `graph_expansion_max` | `50` | Per-query cap on newly added graph candidates. |
+| `edge_weight_frontmatter` | `1.0` | Default weight on derived `frontmatter` link rows. |
+| `edge_weight_entity_pattern` | `0.7` | Reserved for the entity-pattern edge follow-on; not yet used as a `links` source. |
+| `edge_weight_wikilink` | `0.5` | Default weight on derived `wiki_link` link rows. |
 
 ## Immutable model config
 
@@ -76,7 +82,7 @@ Recognized keys (with seeded defaults):
 | `model_id` | `BAAI/bge-small-en-v1.5` | Full Hugging Face model ID. |
 | `model_alias` | `small` | The alias passed to `init`. |
 | `embedding_dim` | `384` | Vector width. Determines which `page_embeddings_vec_*` table is used. |
-| `schema_version` | `6` | Validated on every open. |
+| `schema_version` | `10` | Validated on every open. |
 
 On open, `quaid` verifies the requested model matches the recorded one. A mismatch errors out before any command runs. To switch models, initialize a new memory and import into it.
 

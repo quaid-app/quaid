@@ -25,7 +25,7 @@ use thiserror::Error;
 
 use crate::core::file_state::{self, FileStat};
 use crate::core::types::{frontmatter_get_string, frontmatter_insert_string, Frontmatter, Page};
-use crate::core::{db, markdown, page_uuid, palace, raw_imports};
+use crate::core::{db, links, markdown, page_uuid, palace, raw_imports};
 
 const ELIGIBLE_TYPES: [&str; 4] = ["decision", "preference", "fact", "action_item"];
 
@@ -124,6 +124,11 @@ pub enum FileEditError {
         /// Slug of the existing successor that blocks the edit.
         successor_slug: String,
     },
+    /// Catch-all for write-path invariants surfaced by helpers that
+    /// don't have a dedicated variant (e.g. frontmatter-graph validation
+    /// from `links::validate_graph_frontmatter`).
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Parse the on-disk bytes of an edited page into a typed
@@ -188,6 +193,8 @@ pub fn handle_extracted_edit(
     if !is_extracted_path(relative_path) || !eligible_type(&prior_page.page_type) {
         return Ok(HandleExtractedEditOutcome::Bypass);
     }
+    links::validate_graph_frontmatter(&new_page.frontmatter)
+        .map_err(|err| FileEditError::Other(format!("handle_extracted_edit: {err}")))?;
 
     if let Some(successor_id) = prior_page.superseded_by {
         let successor_slug: String = conn.query_row(
@@ -364,6 +371,24 @@ pub fn handle_extracted_edit(
             &final_stat,
             &final_hash,
         )?;
+        links::sync_page_graph_artifacts(
+            &tx,
+            archived_page_id,
+            collection_id,
+            &prior_page.frontmatter,
+            &prior_page.compiled_truth,
+            &prior_page.timeline,
+        )
+        .map_err(|err| FileEditError::Other(format!("handle_extracted_edit: {err}")))?;
+        links::sync_page_graph_artifacts(
+            &tx,
+            page_id,
+            collection_id,
+            &current_frontmatter,
+            &new_page.compiled_truth,
+            &new_page.timeline,
+        )
+        .map_err(|err| FileEditError::Other(format!("handle_extracted_edit: {err}")))?;
         tx.commit()?;
 
         Ok(HandleExtractedEditOutcome::Superseded {

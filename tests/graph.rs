@@ -86,15 +86,30 @@ fn graph_cli_human_output_nests_depth_two_edges_under_their_parent() {
     quaid::commands::graph::run_to(&conn, "people/alice", 2, "current", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
     let lines: Vec<_> = output.lines().collect();
+    let tree_lines: Vec<_> = lines
+        .iter()
+        .take_while(|line| !line.starts_with("paths:"))
+        .copied()
+        .collect();
 
     assert_eq!(
-        lines,
+        tree_lines,
         vec![
             "default::people/alice",
             "  → default::companies/acme (works_at)",
             "    → default::projects/rocket (owns)",
         ],
         "text output must render depth-2 edges under their parent; got: {output}"
+    );
+    assert!(
+        output.contains("paths:"),
+        "text output must include a paths block for reachable nodes; got: {output}"
+    );
+    assert!(
+        output.contains(
+            "default::projects/rocket: default::people/alice -[works_at]-> default::companies/acme"
+        ),
+        "paths block must show the 2-hop chain to projects/rocket; got: {output}"
     );
 }
 
@@ -144,9 +159,14 @@ fn graph_cli_human_self_link_plus_real_neighbour_renders_only_neighbour() {
     quaid::commands::graph::run_to(&conn, "people/alice", 1, "current", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
     let lines: Vec<_> = output.lines().collect();
+    let tree_lines: Vec<_> = lines
+        .iter()
+        .take_while(|line| !line.starts_with("paths:"))
+        .copied()
+        .collect();
 
     assert_eq!(
-        lines,
+        tree_lines,
         vec![
             "default::people/alice",
             "  → default::companies/acme (works_at)",
@@ -173,9 +193,13 @@ fn graph_cli_human_output_skips_cycle_back_to_root() {
     let mut out = Vec::<u8>::new();
     quaid::commands::graph::run_to(&conn, "a", 2, "all", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
+    let tree_lines: Vec<_> = output
+        .lines()
+        .take_while(|line| !line.starts_with("paths:"))
+        .collect();
 
     assert_eq!(
-        output.lines().collect::<Vec<_>>(),
+        tree_lines,
         vec!["default::a", "  → default::b (related)"],
         "cycles must not render an already-on-path node back into the tree; got: {output}"
     );

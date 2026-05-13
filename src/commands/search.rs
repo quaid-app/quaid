@@ -21,6 +21,7 @@ pub fn run(
     include_superseded: bool,
     json: bool,
     raw: bool,
+    hops: Option<u32>,
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -59,6 +60,22 @@ pub fn run(
 
     let results: Vec<_> = results.into_iter().take(limit as usize).collect();
 
+    // Apply graph expansion when the effective depth is non-zero. The CLI
+    // `--hops` value, when given, overrides `config.graph_depth` for this
+    // invocation; otherwise the seeded default (`1`) is used.
+    let results = match expand_with_hops(db, results, hops) {
+        Ok(expanded) => expanded,
+        Err(e) => {
+            if json {
+                println!("{}", serde_json::json!({"error": e.to_string()}));
+                return Ok(());
+            }
+            return Err(e.into());
+        }
+    };
+
+    let results: Vec<_> = results.into_iter().take(limit as usize).collect();
+
     if json {
         println!("{}", serde_json::to_string_pretty(&results)?);
     } else if results.is_empty() {
@@ -70,6 +87,33 @@ pub fn run(
     }
 
     Ok(())
+}
+
+fn expand_with_hops(
+    db: &Connection,
+    mut results: Vec<crate::core::types::SearchResult>,
+    hops: Option<u32>,
+) -> std::result::Result<Vec<crate::core::types::SearchResult>, crate::core::types::SearchError> {
+    use crate::core::search::{expand_graph, GraphExpansionConfig};
+
+    if results.is_empty() {
+        return Ok(results);
+    }
+    let cfg = GraphExpansionConfig::from_config(db)?;
+    let depth = hops.unwrap_or(cfg.depth);
+    if depth == 0 {
+        return Ok(results);
+    }
+    let added = expand_graph(db, &results, depth, cfg.max_added, cfg.distance_decay, None)?;
+    if !added.is_empty() {
+        results.extend(added);
+        results.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.slug.cmp(&b.slug))
+        });
+    }
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -97,6 +141,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -117,6 +162,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -137,6 +183,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -158,6 +205,7 @@ mod tests {
             false,
             true,
             false,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -170,7 +218,7 @@ mod tests {
     fn run_raw_json_mode_with_invalid_fts5_returns_ok_not_panic() {
         let (_dir, conn) = open_test_db();
         // '?invalid' is invalid FTS5 with --raw; the error is printed as JSON, not propagated.
-        let result = run(&conn, "?invalid", None, None, 10, false, true, true);
+        let result = run(&conn, "?invalid", None, None, 10, false, true, true, None);
         assert!(
             result.is_ok(),
             "--raw --json with bad FTS5 must return Ok (error JSON on stdout): {result:?}"

@@ -5,15 +5,15 @@ Quaid already exposes graph reads (`memory_graph`, `memory_backlinks`) and has a
 Current constraints that shape this change:
 
 - `src/core/links.rs::extract_links()` can parse body wikilinks, but it is not wired into the production write paths.
-- `src/core/markdown.rs::parse_frontmatter()` returns `HashMap<String, String>` and silently skips YAML sequences/mappings, so structured fields such as `links: [{...}]`, `children: [...]`, and `tags: [...]` are not preserved today.
+- `src/core/markdown.rs::parse_frontmatter()` returns `JsonMap<String, JsonValue>` (already structured via `serde_json::to_value`) and scalar helpers are in `src/core/types.rs`. This is already implemented as of the v9 baseline; tasks 2.1–2.5 are pre-checked.
 - `src/core/search.rs::hybrid_search` is lexical + vector today. `src/core/progressive.rs` can walk outbound links after initial retrieval, but the hybrid ranking layer does not use graph proximity or edge weights.
-- Existing schema-migration policy rejects old schema versions. This is pre-release software with no users to migrate, so this change updates the canonical v7 schema directly and does not introduce a v6 → v7 migration path.
+- Existing schema-migration policy rejects old schema versions. This is pre-release software with no users to migrate, so this change updates the canonical v10 schema directly and does not introduce a v9 → v10 migration path.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Preserve structured frontmatter values while keeping ergonomic scalar access for `slug`, `title`, `type`, `wing`, and `memory_id`.
+- Preserve structured frontmatter values while keeping ergonomic scalar access for `slug`, `title`, `type`, `wing`, and `memory_id`. (Already implemented as of v9 baseline via `pub type Frontmatter = JsonMap<String, JsonValue>` and helpers in `src/core/types.rs`; tasks 2.1–2.5 are pre-checked.)
 - Every page write/import syncs derived edges from frontmatter and body wikilinks without a manual step.
 - Frontmatter tags sync to the `tags` table only; tags do not become graph edges in this change.
 - Regex entity extraction produces additional `entity_pattern` edges when both endpoints resolve to pages, otherwise text assertions.
@@ -23,7 +23,7 @@ Current constraints that shape this change:
 
 **Non-Goals:**
 
-- Automatic schema migration, rollback, or graph backfill for v6 databases. Stale pre-release DBs should be re-initialized and re-imported.
+- Automatic schema migration, rollback, or graph backfill for v9 databases. Stale pre-release DBs should be re-initialized and re-imported.
 - LLM-based entity extraction. Entity extraction remains regex only under the airgapped-binary rule.
 - Inferring relationships across collections or across temporal validity windows. Edges are resolved in the source collection unless explicitly specified otherwise in a later change.
 - Graph mutation tools. Existing typed `memory_link` / CLI link commands remain the manual write surfaces.
@@ -33,21 +33,23 @@ Current constraints that shape this change:
 
 ### Decision 1 — Preserve structured frontmatter as JSON values, not scalar-only strings.
 
-**Why:** Frontmatter is now part of the graph/tag source of truth. Reducing YAML arrays/objects to `HashMap<String, String>` makes `links: [{target: ...}]`, `children: [...]`, and `tags: [...]` impossible to parse after the initial raw read and breaks export/re-import semantics. Introduce a structured frontmatter representation that stores the full YAML mapping as JSON in `pages.frontmatter`, plus helper accessors for scalar fields used by existing code.
+**Why:** Frontmatter is the graph/tag source of truth. The old `HashMap<String, String>` approach silently dropped YAML arrays/objects, making `links: [{target: ...}]`, `children: [...]`, and `tags: [...]` unparseable after initial raw read and breaking export/re-import semantics. The fix is a structured frontmatter representation that stores the full YAML mapping as JSON in `pages.frontmatter`, plus helper accessors for scalar fields used by existing code.
 
-**Implementation shape:** Add a `FrontmatterDocument` (or equivalent) that contains the full `serde_json::Value`/map and scalar helpers. Keep `parse_frontmatter()` as a compatibility wrapper if useful, but route write paths through the structured parser. `render_page()` renders structured values deterministically so arrays and objects survive export.
+**Status:** Already implemented as of the v9 baseline. `pub type Frontmatter = JsonMap<String, JsonValue>` with `frontmatter_get`, `frontmatter_get_str`, and `frontmatter_get_string` helpers exists in `src/core/types.rs`; `parse_frontmatter()` in `src/core/markdown.rs` already uses `serde_json::to_value`. Tasks 2.1–2.5 are pre-checked.
+
+**Implementation shape:** Add `expand_frontmatter_edges` and `expand_frontmatter_tags` consumers that read the already-structured `Frontmatter` type (tasks 3.x). No changes to `parse_frontmatter()` or `Page.frontmatter` are needed.
 
 ### Decision 2 — Extend `links.source_kind`; do not add `edge_source`.
 
-**Why:** The existing `links` table already has a provenance column. We extend the `source_kind` CHECK constraint to include `frontmatter` and `entity_pattern` alongside `wiki_link` and `programmatic`. A separate `edge_source` column would duplicate state and create ambiguity in readers.
+**Why:** The existing `links` table already has a provenance column. We extend the `source_kind` CHECK constraint to include `frontmatter` alongside `wiki_link` and `programmatic`. `entity_pattern` is reserved in the schema for a follow-on change that adds explicit source-page provenance and proven retraction semantics (see Decision 11). A separate `edge_source` column would duplicate state and create ambiguity in readers.
 
-**Schema:** `source_kind TEXT NOT NULL DEFAULT 'programmatic' CHECK(source_kind IN ('wiki_link', 'programmatic', 'frontmatter', 'entity_pattern'))` and `edge_weight REAL NOT NULL DEFAULT 1.0`.
+**Schema:** `source_kind TEXT NOT NULL DEFAULT 'programmatic' CHECK(source_kind IN ('wiki_link', 'programmatic', 'frontmatter', 'entity_pattern'))` and `edge_weight REAL NOT NULL DEFAULT 1.0`. The `entity_pattern` value is present in the CHECK constraint for schema completeness but no write path uses it in this change.
 
 ### Decision 3 — This is a pre-release schema reset, not a migration.
 
-**Why:** There are no users to migrate. The repo already has a no-auto-migration policy for schema mismatches, and adding migration/rollback machinery would create complexity for a pre-release-only database shape. Update `src/schema.sql` and schema version constants directly. Existing dev DBs fail with the current schema-mismatch message and should be recreated with `quaid init` then repopulated with `quaid import`.
+**Why:** There are no users to migrate. The repo already has a no-auto-migration policy for schema mismatches, and adding migration/rollback machinery would create complexity for a pre-release-only database shape. Update `src/schema.sql` and schema version constants directly from the current v9 baseline to v10. Existing v9 dev DBs fail with the current schema-mismatch message and should be recreated with `quaid init` then repopulated with `quaid import`.
 
-**Consequence:** There is no migration backfill. Existing pages get frontmatter/wikilink edges when re-imported or written under v7.
+**Consequence:** There is no migration backfill. Existing pages get frontmatter/wikilink edges when re-imported or written under v10.
 
 ### Decision 4 — Frontmatter edge syntax is typed objects with string shorthand; tags are labels only.
 
@@ -89,35 +91,52 @@ Current constraints that shape this change:
 
 If exactly one page resolves for both endpoints, write a `links` row from the resolved subject page to the resolved object page. If either endpoint is unresolved or ambiguous, write an assertion only and do not pollute the graph.
 
-### Decision 8 — Entity-pattern output goes to `links` only when both endpoints resolve.
+### Decision 8 — Entity-pattern output goes to `assertions` only in this change; durable `entity_pattern` links are deferred.
 
-**Why:** The five seed relationships are inherently page-to-page when both endpoints are known. When both endpoints resolve, the `links` table is the right home because retrieval can traverse it. When one or both endpoints fail to resolve, an assertion preserves the text-anchored fact without creating a misleading graph edge.
+**Why (updated per Nibbler's review gate, 2026-05-12):** The original design routed resolved entity-pattern matches to `links`. Nibbler blocked this pending (a) explicit source-page provenance on `links` rows (so a retract/re-sync by the source page is unambiguous) and (b) proven retraction semantics (so stale derived rows are cleaned up when the source page changes). Neither is implemented in this change. The safer option is to write all entity-pattern matches to `assertions` only, regardless of whether both endpoints resolve to pages. This preserves the extracted knowledge in a queryable form without polluting the durable graph with edges that cannot be reliably retracted.
 
 **Assertion routing:** Entity assertions use `(subject, predicate, object)`, `asserted_by = 'agent'`, `confidence = pattern.weight`, and evidence/source context from the page where the match was found. Duplicate assertions are prevented by checking `(page_id, subject, predicate, object)` before insert.
+
+**Deferred:** A follow-on change will add `source_page_id` provenance to `links` and wire `entity_pattern` edges through the derived-edge sync owner (task 4.1) with proven retraction. Until that change lands, `source_kind = 'entity_pattern'` is reserved in the schema CHECK constraint but no write path inserts rows with that value.
 
 ### Decision 9 — Graph expansion is layered onto `hybrid_search`, not a parallel pipeline.
 
 **Why:** Search stays one entry point. `hybrid_search` first produces FTS5 + vector candidates, then a bounded graph-expansion pass walks outward from those candidates and scores expansions by `(parent_score) × edge_weight × distance_decay^hops`. This treats the graph as a recall booster and re-ranker around already relevant pages rather than an independent result source.
 
-**Bounds:** Default depth is 1. CLI/config allow 0–3. Expansion caps new candidates via `graph_expansion_max` and caps visited nodes via the graph module's `MAX_NODES` safety limit.
+**Bounds:** Default depth is 0 until the DAB §4 / MSMARCO benchmark gate publishes passing numbers. CLI/config allow 0–3. Expansion caps new candidates via `graph_expansion_max` and caps visited nodes via the graph module's `MAX_NODES` safety limit.
 
 ### Decision 10 — Graph path output changes the pre-release contract.
 
-**Why:** Path explanations make navigational graph results auditable and are required by the retrieval/graph UX. Because Quaid is pre-release and has no compatibility obligations yet, `GraphResult` can grow a `paths` field and `memory_graph` can return the new shape without version negotiation.
+**Why:** Path explanations make navigational graph results auditable and are required by the retrieval/graph UX. Because Quaid is pre-release and has no compatibility obligations yet, `GraphResult` can grow a `paths` field and `memory_graph` can return the new shape without version negotiation. The MCP handler target for this change is `src/mcp/tools/links.rs` (decomposed from `src/mcp/server.rs` in PR #183, v0.21.0).
+
+### Decision 11 — Single derived-edge sync owner and task wave order.
+
+**Why:** Multiple write paths (put, ingest, import, vault sync, MCP) must all call the same derived-edge sync logic. Without a single owner, each path diverges independently. The canonical owner is the `upsert_derived_edge` + `sync_frontmatter_edges` / `sync_wikilink_edges` primitives in `src/core/links.rs`. Every write path calls these primitives; none re-implements edge logic inline.
+
+**Wave order:**
+1. **Schema + config** (tasks 1.x): bump schema to v10, extend `source_kind`, add `edge_weight`, partial unique index, seed config defaults.
+2. **Structured frontmatter** (tasks 2.1–2.5 pre-checked, task 2.6): already implemented at v9 baseline; verify and add remaining unit tests.
+3. **Frontmatter edge and tag expansion types** (tasks 3.x): `FrontmatterLink`, `expand_frontmatter_edges`, `expand_frontmatter_tags` — pure parsing, no DB writes yet.
+4. **Derived-edge sync primitive** (tasks 4.x): `upsert_derived_edge`, `sync_frontmatter_edges`, `sync_wikilink_edges` in `src/core/links.rs` — the single write owner.
+5. **Write-path wiring** (tasks 5.x): wire the sync primitives into `commands/put.rs`, `commands/ingest.rs`, `src/core/migrate.rs`, `src/core/vault_sync/mod.rs`, and `src/mcp/tools/pages.rs`.
+6. **Entity-pattern extraction** (tasks 6.x, 7.x, 8.x): regex config, resolver, extraction loop, assertions-only routing, opt-in backfill command.
+7. **Graph-aware retrieval and path output** (tasks 9.x, 10.x): `expand_graph`, updated `hybrid_search`, `progressive_retrieve`, `--hops` flag, `GraphResult.paths`, `src/mcp/tools/links.rs` output schema.
+8. **Tests, benchmarks, docs** (tasks 11.x, 12.x, 13.x).
 
 ## Risks / Trade-offs
 
-- **Risk: structured frontmatter touches many call sites.** `Page.frontmatter` and helpers are widely used. → Mitigation: introduce scalar accessors and compatibility wrappers, then migrate write/read call sites incrementally under tests.
-- **Risk: regex false positives pollute the graph.** → Mitigation: role-aware page resolution gates graph writes; unresolved/ambiguous matches become assertions only.
-- **Risk: graph-aware ranking degrades broad queries.** → Mitigation: depth defaults to 1, `graph_expansion_max` caps additions, `graph_depth = 0` disables the feature, and benchmark gates include broad as well as navigational queries.
+- **Risk: structured frontmatter consumers break.** `Page.frontmatter` is already `JsonMap<String, JsonValue>` at v9 baseline; scalar helpers are in place. → Mitigation: edge-expansion consumers are new code; existing consumers are unchanged. Remaining exposure is in write paths that need to call the new sync primitives.
+- **Risk: regex false positives pollute assertions.** Unresolved/ambiguous matches still write assertions; duplicates are deduplicated. → Mitigation: role-aware resolver reduces false matches; confidence field lets downstream consumers filter by weight.
+- **Risk: entity-pattern `links` routing deferred until provenance + retraction land.** All entity patterns go to assertions only in this change. → Mitigation: assertions are queryable and preserve extracted knowledge; a follow-on change will add durable `entity_pattern` edges once retraction semantics are proven.
+- **Risk: graph-aware ranking degrades broad queries.** → Mitigation: depth defaults to 0 until the DAB §4 / MSMARCO gate publishes passing numbers, `graph_expansion_max` caps opt-in additions, and benchmark gates include broad as well as navigational queries.
 - **Risk: entity extraction destabilizes import time.** → Mitigation: regexes compile once, extraction has a 5 ms per-page budget, and over-budget pages skip remaining patterns and log a gap instead of failing the write.
 - **Trade-off: edge weights are source-level, not relationship-level.** This keeps v1 simple. If DAB §4 plateaus, per-relationship weights are the next obvious lever.
 
 ## Pre-release Schema Plan
 
-1. Update `src/schema.sql` to v7 directly: extend `source_kind`, add `edge_weight`, add the partial unique index for derived edges, and seed graph config defaults.
-2. Bump `SCHEMA_VERSION`, `config.version`, and `quaid_config.schema_version` expectations to 7.
-3. Do not implement v6 → v7 migration or rollback. Existing v6 databases remain incompatible by design.
+1. Update `src/schema.sql` to v10 directly: extend `source_kind`, add `edge_weight`, add the partial unique index for derived edges, and seed graph config defaults.
+2. Bump `SCHEMA_VERSION`, `config.version`, and `quaid_config.schema_version` expectations to 10.
+3. Do not implement v9 → v10 migration or rollback. Existing v9 databases remain incompatible by design.
 4. Re-import fixture/dev vaults to populate structured frontmatter, tags, wikilinks, and frontmatter edges.
 5. Keep entity-pattern backfill opt-in via `quaid graph extract-entities` because it is potentially expensive and heuristic.
 

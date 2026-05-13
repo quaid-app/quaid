@@ -187,13 +187,20 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 
 ### `memory_graph`
 
-> N-hop neighbourhood graph from a page.
+> N-hop neighbourhood graph from a page, with path explanations.
 
 | Param | Type | Required | Default |
 | ----- | ---- | :------: | ------- |
 | `slug` | string | yes | – |
 | `depth` | u32 | no | 2 |
 | `temporal` | string | no | `"current"` |
+
+The response carries the usual `nodes` and `edges` arrays plus a `paths`
+object keyed by reachable slug. Each value is a list of
+`(from_slug, relationship, to_slug)` triples describing the first path
+found to that node during BFS; the value for the root slug is an empty
+list. This shape was introduced in the v10 schema (pre-release) and has
+no compatibility mode.
 
 ## Intelligence tools
 

@@ -86,6 +86,9 @@ enum Commands {
         /// Pass the query verbatim to FTS5 without sanitization (for expert FTS5 syntax: quoted phrases, boolean operators, wildcards)
         #[arg(long, default_value_t = false)]
         raw: bool,
+        /// Override `config.graph_depth` for this invocation. `0` disables graph expansion.
+        #[arg(long)]
+        hops: Option<u32>,
     },
     /// Semantic / hybrid query
     Query {
@@ -103,6 +106,9 @@ enum Commands {
         namespace: Option<String>,
         #[arg(long, default_value_t = false)]
         include_superseded: bool,
+        /// Override `config.graph_depth` for this invocation. `0` disables graph expansion.
+        #[arg(long)]
+        hops: Option<u32>,
     },
     /// Ingest a source document
     Ingest {
@@ -206,13 +212,7 @@ enum Commands {
         detail: Option<String>,
     },
     /// N-hop graph neighbourhood
-    Graph {
-        slug: String,
-        #[arg(long, default_value = "2")]
-        depth: u32,
-        #[arg(long, default_value = "current")]
-        temporal: String,
-    },
+    Graph(commands::graph::GraphArgs),
     /// Check for contradictions using assertions from frontmatter or ## Assertions sections
     Check {
         slug: Option<String>,
@@ -400,6 +400,7 @@ async fn main() -> Result<()> {
             limit,
             include_superseded,
             raw,
+            hops,
         } => commands::search::run(
             &db,
             &query,
@@ -409,6 +410,7 @@ async fn main() -> Result<()> {
             include_superseded,
             cli.json,
             raw,
+            hops,
         ),
         Commands::Query {
             query,
@@ -418,6 +420,7 @@ async fn main() -> Result<()> {
             wing,
             namespace,
             include_superseded,
+            hops,
         } => {
             commands::query::run(
                 &db,
@@ -429,6 +432,7 @@ async fn main() -> Result<()> {
                 namespace.as_deref().or(Some("")),
                 include_superseded,
                 cli.json,
+                hops,
             )
             .await
         }
@@ -470,11 +474,7 @@ async fn main() -> Result<()> {
             source,
             detail,
         } => commands::timeline::add(&db, &slug, &date, &summary, source, detail),
-        Commands::Graph {
-            slug,
-            depth,
-            temporal,
-        } => commands::graph::run(&db, &slug, depth, &temporal, cli.json),
+        Commands::Graph(args) => commands::graph::run_cli(&db, args, cli.json),
         Commands::Check { slug, all, r#type } => {
             commands::check::run(&db, slug, all, r#type, cli.json)
         }

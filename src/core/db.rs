@@ -25,7 +25,7 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
 const PAGES_AU_TRIGGER_SQL: &str =
     "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
@@ -1144,16 +1144,16 @@ mod tests {
     }
 
     #[test]
-    fn open_with_model_rejects_v8_database_before_creating_v9_tables() {
+    fn open_with_model_rejects_v9_database_before_creating_v10_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 8);
+        seed_existing_db(&db_path, 9);
 
         let err = open_with_model(db_path.to_str().unwrap(), &default_model())
             .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 8, expected 9"));
+        assert!(err.to_string().contains("Found version 9, expected 10"));
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
@@ -1164,14 +1164,14 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored_version, "8");
+        assert_eq!(stored_version, "9");
     }
 
     #[test]
-    fn init_rejects_v8_database_before_creating_v9_tables() {
+    fn init_rejects_v9_database_before_creating_v10_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 8);
+        seed_existing_db(&db_path, 9);
 
         let err = init(db_path.to_str().unwrap(), &default_model())
             .expect_err("legacy database should be refused");
@@ -1180,69 +1180,6 @@ mod tests {
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
-        let config_version: String = conn
-            .query_row(
-                "SELECT value FROM config WHERE key = 'version'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(config_version, "8");
-    }
-
-    #[test]
-    fn open_with_model_rejects_future_schema_database_before_creating_v9_tables() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("future.db");
-        seed_existing_db(&db_path, 10);
-
-        let err = open_with_model(db_path.to_str().unwrap(), &default_model())
-            .expect_err("future schema database should be refused");
-
-        assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 10, expected 9"));
-
-        let conn = Connection::open(&db_path).unwrap();
-        assert!(!table_exists(&conn, "collections").unwrap());
-        let stored_version: String = conn
-            .query_row(
-                "SELECT value FROM quaid_config WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(stored_version, "10");
-    }
-
-    #[test]
-    fn init_rejects_future_schema_database_before_creating_v9_tables() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("future.db");
-        seed_existing_db(&db_path, 10);
-
-        let err = init(db_path.to_str().unwrap(), &default_model())
-            .expect_err("future schema database should be refused");
-
-        assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 10, expected 9"));
-
-        let conn = Connection::open(&db_path).unwrap();
-        assert!(!table_exists(&conn, "collections").unwrap());
-        let config_version: String = conn
-            .query_row(
-                "SELECT value FROM config WHERE key = 'version'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(config_version, "10");
-    }
-
-    #[test]
-    fn open_connection_seeds_config_version_to_9_for_partial_v9_databases() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("partial-v8.db");
-        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
         let config_version: String = conn
             .query_row(
                 "SELECT value FROM config WHERE key = 'version'",
@@ -1251,11 +1188,74 @@ mod tests {
             )
             .unwrap();
         assert_eq!(config_version, "9");
+    }
+
+    #[test]
+    fn open_with_model_rejects_future_schema_database_before_creating_v10_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("future.db");
+        seed_existing_db(&db_path, 11);
+
+        let err = open_with_model(db_path.to_str().unwrap(), &default_model())
+            .expect_err("future schema database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("Found version 11, expected 10"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let stored_version: String = conn
+            .query_row(
+                "SELECT value FROM quaid_config WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_version, "11");
+    }
+
+    #[test]
+    fn init_rejects_future_schema_database_before_creating_v10_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("future.db");
+        seed_existing_db(&db_path, 11);
+
+        let err = init(db_path.to_str().unwrap(), &default_model())
+            .expect_err("future schema database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("Found version 11, expected 10"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "11");
+    }
+
+    #[test]
+    fn open_connection_seeds_config_version_to_10_for_partial_v10_databases() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v10.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "10");
         drop(conn);
 
         assert!(
             preflight_existing_schema(db_path.to_str().unwrap()).is_ok(),
-            "freshly seeded v9 DDL should not be misclassified as legacy before quaid_config is written"
+            "freshly seeded v10 DDL should not be misclassified as legacy before quaid_config is written"
         );
     }
 
@@ -1271,7 +1271,7 @@ mod tests {
         let stored = read_quaid_config(&opened.conn).unwrap().unwrap();
 
         assert_eq!(stored.model_alias, "small");
-        assert_eq!(stored.schema_version, 9);
+        assert_eq!(stored.schema_version, 10);
     }
 
     #[cfg(feature = "online-model")]
@@ -1305,7 +1305,7 @@ mod tests {
         let stored = read_quaid_config(&conn).unwrap().unwrap();
 
         assert_eq!(stored.model_alias, "small");
-        assert_eq!(stored.schema_version, 9);
+        assert_eq!(stored.schema_version, 10);
     }
 
     #[test]
@@ -1438,7 +1438,7 @@ mod tests {
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 9);
+        assert_eq!(config.schema_version, 10);
     }
 
     #[test]

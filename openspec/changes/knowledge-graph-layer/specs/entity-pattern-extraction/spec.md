@@ -52,12 +52,15 @@ For each regex match producing a `(subject, object)` pair, the system SHALL reso
 - **WHEN** a matched surface `Acme` could resolve to more than one page in the source collection
 - **THEN** the match is treated as unresolved for graph purposes and no `entity_pattern` edge is inserted for that match
 
-### Requirement: Extraction results route to `links` when both endpoints resolve, otherwise to `assertions`
-For each regex match producing a `(subject, object)` pair, if both endpoints resolve to pages, the system SHALL insert a derived `links` row from the resolved subject page to the resolved object page with `source_kind = 'entity_pattern'`, `relationship` from the pattern config, `edge_weight` from the pattern or default, and context/evidence identifying the source page. If either endpoint is unresolved or ambiguous, the system SHALL insert an `assertions` row with `(subject, predicate, object)` matching the pattern, `asserted_by = 'agent'`, and `confidence = pattern.weight`.
+### Requirement: Extraction results route to `assertions` only in this change
 
-#### Scenario: Both endpoints resolve to pages → edge in `links`
-- **WHEN** page text matches a `founded` pattern producing `(alice, brex)`, and both pages resolve uniquely
-- **THEN** a `links` row is inserted from `people/alice` to `companies/brex` with `relationship = 'founded'`, `source_kind = 'entity_pattern'`, and the configured `edge_weight`; no `assertions` row is added for this match
+For each regex match producing a `(subject, object)` pair, the system SHALL insert an `assertions` row regardless of whether endpoints resolve to pages. Resolved endpoint information SHOULD be recorded in the evidence/context field. The system SHALL NOT insert `links` rows with `source_kind = 'entity_pattern'` in this change. (Durable `entity_pattern` edges in `links` are deferred to a follow-on change that adds source-page provenance and proven retraction semantics.)
+
+`Assertions` rows use `(subject, predicate, object)`, `asserted_by = 'agent'`, and `confidence = pattern.weight`. Duplicate assertions are prevented by checking `(page_id, subject, predicate, object)` before insert.
+
+#### Scenario: Match with both endpoints resolving to pages → assertion only (no edge)
+- **WHEN** page text matches a `founded` pattern producing `(alice, brex)`, and both pages `people/alice` and `companies/brex` exist
+- **THEN** an `assertions` row is inserted with `(subject='alice', predicate='founded', object='brex')`; **no `links` row** with `source_kind = 'entity_pattern'` is added in this change
 
 #### Scenario: Object does not resolve to a page → assertion only
 - **WHEN** page text matches a `founded` pattern producing `(alice, xyz-corp)` and no page resolves for `xyz-corp`
@@ -69,10 +72,6 @@ For each regex match producing a `(subject, object)` pair, if both endpoints res
 
 ### Requirement: Extraction is idempotent under re-ingest
 Re-ingesting the same page SHALL NOT produce duplicate edges or duplicate assertions from entity patterns. Duplicate prevention for edges relies on the derived-edge partial unique key. Duplicate prevention for assertions SHALL check `(page_id, subject, predicate, object)` before insertion.
-
-#### Scenario: Re-ingesting an unchanged page produces no new edges
-- **WHEN** a page that produced one `entity_pattern` edge on first ingest is re-ingested with identical content
-- **THEN** the total count of matching `entity_pattern` rows remains unchanged
 
 #### Scenario: Re-ingesting an unchanged page produces no new assertions
 - **WHEN** a page that produced one entity-pattern assertion on first ingest is re-ingested with identical content
@@ -86,5 +85,5 @@ The system SHALL provide a `quaid graph extract-entities` command that re-runs e
 - **THEN** every page's `compiled_truth` is processed through the active pattern set, and the resulting edges and assertions are written, respecting idempotency
 
 #### Scenario: Schema reset does not run entity extraction automatically
-- **WHEN** a fresh v7 schema is initialized or a v6 database is rejected for schema mismatch
+- **WHEN** a fresh v10 schema is initialized or a v9 database is rejected for schema mismatch
 - **THEN** `entity_pattern` rows are NOT inserted by schema handling alone; only writes/re-ingest or explicit `quaid graph extract-entities` create them

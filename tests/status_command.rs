@@ -43,14 +43,9 @@ fn status_json_reports_runtime_host_and_recent_activity() {
     fs::create_dir_all(&home_dir).unwrap();
     let (conn, db_path) = open_test_db_file(&dir);
 
+    // Register a daemon session; leave heartbeat_at at the DEFAULT (now) so the
+    // 15-second SESSION_LIVENESS_SECS window in find_active_runtime_host keeps it live.
     let session_id = register_session(&conn, SessionType::Daemon).unwrap();
-    conn.execute(
-        "UPDATE serve_sessions
-         SET heartbeat_at = '2026-05-12T10:00:00Z'
-         WHERE session_id = ?1",
-        [&session_id],
-    )
-    .unwrap();
     conn.execute(
         "INSERT INTO extraction_queue (
              session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, status
@@ -74,9 +69,12 @@ fn status_json_reports_runtime_host_and_recent_activity() {
         payload["activity"]["last_extraction_at"],
         "2026-05-12T10:02:00Z"
     );
-    assert_eq!(
-        payload["activity"]["last_heartbeat_at"],
-        "2026-05-12T10:00:00Z"
+    // last_heartbeat_at reflects the daemon session's fresh heartbeat; exact value is
+    // runtime-dependent so we only assert presence, not the specific timestamp.
+    assert!(
+        payload["activity"]["last_heartbeat_at"].is_string(),
+        "expected last_heartbeat_at to be a string, got: {:?}",
+        payload["activity"]["last_heartbeat_at"]
     );
 }
 

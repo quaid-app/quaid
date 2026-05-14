@@ -214,11 +214,10 @@ impl SlmRunner {
                 });
             }
         }
-        let config: Phi3Config =
-            serde_json::from_str(&config_text).map_err(|error| SlmError::Config {
-                path: config_path.display().to_string(),
-                message: error.to_string(),
-            })?;
+        let config = parse_phi3_config(&config_text).map_err(|error| SlmError::Config {
+            path: config_path.display().to_string(),
+            message: error.to_string(),
+        })?;
 
         let tokenizer_path = model_dir.join("tokenizer.json");
         let tokenizer =
@@ -420,6 +419,28 @@ impl LazySlmRunner {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .runtime_disabled
     }
+}
+
+fn parse_phi3_config(config_text: &str) -> serde_json::Result<Phi3Config> {
+    let mut config_value: JsonValue = serde_json::from_str(config_text)?;
+    normalize_phi3_rope_scaling(&mut config_value);
+    serde_json::from_value(config_value)
+}
+
+fn normalize_phi3_rope_scaling(config: &mut JsonValue) {
+    let Some(rope_scaling) = config.get_mut("rope_scaling") else {
+        return;
+    };
+    let JsonValue::Object(rope_scaling_object) = rope_scaling else {
+        return;
+    };
+    let normalized = rope_scaling_object
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .map_or(JsonValue::Null, |rope_type| {
+            JsonValue::String(rope_type.to_string())
+        });
+    *rope_scaling = normalized;
 }
 
 /// Parse the model's raw output into the typed

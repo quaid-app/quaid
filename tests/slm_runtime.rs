@@ -30,6 +30,19 @@ fn slm_runner_generates_deterministic_output_from_tiny_fixture() {
 }
 
 #[test]
+fn slm_runner_accepts_object_valued_rope_scaling_config() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let _guard = EnvGuard::set("QUAID_MODEL_CACHE_DIR", temp.path().display().to_string());
+    seed_tiny_phi3_cache("phi-3.5-mini");
+    write_object_valued_rope_scaling("phi-3.5-mini");
+
+    let mut runner = SlmRunner::load("phi-3.5-mini").expect("load tiny phi3 model");
+    let output = runner.infer("hello", 1).expect("run deterministic infer");
+
+    assert_eq!(output, "world");
+}
+
+#[test]
 fn parse_response_strips_json_fence_and_preserves_fact_shape() {
     let parsed = parse_response(
         "```json\n{\"facts\":[{\"kind\":\"preference\",\"about\":\"language\",\"summary\":\"Rust is preferred\"}]}\n```",
@@ -253,6 +266,25 @@ fn manifest_entry(path: &str, full_path: &std::path::Path) -> serde_json::Value 
         "sha256": format!("{:x}", Sha256::digest(bytes)),
         "verified_from_source": false
     })
+}
+
+fn write_object_valued_rope_scaling(alias: &str) {
+    let cache_dir = cache_dir_for_alias(alias).unwrap();
+    let config_path = cache_dir.join("config.json");
+    let config_text = std::fs::read_to_string(&config_path).unwrap();
+    let mut config: serde_json::Value = serde_json::from_str(&config_text).unwrap();
+    config["rope_scaling"] = serde_json::json!({
+        "long_factor": [1.0],
+        "short_factor": [1.0],
+        "type": "longrope"
+    });
+    std::fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+
+    let manifest_path = cache_dir.join("manifest.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_str(&manifest_text).unwrap();
+    manifest["files"][0] = manifest_entry("config.json", &config_path);
+    std::fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
 }
 
 fn floats_to_bytes(values: &[f32]) -> Vec<u8> {

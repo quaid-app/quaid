@@ -11,6 +11,12 @@ Quaid moves through three arcs. Each arc is a directional bet, not a feature lis
 **Arc 1** ships a private, offline knowledge runtime that holds. **Arc 2** turns that runtime into an agent that compounds knowledge across sessions. **Arc 3** turns that compounding into something that genuinely thinks. Each arc is independently useful; together they are the whole product.
 </Aside>
 
+<Aside type="note" title="Release truth">
+**Latest published release:** `v0.22.3`. **Main branch manifest:** `v0.22.3` in `Cargo.toml`.
+
+That means the remaining items below are roadmap work or branch-only follow-ons, not an already-cut `v0.23.0` release lane.
+</Aside>
+
 ---
 
 ## Arc 1 - Local memory that holds <Badge text="Shipped" variant="success" />
@@ -53,14 +59,10 @@ The foundation. Storage that doesn't lose data, retrieval that doesn't hallucina
 
 ## Arc 2 - Agents that compound <Badge text="In progress" variant="caution" />
 
-Phase 5 ships conversation memory and a local Phi-3.5 Mini SLM that extracts structured facts from conversation turns ΓÇö airgapped, downloaded once, never calls home. Namespace isolation and supersede chains are live. Phase 6 adds the entity layer that turns extracted facts into a queryable knowledge graph.
+Phase 5 shipped conversation memory and the local Phi-3.5 Mini extraction path. Phase 6 foundations also shipped in the current public release: graph autowiring, graph path output, `quaid graph extract-entities`, and graph retrieval controls. The remaining Arc 2 work is performance, entity-graph follow-ons, and benchmark reruns.
 
 <Aside type="note" title="Honest about today">
-**Pre-implementation baselines (before Phase 5):**
-**LongMemEval:** Quaid 0.0% ΓåÆ Mem0 v3 93.4%
-**LoCoMo:** Quaid 0.1% ΓåÆ Mem0 v3 91.6%
-
-Phase 5 (conversation turn ingestion, Phi-3.5 Mini SLM extraction, supersede chains, head-only retrieval by default) is now shipped. These benchmarks have not yet been re-run against the Phase 5 implementation. **Targets after Phase 5 + Phase 6 entity work: LongMemEval > 40%, LoCoMo > 40%.**
+The latest published release (`v0.22.3`) is the installable public build today, while the published DAB v1 release-gate number (**94.4%**) was recorded on `v0.22.2`. Quaid still trails peers on public conversational-memory benchmarks even though Phase 5 is shipped. The remaining gap is published benchmark reruns plus the still-open entity-graph and enrichment follow-ons. **Targets after the next delivery slices remain LongMemEval > 40% and LoCoMo > 40%.**
 </Aside>
 
 ### Phase 5 - Conversation memory + SLM extraction
@@ -73,63 +75,63 @@ Outcome: an agent that remembers the right things from a conversation turn, not 
 
     Per-namespace memory isolation for multi-agent and multi-session contexts. Drops LongMemEval benchmark runtime from 3-6 hours to under 30 minutes.
 
-    [ΓåÆ GitHub #137](https://github.com/quaid-app/quaid/issues/137)
+    [GitHub #137](https://github.com/quaid-app/quaid/issues/137)
   </Card>
   <Card title="Large corpus performance" icon="rocket">
     <Badge text="Pending" variant="caution" />
 
     Optimize for 10K+ document stores. Current import: ~437s for 350 docs. Target: under 60s. Validate Quaid at the scale real users need (GBrain operates at 75K files).
 
-    [ΓåÆ GitHub #134](https://github.com/quaid-app/quaid/issues/134)
+    [GitHub #134](https://github.com/quaid-app/quaid/issues/134)
   </Card>
   <Card title="Conversation ingestion + SLM extraction" icon="check-circle">
     <Badge text="Complete" variant="success" />
 
     Ingest conversation turns, extract structured facts using a local Phi-3.5 Mini SLM, store as typed pages. Non-blocking background queue, fully airgapped. Supersede chains, head-only retrieval by default, `memory_add_turn` / `memory_close_session` / `memory_close_action` MCP tools, correction-via-file-edit path.
 
-    [ΓåÆ GitHub #105](https://github.com/quaid-app/quaid/issues/105)
+    [GitHub #105](https://github.com/quaid-app/quaid/issues/105)
   </Card>
   <Card title="Contradiction resolution" icon="check-circle">
     <Badge text="Complete" variant="success" />
 
     Supersede and version stale facts. "I used to work at X, now Y" resolves correctly rather than keeping both facts active. Version chains, temporal-latest query mode. Per-fact dedup/supersede/coexist resolution with embedding-backed scoring.
 
-    [ΓåÆ GitHub #135](https://github.com/quaid-app/quaid/issues/135)
+    [GitHub #135](https://github.com/quaid-app/quaid/issues/135)
   </Card>
 </CardGrid>
 
-### Phase 6 - Knowledge graph
+### Phase 6 - Knowledge graph foundations
 
-Outcome: query by entity, not just text. Once Phase 5 extracts entities, the graph is a thin layer on top.
+Outcome: a graph that already wires itself from page structure today, with richer entity-centric traversal still ahead.
 
 <CardGrid>
-  <Card title="Entity extraction at write time" icon="document">
-    <Badge text="Graph foundation" variant="tip" />
+  <Card title="Frontmatter and wikilink autowiring" icon="check-circle">
+    <Badge text="Shipped in v0.22.0" variant="success" />
 
-    Extract people, companies, and concepts at ingest time using zero-LLM heuristics. Coordinates with #105 - shares the same SLM extraction pipeline.
+    `links:`, `parent:`, `children:`, `related:`, and body `[[slug]]` references now create derived graph edges automatically. The current published release (`v0.22.3`) carries this foundation.
 
-    [ΓåÆ GitHub #107](https://github.com/quaid-app/quaid/issues/107)
+    [GitHub #72](https://github.com/quaid-app/quaid/issues/72)
   </Card>
-  <Card title="Self-wiring knowledge graph" icon="random">
-    <Badge text="Depends on #107" variant="caution" />
+  <Card title="Path explanations and retrieval controls" icon="check-circle">
+    <Badge text="Shipped in v0.22.0" variant="success" />
 
-    YAML frontmatter as first-class graph edges. Documents auto-link via wikilinks and tags. From GBrain data: +28% graph search performance, -53% noisy results.
+    `memory_graph` and `quaid graph` return `paths`, and `quaid query/search --hops N` plus graph config keys are live. Retrieval expansion is still default-off until the published benchmark gate is cleared.
 
-    [ΓåÆ GitHub #72](https://github.com/quaid-app/quaid/issues/72)
+    [GitHub #74](https://github.com/quaid-app/quaid/issues/74)
   </Card>
-  <Card title="Graph traversal query API" icon="magnifier">
-    <Badge text="Depends on #72, #107" variant="caution" />
+  <Card title="Entity-pattern backfill" icon="check-circle">
+    <Badge text="Shipped with a limit" variant="success" />
 
-    Query by entity: `memory_graph_query(entity, hops)`. Find all pages connected to X, find concepts that link two people, 2-hop traversal in under 500ms.
+    `quaid graph extract-entities` ships now, but it writes assertions only. It does not yet promote durable entity edges into the graph.
 
-    [ΓåÆ GitHub #133](https://github.com/quaid-app/quaid/issues/133)
+    [GitHub #107](https://github.com/quaid-app/quaid/issues/107)
   </Card>
-  <Card title="Multi-hop graph traversal" icon="right-arrow">
-    <Badge text="Depends on #133" variant="caution" />
+  <Card title="Entity-centric query API and multi-hop follow-ons" icon="right-arrow">
+    <Badge text="Still pending" variant="caution" />
 
-    Configurable 1-3 hop traversal, edge type weighting, relationship scoring combined with semantic similarity.
+    The current public release does **not** include `memory_graph_query(entity, hops)`, durable entity-edge promotion, or default-on graph expansion. Those remain follow-on work.
 
-    [ΓåÆ GitHub #74](https://github.com/quaid-app/quaid/issues/74)
+    [GitHub #133](https://github.com/quaid-app/quaid/issues/133)
   </Card>
 </CardGrid>
 
@@ -137,7 +139,7 @@ Outcome: query by entity, not just text. Once Phase 5 extracts entities, the gra
 
 ## Arc 3 - Memory that thinks <Badge text="Later" variant="note" />
 
-The features that turn a memory store into a memory system. With the graph built and conversation memory working, the runtime can be proactive instead of just responsive.
+The features that turn a memory store into a memory system. With the graph foundation shipped and conversation memory working, the runtime can be proactive instead of just responsive.
 
 ### Phase 7 - Intelligence layer
 
@@ -149,17 +151,17 @@ Outcome: memory that updates itself when new content arrives, deduplicates noise
 
     When new content arrives, existing entity memories update proactively. GBrain v0.23.0's headline feature: "Your brain actually gets enriched from your conversations."
 
-    [ΓåÆ GitHub #136](https://github.com/quaid-app/quaid/issues/136)
+    [GitHub #136](https://github.com/quaid-app/quaid/issues/136)
   </Card>
   <Card title="Noise reduction + deduplication" icon="list-format">
     Result deduplication and relevance filtering. Implementable at any point but most valuable when the corpus is large.
 
-    [ΓåÆ GitHub #75](https://github.com/quaid-app/quaid/issues/75)
+    [GitHub #75](https://github.com/quaid-app/quaid/issues/75)
   </Card>
   <Card title="Context compression (REFRAG)" icon="compress">
     Compress retrieved chunks before sending to an LLM. Reduces tokens and cost while maintaining quality. High value at production scale.
 
-    [ΓåÆ GitHub #76](https://github.com/quaid-app/quaid/issues/76)
+    [GitHub #76](https://github.com/quaid-app/quaid/issues/76)
   </Card>
 </CardGrid>
 
@@ -172,9 +174,9 @@ For contributors. The arcs above are the public roadmap; the table below is the 
 | Priority | Issue | Feature | Depends on |
 |----------|-------|---------|-----------|
 | 1 | [#134](https://github.com/quaid-app/quaid/issues/134) | Large corpus performance | - |
-| 2 | [#107](https://github.com/quaid-app/quaid/issues/107) | Entity extraction | #105 (coordinate) |
-| 3 | [#72](https://github.com/quaid-app/quaid/issues/72) | Self-wiring knowledge graph | #107 |
-| 4 | [#133](https://github.com/quaid-app/quaid/issues/133) | Graph traversal query API | #72, #107 |
+| 2 | [#107](https://github.com/quaid-app/quaid/issues/107) | Durable entity extraction follow-on | #105 (coordinate) |
+| 3 | [#72](https://github.com/quaid-app/quaid/issues/72) | Self-wiring graph follow-on and edge promotion | #107 |
+| 4 | [#133](https://github.com/quaid-app/quaid/issues/133) | Entity-centric graph query API | #72, #107 |
 | 5 | [#74](https://github.com/quaid-app/quaid/issues/74) | Multi-hop traversal | #133 |
 | 6 | [#136](https://github.com/quaid-app/quaid/issues/136) | Active memory enrichment | #107, #133 |
 | 7 | [#75](https://github.com/quaid-app/quaid/issues/75), [#76](https://github.com/quaid-app/quaid/issues/76) | Noise reduction, context compression | Any |

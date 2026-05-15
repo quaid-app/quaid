@@ -48,3 +48,4 @@
 - Decision inbox merged: 63 files
 - Decisions archived: 1 entry (2026-04-29)
 - Team synchronized
+- [2026-05-15T10:21:41.579+00:00] Release housekeeping for v0.22.3 is safest when treated as one operational chain: prune only remote branches whose exact tip is already an ancestor of `origin/main`, run the release gate (`cargo test`) before touching tags, and stop at a local commit/tag if publishing is blocked by auth or branch protections.

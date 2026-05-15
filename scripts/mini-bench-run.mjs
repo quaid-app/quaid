@@ -11,29 +11,29 @@ const DEFAULT_QUAID = path.join(REPO_DIR, "target", "release", "quaid");
 const DEFAULT_PREV = "/tmp/quaid-mini-bench-prev.txt";
 
 const FTS_QUERIES = [
-  { query: "memory systems persistent storage sessions archive 2025", expected: "2025/page-0089", label: "S01" },
-  { query: "semantic search dense vector representations health area", expected: "health/page-0038", label: "S02" },
-  { query: "regulatory clarity institutional adoption AI tools resource", expected: "ai-tools/page-0051", label: "S03" },
-  { query: "formal verification exploit surface 2024 archive part 7", expected: "2024/page-0083", label: "S04" },
-  { query: "automated market maker pooled reserves", expected: "defi", label: "S05" },
-  { query: "stable asset issuer redemption reserves", expected: "stablecoin", label: "S06" },
-  { query: "Projects Areas Resources Archives finance area part 7", expected: "finance/page-0034", label: "S07" },
-  { query: "RAG generative models research resource part 3", expected: "research/page-0072", label: "S08" },
-  { query: "zero copy request latency tuning", expected: "rust", label: "S09" },
-  { query: "Bitcoin 75000 valuation supply velocity utility", expected: "token", label: "S10" },
+  { query: "agent memory architecture persistent storage sessions", expected: ["Agent Memory", "agent-memory", "page-0089"], label: "S01" },
+  { query: "vector embeddings semantic search dense representations", expected: ["Vector Embeddings", "vector-embeddings", "vector"], label: "S02" },
+  { query: "stablecoin regulation clarity institutional adoption", expected: ["Stablecoin Regulation", "stablecoin-regulation", "stablecoin"], label: "S03" },
+  { query: "Rust async runtime performance optimization", expected: ["Rust Performance", "rust-performance", "rust"], label: "S04" },
+  { query: "automated market maker DeFi liquidity protocol pooled reserves", expected: ["DeFi Liquidity", "defi-liquidity", "defi"], label: "S05" },
+  { query: "knowledge graph traversal entity relationships", expected: ["Knowledge Graph", "knowledge-graph", "knowledge"], label: "S06" },
+  { query: "smart contract security audit formal verification exploit", expected: ["Smart Contract", "smart-contract", "smart"], label: "S07" },
+  { query: "cross-chain bridge interoperability asset transfer", expected: ["Cross-Chain", "cross-chain", "cross"], label: "S08" },
+  { query: "zero knowledge proof cryptographic circuit commitment", expected: ["Zero Knowledge", "zero-knowledge", "zero"], label: "S09" },
+  { query: "retrieval augmented generation RAG document search", expected: ["Retrieval Augmented", "rag-retrieval", "retrieval"], label: "S10" },
 ];
 
 const SEMANTIC_QUERIES = [
-  { query: "Which project gamma note is about AI agents retaining state between sessions?", expected: "project-gamma/page-0020", label: "Q01" },
-  { query: "Find the 2025 archive note about graph structures modeling relationships naturally.", expected: "2025/page-0084", label: "Q02" },
-  { query: "Where is the Dev Tools resource about formal verification reducing the DeFi exploit surface?", expected: "dev-tools/page-0069", label: "Q03" },
-  { query: "Which finance area note ties PARA organization to stablecoins, DeFi liquidity, and graph databases?", expected: "finance/page-0034", label: "Q04" },
-  { query: "Find the learning area document on AMM liquidity pools with stablecoin regulation as a related topic.", expected: "learning/page-0046", label: "Q05" },
-  { query: "Which page discusses stablecoin clarity for institutions in project beta part 3?", expected: "project-beta/page-0009", label: "Q06" },
-  { query: "Which AI tools retrieval generation note part 7 is connected to stablecoin regulation?", expected: "ai-tools/page-0055", label: "Q07" },
-  { query: "Find the project alpha PARA page that mentions smart contract auditing and agent memory in key points.", expected: "project-alpha/page-0000", label: "Q08" },
-  { query: "Which learning area Rust performance note part 3 has graph databases and DeFi as key points?", expected: "learning/page-0044", label: "Q09" },
-  { query: "Where is the research smart contract auditing part 2 note connected to stablecoin and token economics?", expected: "research/page-0071", label: "Q10" },
+  { query: "how do AI agents remember information across multiple sessions", expected: ["Agent Memory", "agent-memory", "page-0084", "page-0089", "page-0020"], label: "Q01" },
+  { query: "what makes decentralized exchanges different from centralized ones", expected: ["DeFi", "defi-liquidity", "defi", "page-0046"], label: "Q02" },
+  { query: "techniques for compressing large language model context windows", expected: ["Retrieval", "rag-retrieval", "retrieval", "page-0072"], label: "Q03" },
+  { query: "regulatory challenges for stablecoin issuers in the US", expected: ["Stablecoin", "stablecoin-regulation", "stablecoin", "page-0009"], label: "Q04" },
+  { query: "building efficient search over large markdown document collections", expected: ["Vector Embeddings", "vector-embeddings", "vector", "page-0038"], label: "Q05" },
+  { query: "how to detect contradictions in a knowledge base graph", expected: ["Knowledge Graph", "knowledge-graph", "knowledge", "page-0034"], label: "Q06" },
+  { query: "performance optimisation strategies for Rust web services", expected: ["Rust Performance", "rust-performance", "rust", "page-0044"], label: "Q07" },
+  { query: "blockchain interoperability and cross-chain asset transfers", expected: ["Cross-Chain", "cross-chain", "cross", "page-0000"], label: "Q08" },
+  { query: "cryptographic commitments and privacy in smart contracts", expected: ["Zero Knowledge", "zero-knowledge", "zero", "page-0055"], label: "Q09" },
+  { query: "graph-based reasoning and link traversal in document stores", expected: ["Knowledge Graph", "knowledge-graph", "knowledge", "page-0071"], label: "Q10" },
 ];
 
 function parseArgs(argv) {

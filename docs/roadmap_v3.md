@@ -1,17 +1,18 @@
 ---
 title: "Quaid Product Roadmap"
 source: quaid-app/quaid
-date: 2026-05-04
+date: 2026-05-14T10:44:54.579+00:00
 tags: [quaid, roadmap, product, planning, memory-systems]
 aliases: [quaid-roadmap]
 ---
 
 # Quaid Product Roadmap
 
-**Last updated:** May 12, 2026
-**Latest public release:** v0.22.2
-**Current release lane:** v0.23.0
-**Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
+**Last updated:** 2026-05-14T10:44:54.579+00:00
+**Latest public release:** v0.22.3
+**Main branch manifest:** v0.22.3
+**Next release lane:** not tagged yet
+**Benchmark status:** DAB v1 release gate is 94.4% on `v0.22.2`; conversation-memory and scale benchmarks remain the main public gap.
 
 ---
 
@@ -19,14 +20,11 @@ aliases: [quaid-roadmap]
 
 Quaid is local-first persistent memory for AI agents. A single static binary wrapping SQLite + FTS5 + vector embeddings that runs fully airgapped. The north star: a private, offline, compounding knowledge system that gets smarter as you use it. No cloud. No API keys. No data leaving the machine.
 
-The gap vs competitors (Mem0 v3, GBrain, Hindsight) is documented and honest:
+Release truth matters here:
 
-| Benchmark | Quaid | Mem0 v3 | Status |
-|-----------|-------|---------|--------|
-| Infrastructure (DAB v1) | 99% | ~70% est | Quaid leads |
-| LoCoMo | 0.1% | 91.6% | Gap = issue #105 |
-| LongMemEval | 0.0% | 93.4% | Gap = issue #105 |
-| BEAM 100K | 0.0% | 64.1% | Gap = issues #105, #107 |
+- GitHub Releases and `install.sh` currently resolve to **`v0.22.3`**.
+- `Cargo.toml` on `main` also now reads **`0.22.3`**, so there is no separate public `v0.23.0` lane waiting to be tagged.
+- The roadmap below mixes **already shipped foundations** with **follow-on work that is still branch-only or not started**. Those states are called out explicitly.
 
 ---
 
@@ -110,53 +108,40 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - No new MCP tools; the 24-tool surface is unchanged
 
 ### Release truth
-- First shipped in `v0.21.0`; GitHub Releases and `install.sh` now resolve to `v0.22.2`.
+- First shipped in `v0.21.0`; GitHub Releases and `install.sh` now resolve to `v0.22.3`.
 
 ---
 
-## Phase 6 - Knowledge Graph
+## Phase 6 - Knowledge graph foundations ✅ Shipped foundation in v0.22.0
 
-**Target: GBrain-competitive entity linking, graph traversal**
-**Issues: #107 (entity extraction), #72 (self-wiring graph), #133 (graph traversal API), #74 (multi-hop)**
+**Shipped foundation:** `v0.22.0`  
+**Latest published release carrying it:** `v0.22.3`  
+**Issues still open for follow-ons:** #107, #72, #133, #74
 
-### What it needs to achieve
+### What already landed
 
-GBrain v0.23.0 headline: "Your brain's people, companies, and concepts now all benefit from what it learns from you." Entity graph that enriches over time. This is the second major gap after conversation memory.
+The knowledge-graph phase is no longer hypothetical. The current public release already ships the foundational graph layer:
 
-### Core requirements
+- **Structured frontmatter + autowiring.** YAML frontmatter now round-trips as structured JSON, and `links:`, `parent:`, `children:`, and `related:` fields create derived graph edges automatically.
+- **Wikilink autowiring.** `[[slug]]` references create and clean up derived `wiki_link` edges on page rewrite.
+- **Graph path output.** `memory_graph` and `quaid graph` now return `paths` so agents and humans can explain how a node was reached.
+- **Opt-in graph-aware retrieval knobs.** `graph_depth`, `graph_distance_decay`, `graph_expansion_max`, and `--hops N` are all landed, but retrieval expansion stays default-off until the benchmark gate is cleared.
+- **Entity-pattern backfill command.** `quaid graph extract-entities` is available now, but it writes assertions only; it does not yet promote durable entity edges.
 
-**Zero-LLM entity extraction at write time** (#107)
-- Extract people, companies, concepts from ingested pages
-- Zero LLM required - pure heuristic/NLP extraction
-- Can share the SLM pipeline from Phase 5 if SLM is enabled
-- Entities get canonical IDs, are linked across pages
+### What is still not shipped
 
-**Self-wiring knowledge graph** (#72)
-- YAML frontmatter as first-class graph edges
-- Wikilinks and tags auto-generate edges
-- Historical GBrain data: +28% graph search performance, -53% noisy results
+These items remain future work and should not be described as part of the current public release:
 
-**Graph traversal query API** (#133)
-- `memory_graph_query(entity, hops)` MCP tool
-- "Find all pages connected to entity X"
-- Multi-hop traversal (1-3 hops configurable)
-- Edge type weighting: explicit wikilink > tag co-occurrence > title mention
+- **No `memory_graph_query(entity, hops)` MCP tool yet.**
+- **No durable entity-pattern edge promotion yet.** The extractor writes assertions, not persistent graph edges.
+- **No default-on graph expansion yet.** The shipped release keeps `graph_depth = 0` by default pending the documented benchmark gate.
+- **No active enrichment yet.** That stays in Phase 7.
 
-**Multi-hop traversal** (#74)
-- Configurable depth: `--depth 1|2|3|auto`
-- Combine semantic similarity with relationship distance scoring
-
-### Success criteria
-- `memory_graph_query` returns entity-adjacent pages in <200ms (1-hop)
-- Graph edges persist across sessions
-- Entity extraction runs without LLM call (zero marginal cost)
-- DAB v2.1 §4 Knowledge Graph score improves from ~0
-
-### Key design decisions for OpenSpec
-- Entity extraction: heuristic-only vs SLM-optional?
-- Graph storage: new table vs extending links table?
-- How do graph edges interact with the existing `memory_link` surface?
-- Namespace isolation for graph queries - does entity graph span namespaces?
+### Success criteria for the remaining follow-ons
+- Entity-centric graph query results in <200 ms for the supported 1-hop path
+- Durable entity edges that persist across sessions without requiring manual linking
+- Default-on graph expansion only after the DAB §4 / MSMARCO gate is published as passing
+- A public benchmark story that reflects the shipped graph layer rather than the pre-graph baseline
 
 ---
 
@@ -167,7 +152,7 @@ GBrain v0.23.0 headline: "Your brain's people, companies, and concepts now all b
 
 ### What it needs to achieve
 
-With entity graph and conversation memory in place, the system can start being proactive rather than purely reactive.
+With the graph foundation and conversation memory in place, the system can start being proactive rather than purely reactive.
 
 ### Core requirements
 
@@ -242,18 +227,17 @@ Not on the current roadmap but worth an OpenSpec after the daemon surface is sta
 
 ## Build Order Summary
 
-| Priority | Issue | Feature | Depends on |
-|----------|-------|---------|-----------|
-| 1 | #137 ✅ | Namespace isolation | — |
-| 2 | #134 | Large corpus performance | — |
-| 3 | #105 | Conversation memory foundations (`v0.18.0`) + SLM extraction follow-on (`v0.19.0`) ✅ | #137 |
-| 4 | #135 | Contradiction resolution | #105 |
-| 5 | #107 | Entity extraction | #105 (coordinate) |
-| 6 | #72 | Self-wiring knowledge graph | #107 |
-| 7 | #133 | Graph traversal query API | #72, #107 |
-| 8 | #74 | Multi-hop traversal | #133 |
-| 9 | #136 | Active memory enrichment | #107, #133 |
-| 10 | #75, #76 | Noise reduction, context compression | Any |
+This table is now only for **remaining work** after the shipped phases above.
+
+| Priority | Issue | Remaining feature | Depends on |
+|----------|-------|-------------------|-----------|
+| 1 | #134 | Large corpus performance | — |
+| 2 | #107 | Durable entity extraction follow-on | #105 (coordinate) |
+| 3 | #72 | Self-wiring graph follow-on and edge promotion | #107 |
+| 4 | #133 | Entity-centric graph query API | #72, #107 |
+| 5 | #74 | Multi-hop traversal | #133 |
+| 6 | #136 | Active memory enrichment | #107, #133 |
+| 7 | #75, #76 | Noise reduction, context compression | Any |
 
 ---
 

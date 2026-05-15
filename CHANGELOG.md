@@ -4,6 +4,21 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
+## v0.22.3 — post-release bug fixes
+
+### Fixed
+
+- **Synthetic benchmark fallback.** `make bench` / DAB-oriented benchmark flows
+  now generate the synthetic corpus automatically when the DAB corpus is absent,
+  so fresh clones no longer fail before the benchmark harness can run.
+- **Phi-3 config compatibility.** SLM model loading now normalizes
+  `rope_scaling` object payloads before `Phi3Config` deserialization, fixing a
+  main-branch regression in the conversation extraction path.
+
+### Migration
+
+- No schema migration. Existing v0.22.x databases remain compatible.
+
 ## v0.22.2 — conversation turn delimiter fix
 
 ### Fixed

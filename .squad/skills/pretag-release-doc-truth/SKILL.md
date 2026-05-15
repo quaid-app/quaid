@@ -2,7 +2,7 @@
 name: pretag-release-doc-truth
 version: 1.0
 author: amy
-last_updated: 2026-04-29T21:29:11.071+08:00
+last_updated: 2026-05-14T10:44:54.579+00:00
 ---
 
 # Pre-tag release doc truth
@@ -51,12 +51,21 @@ Also check roadmap/deferred tables for stale "not yet implemented" language; the
 When a previously deferred CLI/admin command ships, update both the roadmap's deferred table and the user docs that teach the old workflow. A merged feature like `--write-quaid-id` / `migrate-uuids` can still block release if public docs leave it stranded in "future work."
 - If the shipped delta is an admin or vault-write path, verify the docs also carry its operating limits (for example Unix-only, offline-only, or "refuses while `serve` owns the collection"). Naming the feature without its guardrails is still a truth bug.
 
+### 4. Split shipped phase foundations from pending follow-ons
+
+- A roadmap can drift even when the version number is correct. When a phase lands a foundation slice in the current published release, stop describing the whole phase as "upcoming."
+- Name the shipped floor precisely (for example autowiring, path output, or a backfill command), then name the still-pending follow-ons separately (for example entity-centric query APIs, default-on retrieval, or enrichment).
+- Re-state the truth in every release-facing surface that points at the roadmap: homepage status card, getting-started guide, roadmap doc, and any reference page that still says "pre-release" for a now-published shape.
+
 ## Audit checklist
 
 - [ ] Manifest version (`Cargo.toml`, `package.json`, etc.) matches the intended tag once the release is actually ready to cut
 - [ ] `README.md`
 - [ ] `docs/getting-started.md`
+- [ ] `docs/roadmap_v3.md` (or the current public roadmap source)
 - [ ] `website/src/content/docs/tutorials/install.mdx`
+- [ ] `website/src/content/docs/index.mdx`
+- [ ] `website/src/content/docs/contributing/roadmap.mdx`
 - [ ] `docs/roadmap.md` if getting-started or README links readers there for release status
 
 ## Anti-patterns

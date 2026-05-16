@@ -34,8 +34,42 @@ use uuid::Uuid;
 use super::chunking::chunk_page;
 use super::types::{InferenceError, SearchError, SearchResult};
 
-#[cfg(all(feature = "embedded-model", feature = "online-model"))]
-compile_error!("Enable only one model channel: `embedded-model` or `online-model`.");
+#[cfg(feature = "online-model")]
+#[derive(Debug)]
+struct TempFileCleanupGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+#[cfg(feature = "online-model")]
+impl TempFileCleanupGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(feature = "online-model")]
+impl Drop for TempFileCleanupGuard {
+    fn drop(&mut self) {
+        if !self.armed || !self.path.exists() {
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            eprintln!(
+                "Warning: failed to remove temporary embedding model file {}: {error}. Run `quaid model clean --all --force` after the download exits.",
+                self.path.display()
+            );
+        }
+    }
+}
 
 const DEFAULT_MODEL_ALIAS: &str = "small";
 const DEFAULT_EMBEDDING_DIMENSIONS: usize = 384;
@@ -219,6 +253,28 @@ pub fn resolve_model(input: &str) -> ModelConfig {
     }
 }
 
+/// Returns the built-in embedding model aliases that use pinned file hashes.
+pub fn known_embedding_models() -> Vec<ModelConfig> {
+    ["small", "base", "large", "m3"]
+        .into_iter()
+        .map(resolve_model)
+        .collect()
+}
+
+/// Resolves a selector only when it names one of Quaid's pinned embedding
+/// model aliases or repository ids, avoiding custom-model warning output.
+pub fn resolve_known_embedding_model(input: &str) -> Option<ModelConfig> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let alias = match normalized.as_str() {
+        "" | "small" | "baai/bge-small-en-v1.5" => "small",
+        "base" | "baai/bge-base-en-v1.5" => "base",
+        "large" | "baai/bge-large-en-v1.5" => "large",
+        "m3" | "baai/bge-m3" => "m3",
+        _ => return None,
+    };
+    Some(resolve_model(alias))
+}
+
 /// Resolves an optional user-supplied model selector, defaulting to the
 /// embedded model and coercing the result to what the current build channel
 /// can actually load.
@@ -384,21 +440,35 @@ impl EmbeddingModel {
     }
 
     fn try_load_candle(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
-        #[cfg(feature = "embedded-model")]
+        #[cfg(all(feature = "online-model", feature = "test-harness"))]
         {
-            return load_embedded_backend(config);
+            load_online_backend(config)
         }
 
-        #[cfg(feature = "online-model")]
+        // When both release channels are enabled outside the test harness,
+        // prefer embedded so validation builds keep release-profile behavior.
+        #[cfg(all(
+            feature = "embedded-model",
+            not(all(feature = "online-model", feature = "test-harness"))
+        ))]
         {
-            return load_online_backend(config);
+            load_embedded_backend(config)
         }
 
-        #[expect(
-            unreachable_code,
-            reason = "either embedded-model or online-model feature returns above; this fallback only fires if neither is enabled at build time"
-        )]
-        Err("no model channel enabled".to_owned())
+        #[cfg(all(
+            not(feature = "embedded-model"),
+            feature = "online-model",
+            not(feature = "test-harness")
+        ))]
+        {
+            load_online_backend(config)
+        }
+
+        #[cfg(not(any(feature = "embedded-model", feature = "online-model")))]
+        {
+            let _ = config;
+            Err("no model channel enabled".to_owned())
+        }
     }
 
     fn embed(&self, text: &str) -> Result<Vec<f32>, InferenceError> {
@@ -427,7 +497,10 @@ impl EmbeddingModel {
     }
 }
 
-#[cfg(feature = "embedded-model")]
+#[cfg(all(
+    feature = "embedded-model",
+    not(all(feature = "online-model", feature = "test-harness"))
+))]
 fn load_embedded_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
     if !config.is_small() {
         return Err(format!(
@@ -763,7 +836,9 @@ fn download_model_file(
 ) -> Result<(), String> {
     let validated_model_id = validate_model_id(&model.model_id)?;
     let destination = cache_dir.join(file_name);
-    let (temp_destination, mut file) = create_temp_download_file(cache_dir, file_name)?;
+    let (temp_destination, file) = create_temp_download_file(cache_dir, file_name)?;
+    let mut temp_guard = TempFileCleanupGuard::new(temp_destination);
+    let mut file = file;
     let base_url = huggingface_base_url();
     // Use pinned revision for standard aliases; fall back to `main` only for
     // custom/unpinned models so upstream changes never silently break SHA checks.
@@ -786,22 +861,34 @@ fn download_model_file(
         .map_err(|e| format!("download {url}: {e}"))?;
 
     std::io::copy(&mut response, &mut file)
-        .map_err(|e| format!("write {}: {e}", temp_destination.display()))?;
+        .map_err(|e| format!("write {}: {e}", temp_guard.path().display()))?;
+    file.sync_all()
+        .map_err(|e| format!("flush {}: {e}", temp_guard.path().display()))?;
 
     if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
-        verify_file_sha256(&temp_destination, expected_hash)?;
+        verify_file_sha256(temp_guard.path(), expected_hash).map_err(|error| {
+            format!(
+                "{error}; run `quaid model clean {} --force` and retry the operation",
+                model.alias
+            )
+        })?;
     }
 
-    if let Err(err) = std::fs::rename(&temp_destination, &destination) {
-        let _ = std::fs::remove_file(&temp_destination);
+    drop(file);
+    if let Err(err) = std::fs::rename(temp_guard.path(), &destination) {
         if destination.exists() {
             if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
                 verify_file_sha256(&destination, expected_hash)?;
             }
             return Ok(());
         }
-        return Err(format!("rename {}: {err}", destination.display()));
+        return Err(format!(
+            "rename {}: {err}; temporary file {} will be removed",
+            destination.display(),
+            temp_guard.path().display()
+        ));
     }
+    temp_guard.disarm();
 
     Ok(())
 }
@@ -888,6 +975,44 @@ fn existing_model_paths(cache_dir: &Path) -> Option<(PathBuf, PathBuf, PathBuf)>
 
     (config.is_file() && tokenizer.is_file() && model.is_file())
         .then_some((config, tokenizer, model))
+}
+
+/// Returns the cache directory used for a resolved online embedding model.
+#[cfg(feature = "online-model")]
+pub fn embedding_model_cache_dir(model: &ModelConfig) -> Result<PathBuf, String> {
+    model_cache_dir(model)
+}
+
+/// Returns the sanitized cache key used for a resolved online embedding model.
+#[cfg(feature = "online-model")]
+pub fn embedding_model_cache_key(model: &ModelConfig) -> String {
+    cache_dir_name(model)
+}
+
+/// Returns the required file names for an online embedding model cache.
+#[cfg(feature = "online-model")]
+pub fn embedding_required_files() -> &'static [&'static str] {
+    &["config.json", "tokenizer.json", "model.safetensors"]
+}
+
+/// Validates the required files for an online embedding model cache, with
+/// optional SHA-256 verification for pinned models.
+#[cfg(feature = "online-model")]
+pub fn verify_embedding_model_cache(
+    model: &ModelConfig,
+    cache_dir: &Path,
+    verify_hashes: bool,
+) -> Result<(), String> {
+    for file_name in embedding_required_files() {
+        let path = cache_dir.join(file_name);
+        if !path.is_file() {
+            return Err(format!("missing required file {}", path.display()));
+        }
+    }
+    if verify_hashes {
+        verify_cached_model_integrity(model, cache_dir)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "online-model")]

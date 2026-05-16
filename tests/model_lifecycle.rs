@@ -11,12 +11,14 @@ mod common;
 #[path = "common/subprocess.rs"]
 mod common_subprocess;
 
+use filetime::{set_file_mtime, FileTime};
 use quaid::core::{
     conversation::model_lifecycle::{
-        cache_dir_for_alias, cached_model_status, download_model, resolve_model_alias,
-        NoopProgressReporter, ProgressReporter,
+        cache_dir_for_alias, cached_model_status, download_model, inspect_model_caches,
+        remove_model_cache_entries, resolve_model_alias, ModelCacheState, NoopProgressReporter,
+        ProgressReporter,
     },
-    db,
+    db, inference,
 };
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -339,6 +341,10 @@ fn open_db(path: &Path) -> Connection {
     db::open(path.to_str().expect("utf8 db path")).expect("open db")
 }
 
+fn mark_path_old(path: &Path) {
+    set_file_mtime(path, FileTime::from_unix_time(1, 0)).expect("set old mtime");
+}
+
 #[test]
 fn resolve_model_alias_maps_gemma_3_4b() {
     let resolved = resolve_model_alias("gemma-3-4b").expect("resolve alias");
@@ -431,6 +437,42 @@ fn download_model_rejects_bad_integrity_and_cleans_partial_cache() {
 }
 
 #[test]
+fn embedding_download_removes_temp_file_after_hash_failure() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let model = inference::resolve_model("base");
+    let revision = model
+        .sha256_hashes
+        .and_then(|hashes| hashes.revision)
+        .expect("base revision");
+    let server = MockModelServer::start(&model.model_id, revision, mock_files(false));
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let _env = EnvGuard::set_all(&[
+        ("QUAID_HF_BASE_URL", server.base_url.clone()),
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+        ("QUAID_FORCE_HASH_SHIM", "0".to_owned()),
+    ]);
+
+    inference::set_model_config(model.clone());
+    let embedding = inference::embed("force embedding download").expect("fallback embedding");
+    assert_eq!(embedding.len(), model.embedding_dim);
+
+    let cache_dir = inference::embedding_model_cache_dir(&model).expect("embedding cache dir");
+    let leftovers = std::fs::read_dir(&cache_dir)
+        .expect("read embedding cache dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".download-"))
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "temporary embedding files should be removed, found {leftovers:?}"
+    );
+}
+
+#[test]
 fn download_model_succeeds_when_another_writer_populates_the_cache_first() {
     let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
     let repo_id = "org/test-model";
@@ -465,6 +507,38 @@ fn download_model_succeeds_when_another_writer_populates_the_cache_first() {
 }
 
 #[test]
+fn inspect_model_caches_generates_manifest_v1_from_trusted_source_pins() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let _env = EnvGuard::set_all(&[(
+        "QUAID_MODEL_CACHE_DIR",
+        cache_root.path().display().to_string(),
+    )]);
+    let cache_dir = cache_dir_for_alias("test-pinned").expect("cache dir");
+    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+    for (path, file) in mock_files(false) {
+        std::fs::write(cache_dir.join(path), file.content).expect("write cached file");
+    }
+
+    let entries = inspect_model_caches(Some("test-pinned"), true).expect("inspect caches");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].state, ModelCacheState::Complete);
+    assert!(entries[0].complete_cache);
+
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(cache_dir.join("manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(manifest["manifest_version"], 1);
+    assert!(manifest["created_at_unix"].as_u64().is_some());
+    for file in manifest["files"].as_array().expect("manifest files") {
+        assert!(file["size_bytes"].as_u64().is_some());
+        assert!(file["modified_unix"].as_u64().is_some());
+        assert_eq!(file["verified_from_source"], true);
+    }
+}
+
+#[test]
 fn download_model_scavenges_stale_download_dirs_without_touching_recent_ones() {
     let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
     let repo_id = "org/test-model";
@@ -479,6 +553,7 @@ fn download_model_scavenges_stale_download_dirs_without_touching_recent_ones() {
     std::fs::create_dir_all(&recent_dir).expect("create recent dir");
     std::fs::write(stale_dir.join("partial.bin"), b"stale").expect("write stale file");
     std::fs::write(recent_dir.join("partial.bin"), b"recent").expect("write recent file");
+    mark_path_old(&stale_dir);
 
     let _env = EnvGuard::set_all(&[
         ("QUAID_HF_BASE_URL", server.base_url.clone()),
@@ -493,6 +568,45 @@ fn download_model_scavenges_stale_download_dirs_without_touching_recent_ones() {
 
     assert!(!stale_dir.exists(), "stale dir should be scavenged");
     assert!(recent_dir.exists(), "recent dir should be preserved");
+}
+
+#[test]
+fn inspect_and_clean_preserves_active_temp_dirs() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let stale_dir = cache_root.path().join(".org-test-model-download-1-stale");
+    let active_dir = cache_root.path().join(".org-test-model-download-1-active");
+    std::fs::create_dir_all(&stale_dir).expect("create stale dir");
+    std::fs::create_dir_all(&active_dir).expect("create active dir");
+    std::fs::write(stale_dir.join("partial.bin"), b"stale").expect("write stale file");
+    std::fs::write(active_dir.join(".downloading"), b"active").expect("write heartbeat");
+    mark_path_old(&stale_dir);
+    let _env = EnvGuard::set_all(&[
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+        ("QUAID_STALE_MODEL_CACHE_TTL_SECS", "3600".to_owned()),
+    ]);
+
+    let entries = inspect_model_caches(None, false).expect("inspect caches");
+    assert!(entries
+        .iter()
+        .any(|entry| entry.path == stale_dir && entry.cleanup_eligible));
+    assert!(entries.iter().any(|entry| {
+        entry.path == active_dir
+            && entry.state == ModelCacheState::ActiveTemporary
+            && !entry.cleanup_eligible
+    }));
+
+    let candidates = entries
+        .into_iter()
+        .filter(|entry| entry.cleanup_eligible)
+        .collect::<Vec<_>>();
+    let report = remove_model_cache_entries(&candidates);
+    assert!(report.failed.is_empty(), "cleanup failures: {report:?}");
+    assert!(!stale_dir.exists(), "stale temp dir should be removed");
+    assert!(active_dir.exists(), "active temp dir should be preserved");
 }
 
 #[test]
@@ -588,6 +702,86 @@ fn cli_model_pull_caches_without_flipping_extraction_flag() {
     let enabled = quaid::core::db::read_config_value_or(&conn, "extraction.enabled", "false")
         .expect("read extraction flag");
     assert_eq!(enabled, "false");
+}
+
+#[test]
+fn cli_model_status_reports_verified_cache() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("memory.db");
+    let cache_root = dir.path().join("cache");
+    let _env = EnvGuard::set_all(&[("QUAID_MODEL_CACHE_DIR", cache_root.display().to_string())]);
+    let cache_dir = cache_dir_for_alias("test-pinned").expect("cache dir");
+    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+    for (path, file) in mock_files(false) {
+        std::fs::write(cache_dir.join(path), file.content).expect("write cached file");
+    }
+
+    let output = run_quaid_with_env(
+        &db_path,
+        &["model", "status", "test-pinned", "--verify"],
+        &[("QUAID_MODEL_CACHE_DIR", cache_root.display().to_string())],
+    );
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("extraction"));
+    assert!(stdout.contains("test-pinned"));
+    assert!(stdout.contains("complete"));
+}
+
+#[test]
+fn cli_model_clean_list_and_all_force_remove_only_cleanup_candidates() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = dir.path().join("memory.db");
+    let cache_root = dir.path().join("cache");
+    std::fs::create_dir_all(&cache_root).expect("create cache root");
+    let _env = EnvGuard::set_all(&[("QUAID_MODEL_CACHE_DIR", cache_root.display().to_string())]);
+    let stale_dir = cache_root.join(".org-test-model-download-1-stale");
+    std::fs::create_dir_all(&stale_dir).expect("create stale dir");
+    std::fs::write(stale_dir.join("partial.bin"), b"stale").expect("write stale file");
+    mark_path_old(&stale_dir);
+
+    let cache_dir = cache_dir_for_alias("test-pinned").expect("cache dir");
+    std::fs::create_dir_all(&cache_dir).expect("create complete cache dir");
+    for (path, file) in mock_files(false) {
+        std::fs::write(cache_dir.join(path), file.content).expect("write cached file");
+    }
+    inspect_model_caches(Some("test-pinned"), true).expect("generate manifest");
+
+    let envs = [("QUAID_MODEL_CACHE_DIR", cache_root.display().to_string())];
+    let list_output = run_quaid_with_env(&db_path, &["model", "clean", "--list"], &envs);
+    assert!(
+        list_output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&list_output.stdout),
+        String::from_utf8_lossy(&list_output.stderr)
+    );
+    assert!(stale_dir.exists(), "--list must not delete stale dirs");
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_stdout.contains("stale-temp"));
+    assert!(!list_stdout.contains("test-pinned"));
+
+    let clean_output = run_quaid_with_env(&db_path, &["model", "clean", "--all", "--force"], &envs);
+    assert!(
+        clean_output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&clean_output.stdout),
+        String::from_utf8_lossy(&clean_output.stderr)
+    );
+    assert!(
+        !stale_dir.exists(),
+        "--all --force should remove stale dirs"
+    );
+    assert!(
+        cache_dir.exists(),
+        "--all --force should preserve complete caches"
+    );
 }
 
 #[test]

@@ -14,16 +14,16 @@
 
 #[cfg(feature = "online-model")]
 use std::collections::BTreeSet;
+use std::fmt;
 use std::fs::{self, File};
 use std::io::Read;
 #[cfg(feature = "online-model")]
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-#[cfg(feature = "online-model")]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "online-model")]
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -33,9 +33,11 @@ const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://huggingface.co";
 const MODEL_CACHE_ROOT_ENV: &str = "QUAID_MODEL_CACHE_DIR";
 #[cfg(feature = "online-model")]
 const HUGGINGFACE_BASE_URL_ENV: &str = "QUAID_HF_BASE_URL";
+const STALE_CACHE_TTL_ENV: &str = "QUAID_STALE_MODEL_CACHE_TTL_SECS";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
-#[cfg(feature = "online-model")]
-const STALE_DOWNLOAD_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const DOWNLOAD_HEARTBEAT_FILE: &str = ".downloading";
+const MANIFEST_VERSION: u32 = 1;
+const DEFAULT_STALE_DOWNLOAD_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 const PHI_35_MINI_REVISION: &str = "2fe192450127e6a83f7441aef6e3ca586c338b77";
 const GEMMA_3_1B_REVISION: &str = "dcc83ea841ab6100d6b47a070329e1ba4cf78752";
@@ -112,13 +114,27 @@ pub trait ProgressReporter {
 
 /// Human-readable stderr reporter for CLI commands.
 #[derive(Debug, Default)]
-pub struct ConsoleProgressReporter;
+pub struct ConsoleProgressReporter {
+    started_at: Option<Instant>,
+    current_file_started_at: Option<Instant>,
+    last_progress_at: Option<Instant>,
+    planned_files: usize,
+    finished_files: usize,
+}
 
 impl ProgressReporter for ConsoleProgressReporter {
     fn planned(&mut self, alias: &ResolvedModelAlias, file_count: usize) {
+        self.started_at = Some(Instant::now());
+        self.planned_files = file_count;
         eprintln!(
-            "Downloading model `{}` from {} ({} file(s))",
-            alias.requested_alias, alias.repo_id, file_count
+            "Downloading model `{}` from {}{} ({} file(s))",
+            alias.requested_alias,
+            alias.repo_id,
+            alias
+                .revision
+                .as_deref()
+                .map_or_else(String::new, |revision| { format!(" @ {revision}") }),
+            file_count
         );
     }
 
@@ -127,14 +143,78 @@ impl ProgressReporter for ConsoleProgressReporter {
     }
 
     fn file_started(&mut self, file_name: &str, bytes_total: Option<u64>) {
+        self.current_file_started_at = Some(Instant::now());
+        self.last_progress_at = None;
         match bytes_total {
-            Some(bytes_total) => eprintln!("  → {file_name} ({bytes_total} bytes)"),
-            None => eprintln!("  → {file_name}"),
+            Some(bytes_total) => eprintln!("  -> {file_name} ({})", human_bytes(bytes_total)),
+            None => eprintln!("  -> {file_name}"),
         }
     }
 
-    fn file_finished(&mut self, file_name: &str, _actual_sha256: &str) {
-        eprintln!("  ✓ {file_name}");
+    fn file_progress(&mut self, file_name: &str, downloaded_bytes: u64, bytes_total: Option<u64>) {
+        let now = Instant::now();
+        if self
+            .last_progress_at
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1))
+            && bytes_total != Some(downloaded_bytes)
+        {
+            return;
+        }
+        self.last_progress_at = Some(now);
+
+        let elapsed = self
+            .current_file_started_at
+            .map(|started| now.duration_since(started))
+            .unwrap_or_default();
+        let speed = if elapsed.as_secs_f64() > 0.0 {
+            downloaded_bytes as f64 / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        let eta = bytes_total.and_then(|total| {
+            if speed > 0.0 && total > downloaded_bytes {
+                Some(Duration::from_secs_f64(
+                    (total - downloaded_bytes) as f64 / speed,
+                ))
+            } else {
+                None
+            }
+        });
+
+        match (bytes_total, eta) {
+            (Some(total), Some(eta)) => eprintln!(
+                "     {file_name}: {} / {} ({}/s, ~{} remaining)",
+                human_bytes(downloaded_bytes),
+                human_bytes(total),
+                human_bytes(speed as u64),
+                human_duration(eta)
+            ),
+            (Some(total), None) => eprintln!(
+                "     {file_name}: {} / {}",
+                human_bytes(downloaded_bytes),
+                human_bytes(total)
+            ),
+            (None, _) => eprintln!("     {file_name}: {}", human_bytes(downloaded_bytes)),
+        }
+    }
+
+    fn file_finished(&mut self, file_name: &str, actual_sha256: &str) {
+        self.finished_files += 1;
+        let elapsed = self
+            .started_at
+            .map(|started| human_duration(started.elapsed()))
+            .unwrap_or_else(|| "unknown time".to_owned());
+        let digest_prefix = actual_sha256.get(..12).unwrap_or(actual_sha256);
+        eprintln!(
+            "  ok {file_name} (SHA-256: {digest_prefix}..., {}/{}, {elapsed})",
+            self.finished_files, self.planned_files
+        );
+        if self.planned_files > 0 && self.finished_files >= self.planned_files {
+            eprintln!(
+                "Download complete: {} file(s) verified in {elapsed}",
+                self.finished_files
+            );
+        }
     }
 }
 
@@ -143,6 +223,36 @@ impl ProgressReporter for ConsoleProgressReporter {
 pub struct NoopProgressReporter;
 
 impl ProgressReporter for NoopProgressReporter {}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn human_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    if minutes < 60 {
+        return format!("{minutes}m{remainder:02}s");
+    }
+    let hours = minutes / 60;
+    let minutes = minutes % 60;
+    format!("{hours}h{minutes:02}m")
+}
 
 /// Result of resolving a user-supplied alias to the concrete HuggingFace
 /// repo, revision, and cache key that the lifecycle code operates on.
@@ -175,6 +285,121 @@ pub struct CachedModelStatus {
     /// `true` when every file in the manifest was verified against a
     /// source-pinned digest, not a server-supplied hash.
     pub source_pinned: bool,
+}
+
+/// High-level family for a cache entry discovered under the shared model
+/// cache root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelCacheFamily {
+    /// Chat/extraction SLM cache managed by `quaid model pull`.
+    Extraction,
+    /// Embedding model cache managed by semantic indexing/query paths.
+    Embedding,
+}
+
+impl ModelCacheFamily {
+    /// Stable lowercase label for CLI output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Extraction => "extraction",
+            Self::Embedding => "embedding",
+        }
+    }
+}
+
+impl fmt::Display for ModelCacheFamily {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Validation state for a discovered model cache path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelCacheState {
+    /// A complete cache passed the requested validation level.
+    Complete,
+    /// The expected cache path is absent.
+    Missing,
+    /// The cache path exists but is missing required files or metadata.
+    Incomplete,
+    /// The cache path exists but validation detected corrupt or mismatched content.
+    Corrupted,
+    /// A temporary download path is older than the stale-download threshold.
+    StaleTemporary,
+    /// A temporary download path still has a fresh heartbeat or mtime.
+    ActiveTemporary,
+}
+
+impl ModelCacheState {
+    /// Stable lowercase label for CLI output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Missing => "missing",
+            Self::Incomplete => "incomplete",
+            Self::Corrupted => "corrupted",
+            Self::StaleTemporary => "stale-temp",
+            Self::ActiveTemporary => "active-temp",
+        }
+    }
+}
+
+impl fmt::Display for ModelCacheState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Snapshot of one extraction or embedding cache path discovered for
+/// operator-facing status and cleanup commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCacheEntry {
+    /// Cache family.
+    pub family: ModelCacheFamily,
+    /// User-facing alias when the path can be mapped to one.
+    pub alias: Option<String>,
+    /// Sanitized cache key under the shared cache root.
+    pub cache_key: String,
+    /// Filesystem path represented by the entry.
+    pub path: PathBuf,
+    /// Validation state for the path.
+    pub state: ModelCacheState,
+    /// Human-readable detail about the state.
+    pub reason: String,
+    /// Number of regular files under the path.
+    pub file_count: usize,
+    /// Total bytes occupied by regular files under the path.
+    pub size_bytes: u64,
+    /// Latest observed mtime, represented as seconds since the Unix epoch.
+    pub modified_unix: Option<u64>,
+    /// `true` when cleanup may remove this entry without deleting a verified
+    /// complete cache.
+    pub cleanup_eligible: bool,
+    /// `true` when the entry represents a complete cache that should only be
+    /// removed when an alias-specific forced clean explicitly targets it.
+    pub complete_cache: bool,
+}
+
+/// Result for a single cleanup removal attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCacheRemoval {
+    /// Filesystem path targeted by the removal attempt.
+    pub path: PathBuf,
+    /// Bytes that were counted for the entry before removal.
+    pub size_bytes: u64,
+    /// Error message when removal failed.
+    pub error: Option<String>,
+}
+
+/// Summary returned after removing one or more cache entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelCacheCleanReport {
+    /// Successful removals.
+    pub removed: Vec<ModelCacheRemoval>,
+    /// Failed removals.
+    pub failed: Vec<ModelCacheRemoval>,
+    /// Sum of `size_bytes` for successful removals.
+    pub bytes_freed: u64,
 }
 
 #[cfg(any(feature = "online-model", test, feature = "test-harness"))]
@@ -412,9 +637,13 @@ pub enum ModelLifecycleError {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct CacheManifest {
+    #[serde(default)]
+    manifest_version: Option<u32>,
     requested_alias: String,
     repo_id: String,
     revision: Option<String>,
+    #[serde(default)]
+    created_at_unix: Option<u64>,
     files: Vec<CachedFile>,
 }
 
@@ -422,6 +651,10 @@ struct CacheManifest {
 struct CachedFile {
     path: String,
     sha256: String,
+    #[serde(default)]
+    size_bytes: Option<u64>,
+    #[serde(default)]
+    modified_unix: Option<u64>,
     verified_from_source: bool,
 }
 
@@ -443,6 +676,52 @@ struct DownloadedArtifact {
     relative_path: String,
     sha256: String,
     verified_from_source: bool,
+}
+
+#[cfg(feature = "online-model")]
+#[derive(Debug)]
+struct TempDirCleanupGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+#[cfg(feature = "online-model")]
+impl TempDirCleanupGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    fn cleanup_now(&mut self) -> Result<(), String> {
+        if self.path.exists() {
+            fs::remove_dir_all(&self.path)
+                .map_err(|error| format!("remove {}: {error}", self.path.display()))?;
+        }
+        self.disarm();
+        Ok(())
+    }
+}
+
+#[cfg(feature = "online-model")]
+impl Drop for TempDirCleanupGuard {
+    fn drop(&mut self) {
+        if !self.armed || !self.path.exists() {
+            return;
+        }
+        if let Err(error) = fs::remove_dir_all(&self.path) {
+            eprintln!(
+                "Warning: failed to remove temporary model cache at {}: {error}. Run `quaid model clean --all --force` after the download exits.",
+                self.path.display()
+            );
+        }
+    }
 }
 
 /// Map a user-facing alias (curated short name or raw `<org>/<model>` repo
@@ -532,6 +811,621 @@ pub fn cached_model_status(alias: &str) -> Result<CachedModelStatus, ModelLifecy
         verified,
         source_pinned,
     })
+}
+
+/// Inspect extraction and embedding cache entries under the shared model
+/// cache root.
+///
+/// When `alias` is `Some`, the result includes missing expected paths for
+/// matching families. When `verify_hashes` is `true`, complete caches must
+/// pass full digest verification instead of fast metadata validation.
+pub fn inspect_model_caches(
+    alias: Option<&str>,
+    verify_hashes: bool,
+) -> Result<Vec<ModelCacheEntry>, ModelLifecycleError> {
+    let cache_root = cache_root_dir()?;
+    let mode = if verify_hashes {
+        ManifestValidation::Full
+    } else {
+        ManifestValidation::Fast
+    };
+    let mut entries = Vec::new();
+
+    if let Some(selector) = alias {
+        let mut matched = false;
+        if let Ok(resolved) = resolve_model_alias(selector) {
+            matched = true;
+            inspect_extraction_alias(&mut entries, &cache_root, &resolved, mode)?;
+        }
+
+        #[cfg(feature = "online-model")]
+        if let Some(model) = crate::core::inference::resolve_known_embedding_model(selector) {
+            matched = true;
+            inspect_embedding_model(&mut entries, &cache_root, &model, true, verify_hashes);
+        }
+
+        if !matched {
+            resolve_model_alias(selector)?;
+        }
+    } else {
+        inspect_extraction_cache_root(&mut entries, &cache_root, mode)?;
+
+        #[cfg(feature = "online-model")]
+        for model in crate::core::inference::known_embedding_models() {
+            inspect_embedding_model(&mut entries, &cache_root, &model, false, verify_hashes);
+        }
+    }
+
+    entries.sort_by(|left, right| {
+        left.family
+            .as_str()
+            .cmp(right.family.as_str())
+            .then_with(|| left.cache_key.cmp(&right.cache_key))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(entries)
+}
+
+/// Remove cache entries that were selected by an operator-facing cleanup
+/// command.
+///
+/// The removal is constrained to the resolved model cache root. Symlinks are
+/// removed as symlinks; directories are removed recursively.
+pub fn remove_model_cache_entries(entries: &[ModelCacheEntry]) -> ModelCacheCleanReport {
+    let mut report = ModelCacheCleanReport::default();
+    let Ok(cache_root) = cache_root_dir() else {
+        for entry in entries {
+            report.failed.push(ModelCacheRemoval {
+                path: entry.path.clone(),
+                size_bytes: entry.size_bytes,
+                error: Some("could not resolve model cache root".to_owned()),
+            });
+        }
+        return report;
+    };
+
+    for entry in entries {
+        if !entry.cleanup_eligible && !entry.complete_cache {
+            report.failed.push(ModelCacheRemoval {
+                path: entry.path.clone(),
+                size_bytes: entry.size_bytes,
+                error: Some("entry is not eligible for cleanup".to_owned()),
+            });
+            continue;
+        }
+        if !path_is_within_cache_root(&cache_root, &entry.path) {
+            report.failed.push(ModelCacheRemoval {
+                path: entry.path.clone(),
+                size_bytes: entry.size_bytes,
+                error: Some("refusing to remove a path outside the model cache root".to_owned()),
+            });
+            continue;
+        }
+
+        match remove_cache_path(&entry.path) {
+            Ok(()) => {
+                report.bytes_freed = report.bytes_freed.saturating_add(entry.size_bytes);
+                report.removed.push(ModelCacheRemoval {
+                    path: entry.path.clone(),
+                    size_bytes: entry.size_bytes,
+                    error: None,
+                });
+            }
+            Err(error) => report.failed.push(ModelCacheRemoval {
+                path: entry.path.clone(),
+                size_bytes: entry.size_bytes,
+                error: Some(error),
+            }),
+        }
+    }
+
+    report
+}
+
+fn inspect_extraction_alias(
+    entries: &mut Vec<ModelCacheEntry>,
+    cache_root: &Path,
+    alias: &ResolvedModelAlias,
+    mode: ManifestValidation,
+) -> Result<(), ModelLifecycleError> {
+    let cache_dir = cache_root.join(&alias.cache_key);
+    entries.push(inspect_extraction_cache_dir(
+        cache_dir,
+        &alias.cache_key,
+        Some(alias),
+        mode,
+    ));
+    inspect_extraction_temp_dirs(entries, cache_root, Some(&alias.cache_key))?;
+    Ok(())
+}
+
+fn inspect_extraction_cache_root(
+    entries: &mut Vec<ModelCacheEntry>,
+    cache_root: &Path,
+    mode: ManifestValidation,
+) -> Result<(), ModelLifecycleError> {
+    let read_dir = match fs::read_dir(cache_root) {
+        Ok(read_dir) => read_dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(ModelLifecycleError::CacheInvalid {
+                cache_dir: cache_root.display().to_string(),
+                message: format!("read cache root: {error}"),
+            });
+        }
+    };
+
+    for entry in read_dir.filter_map(Result::ok) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if extraction_temp_cache_key(&file_name).is_some() {
+            continue;
+        }
+        if is_known_embedding_cache_key(&file_name) {
+            continue;
+        }
+        let path = entry.path();
+        if !path.join(MANIFEST_FILE_NAME).is_file() {
+            continue;
+        }
+        match read_manifest(&path) {
+            Ok(manifest) => match resolve_model_alias(&manifest.requested_alias) {
+                Ok(alias) => entries.push(inspect_extraction_cache_dir(
+                    path,
+                    &alias.cache_key,
+                    Some(&alias),
+                    mode,
+                )),
+                Err(error) => entries.push(cache_entry(
+                    CacheEntryParams::new(
+                        ModelCacheFamily::Extraction,
+                        file_name,
+                        path,
+                        ModelCacheState::Corrupted,
+                        format!("manifest alias is invalid: {error}"),
+                    )
+                    .alias(Some(manifest.requested_alias))
+                    .cleanup_eligible(true),
+                )),
+            },
+            Err(error) => entries.push(cache_entry(
+                CacheEntryParams::new(
+                    ModelCacheFamily::Extraction,
+                    file_name,
+                    path,
+                    ModelCacheState::Corrupted,
+                    error,
+                )
+                .cleanup_eligible(true),
+            )),
+        }
+    }
+
+    inspect_extraction_temp_dirs(entries, cache_root, None)
+}
+
+fn inspect_extraction_cache_dir(
+    path: PathBuf,
+    cache_key: &str,
+    alias: Option<&ResolvedModelAlias>,
+    mode: ManifestValidation,
+) -> ModelCacheEntry {
+    if !path.exists() {
+        return cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Extraction,
+                cache_key,
+                path,
+                ModelCacheState::Missing,
+                "cache directory is not present",
+            )
+            .alias(alias.map(|alias| alias.requested_alias.clone())),
+        );
+    }
+    if !path.is_dir() {
+        return cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Extraction,
+                cache_key,
+                path,
+                ModelCacheState::Corrupted,
+                "cache path is not a directory",
+            )
+            .alias(alias.map(|alias| alias.requested_alias.clone()))
+            .cleanup_eligible(true),
+        );
+    }
+
+    let validation = alias
+        .ok_or_else(|| ModelLifecycleError::CacheInvalid {
+            cache_dir: path.display().to_string(),
+            message: "manifest alias is missing".to_owned(),
+        })
+        .and_then(|alias| ensure_cache_manifest(&path, alias, mode));
+    match validation {
+        Ok(manifest) => cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Extraction,
+                cache_key,
+                path,
+                ModelCacheState::Complete,
+                if mode == ManifestValidation::Full {
+                    "manifest and file hashes verified"
+                } else {
+                    "manifest verified"
+                },
+            )
+            .alias(Some(manifest.requested_alias))
+            .complete_cache(true),
+        ),
+        Err(error) => {
+            let state = cache_state_from_validation_error(&error);
+            cache_entry(
+                CacheEntryParams::new(
+                    ModelCacheFamily::Extraction,
+                    cache_key,
+                    path,
+                    state,
+                    error.to_string(),
+                )
+                .alias(alias.map(|alias| alias.requested_alias.clone()))
+                .cleanup_eligible(matches!(
+                    state,
+                    ModelCacheState::Incomplete | ModelCacheState::Corrupted
+                )),
+            )
+        }
+    }
+}
+
+fn inspect_extraction_temp_dirs(
+    entries: &mut Vec<ModelCacheEntry>,
+    cache_root: &Path,
+    cache_key_filter: Option<&str>,
+) -> Result<(), ModelLifecycleError> {
+    let read_dir = match fs::read_dir(cache_root) {
+        Ok(read_dir) => read_dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(ModelLifecycleError::CacheInvalid {
+                cache_dir: cache_root.display().to_string(),
+                message: format!("read cache root: {error}"),
+            });
+        }
+    };
+    let ttl = stale_temp_ttl();
+    for entry in read_dir.filter_map(Result::ok) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Some(cache_key) = extraction_temp_cache_key(&file_name) else {
+            continue;
+        };
+        if cache_key_filter.is_some_and(|filter| filter != cache_key) {
+            continue;
+        }
+        let active = download_temp_is_active(&entry.path(), ttl);
+        let state = if active {
+            ModelCacheState::ActiveTemporary
+        } else {
+            ModelCacheState::StaleTemporary
+        };
+        entries.push(cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Extraction,
+                cache_key,
+                entry.path(),
+                state,
+                if active {
+                    "temporary download has a fresh heartbeat or mtime"
+                } else {
+                    "temporary download is older than the stale threshold"
+                },
+            )
+            .cleanup_eligible(!active),
+        ));
+    }
+    Ok(())
+}
+
+fn extraction_temp_cache_key(file_name: &str) -> Option<String> {
+    let rest = file_name.strip_prefix('.')?;
+    let (cache_key, suffix) = rest.rsplit_once("-download-")?;
+    (!cache_key.is_empty() && !suffix.is_empty()).then(|| cache_key.to_owned())
+}
+
+#[cfg(feature = "online-model")]
+fn inspect_embedding_model(
+    entries: &mut Vec<ModelCacheEntry>,
+    cache_root: &Path,
+    model: &crate::core::inference::ModelConfig,
+    include_missing: bool,
+    verify_hashes: bool,
+) {
+    let cache_key = crate::core::inference::embedding_model_cache_key(model);
+    let cache_dir = cache_root.join(&cache_key);
+    if include_missing || cache_dir.exists() {
+        entries.push(inspect_embedding_cache_dir(
+            cache_dir.clone(),
+            &cache_key,
+            model,
+            verify_hashes,
+        ));
+    }
+    inspect_embedding_temp_files(entries, &cache_dir, &cache_key, model);
+}
+
+#[cfg(feature = "online-model")]
+fn inspect_embedding_cache_dir(
+    path: PathBuf,
+    cache_key: &str,
+    model: &crate::core::inference::ModelConfig,
+    verify_hashes: bool,
+) -> ModelCacheEntry {
+    if !path.exists() {
+        return cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Embedding,
+                cache_key,
+                path,
+                ModelCacheState::Missing,
+                "cache directory is not present",
+            )
+            .alias(Some(model.alias.clone())),
+        );
+    }
+    if !path.is_dir() {
+        return cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Embedding,
+                cache_key,
+                path,
+                ModelCacheState::Corrupted,
+                "cache path is not a directory",
+            )
+            .alias(Some(model.alias.clone()))
+            .cleanup_eligible(true),
+        );
+    }
+
+    match crate::core::inference::verify_embedding_model_cache(model, &path, verify_hashes) {
+        Ok(()) => cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Embedding,
+                cache_key,
+                path,
+                ModelCacheState::Complete,
+                if verify_hashes {
+                    "required files and file hashes verified"
+                } else {
+                    "required files are present"
+                },
+            )
+            .alias(Some(model.alias.clone()))
+            .complete_cache(true),
+        ),
+        Err(error) => {
+            let state = if error.contains("missing required file") {
+                ModelCacheState::Incomplete
+            } else {
+                ModelCacheState::Corrupted
+            };
+            cache_entry(
+                CacheEntryParams::new(ModelCacheFamily::Embedding, cache_key, path, state, error)
+                    .alias(Some(model.alias.clone()))
+                    .cleanup_eligible(true),
+            )
+        }
+    }
+}
+
+#[cfg(feature = "online-model")]
+fn inspect_embedding_temp_files(
+    entries: &mut Vec<ModelCacheEntry>,
+    cache_dir: &Path,
+    cache_key: &str,
+    model: &crate::core::inference::ModelConfig,
+) {
+    let Ok(read_dir) = fs::read_dir(cache_dir) else {
+        return;
+    };
+    let ttl = stale_temp_ttl();
+    for entry in read_dir.filter_map(Result::ok) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if !file_name.contains(".download-") {
+            continue;
+        }
+        let active = recent_path_mtime(&entry.path(), ttl);
+        let state = if active {
+            ModelCacheState::ActiveTemporary
+        } else {
+            ModelCacheState::StaleTemporary
+        };
+        entries.push(cache_entry(
+            CacheEntryParams::new(
+                ModelCacheFamily::Embedding,
+                cache_key,
+                entry.path(),
+                state,
+                if active {
+                    "temporary download file has a fresh mtime"
+                } else {
+                    "temporary download file is older than the stale threshold"
+                },
+            )
+            .alias(Some(model.alias.clone()))
+            .cleanup_eligible(!active),
+        ));
+    }
+}
+
+#[cfg(feature = "online-model")]
+fn is_known_embedding_cache_key(cache_key: &str) -> bool {
+    crate::core::inference::known_embedding_models()
+        .iter()
+        .any(|model| crate::core::inference::embedding_model_cache_key(model) == cache_key)
+}
+
+#[cfg(not(feature = "online-model"))]
+fn is_known_embedding_cache_key(_cache_key: &str) -> bool {
+    false
+}
+
+fn cache_state_from_validation_error(error: &ModelLifecycleError) -> ModelCacheState {
+    let message = error.to_string().to_ascii_lowercase();
+    if message.contains("missing")
+        || message.contains("did not record")
+        || message.contains("not a regular file")
+        || message.contains("manifest.json is missing")
+    {
+        ModelCacheState::Incomplete
+    } else {
+        ModelCacheState::Corrupted
+    }
+}
+
+struct CacheEntryParams {
+    family: ModelCacheFamily,
+    alias: Option<String>,
+    cache_key: String,
+    path: PathBuf,
+    state: ModelCacheState,
+    reason: String,
+    cleanup_eligible: bool,
+    complete_cache: bool,
+}
+
+impl CacheEntryParams {
+    fn new(
+        family: ModelCacheFamily,
+        cache_key: impl Into<String>,
+        path: PathBuf,
+        state: ModelCacheState,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            family,
+            alias: None,
+            cache_key: cache_key.into(),
+            path,
+            state,
+            reason: reason.into(),
+            cleanup_eligible: false,
+            complete_cache: false,
+        }
+    }
+
+    fn alias(mut self, alias: Option<String>) -> Self {
+        self.alias = alias;
+        self
+    }
+
+    fn cleanup_eligible(mut self, cleanup_eligible: bool) -> Self {
+        self.cleanup_eligible = cleanup_eligible;
+        self
+    }
+
+    fn complete_cache(mut self, complete_cache: bool) -> Self {
+        self.complete_cache = complete_cache;
+        self
+    }
+}
+
+fn cache_entry(params: CacheEntryParams) -> ModelCacheEntry {
+    let CacheEntryParams {
+        family,
+        alias,
+        cache_key,
+        path,
+        state,
+        reason,
+        cleanup_eligible,
+        complete_cache,
+    } = params;
+    let (file_count, size_bytes, modified_unix) = path_tree_stats(&path);
+    ModelCacheEntry {
+        family,
+        alias,
+        cache_key,
+        path,
+        state,
+        reason,
+        file_count,
+        size_bytes,
+        modified_unix,
+        cleanup_eligible,
+        complete_cache,
+    }
+}
+
+fn path_tree_stats(path: &Path) -> (usize, u64, Option<u64>) {
+    let mut file_count = 0_usize;
+    let mut size_bytes = 0_u64;
+    let mut modified_unix = None;
+    let mut stack = vec![path.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        let Ok(metadata) = fs::symlink_metadata(&current) else {
+            continue;
+        };
+        if let Some(modified) = metadata.modified().ok().and_then(system_time_secs_fallback) {
+            modified_unix =
+                Some(modified_unix.map_or(modified, |current: u64| current.max(modified)));
+        }
+        if metadata.is_file() {
+            file_count += 1;
+            size_bytes = size_bytes.saturating_add(metadata.len());
+        } else if metadata.is_dir() {
+            let Ok(entries) = fs::read_dir(&current) else {
+                continue;
+            };
+            stack.extend(entries.filter_map(Result::ok).map(|entry| entry.path()));
+        }
+    }
+
+    (file_count, size_bytes, modified_unix)
+}
+
+fn path_is_within_cache_root(cache_root: &Path, path: &Path) -> bool {
+    let Ok(root) = cache_root.canonicalize() else {
+        return false;
+    };
+    match path.canonicalize() {
+        Ok(target) => target != root && target.starts_with(&root),
+        Err(_) => path
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .is_some_and(|parent| parent == root || parent.starts_with(&root)),
+    }
+}
+
+fn remove_cache_path(path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("metadata {}: {error}", path.display())),
+    };
+
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path).map_err(|error| format!("remove {}: {error}", path.display()))
+    } else {
+        fs::remove_file(path).map_err(|error| format!("remove {}: {error}", path.display()))
+    }
 }
 
 /// Returns a verified local cache directory without touching the network.
@@ -654,11 +1548,17 @@ fn download_model_online(
         alias: alias.requested_alias.clone(),
         message: format!("create temporary cache {}: {error}", temp_dir.display()),
     })?;
+    let mut temp_guard = TempDirCleanupGuard::new(temp_dir);
+    touch_download_heartbeat(temp_guard.path());
 
     let install_result = match source_pins_for_alias(&alias) {
-        Some(files) => {
-            install_source_pinned_model_into_dir(&client, &alias, files, &temp_dir, progress)
-        }
+        Some(files) => install_source_pinned_model_into_dir(
+            &client,
+            &alias,
+            files,
+            temp_guard.path(),
+            progress,
+        ),
         None => {
             let Some(metadata) = metadata.as_ref() else {
                 return Err(ModelLifecycleError::Metadata {
@@ -667,30 +1567,29 @@ fn download_model_online(
                 });
             };
             let files = select_files_to_download(metadata, &alias)?;
-            install_model_into_dir(&client, &alias, &files, &temp_dir, progress)
+            install_model_into_dir(&client, &alias, &files, temp_guard.path(), progress)
         }
     };
-    if let Err(error) = install_result {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err(error);
-    }
+    install_result?;
 
-    if let Err(error) = fs::rename(&temp_dir, &cache_dir) {
+    if let Err(error) = fs::rename(temp_guard.path(), &cache_dir) {
         if cache_dir.is_dir() && verify_cache_manifest(&cache_dir, &alias).is_ok() {
-            let _ = fs::remove_dir_all(&temp_dir);
+            let _ = temp_guard.cleanup_now();
             progress.cache_hit(&cache_dir);
             return Ok(cache_dir);
         }
-        let _ = fs::remove_dir_all(&temp_dir);
         return Err(ModelLifecycleError::Download {
             alias: alias.requested_alias.clone(),
             message: format!(
-                "promote verified cache {} -> {}: {error}",
-                temp_dir.display(),
-                cache_dir.display()
+                "promote verified cache {} -> {}: {error}; run `quaid model clean {} --force` and retry `quaid model pull {}`",
+                temp_guard.path().display(),
+                cache_dir.display(),
+                alias.requested_alias,
+                alias.requested_alias
             ),
         });
     }
+    temp_guard.disarm();
 
     Ok(cache_dir)
 }
@@ -707,22 +1606,20 @@ fn install_model_into_dir(
 
     for relative_path in files {
         let artifact = download_artifact(client, alias, relative_path, temp_dir, progress)?;
-        manifest_files.push(CachedFile {
-            path: artifact.relative_path,
-            sha256: artifact.sha256,
-            verified_from_source: artifact.verified_from_source,
-        });
+        manifest_files.push(cached_file_from_artifact(temp_dir, artifact, alias)?);
     }
 
     manifest_files.sort_by(|left, right| left.path.cmp(&right.path));
     let manifest = CacheManifest {
+        manifest_version: Some(MANIFEST_VERSION),
         requested_alias: alias.requested_alias.clone(),
         repo_id: alias.repo_id.clone(),
         revision: alias.revision.clone(),
+        created_at_unix: Some(download_timestamp_secs()),
         files: manifest_files,
     };
     write_manifest(temp_dir, &manifest, alias)?;
-    verify_cache_manifest(temp_dir, alias)?;
+    verify_cache_manifest_full(temp_dir, alias)?;
     Ok(())
 }
 
@@ -739,23 +1636,49 @@ fn install_source_pinned_model_into_dir(
     for pinned_file in files {
         let artifact =
             download_source_pinned_artifact(client, alias, pinned_file, temp_dir, progress)?;
-        manifest_files.push(CachedFile {
-            path: artifact.relative_path,
-            sha256: artifact.sha256,
-            verified_from_source: artifact.verified_from_source,
-        });
+        manifest_files.push(cached_file_from_artifact(temp_dir, artifact, alias)?);
     }
 
     manifest_files.sort_by(|left, right| left.path.cmp(&right.path));
     let manifest = CacheManifest {
+        manifest_version: Some(MANIFEST_VERSION),
         requested_alias: alias.requested_alias.clone(),
         repo_id: alias.repo_id.clone(),
         revision: alias.revision.clone(),
+        created_at_unix: Some(download_timestamp_secs()),
         files: manifest_files,
     };
     write_manifest(temp_dir, &manifest, alias)?;
-    verify_cache_manifest(temp_dir, alias)?;
+    verify_cache_manifest_full(temp_dir, alias)?;
     Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn cached_file_from_artifact(
+    cache_dir: &Path,
+    artifact: DownloadedArtifact,
+    alias: &ResolvedModelAlias,
+) -> Result<CachedFile, ModelLifecycleError> {
+    let path = cache_dir.join(&artifact.relative_path);
+    let metadata = path
+        .metadata()
+        .map_err(|error| ModelLifecycleError::Download {
+            alias: alias.requested_alias.clone(),
+            message: format!("metadata {}: {error}", path.display()),
+        })?;
+    let modified_unix = metadata
+        .modified()
+        .ok()
+        .and_then(system_time_secs)
+        .unwrap_or_else(download_timestamp_secs);
+
+    Ok(CachedFile {
+        path: artifact.relative_path,
+        sha256: artifact.sha256,
+        size_bytes: Some(metadata.len()),
+        modified_unix: Some(modified_unix),
+        verified_from_source: artifact.verified_from_source,
+    })
 }
 
 #[cfg(feature = "online-model")]
@@ -813,7 +1736,11 @@ fn download_artifact(
             .read(&mut buffer)
             .map_err(|error| ModelLifecycleError::Download {
                 alias: alias.requested_alias.clone(),
-                message: format!("read {url}: {error}"),
+                message: format!(
+                    "read {url} for {relative_path}: {error} after {} received; retry with `quaid model pull {}`",
+                    human_bytes(downloaded),
+                    alias.requested_alias
+                ),
             })?;
         if read == 0 {
             break;
@@ -825,6 +1752,7 @@ fn download_artifact(
             })?;
         hasher.update(&buffer[..read]);
         downloaded += read as u64;
+        touch_download_heartbeat(temp_dir);
         progress.file_progress(&relative_path, downloaded, total_bytes);
     }
     file.flush()
@@ -840,8 +1768,8 @@ fn download_artifact(
             return Err(ModelLifecycleError::Download {
                 alias: alias.requested_alias.clone(),
                 message: format!(
-                    "integrity check failed for {}: expected SHA-256 {}, got {}",
-                    relative_path, expected_sha256, actual_sha256
+                    "integrity check failed for {}: expected SHA-256 {}, got {}; run `quaid model clean {} --force` and retry `quaid model pull {}`",
+                    relative_path, expected_sha256, actual_sha256, alias.requested_alias, alias.requested_alias
                 ),
             });
         }
@@ -909,7 +1837,11 @@ fn download_source_pinned_artifact(
             .read(&mut buffer)
             .map_err(|error| ModelLifecycleError::Download {
                 alias: alias.requested_alias.clone(),
-                message: format!("read {url}: {error}"),
+                message: format!(
+                    "read {url} for {relative_path}: {error} after {} received; retry with `quaid model pull {}`",
+                    human_bytes(downloaded),
+                    alias.requested_alias
+                ),
             })?;
         if read == 0 {
             break;
@@ -922,6 +1854,7 @@ fn download_source_pinned_artifact(
         })?;
         sha256.update(&buffer[..read]);
         downloaded += read as u64;
+        touch_download_heartbeat(temp_dir);
         progress.file_progress(&relative_path, downloaded, total_bytes);
     }
     std::io::Write::flush(&mut file).map_err(|error| ModelLifecycleError::Download {
@@ -1003,6 +1936,46 @@ fn download_timestamp_secs() -> u64 {
         .as_secs()
 }
 
+#[cfg(feature = "online-model")]
+fn system_time_secs(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
+fn download_timestamp_secs_fallback() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn system_time_secs_fallback(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
+#[cfg(feature = "online-model")]
+fn stale_download_ttl() -> Duration {
+    stale_temp_ttl()
+}
+
+fn stale_temp_ttl() -> Duration {
+    std::env::var(STALE_CACHE_TTL_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_STALE_DOWNLOAD_TTL)
+}
+
+#[cfg(feature = "online-model")]
+fn touch_download_heartbeat(temp_dir: &Path) {
+    let heartbeat_path = temp_dir.join(DOWNLOAD_HEARTBEAT_FILE);
+    let _ = fs::write(heartbeat_path, download_timestamp_secs().to_string());
+}
+
 #[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 fn source_pins_for_alias(alias: &ResolvedModelAlias) -> Option<&'static [SourcePinnedFile]> {
     match alias.requested_alias.to_ascii_lowercase().as_str() {
@@ -1021,6 +1994,7 @@ fn scavenge_stale_download_dirs(cache_root: &Path, cache_key: &str) {
         return;
     };
     let now = download_timestamp_secs();
+    let ttl = stale_download_ttl();
     for entry in entries.filter_map(Result::ok) {
         let Ok(file_type) = entry.file_type() else {
             continue;
@@ -1034,10 +2008,17 @@ fn scavenge_stale_download_dirs(cache_root: &Path, cache_key: &str) {
         else {
             continue;
         };
-        if now.saturating_sub(created_at) < STALE_DOWNLOAD_TTL.as_secs() {
+        if download_temp_is_active(&entry.path(), ttl)
+            || now.saturating_sub(created_at) < ttl.as_secs()
+        {
             continue;
         }
-        let _ = fs::remove_dir_all(entry.path());
+        if let Err(error) = fs::remove_dir_all(entry.path()) {
+            eprintln!(
+                "Warning: failed to remove stale model download directory {}: {error}",
+                entry.path().display()
+            );
+        }
     }
 }
 
@@ -1055,8 +2036,21 @@ fn parse_download_timestamp(file_name: &str, cache_key: &str, path: &Path) -> Op
         .ok()
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .filter(|age| *age >= STALE_DOWNLOAD_TTL)
+        .filter(|age| *age >= stale_download_ttl())
         .map(|age| download_timestamp_secs().saturating_sub(age.as_secs()))
+}
+
+fn download_temp_is_active(path: &Path, ttl: Duration) -> bool {
+    let heartbeat = path.join(DOWNLOAD_HEARTBEAT_FILE);
+    recent_path_mtime(&heartbeat, ttl) || recent_path_mtime(path, ttl)
+}
+
+fn recent_path_mtime(path: &Path, ttl: Duration) -> bool {
+    path.metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age < ttl)
 }
 
 #[cfg(feature = "online-model")]
@@ -1105,7 +2099,7 @@ fn verify_source_pin(
     Ok(())
 }
 
-#[cfg(feature = "online-model")]
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
 fn git_blob_sha1_for_file(path: &Path, byte_len: u64) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let mut hasher = Sha1::new();
@@ -1279,7 +2273,16 @@ fn verify_cache_manifest(
     cache_dir: &Path,
     alias: &ResolvedModelAlias,
 ) -> Result<(), ModelLifecycleError> {
-    let _ = validated_manifest(cache_dir, alias)?;
+    let _ = ensure_cache_manifest(cache_dir, alias, ManifestValidation::Fast)?;
+    Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn verify_cache_manifest_full(
+    cache_dir: &Path,
+    alias: &ResolvedModelAlias,
+) -> Result<(), ModelLifecycleError> {
+    let _ = ensure_cache_manifest(cache_dir, alias, ManifestValidation::Full)?;
     Ok(())
 }
 
@@ -1287,12 +2290,42 @@ fn validated_manifest(
     cache_dir: &Path,
     alias: &ResolvedModelAlias,
 ) -> Result<CacheManifest, ModelLifecycleError> {
+    ensure_cache_manifest(cache_dir, alias, ManifestValidation::Fast)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManifestValidation {
+    Fast,
+    Full,
+}
+
+fn ensure_cache_manifest(
+    cache_dir: &Path,
+    alias: &ResolvedModelAlias,
+    mode: ManifestValidation,
+) -> Result<CacheManifest, ModelLifecycleError> {
+    if !cache_dir.join(MANIFEST_FILE_NAME).is_file() {
+        return generate_manifest_from_trusted_sources(cache_dir, alias);
+    }
+
     let manifest =
         read_manifest(cache_dir).map_err(|message| ModelLifecycleError::CacheInvalid {
             cache_dir: cache_dir.display().to_string(),
             message,
         })?;
+    let (manifest, should_upgrade) = validate_manifest_contents(cache_dir, alias, manifest, mode)?;
+    if should_upgrade {
+        try_upgrade_manifest(cache_dir, &manifest, alias);
+    }
+    Ok(manifest)
+}
 
+fn validate_manifest_contents(
+    cache_dir: &Path,
+    alias: &ResolvedModelAlias,
+    mut manifest: CacheManifest,
+    mode: ManifestValidation,
+) -> Result<(CacheManifest, bool), ModelLifecycleError> {
     if manifest.requested_alias != alias.requested_alias {
         return Err(ModelLifecycleError::CacheInvalid {
             cache_dir: cache_dir.display().to_string(),
@@ -1320,6 +2353,18 @@ fn validated_manifest(
             ),
         });
     }
+    if manifest
+        .manifest_version
+        .is_some_and(|version| version > MANIFEST_VERSION)
+    {
+        return Err(ModelLifecycleError::CacheInvalid {
+            cache_dir: cache_dir.display().to_string(),
+            message: format!(
+                "unsupported manifest version {:?}; upgrade Quaid or re-pull `{}`",
+                manifest.manifest_version, alias.requested_alias
+            ),
+        });
+    }
     if manifest.files.is_empty() {
         return Err(ModelLifecycleError::CacheInvalid {
             cache_dir: cache_dir.display().to_string(),
@@ -1327,7 +2372,13 @@ fn validated_manifest(
         });
     }
 
-    for file in &manifest.files {
+    let mut should_upgrade =
+        manifest.manifest_version != Some(MANIFEST_VERSION) || manifest.created_at_unix.is_none();
+    if manifest.created_at_unix.is_none() {
+        manifest.created_at_unix = Some(download_timestamp_secs_fallback());
+    }
+
+    for file in &mut manifest.files {
         let relative_path = normalize_relative_path(&file.path).map_err(|message| {
             ModelLifecycleError::CacheInvalid {
                 cache_dir: cache_dir.display().to_string(),
@@ -1335,22 +2386,190 @@ fn validated_manifest(
             }
         })?;
         let path = cache_dir.join(relative_path);
-        let actual = file_sha256(&path).map_err(|message| ModelLifecycleError::CacheInvalid {
-            cache_dir: cache_dir.display().to_string(),
-            message,
-        })?;
-        if actual != file.sha256 {
+        let metadata = path
+            .metadata()
+            .map_err(|error| ModelLifecycleError::CacheInvalid {
+                cache_dir: cache_dir.display().to_string(),
+                message: format!("metadata {}: {error}", path.display()),
+            })?;
+        if !metadata.is_file() {
             return Err(ModelLifecycleError::CacheInvalid {
                 cache_dir: cache_dir.display().to_string(),
-                message: format!(
-                    "file hash mismatch for {}: expected {}, got {}",
-                    file.path, file.sha256, actual
-                ),
+                message: format!("manifest path {} is not a regular file", file.path),
             });
+        }
+        let modified_unix = metadata
+            .modified()
+            .ok()
+            .and_then(system_time_secs_fallback)
+            .unwrap_or_else(download_timestamp_secs_fallback);
+        let metadata_mismatch =
+            file.size_bytes != Some(metadata.len()) || file.modified_unix != Some(modified_unix);
+        let must_hash = mode == ManifestValidation::Full || metadata_mismatch;
+        if must_hash {
+            let actual =
+                file_sha256(&path).map_err(|message| ModelLifecycleError::CacheInvalid {
+                    cache_dir: cache_dir.display().to_string(),
+                    message,
+                })?;
+            if actual != file.sha256 {
+                return Err(ModelLifecycleError::CacheInvalid {
+                    cache_dir: cache_dir.display().to_string(),
+                    message: format!(
+                        "file hash mismatch for {}: expected {}, got {}; run `quaid model clean {} --force` and retry `quaid model pull {}`",
+                        file.path, file.sha256, actual, alias.requested_alias, alias.requested_alias
+                    ),
+                });
+            }
+        }
+        if metadata_mismatch {
+            should_upgrade = true;
+            file.size_bytes = Some(metadata.len());
+            file.modified_unix = Some(modified_unix);
         }
     }
 
-    Ok(manifest)
+    manifest.manifest_version = Some(MANIFEST_VERSION);
+    Ok((manifest, should_upgrade))
+}
+
+fn generate_manifest_from_trusted_sources(
+    cache_dir: &Path,
+    alias: &ResolvedModelAlias,
+) -> Result<CacheManifest, ModelLifecycleError> {
+    #[cfg(any(feature = "online-model", test, feature = "test-harness"))]
+    {
+        if let Some(files) = source_pins_for_alias(alias) {
+            let manifest = manifest_from_source_pins(cache_dir, alias, files)?;
+            try_upgrade_manifest(cache_dir, &manifest, alias);
+            return Ok(manifest);
+        }
+    }
+
+    Err(ModelLifecycleError::CacheInvalid {
+        cache_dir: cache_dir.display().to_string(),
+        message: format!(
+            "manifest.json is missing and `{}` has no trusted source pins; run `quaid model clean {} --force` and retry `quaid model pull {}`",
+            alias.requested_alias, alias.requested_alias, alias.requested_alias
+        ),
+    })
+}
+
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
+fn manifest_from_source_pins(
+    cache_dir: &Path,
+    alias: &ResolvedModelAlias,
+    files: &[SourcePinnedFile],
+) -> Result<CacheManifest, ModelLifecycleError> {
+    let mut manifest_files = Vec::with_capacity(files.len());
+    for pinned_file in files {
+        let relative_path = normalize_relative_path(pinned_file.path).map_err(|message| {
+            ModelLifecycleError::CacheInvalid {
+                cache_dir: cache_dir.display().to_string(),
+                message,
+            }
+        })?;
+        let path = cache_dir.join(&relative_path);
+        let metadata = path
+            .metadata()
+            .map_err(|error| ModelLifecycleError::CacheInvalid {
+                cache_dir: cache_dir.display().to_string(),
+                message: format!("metadata {}: {error}", path.display()),
+            })?;
+        let actual_sha256 =
+            file_sha256(&path).map_err(|message| ModelLifecycleError::CacheInvalid {
+                cache_dir: cache_dir.display().to_string(),
+                message,
+            })?;
+        verify_source_pin_for_cache(
+            &relative_path,
+            metadata.len(),
+            pinned_file.digest,
+            &actual_sha256,
+            &path,
+            alias,
+            cache_dir,
+        )?;
+        let modified_unix = metadata
+            .modified()
+            .ok()
+            .and_then(system_time_secs_fallback)
+            .unwrap_or_else(download_timestamp_secs_fallback);
+        manifest_files.push(CachedFile {
+            path: relative_path,
+            sha256: actual_sha256,
+            size_bytes: Some(metadata.len()),
+            modified_unix: Some(modified_unix),
+            verified_from_source: true,
+        });
+    }
+    manifest_files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(CacheManifest {
+        manifest_version: Some(MANIFEST_VERSION),
+        requested_alias: alias.requested_alias.clone(),
+        repo_id: alias.repo_id.clone(),
+        revision: alias.revision.clone(),
+        created_at_unix: Some(download_timestamp_secs_fallback()),
+        files: manifest_files,
+    })
+}
+
+#[cfg(any(feature = "online-model", test, feature = "test-harness"))]
+fn verify_source_pin_for_cache(
+    relative_path: &str,
+    byte_len: u64,
+    digest: PinnedDigest,
+    actual_sha256: &str,
+    path: &Path,
+    alias: &ResolvedModelAlias,
+    cache_dir: &Path,
+) -> Result<(), ModelLifecycleError> {
+    match digest {
+        PinnedDigest::Sha256(expected) if actual_sha256 == expected => Ok(()),
+        PinnedDigest::Sha256(expected) => Err(ModelLifecycleError::CacheInvalid {
+            cache_dir: cache_dir.display().to_string(),
+            message: format!(
+                "file hash mismatch for {relative_path}: expected SHA-256 {expected}, got {actual_sha256}; run `quaid model clean {} --force` and retry `quaid model pull {}`",
+                alias.requested_alias, alias.requested_alias
+            ),
+        }),
+        PinnedDigest::GitBlobSha1(expected) => {
+            let actual = git_blob_sha1_for_file(path, byte_len).map_err(|message| {
+                ModelLifecycleError::CacheInvalid {
+                    cache_dir: cache_dir.display().to_string(),
+                    message,
+                }
+            })?;
+            if actual == expected {
+                Ok(())
+            } else {
+                Err(ModelLifecycleError::CacheInvalid {
+                    cache_dir: cache_dir.display().to_string(),
+                    message: format!(
+                        "file hash mismatch for {relative_path}: expected git blob SHA-1 {expected}, got {actual}; run `quaid model clean {} --force` and retry `quaid model pull {}`",
+                        alias.requested_alias, alias.requested_alias
+                    ),
+                })
+            }
+        }
+    }
+}
+
+fn try_upgrade_manifest(cache_dir: &Path, manifest: &CacheManifest, alias: &ResolvedModelAlias) {
+    #[cfg(feature = "online-model")]
+    if let Err(error) = write_manifest(cache_dir, manifest, alias) {
+        eprintln!(
+            "Warning: failed to write upgraded manifest for `{}` at {}: {error}",
+            alias.requested_alias,
+            cache_dir.display()
+        );
+    }
+    #[cfg(not(feature = "online-model"))]
+    {
+        let _ = cache_dir;
+        let _ = manifest;
+        let _ = alias;
+    }
 }
 
 #[cfg(feature = "online-model")]

@@ -1,175 +1,166 @@
-## 1. Download Resilience - Error Handling
+## 1. Download Resilience - Cleanup Guards
 
-- [ ] 1.1 Add guaranteed cleanup wrapper for download operations
-  - Implement try-finally pattern in `download_model_to_cache()` that removes temp_dir on all error paths
-  - Ensure cleanup happens before returning error to caller
-  
-- [ ] 1.2 Improve error messages with actionable recovery instructions
-  - Update `ModelLifecycleError` variants to include next steps (e.g., "Run `quaid cache clean`")
-  - Ensure all error paths provide context: file name, expected vs. actual, paths affected
+- [ ] 1.1 Add an extraction temp-directory cleanup guard
+  - Guard owns the `.{cache_key}-download-{timestamp}-{uuid}` path
+  - Guard removes the temp directory on `Drop` unless disarmed
+  - Disarm only after successful rename or after another process has produced a verified final cache
+  - Cover metadata/selection `?` early returns as well as file download errors
 
-- [ ] 1.3 Add protection against concurrent download cleanup races
-  - Implement check for `.downloading` lock files before cleanup
-  - Prevent removing in-progress downloads from other Quaid instances
-  - Document single-writer constraint
+- [ ] 1.2 Add an embedding temp-file cleanup guard
+  - Guard owns each `{file}.download-{uuid}` path in `src/core/inference.rs`
+  - Guard removes the temp file on network, write, hash, or rename failures
+  - Disarm only after the temp file is successfully renamed or a valid destination already exists
 
-## 2. Download Observability - Logging
+- [ ] 1.3 Add stale-download heartbeat handling
+  - Write `.downloading` marker metadata for extraction temp directories
+  - Refresh heartbeat during long downloads before TTL can expire
+  - Skip cleanup for temp artifacts with recent heartbeat/mtime
+  - Report cleanup failures instead of treating them as success
 
-- [ ] 2.1 Add trace-level logging throughout download lifecycle
-  - Log at download start: alias, repo_id, revision, file count, total size
-  - Log per-file: URL, size, start time, hash type
-  - Log per-file completion: actual hash, time elapsed, speed
-  - Log cleanup operations: which files removed, why
+- [ ] 1.4 Improve actionable error messages
+  - Include alias, file name, URL when relevant, affected path, expected vs actual hash, and bytes received when known
+  - Recommend `quaid model clean <alias> --force` plus `quaid model pull <alias>` where appropriate
+  - Keep errors as `Result` values; do not add panics or test-only seams
 
-- [ ] 2.2 Integrate error logging with existing ProgressReporter
-  - Add methods or logging hooks for error reporting without changing interface
-  - Ensure errors are logged at WARN level minimum (visible without RUST_LOG)
-  - Ensure success completion is logged at INFO level
+## 2. Cache Inventory and Validation
 
-- [ ] 2.3 Add cache validation logging
-  - Log manifest validation results (found/not found, valid/invalid)
-  - Log file existence and hash verification for each file
-  - Log when manifest is auto-generated vs. already present
+- [ ] 2.1 Add shared cache inventory helpers
+  - Resolve cache root from `QUAID_MODEL_CACHE_DIR` or `~/.quaid/models`
+  - Detect extraction SLM final caches and temp directories
+  - Detect embedding model final caches and `*.download-*` temp files
+  - Return structured status: family, alias/cache key, path, size, age, manifest state, validation state, cleanup eligibility
 
-## 3. Cache Validation - Manifest Generation
+- [ ] 2.2 Add manifest v1 while preserving legacy manifests
+  - Add `manifest_version`, `created_at_unix`, `size_bytes`, and `modified_unix`
+  - Read existing versionless manifests as legacy v0
+  - Treat missing v1 fields as legacy, not corruption, when existing hashes validate
+  - Upgrade legacy manifests only after successful full verification
 
-- [ ] 3.1 Implement lazy manifest generation for existing caches
-  - Create function `ensure_cache_manifest(cache_dir, alias)` 
-  - Scan cache_dir for all expected files based on alias
-  - Compute SHA-256 for each file
-  - Create manifest.json if all files present with correct hashes
-  - Return error if files missing or hashes mismatch
+- [ ] 2.3 Implement safe lazy manifest generation
+  - Generate manifests for curated extraction aliases from source pins
+  - Generate manifests for known embedding aliases from pinned `ModelConfig` hashes
+  - Generate manifests for custom models only after trusted metadata/checksums from a fresh pull
+  - Fail closed for custom/unpinned existing caches without a manifest when trusted expectations are unavailable
 
-- [ ] 3.2 Add manifest version field for forward compatibility
-  - Update `CacheManifest` struct to include `manifest_version: u32`
-  - Set to 1 for initial version
-  - Add migration logic if version changes in future
+- [ ] 2.4 Split fast validation from full verification
+  - Fast validation: manifest parse, path safety, file existence, size, and modified time
+  - Full verification: SHA-256/git-blob digest recomputation
+  - Run full verification after downloads, during manifest generation/upgrade, on fast-validation mismatch, and for `quaid model status --verify`
+  - Do not re-hash multi-GB models on every normal cache hit
 
-- [ ] 3.3 Call manifest validation before model load
-  - Update `load_model_from_local_cache()` to call `ensure_cache_manifest()`
-  - Ensure this happens automatically without user intervention
-  - Log trace-level message when manifest is auto-generated
+## 3. CLI - `quaid model status` and `quaid model clean`
 
-## 4. Cache Cleanup Command - CLI
+- [ ] 3.1 Extend `src/commands/model.rs`
+  - Keep existing `quaid model pull <alias>` behavior
+  - Add `status [alias] [--verbose] [--verify]`
+  - Add `clean --list [alias]`
+  - Add `clean --all [--force]`
+  - Add `clean <alias> --force`
 
-- [ ] 4.1 Create new `src/commands/cache.rs` command module
-  - Add subcommands: `clean`, `status`
-  - Implement `--list`, `--all`, `--force` flags for clean
-  - Implement `--verbose` flag for status
-  - Wire into CLI dispatcher in `main.rs`
+- [ ] 3.2 Implement `quaid model status`
+  - With no alias, list recognized caches with columns: Family | Alias/Key | Status | Files | Size | Manifest | Modified
+  - With an alias, show matching cache details and validation result
+  - With `--verbose`, show file-level paths, sizes, and manifest hashes
+  - With `--verify`, perform full hash verification and report duration
+  - Exit non-zero only for operational errors, not merely because a cache is missing/corrupted
 
-- [ ] 4.2 Implement `quaid cache clean --list` subcommand
-  - Scan ~/.quaid/models/ for temp directories (`.{cache_key}-download-*` pattern)
-  - Identify incomplete caches (missing manifest or failed validation)
-  - Display path, size, age, status for each
-  - Calculate total disk space would be freed
+- [ ] 3.3 Implement `quaid model clean --list`
+  - Preview stale temp directories, stale temp files, incomplete caches, and corrupted caches
+  - Clearly distinguish "would remove" from "kept"
+  - Show path, family, reason, age, and size
+  - Calculate total disk space eligible for cleanup
 
-- [ ] 4.3 Implement `quaid cache clean --all` with user confirmation
-  - Prompt user with summary: "This will remove N directories, freeing X GB"
-  - Support `--force` flag to skip confirmation
-  - Remove directories one by one, tracking failures
-  - Report results: successful removals, failures, total freed
+- [ ] 3.4 Implement `quaid model clean --all`
+  - Prompt with a summary unless `--force` is supplied
+  - Remove only stale/incomplete/corrupted artifacts, not complete verified caches
+  - Continue after partial failures and report failed paths with reasons
+  - Return non-zero when any requested removal fails
 
-- [ ] 4.4 Implement `quaid cache clean <alias>` for specific models
-  - Remove only caches related to specified alias
-  - Support both temp directories and complete caches with `--force`
-  - Validate alias exists before offering to remove
+- [ ] 3.5 Implement alias-specific cleanup
+  - `quaid model clean <alias> --force` may remove the complete verified cache for that alias
+  - Without `--force`, show the action that would be taken and require confirmation
+  - Validate alias/cache matching before removing anything
 
-- [ ] 4.5 Implement `quaid cache status` subcommand
-  - List all cached models with columns: Alias | Status | Files | Size | Manifest | Modified
-  - Show status: ✓ complete, ⚠️  incomplete, ❌ corrupted
-  - Support `--verbose` to show file-by-file breakdown with SHA-256 hashes
+## 4. Download Observability
 
-## 5. Stale Directory Scavenging - Refactoring
+- [ ] 4.1 Improve `ConsoleProgressReporter`
+  - Show alias, repo, revision, file count, and total bytes when known
+  - Implement throttled `file_progress()` output with downloaded bytes, total bytes, speed, and ETA when known
+  - Show per-file verification completion and final summary
 
-- [ ] 5.1 Refactor scavenge_stale_download_dirs() for reusability
-  - Extract core logic into reusable function that returns list of stale directories
-  - Keep existing pre-download scavenging calling the refactored version
-  - Make available to CLI command module for on-demand cleanup
+- [ ] 4.2 Keep observability dependency-free
+  - Do not introduce `tracing`, `log`, env_logger, or `RUST_LOG` requirements in this change
+  - Route user-visible diagnostics through progress output, command output, and returned errors
 
-- [ ] 5.2 Make TTL configurable via environment variable
-  - Add `QUAID_STALE_CACHE_TTL_SECS` environment variable
-  - Default to 6 hours (21600 seconds) if not set
-  - Allow override for testing and custom deployments
+- [ ] 4.3 Improve cleanup reporting
+  - Report successful temp cleanup at verbose/status level
+  - Report cleanup failures in normal error output when they affect recovery
+  - Include recovery command suggestions
 
-## 6. Integration Tests
+## 5. Tests
 
-- [ ] 6.1 Add integration test for incomplete download recovery
-  - Simulate download interruption (mock HTTP stream cutoff)
-  - Verify temp dir cleanup happens
-  - Verify subsequent download starts fresh without errors
-  - Test: incomplete cache → cache clean → fresh download succeeds
+- [ ] 5.1 Add extraction temp-directory cleanup tests
+  - Metadata/file-selection error after temp dir creation leaves no temp dir
+  - Network interruption leaves no temp dir
+  - Hash mismatch leaves no temp dir
+  - Rename race with existing verified cache returns cache hit and removes local temp
 
-- [ ] 6.2 Add integration test for manifest generation
-  - Create mock cache directory with all files but no manifest
-  - Call ensure_cache_manifest()
-  - Verify manifest is created with correct structure
-  - Verify file hashes in manifest match actual files
+- [ ] 5.2 Add embedding temp-file cleanup tests
+  - GET failure after temp file creation removes temp file
+  - Stream/write failure removes temp file
+  - Hash mismatch removes temp file
+  - Rename race with existing valid destination succeeds without corrupting cache
 
-- [ ] 6.3 Add integration test for cache cleanup command
-  - Create temp directories and incomplete caches
-  - Run `quaid cache clean --list` and verify output
-  - Run `quaid cache clean --all --force` and verify cleanup
-  - Verify final status is empty
+- [ ] 5.3 Add manifest compatibility tests
+  - Existing versionless manifest remains valid
+  - Legacy manifest upgrades to v1 after full verification
+  - Missing manifest for complete curated extraction cache is generated
+  - Missing manifest for custom/unpinned cache fails closed when trusted expectations are unavailable
 
-- [ ] 6.4 Add integration test for concurrent safety
-  - Simulate two Quaid instances attempting to download same model
-  - Verify only one succeeds and final cache is uncorrupted
-  - Verify no duplicate files in cache directory
+- [ ] 5.4 Add CLI status/clean integration tests
+  - `quaid model status` lists complete, missing, incomplete, and corrupted states
+  - `quaid model status --verify` performs full hash validation
+  - `quaid model clean --list` is dry-run only
+  - `quaid model clean --all --force` removes eligible stale artifacts and keeps complete verified caches
+  - `quaid model clean <alias> --force` removes that alias cache
 
-## 7. Documentation
+- [ ] 5.5 Add stale heartbeat/concurrency tests
+  - Recent `.downloading` marker prevents cleanup
+  - Expired heartbeat is eligible for cleanup
+  - Two simulated downloads for the same alias leave one valid final cache and no extra temp paths
 
-- [ ] 7.1 Update operator guide with model caching troubleshooting section
-  - Explain common failure scenarios and symptoms
-  - Document recovery procedures (cache clean, re-download)
-  - Explain QUAID_MODEL_CACHE_DIR and cache TTL configuration
-  - Add examples: inspecting cache status, manual cleanup
+## 6. Documentation
 
-- [ ] 7.2 Update CLI help text for new cache commands
-  - `quaid cache --help` explains all subcommands with examples
-  - `quaid cache clean --help` documents flags and safety behavior
-  - `quaid cache status --help` explains output format and verbose mode
+- [ ] 6.1 Update operator guide with model cache troubleshooting
+  - Explain extraction SLM vs embedding model cache layouts
+  - Document `QUAID_MODEL_CACHE_DIR`
+  - Document `QUAID_STALE_MODEL_CACHE_TTL_SECS`
+  - Show recovery examples using `quaid model status`, `quaid model clean`, and `quaid model pull`
 
-- [ ] 7.3 Add migration notes for users with stale caches
-  - Explain that old incomplete caches will be automatically cleaned
-  - Document how to manually recover existing complete caches via cache clean/status
-  - Provide script to identify large stale caches before update
+- [ ] 6.2 Update CLI help text
+  - `quaid model --help` lists `pull`, `status`, and `clean`
+  - `quaid model status --help` explains `--verbose` and `--verify`
+  - `quaid model clean --help` explains dry-run, confirmation, and `--force`
 
-## 8. Testing and Validation
+- [ ] 6.3 Add migration notes
+  - Legacy versionless manifests are accepted
+  - Complete source-verifiable caches can be repaired without re-download
+  - Custom/unpinned caches without trusted metadata may require re-pull
 
-- [ ] 8.1 Run full test suite and verify no regressions
-  - Existing model lifecycle tests pass
-  - New tests for resilience, validation, cleanup pass
-  - Integration tests pass in single and multi-instance scenarios
+## 7. Validation
 
-- [ ] 8.2 Manual testing with real models
-  - Test with phi-3.5-mini: full download, interruption recovery, cache hit
-  - Test with gemma-3-1b: verify manifest generation for existing cache
-  - Test with network throttling/timeout scenarios
+- [ ] 7.1 Run OpenSpec validation
+  - `openspec validate improve-model-caching --strict`
 
-- [ ] 8.3 Verify error messages and logging are clear
-  - Simulate various failure modes and verify error output
-  - Verify logs at TRACE level capture sufficient detail for debugging
-  - Verify users can recover without contacting support
+- [ ] 7.2 Run targeted test suites
+  - `cargo test --features online-model,test-harness --test model_lifecycle`
+  - Add and run new integration tests for model status/clean behavior
 
-- [ ] 8.4 Performance verification
-  - Verify cache validation doesn't add significant latency (<100ms for typical cache)
-  - Verify cleanup command completes in <30 seconds for typical cache directory
-  - Verify logging doesn't noticeably slow down downloads
+- [ ] 7.3 Run lint/format gates
+  - `cargo fmt --check`
+  - `cargo clippy --all-targets --all-features --locked -- -D warnings`
 
-## 9. Code Review and Refinement
-
-- [ ] 9.1 Peer review of error handling changes
-  - Ensure all error paths are covered by cleanup
-  - Verify no new resource leaks introduced
-  - Check that error messages are user-friendly
-
-- [ ] 9.2 Peer review of logging implementation
-  - Verify logging levels are appropriate (TRACE for detail, INFO for success, WARN for non-fatal errors)
-  - Check that sensitive information (paths, hashes) is not over-logged
-  - Ensure performance impact is acceptable
-
-- [ ] 9.3 Security review of cache cleanup command
-  - Verify permissions are respected (don't remove caches user doesn't own)
-  - Verify no path traversal vulnerabilities in cache directory scanning
-  - Check that `--force` flag doesn't bypass important safety checks
+- [ ] 7.4 Performance check
+  - Normal fast cache status should avoid full hashing and stay responsive for multi-GB caches
+  - `status --verify` may take longer, but should report elapsed time and remain bounded by disk throughput
+  - Cleanup should avoid recursively scanning unrelated directories outside the model cache root

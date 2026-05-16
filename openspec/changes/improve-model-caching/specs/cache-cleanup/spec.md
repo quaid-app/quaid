@@ -1,58 +1,81 @@
 ## ADDED Requirements
 
-### Requirement: User can list stale model caches
-Users SHALL be able to preview which stale or incomplete model caches would be removed without actually removing them.
+### Requirement: User can inspect model cache cleanup candidates
+Users SHALL be able to preview stale, incomplete, or corrupted model cache
+artifacts without removing them.
 
-#### Scenario: List stale directories
-- **WHEN** user runs `quaid cache clean --list`
-- **THEN** system displays all temporary download directories (age-based staleness check) and incomplete caches (missing manifest/failed validation), with their paths and sizes
+#### Scenario: List cleanup candidates
+- **WHEN** user runs `quaid model clean --list`
+- **THEN** system displays cleanup candidates from the model cache root, including extraction temp directories, embedding temp files, incomplete caches, and corrupted caches
+- **AND** output includes path, cache family, reason, age, and size
+- **AND** no files or directories are removed
 
-#### Scenario: List specific model cache
-- **WHEN** user runs `quaid cache clean --list phi-3.5-mini`
-- **THEN** system displays all caches related to phi-3.5-mini (both temp and complete directories)
+#### Scenario: List specific model cache candidates
+- **WHEN** user runs `quaid model clean --list phi-3.5-mini`
+- **THEN** system displays cleanup candidates associated with `phi-3.5-mini`
+- **AND** complete verified caches associated with the alias are shown as kept unless explicitly targeted for removal
 
-#### Scenario: Empty list when no stale caches
-- **WHEN** user runs `quaid cache clean --list` but no stale caches exist
-- **THEN** system prints "No stale caches found" and exits successfully
+#### Scenario: Empty list when no cleanup candidates exist
+- **WHEN** user runs `quaid model clean --list` but no stale, incomplete, or corrupted artifacts exist
+- **THEN** system prints "No model cache cleanup candidates found" and exits successfully
 
-### Requirement: User can remove stale model caches
-Users SHALL be able to remove incomplete, broken, or temporary model caches to free up disk space and recover from download failures.
+### Requirement: User can remove stale and broken model cache artifacts
+Users SHALL be able to remove incomplete, corrupted, or stale temporary model
+cache artifacts to free disk space and recover from download failures.
 
 #### Scenario: Remove with confirmation
-- **WHEN** user runs `quaid cache clean --all`
+- **WHEN** user runs `quaid model clean --all`
 - **THEN** system prompts for confirmation with a summary of what will be removed
-- **AND** if user confirms, removes all identified stale directories
+- **AND** if user confirms, removes all eligible stale/incomplete/corrupted artifacts
+- **AND** complete verified caches are not removed
 
 #### Scenario: Force removal without confirmation
-- **WHEN** user runs `quaid cache clean --all --force`
-- **THEN** system immediately removes all stale caches without prompting
+- **WHEN** user runs `quaid model clean --all --force`
+- **THEN** system immediately removes eligible stale/incomplete/corrupted artifacts without prompting
+- **AND** complete verified caches are still not removed
 
 #### Scenario: Remove specific model cache
-- **WHEN** user runs `quaid cache clean phi-3.5-mini --force`
-- **THEN** system removes the cache directory for phi-3.5-mini only
+- **WHEN** user runs `quaid model clean phi-3.5-mini --force`
+- **THEN** system removes cache artifacts associated with `phi-3.5-mini`
+- **AND** because the alias is explicit and `--force` is present, the complete verified cache for that alias MAY be removed
 
-#### Scenario: Partial failures don't stop cleanup
-- **WHEN** system is removing multiple stale directories and one fails to delete
-- **THEN** system continues removing others and reports which directories failed at the end
+#### Scenario: Partial failures do not stop cleanup
+- **WHEN** system is removing multiple cleanup candidates and one fails to delete
+- **THEN** system continues removing other requested candidates
+- **AND** reports failed paths with error reasons at the end
+- **AND** exits non-zero
 
-### Requirement: User receives clear cache cleanup reporting
-Users SHALL receive clear feedback about what was removed, what failed, and cache health statistics after cleanup.
+### Requirement: Cleanup safety guards prevent accidental data loss
+The system SHALL implement safety mechanisms that prevent broad cleanup from
+removing complete verified model caches.
 
-#### Scenario: Success report shows freed space
-- **WHEN** cache cleanup completes successfully
-- **THEN** system reports: number of directories removed, total disk space freed, paths of removed directories
+#### Scenario: Complete caches excluded from broad cleanup
+- **WHEN** user runs `quaid model clean --all --force`
+- **THEN** system removes stale/incomplete/corrupted artifacts only
+- **AND** keeps complete verified caches
 
-#### Scenario: Partial failure report identifies problems
-- **WHEN** some directories fail to remove
-- **THEN** system reports successful removals and lists failed directories with error reasons (permission denied, in use, etc.)
+#### Scenario: Active downloads are skipped
+- **WHEN** cleanup sees a temporary download artifact with a recent `.downloading` heartbeat or recent modified time
+- **THEN** system marks it as active and skips removal
 
-### Requirement: Safety guards prevent accidental data loss
-The system SHALL implement safety mechanisms to prevent users from accidentally removing non-stale caches.
-
-#### Scenario: Non-stale caches excluded by default
-- **WHEN** user runs `quaid cache clean --all` without `--force`
-- **THEN** system only removes stale temp directories and incomplete caches, not recent/complete caches
+#### Scenario: Expired temporary artifacts are eligible
+- **WHEN** cleanup sees a temporary download artifact older than the configured stale TTL and without a recent heartbeat
+- **THEN** system marks it as stale and eligible for removal
 
 #### Scenario: User shown what is not being removed
-- **WHEN** user runs `quaid cache clean --list`
-- **THEN** output clearly distinguishes between "stale (will be removed)" and "active/complete (will be kept)"
+- **WHEN** user runs `quaid model clean --list`
+- **THEN** output clearly distinguishes between "would remove" and "kept"
+
+### Requirement: Cache cleanup respects configured cache root
+The system SHALL only inspect and remove paths inside the resolved model cache
+root.
+
+#### Scenario: Custom model cache root
+- **WHEN** `QUAID_MODEL_CACHE_DIR` is set and user runs `quaid model clean --list`
+- **THEN** system inspects only that directory tree
+- **AND** does not inspect `~/.quaid/models`
+
+#### Scenario: Path traversal is rejected
+- **WHEN** a manifest or cache entry contains an absolute path or parent-directory traversal
+- **THEN** system reports the entry as invalid
+- **AND** cleanup does not follow that path outside the cache root

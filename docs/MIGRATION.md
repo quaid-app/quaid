@@ -30,6 +30,22 @@ The complete new surface. Pre-rename names have no supported presence in this re
 | No-profile flag env var | `QUAID_NO_PROFILE` |
 | GitHub repository | `quaid-app/quaid` |
 
+### Model cache manifest v1
+
+Current releases write `manifest_version = 1` plus file size and mtime metadata
+for downloaded extraction model caches. Legacy manifests without these fields
+remain readable. Quaid upgrades them lazily the next time you run
+`quaid model status`, `quaid model pull`, or local extraction cache validation.
+
+If a cache cannot be repaired from trusted source pins, run:
+
+```bash
+quaid model clean <alias> --force
+quaid model pull <alias>
+```
+
+See [`docs/model-cache.md`](model-cache.md) for status and cleanup operations.
+
 ### MCP tools (all 17)
 
 | Tool |

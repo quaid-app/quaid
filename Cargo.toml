@@ -1,6 +1,6 @@
 [package]
 name = "quaid"
-version = "0.22.3"
+version = "0.22.4"
 edition = "2021"
 description = "Local-first personal memory. SQLite + FTS5 + local vector embeddings. One static binary."
 license = "MIT"
@@ -33,7 +33,10 @@ safetensors = "0.4"
 tokenizers = "0.20"
 
 # Model download for the online channel
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+], optional = true }
 
 # MCP server (stdio + opt-in SSE/HTTP transport, JSON-RPC 2.0)
 rmcp = { version = "0.1", features = ["transport-sse-server"] }
@@ -76,11 +79,15 @@ libc = "0.2"
 rustix = { version = "0.38", features = ["fs", "process"] }
 
 [dev-dependencies]
+filetime = "0.2"
 tempfile = "3"
 serial_test = "3"
 
 [build-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] }
 sha2 = "0.10"
 
 [features]

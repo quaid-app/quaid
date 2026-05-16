@@ -40,7 +40,7 @@ pub fn run(db: &Connection, action: ExtractionAction) -> Result<()> {
 
 fn enable(db: &Connection) -> Result<()> {
     let alias = db::read_config_value_or(db, "extraction.model_alias", "phi-3.5-mini")?;
-    let mut progress = ConsoleProgressReporter;
+    let mut progress = ConsoleProgressReporter::default();
     let cache_dir = tokio::task::block_in_place(|| download_model(&alias, &mut progress))?;
     set_extraction_enabled(db, true)?;
     println!("Extraction enabled: yes");

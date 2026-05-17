@@ -83,6 +83,7 @@ quaid init ~/.quaid/memory.db
 ```
 
 This creates a new `memory.db` file with the full current schema (`v10` in the current published release) — including pages, embeddings, links, assertions, knowledge gaps, collections, raw imports, extraction queue state, and graph configuration.
+It also creates the default writable collection root at `~/.quaid/vault` and marks that collection as the write target, so MCP conversation capture and simple write flows work before you attach any other vault.
 
 ### 2. Attach a markdown directory or ingest a single file
 
@@ -93,6 +94,8 @@ quaid embed --stale --batch-size 32
 ```
 
 `quaid collection add` performs the initial vault scan, records the collection, and writes pages into the database. On Unix/macOS/Linux, `quaid serve` keeps that collection in sync continuously. `quaid embed` scans pages in bounded batches by default; lower `--batch-size` on constrained machines. For one-off files outside a collection, use `quaid ingest /path/to/file.md`.
+
+Existing databases keep their configured write-target collection root. To use a custom root on a new install, run `quaid collection add <name> <path> --writable` after `quaid init`; that collection becomes the explicit write target without rewriting any already-configured root.
 
 > On Unix, you can persist missing `quaid_id` frontmatter during attach (`quaid collection add <name> <path> --write-quaid-id`) or backfill it later with `quaid collection migrate-uuids <name> [--dry-run]`. Same-root single-file `quaid put` can also authenticate a live `quaid serve` owner and proxy the write instead of refusing. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
 

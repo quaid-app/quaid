@@ -22,6 +22,8 @@ pub mod put;
 pub mod query;
 pub mod search;
 pub mod serve;
+#[cfg(unix)]
+pub(crate) mod shutdown;
 pub mod skills;
 pub mod stats;
 pub mod status;

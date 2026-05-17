@@ -527,15 +527,17 @@ fn partial_over_budget_route_preserves_existing_entity_assertions() {
     insert_page(&conn, "companies/acme", "Acme", "body");
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
 
-    entities::run_for_page(
+    entities::run_for_page_with_deadline(
         &conn,
         source,
         1,
         "sources/note",
         "Alice founded Brex. Bob founded Acme.",
         &patterns,
+        Duration::from_secs(1),
     )
     .unwrap();
+    assert_eq!(count_assertions(&conn, source), 2);
     let partial_summary = entities::route_entity_matches_with_sync(
         &conn,
         source,

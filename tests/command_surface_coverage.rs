@@ -65,11 +65,10 @@ fn run_quaid_in_dir(db_path: &Path, dir: &Path, args: &[&str], home_dir: &Path) 
 
 /// Provision a real vault root on the default collection (id=1).
 ///
-/// `quaid init` seeds the default collection with `root_path = ''` and
-/// `state = 'detached'`, which is fine for purely in-memory usage but breaks
-/// any code path that touches `vault_sync::with_write_slug_lock` because it
-/// tries to open the (empty) root directory.  Call this helper after
-/// `db::open` and before any `put` / write-through operation.
+/// Provision a real test-local vault root on the default collection (id=1).
+///
+/// Production init now provisions `~/.quaid/vault`, but these tests keep file
+/// writes inside the temp directory so subprocess assertions remain isolated.
 fn provision_vault(dir: &tempfile::TempDir, conn: &Connection) {
     let vault_root = dir.path().join("vault");
     fs::create_dir_all(&vault_root).unwrap();

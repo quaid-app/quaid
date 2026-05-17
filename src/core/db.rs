@@ -12,7 +12,7 @@
 )]
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time::Duration;
 
@@ -140,6 +140,15 @@ pub fn default_db_path() -> std::path::PathBuf {
 /// String form of [`default_db_path`] for use in error messages.
 pub fn default_db_path_string() -> String {
     default_db_path().display().to_string()
+}
+
+/// Returns the conventional first-run collection root at `~/.quaid/vault`.
+pub fn default_collection_root_path() -> Result<PathBuf, DbError> {
+    dirs::home_dir()
+        .map(|home| home.join(".quaid").join("vault"))
+        .ok_or_else(|| DbError::Schema {
+            message: "could not resolve home directory for default collection root".to_owned(),
+        })
 }
 
 /// Opens the database at `path` and ensures it is configured for
@@ -618,12 +627,72 @@ fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
 /// `DEFAULT 1` routing them to this collection.  Called at every
 /// `open_connection()` so test-only in-memory databases are also covered.
 fn ensure_default_collection(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch(
-        "INSERT OR IGNORE INTO collections \
-             (id, name, root_path, state, writable, is_write_target) \
-         VALUES (1, 'default', '', 'detached', 1, 1);",
+    if has_configured_write_target(conn)? {
+        return Ok(());
+    }
+
+    let default_root = prepare_default_collection_root()?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE collections SET is_write_target = 0 WHERE is_write_target != 0",
+        [],
     )?;
+    tx.execute(
+        "INSERT INTO collections \
+             (id, name, root_path, state, writable, is_write_target, needs_full_sync) \
+         VALUES (1, 'default', ?1, 'active', 1, 1, 0) \
+         ON CONFLICT(id) DO UPDATE SET \
+             root_path = CASE \
+                 WHEN trim(collections.root_path) = '' THEN excluded.root_path \
+                 ELSE collections.root_path \
+             END, \
+             state = CASE \
+                 WHEN trim(collections.root_path) = '' THEN 'active' \
+                 ELSE collections.state \
+             END, \
+             writable = CASE \
+                 WHEN trim(collections.root_path) = '' THEN 1 \
+                 ELSE collections.writable \
+             END, \
+             is_write_target = 1, \
+             needs_full_sync = CASE \
+                 WHEN trim(collections.root_path) = '' THEN 0 \
+                 ELSE collections.needs_full_sync \
+             END, \
+             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
+        [default_root],
+    )?;
+    tx.commit()?;
     Ok(())
+}
+
+fn has_configured_write_target(conn: &Connection) -> Result<bool, DbError> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM collections
+         WHERE is_write_target = 1
+           AND trim(root_path) != ''",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn prepare_default_collection_root() -> Result<String, DbError> {
+    let root = default_collection_root_path()?;
+    std::fs::create_dir_all(&root).map_err(|error| DbError::Schema {
+        message: format!(
+            "failed to create default collection root at {}: {error}",
+            root.display()
+        ),
+    })?;
+    let resolved = std::fs::canonicalize(&root).map_err(|error| DbError::Schema {
+        message: format!(
+            "failed to resolve default collection root at {}: {error}",
+            root.display()
+        ),
+    })?;
+    Ok(resolved.display().to_string())
 }
 
 fn ensure_embedding_model_registry(conn: &Connection, model: &ModelConfig) -> Result<(), DbError> {
@@ -692,13 +761,11 @@ fn recover_crash_partial_fresh_db(
 fn is_bootstrap_fresh_db(conn: &Connection) -> Result<bool, DbError> {
     let default_collection_count: i64 = conn.query_row(
         "SELECT COUNT(*)
-         FROM collections
-         WHERE id = 1
-           AND name = 'default'
-           AND root_path = ''
-           AND state = 'detached'
-           AND writable = 1
-           AND is_write_target = 1",
+                 FROM collections
+                 WHERE id = 1
+                     AND name = 'default'
+                     AND writable = 1
+                     AND is_write_target = 1",
         [],
         |row| row.get(0),
     )?;

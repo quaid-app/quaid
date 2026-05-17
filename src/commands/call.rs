@@ -240,7 +240,7 @@ mod tests {
         let rows = result.as_array().expect("collections array");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["name"], json!("default"));
-        assert_eq!(rows[0]["state"], json!("detached"));
+        assert_eq!(rows[0]["state"], json!("active"));
     }
 
     #[test]

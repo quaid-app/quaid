@@ -444,3 +444,208 @@ struct FailedJobStatus {
     attempts: i64,
     last_error: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::TurnRole;
+
+    fn configured_db() -> (tempfile::TempDir, Connection, PathBuf) {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("memory.db");
+        let conn = db::open(db_path.to_str().expect("utf8 db path")).expect("open db");
+        let vault_root = dir.path().join("vault");
+        fs::create_dir_all(&vault_root).expect("vault root");
+        conn.execute(
+            "UPDATE collections
+             SET root_path = ?1,
+                 state = 'active',
+                 writable = 1,
+                 is_write_target = 1
+             WHERE id = 1",
+            [vault_root.display().to_string()],
+        )
+        .expect("configure root");
+        (dir, conn, vault_root)
+    }
+
+    #[test]
+    fn queue_counts_and_recent_failed_jobs_report_status_breakdown() {
+        let (_dir, conn, _root) = configured_db();
+        conn.execute_batch(
+            "INSERT INTO extraction_queue
+                 (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+             VALUES
+                 ('pending', 'conversations/2026-05-03/pending.md', 'debounce', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 0, NULL, 'pending'),
+                 ('running', 'conversations/2026-05-03/running.md', 'debounce', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 1, NULL, 'running'),
+                 ('failed', 'conversations/2026-05-03/failed.md', 'debounce', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 2, 'abcdefghijklmnopqrstuvwxyz', 'failed')",
+        )
+        .expect("seed queue");
+
+        let counts = queue_counts(&conn).expect("queue counts");
+        let failed = recent_failed_jobs(&conn).expect("failed jobs");
+
+        assert_eq!(counts.pending, 1);
+        assert_eq!(counts.running, 1);
+        assert_eq!(counts.failed_recent, 1);
+        assert_eq!(failed[0].session_id, "failed");
+        assert_eq!(failed[0].attempts, 2);
+    }
+
+    #[test]
+    fn session_summaries_merge_namespaced_and_daily_conversations() {
+        let (_dir, conn, _root) = configured_db();
+        turn_writer::append_turn(
+            &conn,
+            "session-a",
+            TurnRole::User,
+            "first",
+            "2026-05-03T09:14:22Z",
+            None,
+            None,
+        )
+        .expect("append first");
+        turn_writer::append_turn(
+            &conn,
+            "session-a",
+            TurnRole::Assistant,
+            "second",
+            "2026-05-04T09:14:22Z",
+            None,
+            Some("alpha"),
+        )
+        .expect("append namespaced");
+
+        let summaries = session_summaries(&conn).expect("session summaries");
+        let paths = conversation_paths(&turn_writer::resolve_memory_root(&conn).unwrap().root_path)
+            .expect("conversation paths");
+
+        assert!(summaries
+            .iter()
+            .any(|summary| summary.display_name == "session-a"));
+        assert!(summaries
+            .iter()
+            .any(|summary| summary.display_name == "alpha/session-a"));
+        assert_eq!(
+            paths,
+            vec![
+                "alpha/conversations/2026-05-04/session-a.md".to_owned(),
+                "conversations/2026-05-03/session-a.md".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn active_sessions_filters_closed_and_idle_sessions() {
+        let (_dir, conn, _root) = configured_db();
+        let sessions = vec![
+            SessionSummary {
+                display_name: "recent".to_owned(),
+                last_turn_at: "2999-01-01T00:00:00Z".to_owned(),
+                last_extracted_at: None,
+                status: ConversationStatus::Open,
+            },
+            SessionSummary {
+                display_name: "closed".to_owned(),
+                last_turn_at: "2999-01-01T00:00:00Z".to_owned(),
+                last_extracted_at: Some("2026-05-03T00:00:00Z".to_owned()),
+                status: ConversationStatus::Closed,
+            },
+            SessionSummary {
+                display_name: "idle".to_owned(),
+                last_turn_at: "2000-01-01T00:00:00Z".to_owned(),
+                last_extracted_at: None,
+                status: ConversationStatus::Open,
+            },
+        ];
+
+        let active = active_sessions(&conn, &sessions, 60_000).expect("active sessions");
+
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].display_name, "recent");
+    }
+
+    #[test]
+    fn helper_formatters_and_config_parsing_are_stable() {
+        let (_dir, conn, _root) = configured_db();
+        set_extraction_enabled(&conn, true).expect("enable extraction");
+        conn.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('test.invalid', 'abc')",
+            [],
+        )
+        .expect("set invalid config");
+
+        assert!(extraction_enabled(&conn).expect("enabled"));
+        assert!(parse_i64_config(&conn, "test.invalid", 42).is_err());
+        assert_eq!(parse_i64_config(&conn, "test.missing", 42).unwrap(), 42);
+        assert_eq!(session_key(Some("alpha"), "s1"), "alpha::s1");
+        assert_eq!(session_key(None, "s1"), "s1");
+        assert_eq!(session_display_name(Some("alpha"), "s1"), "alpha/s1");
+        assert_eq!(session_display_name(None, "s1"), "s1");
+        assert_eq!(truncate_chars("abcdef", 3), "abc…");
+        assert_eq!(human_duration_ms(90_000), "1m30s");
+        assert_eq!(estimated_resident_memory("gemma-3-1b"), "~600 MiB");
+        assert_eq!(yes_no(true), "yes");
+        assert_eq!(yes_no(false), "no");
+    }
+
+    #[test]
+    fn status_and_disable_commands_run_without_model_downloads() {
+        let (_dir, conn, _root) = configured_db();
+
+        run(&conn, ExtractionAction::Status).expect("status");
+        run(&conn, ExtractionAction::Disable).expect("disable");
+
+        assert!(!extraction_enabled(&conn).expect("disabled"));
+    }
+
+    #[test]
+    fn enabled_status_prints_active_sessions_failed_jobs_and_blocked_runtime() {
+        let (_dir, conn, _root) = configured_db();
+        set_extraction_enabled(&conn, true).expect("enable extraction");
+        turn_writer::append_turn(
+            &conn,
+            "live-session",
+            TurnRole::User,
+            "hello",
+            "2999-01-01T00:00:00Z",
+            None,
+            None,
+        )
+        .expect("append active turn");
+        conn.execute_batch(
+            "INSERT INTO extraction_queue
+                 (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+             VALUES
+                 ('failed-now', 'conversations/2999-01-01/live-session.md', 'manual', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 3, 'model cache missing', 'failed')",
+        )
+        .expect("seed failed job");
+
+        run(&conn, ExtractionAction::Status).expect("enabled status");
+
+        let sessions = session_summaries(&conn).expect("sessions");
+        assert!(runtime_state(true, "org/missing-model", &sessions).contains("blocked"));
+        assert_eq!(active_sessions(&conn, &sessions, 60_000).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn print_helpers_cover_non_empty_rows_and_short_durations() {
+        print_active_sessions(
+            30_000,
+            &[ActiveSessionStatus {
+                display_name: "session".to_owned(),
+                idle_seconds: 12,
+                last_extracted_at: Some("2026-05-03T00:00:00Z".to_owned()),
+            }],
+        );
+        print_failed_jobs(&[FailedJobStatus {
+            session_id: "session".to_owned(),
+            attempts: 2,
+            last_error: "failed".to_owned(),
+        }]);
+
+        assert_eq!(human_duration_seconds(12), "12s");
+        assert_eq!(estimated_resident_memory("gemma-3-4b"), "~2.0 GiB+");
+        assert_eq!(estimated_resident_memory("custom"), "unknown");
+    }
+}

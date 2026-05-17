@@ -2640,6 +2640,42 @@ fn expected_sha256_from_headers(headers: &reqwest::header::HeaderMap) -> Option<
 mod tests {
     use super::*;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_ref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn write_test_pinned_files(cache_dir: &Path) {
+        std::fs::create_dir_all(cache_dir).expect("cache dir");
+        std::fs::write(cache_dir.join("config.json"), br#"{"model_type":"phi3"}"#).expect("config");
+        std::fs::write(cache_dir.join("model.safetensors"), b"tiny-test-weights").expect("weights");
+        std::fs::write(cache_dir.join("tokenizer.json"), br#"{"version":"1.0"}"#)
+            .expect("tokenizer");
+    }
+
+    fn write_manifest(cache_dir: &Path, manifest: &CacheManifest) {
+        let bytes = serde_json::to_vec(manifest).expect("serialize manifest");
+        std::fs::write(cache_dir.join(MANIFEST_FILE_NAME), bytes).expect("write manifest");
+    }
+
     #[test]
     fn resolve_model_alias_maps_standard_aliases_to_pinned_repos() {
         let phi = resolve_model_alias("phi-3.5-mini").expect("resolve phi");
@@ -2701,6 +2737,395 @@ mod tests {
     fn sanitize_cache_key_normalizes_path_separators() {
         assert_eq!(sanitize_cache_key("org/model"), "org-model");
         assert_eq!(sanitize_cache_key("phi-3.5-mini"), "phi-3.5-mini");
+    }
+
+    #[test]
+    fn inspect_model_caches_reports_missing_alias_and_temporary_entries() {
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let _cache_root = EnvVarGuard::set(MODEL_CACHE_ROOT_ENV, cache_root.path());
+        std::fs::create_dir(cache_root.path().join(".phi-3.5-mini-download-active"))
+            .expect("temp download dir");
+
+        let entries = inspect_model_caches(Some("phi-3.5-mini"), false).expect("inspect caches");
+
+        assert!(entries.iter().any(|entry| {
+            entry.family == ModelCacheFamily::Extraction
+                && entry.state == ModelCacheState::Missing
+                && entry.cache_key == "phi-3.5-mini"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.family == ModelCacheFamily::Extraction
+                && entry.state == ModelCacheState::ActiveTemporary
+                && !entry.cleanup_eligible
+        }));
+    }
+
+    #[test]
+    fn trusted_source_pin_cache_loads_status_and_root_inspection() {
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let _cache_root = EnvVarGuard::set(MODEL_CACHE_ROOT_ENV, cache_root.path());
+        let alias = resolve_model_alias(TEST_PINNED_ALIAS).expect("resolve test alias");
+        let cache_dir = cache_root.path().join(&alias.cache_key);
+        write_test_pinned_files(&cache_dir);
+
+        assert_eq!(
+            load_model_from_local_cache(TEST_PINNED_ALIAS).expect("load source-pinned cache"),
+            cache_dir
+        );
+
+        let manifest = manifest_from_source_pins(&cache_dir, &alias, TEST_CURATED_FILES)
+            .expect("source-pinned manifest");
+        write_manifest(&cache_dir, &manifest);
+        let status = cached_model_status(TEST_PINNED_ALIAS).expect("cached status");
+        assert!(status.is_cached);
+        assert!(status.verified);
+        assert!(status.source_pinned);
+
+        let entries = inspect_model_caches(None, true).expect("inspect root");
+        assert!(entries.iter().any(|entry| {
+            entry.cache_key == alias.cache_key
+                && entry.state == ModelCacheState::Complete
+                && entry.complete_cache
+        }));
+    }
+
+    #[test]
+    fn corrupted_and_incomplete_extraction_cache_entries_are_classified() {
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let alias = resolve_model_alias("phi-3.5-mini").expect("resolve alias");
+        std::fs::write(cache_root.path().join("phi-3.5-mini"), b"not a directory")
+            .expect("file cache path");
+        let file_entry = inspect_extraction_cache_dir(
+            cache_root.path().join("phi-3.5-mini"),
+            "phi-3.5-mini",
+            Some(&alias),
+            ManifestValidation::Fast,
+        );
+        assert_eq!(file_entry.state, ModelCacheState::Corrupted);
+        assert!(file_entry.cleanup_eligible);
+
+        let broken_manifest_dir = cache_root.path().join("broken");
+        std::fs::create_dir(&broken_manifest_dir).expect("broken dir");
+        std::fs::write(
+            broken_manifest_dir.join(MANIFEST_FILE_NAME),
+            b"{not valid json",
+        )
+        .expect("broken manifest");
+        let mut entries = Vec::new();
+        inspect_extraction_cache_root(&mut entries, cache_root.path(), ManifestValidation::Fast)
+            .expect("inspect root");
+        assert!(entries.iter().any(|entry| {
+            entry.cache_key == "broken"
+                && entry.state == ModelCacheState::Corrupted
+                && entry.cleanup_eligible
+        }));
+    }
+
+    #[test]
+    fn manifest_validation_rejects_mismatches_and_hash_drift() {
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let alias = resolve_model_alias(TEST_PINNED_ALIAS).expect("resolve test alias");
+        let cache_dir = cache_root.path().join(&alias.cache_key);
+        write_test_pinned_files(&cache_dir);
+        let manifest = manifest_from_source_pins(&cache_dir, &alias, TEST_CURATED_FILES)
+            .expect("source-pinned manifest");
+
+        let mut wrong_alias = manifest.clone();
+        wrong_alias.requested_alias = "phi-3.5-mini".to_owned();
+        assert!(validate_manifest_contents(
+            &cache_dir,
+            &alias,
+            wrong_alias,
+            ManifestValidation::Fast,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("alias mismatch"));
+
+        let mut empty_manifest = manifest.clone();
+        empty_manifest.files.clear();
+        assert!(validate_manifest_contents(
+            &cache_dir,
+            &alias,
+            empty_manifest,
+            ManifestValidation::Fast,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("did not record"));
+
+        let mut wrong_hash = manifest;
+        wrong_hash.files[0].sha256 = "0".repeat(64);
+        assert!(validate_manifest_contents(
+            &cache_dir,
+            &alias,
+            wrong_hash,
+            ManifestValidation::Full,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("hash mismatch"));
+
+        assert_eq!(
+            cache_state_from_validation_error(&ModelLifecycleError::CacheInvalid {
+                cache_dir: cache_dir.display().to_string(),
+                message: "manifest.json is missing".to_owned(),
+            }),
+            ModelCacheState::Incomplete
+        );
+    }
+
+    #[test]
+    fn utility_helpers_cover_edge_paths() {
+        assert!(resolve_model_alias("   ").is_err());
+        assert!(resolve_model_alias("org/model/extra").is_err());
+        assert_eq!(extraction_temp_cache_key("plain"), None);
+        assert_eq!(extraction_temp_cache_key(".model-download-"), None);
+        assert_eq!(stale_temp_ttl(), DEFAULT_STALE_DOWNLOAD_TTL);
+
+        let _ttl = EnvVarGuard::set(STALE_CACHE_TTL_ENV, "3");
+        assert_eq!(stale_temp_ttl(), Duration::from_secs(3));
+
+        let file = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(file.path(), b"abc").expect("write file");
+        let blob_sha = git_blob_sha1_for_file(file.path(), 3).expect("blob sha");
+        assert_eq!(blob_sha, "f2ba8f84ab5c1bce84a7b441cb1959cfc7093b7f");
+
+        assert!(path_is_within_cache_root(
+            file.path().parent().unwrap(),
+            &file.path().parent().unwrap().join("future")
+        ));
+        assert!(remove_cache_path(&file.path().parent().unwrap().join("missing")).is_ok());
+    }
+
+    #[test]
+    fn progress_reporters_and_download_unsupported_paths_are_covered() {
+        let alias = resolve_model_alias("phi-3.5-mini").expect("resolve alias");
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let cache_dir = cache_root.path().join("phi-3.5-mini");
+        let mut reporter = ConsoleProgressReporter::default();
+        reporter.planned(&alias, 2);
+        reporter.cache_hit(&cache_dir);
+        reporter.file_started("config.json", Some(1536));
+        reporter.file_progress("config.json", 1536, Some(1536));
+        reporter.file_finished("config.json", "abcdef1234567890");
+        reporter.file_started("tokenizer.json", None);
+        reporter.file_progress("tokenizer.json", 42, None);
+        reporter.file_finished("tokenizer.json", "abc");
+
+        let mut noop = NoopProgressReporter;
+        noop.planned(&alias, 0);
+        noop.cache_hit(&cache_dir);
+        noop.file_started("file", None);
+        noop.file_progress("file", 1, None);
+        noop.file_finished("file", "sha");
+
+        assert_eq!(human_bytes(1536), "1.5 KiB");
+        assert_eq!(human_duration(Duration::from_millis(250)), "0s");
+        assert_eq!(human_duration(Duration::from_secs(2)), "2s");
+        if !cfg!(feature = "online-model") {
+            assert!(matches!(
+                download_model("phi-3.5-mini", &mut noop),
+                Err(ModelLifecycleError::DownloadsUnsupported)
+            ));
+        }
+    }
+
+    #[test]
+    fn lifecycle_edge_paths_cover_validation_and_cleanup_branches() {
+        let alias = resolve_model_alias("org/model").expect("resolve raw alias");
+        assert!(cache_dir_for_alias("org/model").is_ok());
+        assert!(resolve_model_alias("org/model#bad").is_err());
+        assert!(validate_repo_id(" org/model").is_err());
+        assert!(validate_repo_id("org/model?rev=main").is_err());
+        assert!(validate_repo_id("org/model/extra").is_err());
+        assert!(validate_repo_id("./model").is_err());
+        assert!(validate_repo_id("org/..").is_err());
+        assert!(normalize_relative_path("/absolute.bin").is_err());
+        assert!(normalize_relative_path(".").is_err());
+        assert_eq!(normalize_relative_path("a/./b.bin").unwrap(), "a/b.bin");
+
+        let mut reporter = ConsoleProgressReporter::default();
+        reporter.planned(&alias, 1);
+        reporter.file_started("weights.bin", Some(4096));
+        reporter.last_progress_at = Some(Instant::now());
+        reporter.file_progress("weights.bin", 1024, Some(4096));
+        reporter.current_file_started_at = Some(Instant::now() - Duration::from_secs(2));
+        reporter.last_progress_at = Some(Instant::now() - Duration::from_secs(2));
+        reporter.file_progress("weights.bin", 1024, Some(4096));
+        assert_eq!(human_duration(Duration::from_secs(61)), "1m01s");
+        assert_eq!(human_duration(Duration::from_secs(3661)), "1h01m");
+
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let _cache_root = EnvVarGuard::set(MODEL_CACHE_ROOT_ENV, cache_root.path());
+        let malformed = cache_root.path().join("malformed");
+        std::fs::create_dir(&malformed).expect("malformed dir");
+        write_manifest(
+            &malformed,
+            &CacheManifest {
+                manifest_version: Some(MANIFEST_VERSION),
+                requested_alias: "bad alias?".to_owned(),
+                repo_id: "org/model".to_owned(),
+                revision: None,
+                created_at_unix: Some(1),
+                files: vec![CachedFile {
+                    path: "config.json".to_owned(),
+                    sha256: "abc".to_owned(),
+                    size_bytes: Some(0),
+                    modified_unix: Some(1),
+                    verified_from_source: false,
+                }],
+            },
+        );
+        let entries = inspect_model_caches(None, false).expect("inspect malformed root");
+        assert!(entries.iter().any(|entry| {
+            entry.cache_key == "malformed" && entry.state == ModelCacheState::Corrupted
+        }));
+
+        let existing = cache_root.path().join("existing");
+        std::fs::create_dir(&existing).expect("existing dir");
+        let missing_alias_entry = inspect_extraction_cache_dir(
+            existing.clone(),
+            "existing",
+            None,
+            ManifestValidation::Fast,
+        );
+        assert_eq!(missing_alias_entry.state, ModelCacheState::Incomplete);
+
+        let file_cache_root = tempfile::NamedTempFile::new().expect("file cache root");
+        let _file_cache_root = EnvVarGuard::set(MODEL_CACHE_ROOT_ENV, file_cache_root.path());
+        assert!(inspect_model_caches(None, false).is_err());
+        let report = remove_model_cache_entries(&[ModelCacheEntry {
+            family: ModelCacheFamily::Extraction,
+            alias: None,
+            cache_key: "missing-root".to_owned(),
+            path: cache_root.path().join("missing-root"),
+            state: ModelCacheState::StaleTemporary,
+            reason: "missing root".to_owned(),
+            file_count: 0,
+            size_bytes: 0,
+            modified_unix: None,
+            cleanup_eligible: true,
+            complete_cache: false,
+        }]);
+        assert_eq!(report.failed.len(), 1);
+        drop(_file_cache_root);
+
+        let removable_file = cache_root.path().join("removable-file");
+        std::fs::write(&removable_file, b"x").expect("removable file");
+        assert!(remove_cache_path(&removable_file).is_ok());
+        assert!(!removable_file.exists());
+        assert!(!path_is_within_cache_root(
+            &cache_root.path().join("does-not-exist"),
+            &existing
+        ));
+
+        let pin_error = verify_source_pin_for_cache(
+            "weights.bin",
+            3,
+            PinnedDigest::Sha256("0000"),
+            "1111",
+            &existing.join("missing.bin"),
+            &alias,
+            &existing,
+        )
+        .expect_err("sha mismatch");
+        assert!(pin_error.to_string().contains("SHA-256"));
+        std::fs::write(existing.join("blob.bin"), b"abc").expect("blob");
+        let pin_error = verify_source_pin_for_cache(
+            "blob.bin",
+            3,
+            PinnedDigest::GitBlobSha1("0000"),
+            "unused",
+            &existing.join("blob.bin"),
+            &alias,
+            &existing,
+        )
+        .expect_err("git blob mismatch");
+        assert!(pin_error.to_string().contains("git blob"));
+    }
+
+    #[test]
+    fn remove_model_cache_entries_removes_only_allowed_paths() {
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let _cache_root = EnvVarGuard::set(MODEL_CACHE_ROOT_ENV, cache_root.path());
+        let removable = cache_root.path().join("stale");
+        std::fs::create_dir(&removable).expect("stale dir");
+        std::fs::write(removable.join("file.bin"), [1_u8, 2, 3]).expect("cache file");
+        let outside = tempfile::NamedTempFile::new().expect("outside file");
+        let protected = cache_root.path().join("protected");
+        std::fs::create_dir(&protected).expect("protected dir");
+
+        let report = remove_model_cache_entries(&[
+            ModelCacheEntry {
+                family: ModelCacheFamily::Extraction,
+                alias: None,
+                cache_key: "stale".to_owned(),
+                path: removable.clone(),
+                state: ModelCacheState::StaleTemporary,
+                reason: "stale".to_owned(),
+                file_count: 1,
+                size_bytes: 3,
+                modified_unix: None,
+                cleanup_eligible: true,
+                complete_cache: false,
+            },
+            ModelCacheEntry {
+                family: ModelCacheFamily::Extraction,
+                alias: None,
+                cache_key: "outside".to_owned(),
+                path: outside.path().to_path_buf(),
+                state: ModelCacheState::StaleTemporary,
+                reason: "outside".to_owned(),
+                file_count: 1,
+                size_bytes: 1,
+                modified_unix: None,
+                cleanup_eligible: true,
+                complete_cache: false,
+            },
+            ModelCacheEntry {
+                family: ModelCacheFamily::Extraction,
+                alias: None,
+                cache_key: "protected".to_owned(),
+                path: protected,
+                state: ModelCacheState::ActiveTemporary,
+                reason: "active".to_owned(),
+                file_count: 0,
+                size_bytes: 0,
+                modified_unix: None,
+                cleanup_eligible: false,
+                complete_cache: false,
+            },
+        ]);
+
+        assert_eq!(report.removed.len(), 1);
+        assert_eq!(report.bytes_freed, 3);
+        assert_eq!(report.failed.len(), 2);
+        assert!(!removable.exists());
+    }
+
+    #[test]
+    fn path_tree_stats_counts_nested_files_and_cache_root_checks_boundaries() {
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let nested = cache_root.path().join("entry").join("nested");
+        std::fs::create_dir_all(&nested).expect("nested");
+        std::fs::write(cache_root.path().join("entry").join("a.bin"), [1_u8, 2]).expect("file a");
+        std::fs::write(nested.join("b.bin"), [3_u8]).expect("file b");
+
+        let (file_count, size_bytes, modified_unix) =
+            path_tree_stats(&cache_root.path().join("entry"));
+
+        assert_eq!(file_count, 2);
+        assert_eq!(size_bytes, 3);
+        assert!(modified_unix.is_some());
+        assert!(path_is_within_cache_root(
+            cache_root.path(),
+            &cache_root.path().join("entry")
+        ));
+        assert!(!path_is_within_cache_root(
+            cache_root.path(),
+            cache_root.path()
+        ));
     }
 
     // --- verify_source_pin unit tests (require online-model feature for the fn) ---

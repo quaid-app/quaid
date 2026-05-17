@@ -1720,6 +1720,25 @@ mod tests {
     }
 
     #[test]
+    fn known_model_helpers_cover_aliases_and_repo_ids() {
+        let aliases = known_embedding_models()
+            .into_iter()
+            .map(|model| model.alias)
+            .collect::<Vec<_>>();
+        assert_eq!(aliases, vec!["small", "base", "large", "m3"]);
+        assert_eq!(
+            resolve_known_embedding_model("BAAI/bge-base-en-v1.5")
+                .expect("known repo")
+                .alias,
+            "base"
+        );
+        assert!(resolve_known_embedding_model("org/custom").is_none());
+        assert_eq!(resolve_model("BAAI/bge-small-en-v1.5").alias, "small");
+        assert_eq!(resolve_model("BAAI/bge-base-en-v1.5").alias, "base");
+        assert_eq!(resolve_model("BAAI/bge-m3").alias, "m3");
+    }
+
+    #[test]
     fn model_config_helper_methods_reflect_aliases_and_dimensions() {
         let small = default_model();
         assert_eq!(small.vec_table(), "page_embeddings_vec_384");
@@ -1768,6 +1787,17 @@ mod tests {
 
         assert!(debug.contains("HashShim"));
         assert!(debug.contains("org/custom-model"));
+    }
+
+    #[test]
+    fn embedding_evidence_kind_reports_loaded_backend() {
+        configure_runtime_model(default_model());
+        let kind = embedding_evidence_kind().expect("evidence kind");
+
+        assert!(matches!(
+            kind,
+            EmbeddingEvidenceKind::Semantic | EmbeddingEvidenceKind::HashShim
+        ));
     }
 
     #[test]
@@ -1853,6 +1883,16 @@ mod tests {
             .expect("empty db search should succeed");
 
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_vec_short_circuits_blank_query_and_zero_limit() {
+        let conn = open_test_db();
+
+        assert!(search_vec("   ", 5, None, None, &conn).unwrap().is_empty());
+        assert!(search_vec("query", 0, None, None, &conn)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1948,6 +1988,50 @@ mod tests {
             "unexpected score: {}",
             results[0].score
         );
+    }
+
+    #[test]
+    fn canonical_vector_search_applies_collection_and_namespace_filters() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, namespace, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version, collection_id) \
+             VALUES (?1, ?2, 'person', ?3, ?4, '', '', '{}', ?5, '', 1, 1)",
+            rusqlite::params!["people/alice", "alpha", "Alice", "Founder", "people"],
+        )
+        .expect("insert namespaced page");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        let query_blob = embedding_to_blob(&embed("startup founder").expect("embed query"));
+        conn.execute(
+            "INSERT INTO page_embeddings_vec_384(rowid, embedding) VALUES (?1, ?2)",
+            rusqlite::params![1_i64, query_blob],
+        )
+        .expect("insert vec row");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 1, 'truth_section', 0, 'startup founder', 'hash', 2, 'State')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert embedding metadata");
+
+        let results = search_vec_canonical_with_namespace_filtered(
+            "startup founder",
+            5,
+            Some("people"),
+            Some(1),
+            Some("alpha"),
+            true,
+            &conn,
+        )
+        .expect("canonical vector search");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].slug, "default::people/alice");
     }
 
     #[test]

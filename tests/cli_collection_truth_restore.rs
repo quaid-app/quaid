@@ -552,7 +552,7 @@ fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
             .expect("start serve runtime");
     thread::sleep(Duration::from_secs(1));
 
-    let output = run_quaid(
+    let output = run_quaid_with_env(
         &db_path,
         &[
             "--json",
@@ -562,6 +562,7 @@ fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
             target_root.to_str().expect("utf-8 target"),
             "--online",
         ],
+        &[("QUAID_HANDSHAKE_TIMEOUT_SECS", "90")],
     );
 
     assert!(

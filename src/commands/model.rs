@@ -268,3 +268,197 @@ fn human_duration(duration: std::time::Duration) -> String {
         format!("{seconds:.1} s")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::conversation::model_lifecycle::{ModelCacheFamily, ModelCacheState};
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_ref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn entry(
+        state: ModelCacheState,
+        cleanup_eligible: bool,
+        complete_cache: bool,
+    ) -> ModelCacheEntry {
+        ModelCacheEntry {
+            family: ModelCacheFamily::Extraction,
+            alias: Some("phi-3.5-mini".to_owned()),
+            cache_key: format!("{state}"),
+            path: std::path::PathBuf::from(format!("/tmp/{state}")),
+            state,
+            reason: state.to_string(),
+            file_count: 0,
+            size_bytes: 0,
+            modified_unix: None,
+            cleanup_eligible,
+            complete_cache,
+        }
+    }
+
+    #[test]
+    fn cleanup_candidates_selects_safe_entries_for_each_mode() {
+        let stale = entry(ModelCacheState::StaleTemporary, true, false);
+        let complete = entry(ModelCacheState::Complete, false, true);
+        let missing = entry(ModelCacheState::Missing, false, false);
+        let entries = vec![stale.clone(), complete.clone(), missing];
+
+        assert_eq!(
+            cleanup_candidates(&entries, false, false),
+            vec![stale.clone()]
+        );
+        assert_eq!(
+            cleanup_candidates(&entries, false, true),
+            vec![stale.clone()]
+        );
+        assert_eq!(
+            cleanup_candidates(&entries, true, false),
+            vec![stale, complete]
+        );
+    }
+
+    #[test]
+    fn human_formatters_use_binary_units_and_seconds() {
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(1536), "1.5 KiB");
+        assert_eq!(human_bytes(1024 * 1024), "1.0 MiB");
+        assert_eq!(
+            human_duration(std::time::Duration::from_millis(250)),
+            "250 ms"
+        );
+        assert_eq!(
+            human_duration(std::time::Duration::from_millis(1250)),
+            "1.2 s"
+        );
+    }
+
+    #[test]
+    fn collect_cache_files_recurses_and_uses_relative_slash_paths() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let nested = dir.path().join("nested");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        std::fs::write(dir.path().join("root.bin"), [1_u8, 2]).expect("root file");
+        std::fs::write(nested.join("child.bin"), [3_u8, 4, 5]).expect("child file");
+
+        let mut files = Vec::new();
+        collect_cache_files(dir.path(), dir.path(), &mut files);
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(
+            files,
+            vec![
+                ("nested/child.bin".to_owned(), 3),
+                ("root.bin".to_owned(), 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn print_helpers_accept_empty_and_populated_reports() {
+        print_cache_entries(&[], "empty", false);
+        print_cache_entries(
+            &[entry(ModelCacheState::Complete, false, true)],
+            "empty",
+            true,
+        );
+        print_clean_report(&ModelCacheCleanReport {
+            removed: vec![
+                crate::core::conversation::model_lifecycle::ModelCacheRemoval {
+                    path: std::path::PathBuf::from("/tmp/removed"),
+                    size_bytes: 2048,
+                    error: None,
+                },
+            ],
+            failed: vec![
+                crate::core::conversation::model_lifecycle::ModelCacheRemoval {
+                    path: std::path::PathBuf::from("/tmp/failed"),
+                    size_bytes: 0,
+                    error: Some("nope".to_owned()),
+                },
+            ],
+            bytes_freed: 2048,
+        });
+    }
+
+    #[test]
+    fn run_status_and_clean_list_paths_do_not_require_downloads() {
+        run(ModelAction::Status {
+            alias: Some("phi-3.5-mini".to_owned()),
+            verbose: false,
+            verify: false,
+        })
+        .expect("status should inspect local cache only");
+
+        clean(None, false, false, false).expect("default clean lists candidates only");
+
+        let error = clean(Some("phi-3.5-mini"), false, true, false)
+            .expect_err("alias and all are mutually exclusive");
+        assert!(error.to_string().contains("either an alias or --all"));
+    }
+
+    #[test]
+    fn run_pull_and_verified_status_paths_do_not_download_without_feature() {
+        if cfg!(feature = "online-model") {
+            return;
+        }
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let error = runtime
+            .block_on(async {
+                run(ModelAction::Pull {
+                    alias: "phi-3.5-mini".to_owned(),
+                })
+            })
+            .expect_err("offline build reports unsupported downloads");
+        assert!(error.to_string().contains("online-model"));
+
+        run(ModelAction::Status {
+            alias: Some("phi-3.5-mini".to_owned()),
+            verbose: false,
+            verify: true,
+        })
+        .expect("verified status should inspect local cache only");
+    }
+
+    #[test]
+    fn clean_force_removes_alias_cache_from_temp_root() {
+        let cache_root = tempfile::TempDir::new().expect("cache root");
+        let _cache_root = EnvVarGuard::set("QUAID_MODEL_CACHE_DIR", cache_root.path());
+        let cache_dir = cache_root.path().join("org-test-model");
+        std::fs::create_dir(&cache_dir).expect("cache dir");
+
+        run(ModelAction::Clean {
+            alias: Some("org/test-model".to_owned()),
+            list: false,
+            all: false,
+            force: true,
+        })
+        .expect("clean removes corrupt alias cache");
+
+        assert!(!cache_dir.exists());
+    }
+}

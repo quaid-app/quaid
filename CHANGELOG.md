@@ -8,6 +8,11 @@ each entry below calls out the migration implications.
 
 ### Fixed
 
+- **First-run collection defaults.** Fresh `quaid init` now provisions a writable
+  default collection at `~/.quaid/vault`, so MCP conversation capture can write
+  turns before any manual `collection add`. Existing databases with configured
+  write-target roots are preserved; legacy unconfigured defaults are repaired on
+  open.
 - **Synthetic benchmark fallback.** `make bench` / DAB-oriented benchmark flows
   now generate the synthetic corpus automatically when the DAB corpus is absent,
   so fresh clones no longer fail before the benchmark harness can run.
@@ -17,7 +22,8 @@ each entry below calls out the migration implications.
 
 ### Migration
 
-- No schema migration. Existing v0.22.x databases remain compatible.
+- No schema migration. Existing v0.22.x databases remain compatible; only
+  unconfigured default write-target states are conditionally bootstrapped.
 
 ## v0.22.2 — conversation turn delimiter fix
 

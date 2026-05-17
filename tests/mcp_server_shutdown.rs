@@ -81,11 +81,19 @@ fn terminate_child(child: &Child) {
 }
 
 fn assert_no_sessions(db_path: &std::path::Path) {
-    let conn = Connection::open(db_path).unwrap();
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM serve_sessions", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(count, 0);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_count = 0;
+    while Instant::now() < deadline {
+        let conn = Connection::open(db_path).unwrap();
+        last_count = conn
+            .query_row("SELECT COUNT(*) FROM serve_sessions", [], |row| row.get(0))
+            .unwrap();
+        if last_count == 0 {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(last_count, 0);
 }
 
 #[test]

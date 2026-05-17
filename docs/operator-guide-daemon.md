@@ -122,6 +122,8 @@ quaid serve --http --port 3112 --trust-loopback
 
 You can run `quaid serve` while a daemon is installed; it will detect the live `daemon` session and register itself as a transport-only `serve` session — no watchers, no extraction worker, no double-spawn. The daemon owns the runtime; `serve` is just the MCP transport for your IDE/agent.
 
+Fresh databases created by `quaid init` include a writable default collection rooted at `~/.quaid/vault`. That lets daemon-owned MCP tools such as `memory_add_turn` write immediately on a clean install. Existing databases with a non-empty write-target root are preserved as-is; only legacy unconfigured default states are repaired to the home-directory default.
+
 If you stop the daemon (`quaid daemon stop`) while `quaid serve` is running, the next `quaid serve` invocation after the daemon's session-row sweep window (~15s) will auto-promote to `serve_host` and take over runtime ownership.
 
 Foreground runtimes (`quaid serve` and `quaid daemon run`) handle SIGTERM/SIGINT by stopping owned workers and unregistering their `serve_sessions` row. Use the platform service manager (`quaid daemon stop`) for installed daemons; use a direct signal only for foreground/manual processes.
@@ -170,6 +172,15 @@ An older binary (one that predates the `serve_sessions.session_type` widening) r
 
 ### Logs are empty
 `quaid daemon logs` requires the daemon to have written at least one line since install. Run `quaid daemon stop && quaid daemon start` to bounce it and force a `daemon_ready` line into the log.
+
+### Disable first-run default root bootstrap
+If a regression appears in the conditional default collection bootstrap, roll back by disabling the `ensure_default_collection` repair path in the binary and configuring an explicit write target manually:
+
+```bash
+quaid collection add memory /path/to/vault --writable --db ~/.quaid/memory.db
+```
+
+Databases that already have a non-empty write-target root do not need changes during rollback.
 
 ### `quaid daemon install` fails on Windows
 Windows isn't supported in v1. You can still run `quaid daemon run` directly under your preferred supervisor (`nssm`, Task Scheduler, etc.) — the foreground entry point itself is platform-agnostic.

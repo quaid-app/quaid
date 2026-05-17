@@ -46,6 +46,21 @@ pub fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {
     command.output().expect("run quaid")
 }
 
+pub fn run_quaid_with_env(
+    db_path: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> std::process::Output {
+    let mut command = Command::new(bin_path());
+    crate::common_subprocess::configure_test_command(&mut command);
+    command
+        .arg("--db")
+        .arg(db_path)
+        .args(args)
+        .envs(envs.iter().copied());
+    command.output().expect("run quaid")
+}
+
 pub fn run_quaid_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::process::Output {
     let mut command = Command::new(bin_path());
     crate::common_subprocess::configure_test_command(&mut command);

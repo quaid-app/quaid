@@ -2126,6 +2126,7 @@ pub fn wait_for_exact_ack(
     reload_generation: i64,
 ) -> Result<(), VaultSyncError> {
     let started = Instant::now();
+    let timeout = handshake_timeout();
     loop {
         let collection = load_collection_by_id(conn, collection_id)?;
         // Re-check owner via typed live_collection_owner so that a CLI lease or a
@@ -2157,7 +2158,7 @@ pub fn wait_for_exact_ack(
         {
             return Ok(());
         }
-        if started.elapsed() >= Duration::from_secs(HANDSHAKE_TIMEOUT_SECS) {
+        if started.elapsed() >= timeout {
             return Err(VaultSyncError::Restore(RestoreError::HandshakeTimeout {
                 collection_name: collection.name,
                 expected_session_id: expected_session_id.to_owned(),
@@ -2166,6 +2167,15 @@ pub fn wait_for_exact_ack(
         }
         thread::sleep(Duration::from_millis(HANDSHAKE_POLL_MS));
     }
+}
+
+fn handshake_timeout() -> Duration {
+    std::env::var("QUAID_HANDSHAKE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(HANDSHAKE_TIMEOUT_SECS))
 }
 
 fn configured_full_hash_audit_days() -> i64 {

@@ -18,6 +18,8 @@ use anyhow::{anyhow, Result};
 use clap::Subcommand;
 use rusqlite::Connection;
 
+#[cfg(unix)]
+use crate::commands::shutdown::ShutdownSignal;
 use crate::core::vault_sync;
 use crate::mcp::http::{DEFAULT_HTTP_BIND, DEFAULT_HTTP_PORT};
 use crate::mcp::HttpConfig;
@@ -139,6 +141,9 @@ async fn run_foreground(db: Connection, http_config: Option<HttpConfig>) -> Resu
     let db_path = vault_sync::database_path(&db)?;
     drop(db);
 
+    #[cfg(unix)]
+    let mut shutdown_signal = ShutdownSignal::arm();
+
     let runtime = match vault_sync::start_daemon_runtime(db_path.clone()) {
         Ok(rt) => rt,
         Err(err) => {
@@ -163,17 +168,35 @@ async fn run_foreground(db: Connection, http_config: Option<HttpConfig>) -> Resu
             move || crate::core::db::open(&db_path_for_factory).map_err(anyhow::Error::from);
         // Block on the SSE listener; the supervisor + worker run in
         // their own threads owned by `runtime`.
-        tokio::select! {
-            result = crate::mcp::http::run_http(factory, config) => {
-                if let Err(err) = result {
-                    eprintln!("daemon_http_transport_failed error={err}");
-                    return Ok(1);
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                result = crate::mcp::http::run_http(factory, config) => {
+                    if let Err(err) = result {
+                        eprintln!("daemon_http_transport_failed error={err}");
+                        return Ok(1);
+                    }
                 }
+                () = shutdown_signal.recv() => {}
             }
-            () = wait_for_runtime(&runtime) => {}
+        }
+        #[cfg(not(unix))]
+        {
+            tokio::select! {
+                result = crate::mcp::http::run_http(factory, config) => {
+                    if let Err(err) = result {
+                        eprintln!("daemon_http_transport_failed error={err}");
+                        return Ok(1);
+                    }
+                }
+                () = wait_for_runtime(&runtime) => {}
+            }
         }
     } else {
         // No transport: block until the supervisor thread joins (SIGTERM).
+        #[cfg(unix)]
+        wait_for_runtime(&runtime, &mut shutdown_signal).await;
+        #[cfg(not(unix))]
         wait_for_runtime(&runtime).await;
     }
 
@@ -183,37 +206,19 @@ async fn run_foreground(db: Connection, http_config: Option<HttpConfig>) -> Resu
 
 /// Block until the supervisor thread exits. Used when no MCP transport
 /// is open and we still need the foreground task to wait for shutdown.
-async fn wait_for_runtime(_runtime: &vault_sync::ServeRuntime) {
-    #[cfg(unix)]
-    {
-        let mut sigterm =
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(signal) => signal,
-                Err(_) => {
-                    std::future::pending::<()>().await;
-                    return;
-                }
-            };
-        let mut sigint =
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
-                Ok(signal) => signal,
-                Err(_) => {
-                    let _ = sigterm.recv().await;
-                    return;
-                }
-            };
+#[cfg(unix)]
+async fn wait_for_runtime(
+    _runtime: &vault_sync::ServeRuntime,
+    shutdown_signal: &mut ShutdownSignal,
+) {
+    shutdown_signal.recv().await;
+}
 
-        tokio::select! {
-            _ = sigterm.recv() => {}
-            _ = sigint.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        // Fallback: block forever on a stalled future (the supervisor
-        // thread keeps the process alive; Ctrl-C tears the binary down).
-        std::future::pending::<()>().await;
-    }
+#[cfg(not(unix))]
+async fn wait_for_runtime(_runtime: &vault_sync::ServeRuntime) {
+    // Fallback: block forever on a stalled future (the supervisor
+    // thread keeps the process alive; Ctrl-C tears the binary down).
+    std::future::pending::<()>().await;
 }
 
 fn install_action(

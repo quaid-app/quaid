@@ -220,7 +220,9 @@ mod tests {
         assert_eq!(stats.collection_totals.quarantined_pages, 0);
         assert_eq!(stats.collection_totals.embedding_jobs_pending, 0);
         assert_eq!(stats.collection_totals.embedding_jobs_failed, 0);
-        assert!(stats.collections.is_empty());
+        assert_eq!(stats.collections.len(), 1);
+        assert_eq!(stats.collections[0].name, "default");
+        assert_eq!(stats.collections[0].page_count, 0);
     }
 
     #[test]

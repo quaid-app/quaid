@@ -24,12 +24,12 @@ fn truth_chunks(page: &Page) -> Vec<Chunk> {
         if let Some(heading) = line.strip_prefix("## ") {
             saw_heading = true;
             if !current_lines.is_empty() {
-                chunks.push(build_chunk(
+                push_truth_chunk(
+                    &mut chunks,
                     &page.slug,
                     &current_heading,
                     &current_lines.join("\n"),
-                    "truth_section",
-                ));
+                );
                 current_lines.clear();
             }
             current_heading = heading.trim().to_owned();
@@ -44,15 +44,23 @@ fn truth_chunks(page: &Page) -> Vec<Chunk> {
         } else {
             ""
         };
-        chunks.push(build_chunk(
-            &page.slug,
-            heading,
-            &current_lines.join("\n"),
-            "truth_section",
-        ));
+        push_truth_chunk(&mut chunks, &page.slug, heading, &current_lines.join("\n"));
     }
 
     chunks
+}
+
+fn push_truth_chunk(chunks: &mut Vec<Chunk>, page_slug: &str, heading_path: &str, content: &str) {
+    if content.trim().is_empty() {
+        return;
+    }
+
+    chunks.push(build_chunk(
+        page_slug,
+        heading_path,
+        content,
+        "truth_section",
+    ));
 }
 
 fn timeline_chunks(page: &Page) -> Vec<Chunk> {

@@ -20,7 +20,10 @@ use serde::Deserialize;
 use crate::commands::{get, put};
 
 use crate::core::collections::{self, OpKind, SlugResolution};
-use crate::core::conversation::{extractor::SlmClient, slm::LazySlmRunner, turn_writer};
+use crate::core::conversation::{
+    extractor::SlmClient, format::MemoryLocation, slm::LazySlmRunner, turn_writer,
+};
+use crate::core::db;
 #[cfg(test)]
 use crate::core::graph::{GraphError, TemporalFilter};
 use crate::core::vault_sync;
@@ -82,6 +85,15 @@ pub(crate) fn resolve_memory_collection_filter_for_mcp(
         collections::get_single_active_collection(db).map_err(map_collection_error)?
     {
         return Ok(Some(collection));
+    }
+
+    let memory_location = db::read_config_value_or(db, "memory.location", "vault-subdir")
+        .map_err(map_config_error)?;
+    if matches!(
+        MemoryLocation::from_config(&memory_location).map_err(map_config_error)?,
+        MemoryLocation::VaultSubdir
+    ) {
+        return collections::resolve_read_collection_filter(db, None).map_err(map_collection_error);
     }
 
     let memory_root = turn_writer::resolve_memory_root(db).map_err(map_turn_write_error)?;

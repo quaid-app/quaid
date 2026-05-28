@@ -160,12 +160,18 @@ pub fn search_fts(conn: &Connection, q: FtsQuery<'_>) -> Result<Vec<SearchResult
 ///
 /// Single-token or empty inputs are returned unchanged.
 pub fn expand_fts_query_or(sanitized: &str) -> String {
-    let tokens: Vec<_> = sanitized.split_whitespace().collect();
-    if tokens.len() <= 1 {
-        sanitized.to_owned()
+    let token_queries = token_queries_with_numeric_aliases(sanitized);
+    if token_queries.len() <= 1 {
+        token_queries.into_iter().next().unwrap_or_default()
     } else {
-        tokens.join(" OR ")
+        token_queries.join(" OR ")
     }
+}
+
+/// Expand sanitized numeric tokens into equivalent FTS clauses while
+/// preserving implicit-AND semantics between top-level tokens.
+pub(crate) fn expand_numeric_fts_query(sanitized: &str) -> String {
+    token_queries_with_numeric_aliases(sanitized).join(" AND ")
 }
 
 /// Natural-language FTS5 search with tiered AND→OR fallback for compound-term
@@ -208,9 +214,10 @@ fn search_fts_tiered_internal(
     limit: usize,
     canonical_slug: bool,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    let and_query = expand_numeric_fts_query(sanitized_query);
     // AND pass — highest precision; use this if it returns any results.
     let and_results = search_fts_internal(
-        sanitized_query,
+        &and_query,
         wing_filter,
         collection_filter,
         namespace_filter,
@@ -224,7 +231,7 @@ fn search_fts_tiered_internal(
     }
 
     let or_query = expand_fts_query_or(sanitized_query);
-    if or_query == sanitized_query {
+    if or_query == and_query {
         return Ok(Vec::new());
     }
 
@@ -238,6 +245,68 @@ fn search_fts_tiered_internal(
         limit,
         canonical_slug,
     )
+}
+
+fn token_queries_with_numeric_aliases(sanitized: &str) -> Vec<String> {
+    sanitized
+        .split_whitespace()
+        .map(expand_numeric_token_query)
+        .collect()
+}
+
+fn expand_numeric_token_query(token: &str) -> String {
+    let aliases = numeric_token_aliases(token);
+    if aliases.len() == 1 {
+        aliases.into_iter().next().unwrap_or_default()
+    } else {
+        format!("({})", aliases.join(" OR "))
+    }
+}
+
+fn numeric_token_aliases(token: &str) -> Vec<String> {
+    if !token.chars().all(|ch| ch.is_ascii_digit()) {
+        return vec![token.to_owned()];
+    }
+
+    let mut aliases = vec![token.to_owned()];
+    if let Some(grouped) = grouped_numeric_phrase(token) {
+        aliases.push(format!("\"{grouped}\""));
+    }
+    if let Some(abbreviated) = abbreviated_numeric_alias(token) {
+        aliases.push(abbreviated);
+    }
+    aliases
+}
+
+fn grouped_numeric_phrase(token: &str) -> Option<String> {
+    if token.len() <= 3 {
+        return None;
+    }
+
+    let split_at = token.len() % 3;
+    let mut groups = Vec::new();
+    if split_at != 0 {
+        groups.push(token[..split_at].to_owned());
+    }
+    for chunk in token.as_bytes()[split_at..].chunks(3) {
+        groups.push(String::from_utf8_lossy(chunk).into_owned());
+    }
+
+    Some(groups.join(" "))
+}
+
+fn abbreviated_numeric_alias(token: &str) -> Option<String> {
+    let value = token.parse::<u64>().ok()?;
+    for (divisor, suffix) in [
+        (1_000_000_000_u64, "b"),
+        (1_000_000_u64, "m"),
+        (1_000_u64, "k"),
+    ] {
+        if value >= divisor && value % divisor == 0 {
+            return Some(format!("{}{suffix}", value / divisor));
+        }
+    }
+    None
 }
 
 #[expect(

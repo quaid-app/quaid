@@ -9,14 +9,14 @@
 use rmcp::model::{CallToolResult, Content};
 use rmcp::tool;
 
-use crate::core::fts::{sanitize_fts_query, search_fts, FtsQuery};
+use crate::core::fts::{expand_numeric_fts_query, sanitize_fts_query, search_fts, FtsQuery};
 use crate::core::gaps;
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::search::{hybrid_search, HybridSearch};
 use crate::mcp::errors::{map_namespace_error, map_search_error, map_serialize_error};
 use crate::mcp::server::{
-    resolve_read_collection_filter_for_mcp, MemoryQueryInput, MemorySearchInput, QuaidServer,
+    resolve_memory_collection_filter_for_mcp, MemoryQueryInput, MemorySearchInput, QuaidServer,
 };
 use crate::mcp::validation::MAX_LIMIT;
 
@@ -37,7 +37,7 @@ impl QuaidServer {
             .map_err(map_namespace_error)?;
         let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
-            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
+            resolve_memory_collection_filter_for_mcp(&db, input.collection.as_deref())?;
         let include_superseded = input.include_superseded.unwrap_or(false);
 
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
@@ -113,11 +113,11 @@ impl QuaidServer {
             .map_err(map_namespace_error)?;
         let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
-            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
+            resolve_memory_collection_filter_for_mcp(&db, input.collection.as_deref())?;
         let include_superseded = input.include_superseded.unwrap_or(false);
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        let safe_query = sanitize_fts_query(&input.query);
+        let safe_query = expand_numeric_fts_query(&sanitize_fts_query(&input.query));
         let results = search_fts(
             &db,
             FtsQuery {

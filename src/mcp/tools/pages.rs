@@ -21,8 +21,8 @@ use crate::mcp::errors::{
 };
 use crate::mcp::server::{
     canonical_slug, canonicalize_page_for_mcp, page_id_for_resolved,
-    resolve_read_collection_filter_for_mcp, resolve_slug_for_mcp, MemoryGetInput, MemoryListInput,
-    MemoryPutInput, MemoryRawInput, QuaidServer,
+    resolve_memory_collection_filter_for_mcp, resolve_slug_for_mcp, MemoryGetInput,
+    MemoryListInput, MemoryPutInput, MemoryRawInput, QuaidServer,
 };
 use crate::mcp::validation::{validate_content, validate_slug, MAX_LIMIT, MAX_RAW_DATA_LEN};
 
@@ -186,7 +186,7 @@ impl QuaidServer {
             .map_err(map_namespace_error)?;
         let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
-            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
+            resolve_memory_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT);
         let mut sql = String::from(

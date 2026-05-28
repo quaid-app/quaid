@@ -71,3 +71,9 @@ Batch 3 revision received multi-agent re-review for same-root alias race and off
 - Verdict: APPROVE
 - Rationale: Parser enforces narrower contract, quoted wrappers fail closed, plain prose recovers
 - OpenSpec: No additional wording needed
+
+## 2026-05-28 Parser Lane Review
+
+**Reviewed:** Fry's quoted-region containment + prompt-echo rejection fix
+
+**Verdict:** APPROVED. Implementation correct and complete. Ready to merge.

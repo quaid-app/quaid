@@ -9269,3 +9269,255 @@ The rejected release attempts already consumed those tags, so a repair must move
 **Why:** User request — captured for team memory
 
 ---
+## Scope
+
+- `Cargo.lock`
+- `.squad/agents/fry/history.md`
+
+# Fry decision inbox — PR #119 scope fix
+
+- **Date:** 2026-04-29T06:34:09Z
+- **Requested by:** macro88
+
+## Why
+
+Professor rejected the prior artifact specifically because the branch stopped being a clean release repair once agent-history bookkeeping entered the diff. A small follow-up commit that restores the non-release file preserves the existing release lane, keeps review focused on the actual user-facing repair, and avoids reopening broader scope on the branch.
+
+# Fry decision — v0.22.3 release housekeeping
+
+- Date: 2026-05-15
+- Scope: remote branch pruning, release validation, and v0.22.3 cut sequencing
+
+## Evidence
+
+- `git merge-base --is-ancestor <branch-tip> origin/main` classified the safe delete set.
+- `cargo test` passed for the v0.22.3 tree on 2026-05-15.
+- GitHub CLI release publishing is currently unauthenticated in this environment unless `gh auth login` or `GH_TOKEN` is supplied.
+
+# Fry — search skill PR landing
+
+- **Date:** 2026-04-27
+- **Decision:** Preserve the four search-recall squad skill extracts in `.squad/skills/` and land them via a dedicated branch and draft PR; delete the stray local helper artifacts instead of carrying them forward.
+- **Why:** Leela's gate marked the skill directories as required project knowledge and the helper files as junk/local-only artifacts. Landing this as a draft PR preserves the reusable search-proof guidance while keeping `main` free of unreviewed local clutter.
+- **Paths:** `.squad/skills/compound-term-tiered-fts/`, `.squad/skills/deterministic-hybrid-proof/`, `.squad/skills/search-proof-contracts/`, `.squad/skills/search-surface-coverage/`, `.squad/git-commit-msg.txt`, `create_files.py`, `scribe-cleanup.py`, `scribe-commit.bat`
+
+# Fry decision inbox — v0.11.2 release PR
+
+- **Date:** 2026-04-29T06:15:00Z
+- **Requested by:** macro88
+
+## Why
+
+Reusing the rejected version would leave the release workflow pointed at an already-published tag, which cannot produce a clean new artifact. A narrow branch from current `main` keeps the scope to the version repair while preserving a truthful review trail that the new PR supersedes #116.
+
+# Fry decision inbox — v0.11.5 release PR
+
+- **Date:** 2026-04-29T06:07:05Z
+- **Requested by:** macro88
+
+## Evidence
+
+- Parser seam: `src/core/conversation/slm.rs`
+- Regression seam: `tests/slm_prompt_parsing.rs`, `tests/slm_runtime.rs`
+- Worker recovery proof: `tests/slm_prompt_parsing.rs`
+
+# Leela — housekeeping and v0.22.3 release gate
+
+Date: 2026-05-14T10:44:54.579+00:00
+Decision: APPROVE operational batch with gates
+
+## Addendum — 2026-05-15T10:21:41.579+00:00
+
+Decision: KEEP the shortlist below as the current issue-tracker truth pass for the checked-out tree; do not claim the close/retitle work landed because GitHub write auth is unavailable in this environment.
+
+### Evidence refresh from current checkout
+
+- `docs/roadmap_v3.md:12-15` and `CHANGELOG.md:7-17` show the repo truth is now `v0.22.3`, with the latest public benchmark gate still called out as `94.4%` on `v0.22.2`.
+- `docs/roadmap_v3.md:70-74`, `src/core/supersede.rs`, and `src/core/search.rs:701-703` show shipped supersede chains plus head-only retrieval with an opt-in `include_superseded` escape hatch.
+- `src/core/assertions.rs:360-370` and `docs/spec.md:1036-1045` show contradiction detection is intentionally limited to structured zones (`## Assertions` + selected frontmatter), even though lighter-weight docs still summarize it more broadly.
+- `src/core/conversation/queue.rs:1-15` and `src/commands/daemon.rs:25-94` show queue/daemon infrastructure already shipped for extraction work, but there is still no generic user-facing async job API.
+
+### Shortlist
+
+#### Safe to close now
+
+- **#135 — feat: contradiction resolution - update/supersede stale facts, not just detect**
+  - Reason: shipped supersede-chain semantics already solve the stale-fact/head-truth problem this issue describes.
+  - Evidence: `docs/roadmap_v3.md:70-74`, `src/core/supersede.rs`, `src/core/search.rs:701-703`.
+
+- **#203 — DAB v1.0 Results: quaid v0.22.1 — 150/200 🟠 Acceptable**
+  - Reason: it is an older benchmark snapshot already superseded by `#207` (`v0.22.2`).
+  - Evidence: public GitHub issue search returns `#207` as the newer open DAB results issue; `docs/roadmap_v3.md:15` carries the newer published benchmark truth.
+
+#### Keep open
+
+- **#172** auto-register MCP config — README still documents manual `.mcp.json` setup; no auto-registration command or installer surface is present.
+- **#173** git-sync federation — no shipped git-sync/federation workflow exists in CLI/docs beyond ordinary vault usage.
+- **#174** OpenClaw plugin manifest — integration docs exist, but no `openclaw.plugin.json` bundle is present in the tree.
+- **#159** PII redaction for cloud contexts — sensitivity/gap primitives exist, but there is no outbound MCP redaction layer.
+- **#167** image-to-memory — current product/docs remain text-first; no image skill/runtime is present.
+- **#134** large-corpus performance — roadmap still lists scale validation as open work (`docs/roadmap_v3.md:190`).
+- **#136** active memory enrichment — entity follow-on remains open in roadmap/docs; current shipped graph layer is foundational only.
+- **#75** dedup/relevance filtering — retrieval quality remains open work.
+- **#76** context compression — no REFRAG-style compression surface exists.
+
+#### Reframe / retitle candidates
+
+- **#197** → `docs: make contradiction detection's structured-assertions-only scope explicit`
+  - Why: current code/spec truth is “structured zones only,” so the truthful open delta is docs/runtime expectation alignment, not generic auto-detection magic.
+  - Evidence: `src/core/assertions.rs:360-370`, `docs/spec.md:1036-1045`, `docs/getting-started.md:358-377`.
+
+- **#196** → `search: add numeric alias/query normalization for '$75K' vs '75000' retrieval`
+  - Why: the repo still lacks numeric aliasing/query normalization, but the current title overstates this as a proven bug rather than a targeted retrieval improvement.
+  - Evidence: `src/core/fts.rs:15-76` strips punctuation to spaces but does not normalize `$75K` ↔ `75000`; no changelog entry claims this shipped.
+
+- **#73** → `feat: generic async admin jobs beyond the shipped extraction queue`
+  - Why: queue infrastructure already exists; the remaining gap is a generic submit/status/cancel API for long-running non-extraction tasks.
+  - Evidence: `src/core/conversation/queue.rs:1-15`, `docs/roadmap_v3.md:70-74`, `src/commands/daemon.rs:25-94`.
+
+### Blocked GitHub writes
+
+`gh auth status` reports: `You are not logged into any GitHub hosts. To log in, run: gh auth login`
+
+Blocked operations:
+
+```bash
+gh issue close 135 --repo quaid-app/quaid --comment "Closing as shipped: supersede chains + head-only retrieval now cover the stale-fact resolution described here."
+gh issue close 203 --repo quaid-app/quaid --comment "Closing as superseded by newer DAB snapshot #207."
+gh issue edit 197 --repo quaid-app/quaid --title "docs: make contradiction detection's structured-assertions-only scope explicit"
+gh issue edit 196 --repo quaid-app/quaid --title "search: add numeric alias/query normalization for '$75K' vs '75000' retrieval"
+gh issue edit 73 --repo quaid-app/quaid --title "feat: generic async admin jobs beyond the shipped extraction queue"
+```
+
+### 2026-05-18T02:54:45.237+00:00: Playground extraction failures need a new minimal bugfix lane
+**By:** Leela
+**What:** Treat the playground report as two separate regressions: (1) a real extraction-contract failure where the SLM returned non-JSON for a trivial preference turn, owned by the conversation extraction lane; and (2) an embedding-worker warning that should be hardened independently as a defensive no-noise path. Do not route either under `improve-model-caching`, `housekeeping-release-v0-22-3`, or `retrieval-quality-rerank`, and do not pretend the archived `2026-05-11-fix-extraction-force-correctness` change already covers it.
+**Why:** The archived `fact-extraction-schema` spec establishes the JSON-only contract, but there is no active OpenSpec change owning a runtime regression against that contract. The current code already makes empty embedding chunks unlikely (`src/core/chunking.rs` / `src/core/inference.rs`), so the empty-input warning is probably a guardrail gap or stale/off-path page and should be fixed as a narrow embedding-worker hardening slice rather than conflated with the parser failure.
+
+# Decision: Release Repair Scope — v0.11.1
+
+**Date:** 2026-04-29  
+**By:** Leela  
+**Status:** Active — pending implementation
+
+---
+
+## Constraints
+
+- Do **not** modify release.yml or any other workflow file as part of this repair.
+- Do **not** add any changelog or release notes commits to this branch — keep the diff to exactly one line in Cargo.toml.
+- The release workflow's 17-asset manifest contract (`.github/release-assets.txt`) is unchanged and must remain the gate for the v0.11.1 release to be considered shippable.
+
+# Leela — Release Route Audit (Issues #67, #69)
+
+**Date:** 2026-04-27  
+**Scope:** GitHub audit of FTS compound-term issues (#67, #69) and release readiness
+
+## Evidence
+
+- Parser seam: `src/core/conversation/slm.rs`
+- Regression coverage: `tests/slm_prompt_parsing.rs`
+- OpenSpec scope note: `openspec/changes/fix-playground-extraction-warnings/tasks.md`
+
+# Professor — PR #104 review
+
+- **Date:** 2026-04-27
+- **Verdict:** APPROVE
+- **Why:** The PR is narrowly scoped to preserving four reusable search-review skills under `.squad/skills/` plus one truthful Fry history note. It does not modify runtime code, tests, interfaces, or operational contracts, and the added skill content is coherent, specific, and worth keeping as shared review guidance.
+- **Merge note:** Safe to mark ready and merge from a review gate perspective; the current draft/pending CI state does not expose a design or maintainability blocker in this diff.
+
+# Professor decision inbox — PR #116 release repair gate
+
+- **Date:** 2026-04-29
+- **Requested by:** macro88
+- **PR:** #116
+
+## Owner
+
+Revision owner: macro88 (release owner / PR author).
+
+# Professor — PR #117 release repair gate
+
+Date: 2026-04-29
+PR: #117 (`release/v0.11.2`)
+Decision: APPROVE
+
+## Release gate result
+
+Safe to mark ready, merge, and tag `v0.11.2`.
+
+# Professor — PR #118 rereview
+
+Date: 2026-04-29
+PR: #118 (`release/v0.11.5`)
+Decision: REJECT
+
+## Who must revise
+
+macro88 / the release-lane author must open the next fresh-version repair.
+
+# Professor — PR #118 release repair gate
+
+Date: 2026-04-29
+PR: #118 (`release/v0.11.5`)
+Decision: APPROVE
+
+## Release gate result
+
+Safe to mark ready, merge, and only after merge tag `v0.11.5`.
+
+# Professor — PR #119 re-review
+
+- **Date:** 2026-04-29T14:35:56.7535150+08:00
+- **Requested by:** macro88
+- **PR:** #119
+
+## Gate note
+
+Safe to merge. Tagging for `v0.11.6` must happen only after PR #119 is merged to `main`.
+
+# Professor — PR #119 release repair gate
+
+Date: 2026-04-29
+PR: #119 (`release/v0.11.6`)
+Decision: REJECT
+
+## Next Steps
+
+1. **Restore local shell wrapper** — enables `git` and `gh` commands for release operations
+2. **Extend GitHub MCP** — if available, add write-capable tools (PR create/merge, release publish, issue close/update)
+3. **Manual operations** — use GitHub web UI as fallback for critical release steps if shell unavailable
+
+---
+
+**Recorded by:** Scribe  
+**Time:** 2026-04-25T09:45:00Z  
+**Status:** DECISION LOGGED — capability gap confirmed; release pipeline blocked at write-operation layer
+
+---
+recorded_at: 2026-05-27T08:12:22Z
+author: Scruffy
+change: fix-playground-extraction-warnings
+topic: chatty-slm-json-recovery
+---
+
+# Decision
+
+Close the playground coffee/tea extraction revision by hardening `src/core/conversation/slm.rs` to recover the first balanced JSON object from chatty SLM output, and prove the fix through `Worker::process_job` instead of a prompt-only assertion.
+
+# Why
+
+- Professor's rejection was about the unchanged worker failure seam: tightening prompt wording does not help once Phi-3.5 emits prose before or after otherwise-valid JSON.
+- Recovering the first balanced object is deterministic, narrow, and keeps fail-closed behavior for commentary-only output.
+- The regression test should drive the real queue/worker path so success means the job finishes and advances the conversation cursor, not merely that the prompt text looks stricter.
+
+---
+date: 2026-05-01T14:00:00Z
+agent: Zapp (DevRel/Growth)
+topic: v0.9.10 Release Readiness & Operator Handoff
+status: decided
+---
+
+# v0.9.10 Release Readiness & Operator Handoff
+
+

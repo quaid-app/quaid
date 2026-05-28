@@ -61,6 +61,7 @@ fn build_prompt_should_match_foundation_contract_for_sparse_window() {
         "  preference   — a stable inclination (\"X likes/wants/prefers Y\")\n",
         "  fact         — a claim about the world or a person (\"X is/has/works-at Y\")\n",
         "  action_item  — a commitment to do something with a clear actor\n\n",
+        "You are not a chat partner. Return exactly one JSON object and nothing else.\n",
         "Skip ephemeral content (greetings, clarifications, transient task state).\n",
         "Skip facts you already extracted in prior windows.\n",
         "Facts must be supported by the windowed turns; do not infer beyond what was said.\n\n",
@@ -70,6 +71,9 @@ fn build_prompt_should_match_foundation_contract_for_sparse_window() {
         "  fact         { kind, about, summary }\n",
         "  action_item  { kind, who?, what, status, due?, summary }\n\n",
         "Required: kind, summary, plus the type-specific structured field(s).\n",
+        "Allowed outputs only:\n",
+        "  {\"facts\":[]}\n",
+        "  {\"facts\":[{\"kind\":\"preference\",\"about\":\"beverage\",\"strength\":\"high\",\"summary\":\"The user prefers coffee to tea.\"}]}\n",
         "Return: {\"facts\": [...]}. Empty array if nothing durable.\n\n",
         "USER:\n",
         "Session: session-42\n",
@@ -91,6 +95,31 @@ fn build_prompt_should_match_foundation_contract_for_sparse_window() {
 }
 
 #[test]
+fn build_prompt_should_pin_single_turn_preference_json_example() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+    let worker = worker_with_stub(&conn, StubSlm::empty());
+    let window = WindowedTurns {
+        new_turns: vec![turn(
+            1,
+            TurnRole::User,
+            "I like to drink coffee more than tea.",
+        )],
+        lookback_turns: Vec::new(),
+        context_only: false,
+    };
+
+    let prompt = worker.build_prompt("session-coffee", &window);
+
+    assert!(prompt.contains("You are not a chat partner."));
+    assert!(prompt.contains("{\"facts\":[]}"));
+    assert!(prompt.contains(
+        "{\"facts\":[{\"kind\":\"preference\",\"about\":\"beverage\",\"strength\":\"high\",\"summary\":\"The user prefers coffee to tea.\"}]}"
+    ));
+}
+
+#[test]
 fn parse_response_should_accept_bare_json() {
     let parsed = parse_response(
         r#"{"facts":[{"kind":"preference","about":"programming-language","strength":"high","summary":"Matt prefers Rust"}]}"#,
@@ -109,16 +138,244 @@ fn parse_response_should_accept_bare_json() {
 }
 
 #[test]
-fn parse_response_should_accept_fenced_json() {
-    let parsed = parse_response("```json\n{\"facts\":[]}\n```").unwrap();
+fn parse_response_should_recover_coffee_preference_from_plain_commentary_wrapper() {
+    let parsed = parse_response(concat!(
+        "Sure, here you go:\n",
+        "{\"facts\":[{\"kind\":\"preference\",\"about\":\"beverage\",\"strength\":\"high\",",
+        "\"summary\":\"The user prefers coffee to tea.\"}]}\n",
+        "I kept it to one fact."
+    ))
+    .unwrap();
+
+    assert_eq!(
+        parsed.facts,
+        vec![RawFact::Preference {
+            about: "beverage".to_string(),
+            strength: Some(PreferenceStrength::High),
+            summary: "The user prefers coffee to tea.".to_string(),
+        }]
+    );
+    assert!(parsed.validation_errors.is_empty());
+}
+
+#[test]
+fn parse_response_should_recover_json_after_parenthetical_prose_wrapper() {
+    let parsed = parse_response(concat!("Sure (JSON below):\n", "{\"facts\":[]}")).unwrap();
 
     assert!(parsed.facts.is_empty());
     assert!(parsed.validation_errors.is_empty());
 }
 
 #[test]
-fn parse_response_should_reject_leading_commentary() {
-    let error = parse_response("Sure, here you go:\n{\"facts\":[]}").unwrap_err();
+fn parse_response_should_recover_json_after_bracketed_prose_wrapper() {
+    let parsed =
+        parse_response(concat!("Here’s the answer [one fact]:\n", "{\"facts\":[]}")).unwrap();
+
+    assert!(parsed.facts.is_empty());
+    assert!(parsed.validation_errors.is_empty());
+}
+
+#[test]
+fn parse_response_should_recover_json_after_parenthesized_prose_only_line() {
+    let parsed = parse_response(concat!("(JSON below)\n", "{\"facts\":[]}")).unwrap();
+
+    assert!(parsed.facts.is_empty());
+    assert!(parsed.validation_errors.is_empty());
+}
+
+#[test]
+fn parse_response_should_recover_json_after_bracketed_prose_only_line() {
+    let parsed = parse_response(concat!("[one fact]\n", "{\"facts\":[]}")).unwrap();
+
+    assert!(parsed.facts.is_empty());
+    assert!(parsed.validation_errors.is_empty());
+}
+
+#[test]
+fn parse_response_should_reject_fenced_wrapper() {
+    let error = parse_response("```json\n{\"facts\":[]}\n```").unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_xml_tag_wrapper() {
+    let error = parse_response("<response>{\"facts\":[]}</response>").unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_list_item_wrapper() {
+    let error = parse_response("- {\"facts\":[]}").unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_annotated_bulleted_list_wrapper() {
+    let error = parse_response("- Here is the answer:\n{\"facts\":[]}").unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_annotated_numbered_list_wrapper() {
+    let error = parse_response("1. Actual answer:\n{\"facts\":[]}").unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_bracket_wrapped_json_envelope() {
+    let error = parse_response(r#"[{"facts":[]}]"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_parenthesized_json_envelope() {
+    let error = parse_response(r#"({"facts":[]})"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_prose_adjacent_parenthesized_json_envelope() {
+    let error = parse_response(r#"Sure ({"facts":[]}) thanks"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_whitespace_padded_parenthesized_json_envelope() {
+    let error = parse_response(r#"Sure ( {"facts":[]} ) thanks"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_prose_adjacent_bracketed_json_envelope() {
+    let error = parse_response(r#"Sure [{"facts":[]}] thanks"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_whitespace_padded_bracketed_json_envelope() {
+    let error = parse_response(r#"Sure [ {"facts":[]} ] thanks"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_parenthesized_container_with_prose_around_json() {
+    let error = parse_response(r#"Sure (see {"facts":[]} below) thanks"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_bracketed_container_with_prose_around_json() {
+    let error = parse_response(r#"[see {"facts":[]} below]"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_double_quoted_container_with_prose_around_json() {
+    let error = parse_response(r#""see {"facts":[]} below""#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_double_quoted_json_envelope() {
+    let error = parse_response(r#""{"facts":[]}""#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_prose_adjacent_double_quoted_json_envelope() {
+    let error = parse_response(r#"Sure "{"facts":[]}"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_single_quoted_json_envelope() {
+    let error = parse_response(r#"'{"facts":[]}'"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_prose_adjacent_single_quoted_json_envelope() {
+    let error = parse_response(r#"Sure '{"facts":[]}'"#).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_multiple_json_objects_even_if_first_is_valid() {
+    let error = parse_response(concat!(
+        "{\"facts\":[]}",
+        "{\"facts\":[{\"kind\":\"fact\",\"about\":\"repo\",\"summary\":\"Quaid is local-first\"}]}"
+    ))
+    .unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_schema_example_plus_actual_answer() {
+    let error = parse_response(concat!(
+        "The schema is {\"facts\":[]}\n",
+        "Actual answer: ",
+        "{\"facts\":[{\"kind\":\"preference\",\"about\":\"beverage\",\"strength\":\"high\",",
+        "\"summary\":\"The user prefers coffee to tea.\"}]}"
+    ))
+    .unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_single_object_example_wrapper() {
+    let error = parse_response(concat!("Example:\n", "{\"facts\":[]}")).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_single_object_schema_wrapper() {
+    let error = parse_response(concat!("Schema:\n", "{\"facts\":[]}")).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_single_object_allowed_outputs_wrapper() {
+    let error = parse_response(concat!("Allowed outputs only:\n", "{\"facts\":[]}")).unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_sentence_form_prompt_echo_wrapper() {
+    let error = parse_response(concat!(
+        "You are not a chat partner. Return exactly one JSON object and nothing else.\n",
+        "{\"facts\":[]}"
+    ))
+    .unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
+fn parse_response_should_reject_commentary_without_json() {
+    let error = parse_response("Sure, here you go: the user prefers coffee to tea.").unwrap_err();
 
     assert!(matches!(error, SlmError::Parse { .. }));
 }
@@ -226,6 +483,50 @@ fn worker_should_increment_attempts_and_mark_failed_after_parse_retries() {
 }
 
 #[test]
+fn worker_process_job_should_recover_chatty_single_turn_preference_output() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+    let conversation_path = seed_conversation_file(dir.path(), coffee_preference_conversation());
+
+    queue::enqueue(
+        &conn,
+        "s1",
+        &conversation_path,
+        quaid::core::types::ExtractionTriggerKind::Manual,
+        "2000-01-01T00:00:00Z",
+    )
+    .unwrap();
+
+    let worker = worker_with_stub(
+        &conn,
+        StubSlm::with_outputs([concat!(
+            "Sure, here you go:\n",
+            "{\"facts\":[{\"kind\":\"preference\",\"about\":\"beverage\",\"strength\":\"high\",",
+            "\"summary\":\"The user prefers coffee to tea.\"}]}\n",
+            "I kept it to one fact."
+        )]),
+    );
+    let job = queue::dequeue(&conn).unwrap().unwrap();
+
+    worker.process_job(&job).unwrap();
+
+    let (attempts, status, last_error): (i64, String, Option<String>) = conn
+        .query_row(
+            "SELECT attempts, status, last_error FROM extraction_queue WHERE id = ?1",
+            [job.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(attempts, 0);
+    assert_eq!(status, ExtractionJobStatus::Done.as_str());
+    assert_eq!(last_error, None);
+
+    let updated = format::parse(&dir.path().join(&conversation_path)).unwrap();
+    assert_eq!(updated.frontmatter.last_extracted_turn, 1);
+}
+
+#[test]
 fn worker_infer_window_uses_default_model_alias_and_token_budget() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
@@ -307,6 +608,26 @@ fn sample_conversation() -> ConversationFile {
                 "I'll capture that as a durable preference.",
             ),
         ],
+    }
+}
+
+fn coffee_preference_conversation() -> ConversationFile {
+    ConversationFile {
+        frontmatter: ConversationFrontmatter {
+            file_type: "conversation".to_string(),
+            session_id: "s1".to_string(),
+            date: "2026-05-03".to_string(),
+            started_at: "2026-05-03T10:00:00Z".to_string(),
+            status: ConversationStatus::Open,
+            closed_at: None,
+            last_extracted_at: None,
+            last_extracted_turn: 0,
+        },
+        turns: vec![turn(
+            1,
+            TurnRole::User,
+            "I like to drink coffee more than tea.",
+        )],
     }
 }
 

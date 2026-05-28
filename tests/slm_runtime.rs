@@ -43,21 +43,13 @@ fn slm_runner_accepts_object_valued_rope_scaling_config() {
 }
 
 #[test]
-fn parse_response_strips_json_fence_and_preserves_fact_shape() {
-    let parsed = parse_response(
+fn parse_response_rejects_fenced_response() {
+    let error = parse_response(
         "```json\n{\"facts\":[{\"kind\":\"preference\",\"about\":\"language\",\"summary\":\"Rust is preferred\"}]}\n```",
     )
-    .expect("parse fenced response");
+    .expect_err("markdown fences must fail closed");
 
-    assert_eq!(
-        parsed.facts,
-        vec![RawFact::Preference {
-            about: "language".to_string(),
-            strength: None,
-            summary: "Rust is preferred".to_string(),
-        }]
-    );
-    assert!(parsed.validation_errors.is_empty());
+    assert!(matches!(error, SlmError::Parse { .. }));
 }
 
 #[test]

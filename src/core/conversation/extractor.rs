@@ -47,6 +47,7 @@ const EXTRACTION_SYSTEM_PROMPT: &str = concat!(
     "  preference   — a stable inclination (\"X likes/wants/prefers Y\")\n",
     "  fact         — a claim about the world or a person (\"X is/has/works-at Y\")\n",
     "  action_item  — a commitment to do something with a clear actor\n\n",
+    "You are not a chat partner. Return exactly one JSON object and nothing else.\n",
     "Skip ephemeral content (greetings, clarifications, transient task state).\n",
     "Skip facts you already extracted in prior windows.\n",
     "Facts must be supported by the windowed turns; do not infer beyond what was said.\n\n",
@@ -56,6 +57,9 @@ const EXTRACTION_SYSTEM_PROMPT: &str = concat!(
     "  fact         { kind, about, summary }\n",
     "  action_item  { kind, who?, what, status, due?, summary }\n\n",
     "Required: kind, summary, plus the type-specific structured field(s).\n",
+    "Allowed outputs only:\n",
+    "  {\"facts\":[]}\n",
+    "  {\"facts\":[{\"kind\":\"preference\",\"about\":\"beverage\",\"strength\":\"high\",\"summary\":\"The user prefers coffee to tea.\"}]}\n",
     "Return: {\"facts\": [...]}. Empty array if nothing durable."
 );
 

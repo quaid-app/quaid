@@ -318,6 +318,13 @@ fn parse_response_should_reject_prose_adjacent_single_quoted_json_envelope() {
 }
 
 #[test]
+fn parse_response_should_reject_json_after_unterminated_prefix_quote() {
+    let error = parse_response("Sure \"\n{\"facts\":[]}").unwrap_err();
+
+    assert!(matches!(error, SlmError::Parse { .. }));
+}
+
+#[test]
 fn parse_response_should_reject_multiple_json_objects_even_if_first_is_valid() {
     let error = parse_response(concat!(
         "{\"facts\":[]}",

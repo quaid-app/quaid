@@ -591,9 +591,8 @@ fn candidate_is_inside_bracket_or_parenthesis_container(prefix: &str) -> bool {
     !stack.is_empty()
 }
 
-fn candidate_is_inside_quote_container(prefix: &str, suffix: &str) -> bool {
-    unmatched_quote_delimiter(prefix)
-        .is_some_and(|quote| suffix_contains_quote_delimiter(suffix, quote))
+fn candidate_is_inside_quote_container(prefix: &str, _suffix: &str) -> bool {
+    unmatched_quote_delimiter(prefix).is_some()
 }
 
 fn unmatched_quote_delimiter(text: &str) -> Option<char> {
@@ -627,33 +626,6 @@ fn unmatched_quote_delimiter(text: &str) -> Option<char> {
     }
 
     active_quote
-}
-
-fn suffix_contains_quote_delimiter(text: &str, quote: char) -> bool {
-    let chars = text.chars().collect::<Vec<_>>();
-    let mut escape = false;
-
-    for (index, ch) in chars.iter().copied().enumerate() {
-        match quote {
-            '"' => {
-                if escape {
-                    escape = false;
-                } else if ch == '\\' {
-                    escape = true;
-                } else if ch == '"' {
-                    return true;
-                }
-            }
-            '\'' => {
-                if ch == '\'' && single_quote_is_delimiter(&chars, index) {
-                    return true;
-                }
-            }
-            _ => return false,
-        }
-    }
-
-    false
 }
 
 fn single_quote_is_delimiter(chars: &[char], index: usize) -> bool {

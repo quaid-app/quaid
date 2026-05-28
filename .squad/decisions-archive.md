@@ -5831,4 +5831,795 @@ Result: APPROVE the rename on this docs lane.
 
 - Date: 2026-04-29T20:33:01.970+08:00
 - Decision: Keep `page_uuid` dual-read (`quaid_id` first, legacy `memory_id` fallback) but canonicalize every render/write/export to `quaid_id`.
-- Why: Batch 3 needs an explicit migration target for files missing `quaid_id`, while existing vault content and fixtures can still be ingested safely during the transition. Reusing `put_from_string` for write-back preserves the rename-before-commit and raw_import invariants without maintaining a second file writer.
+- Why: Batch 3 needs an explicit migration target for files missing `quaid_id`, while existing vault content and fixtures can still be ingested safely during the transition. Reusing `put_from_string` for write-back preserves the rename-before-commit and raw_import invariants without maintaining a second file writer.# Amy — conversation memory release docs
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Context:** `v0.18.0` release-doc truth pass for `conversation-memory-foundations`
+- **Decision:** Public release docs must split the shipped `v0.17.0` state from the branch-prep `v0.18.0` state, and must call out the tool-count delta explicitly (`v0.17.0` = 19 MCP tools, `v0.18.0` branch = 22).
+- **Why:** The branch adds `memory_add_turn`, `memory_close_session`, and `memory_close_action`, but GitHub Releases and `install.sh` still resolve to the published `v0.17.0` tag until `v0.18.0` exists. Treating those as the same state makes install docs, release copy, and tool-count claims untruthful.
+
+# Fry — conversation memory queue foundations
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Decision:** For `memory.location = dedicated-collection`, auto-create a sibling collection named `<write-target>-memory` rooted at `<write-target-root>-quaid-memory` on first use.
+- **Why:** This keeps conversation/extracted paths isolated from the main vault without inventing another config key in this slice, and avoids nesting the dedicated collection under the live vault root.
+- **Implication:** Future MCP/CLI surfaces should treat that derived collection contract as the current truthful default unless a later OpenSpec explicitly introduces user-configurable naming or root overrides.
+
+# Leela — conversation-memory conflict resolution
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **PR:** #153 (`feat/slm-conversation-mem`)
+- **Scope:** Resolve six OpenSpec add/add conflicts against `main`
+
+## Decision
+
+Keep the conflict resolutions on the truth-repaired branch versions of the six `conversation-memory-foundations` artifacts.
+
+## Why
+
+`main` carries earlier draft copies of the same change that still describe a v7→v8 schema bump, `pages.kind`, unchecked tasks, and broader future-slice claims. The branch copies were already updated to the shipped reality: schema v8 was the landed baseline before the remaining slices, all 70 tasks are complete, and the narrower conversation-routing / fixed lease-expiry truths are explicitly documented.
+
+## Applied rule
+
+1. Resolve the six add/add conflicts to the artifact text that matches the shipped implementation, not the first version that reached `main`.
+2. Preserve completed checkbox history and truth notes that explain the landed baseline and narrowed seams.
+3. Treat the merge as documentation-truth repair only; no unrelated code or `.squad/` churn enters the commit.
+
+## Leela — conversation-memory foundations Wave 1 truth repair
+
+**Date:** 2026-05-04T07:22:12.881+08:00  
+**Requested by:** macro88  
+**Change:** conversation-memory-foundations
+
+## Decision
+
+Truth-repair the Wave 1 OpenSpec artifacts to describe the shipped queue lease recovery as a fixed 300-second window and the shipped `memory.location` routing/tests as conversation-root-only.
+
+## Why
+
+- `src/core/conversation/queue.rs` hardcodes `DEFAULT_LEASE_EXPIRY_SECONDS = 300`; there is no lease-expiry config key or runtime config read.
+- `src/core/conversation/turn_writer.rs` and `tests/conversation_turn_capture.rs` only resolve and prove conversation-file placement under `memory.location`.
+- Leaving broader wording in checked tasks/spec text keeps the Wave 1 closure dishonest even though the underlying code is correct for the narrower shipped slice.
+
+## Scope preserved
+
+- No product code changes are part of this repair.
+- Future extracted-root routing remains with the later extracted-fact/file-edit work; this repair only narrows wording to the shipped Wave 1 surface.
+
+# Leela — lifecycle truth revision
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Context:** `slm-extraction-and-correction` lifecycle artifact rerevision after Professor's proof-gap review
+- **Decision:** `openspec\changes\slm-extraction-and-correction\tasks.md` item `3.2` must describe curated aliases as a shipped per-file mixed-digest pin table, not as a weight-vs-metadata split. The honest contract is that each pinned artifact is verified by either SHA-256 or git-blob-SHA1 according to the alias table, while raw repo-id downloads remain on the weaker server-supplied ETag SHA-256 path where available.
+- **Why:** The landed Gemma alias tables pin `tokenizer.json` and `tokenizer.model` by SHA-256, so wording that says tokenizer files are uniformly git-blob-SHA1-verified is false even though the implementation and tests are otherwise correct. This revision stays deliberately narrow because the remaining proposal/design text already describes source-pinned curated aliases at a truthful surface.
+
+# Leela — task 2.1 resolution
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Context:** `slm-extraction-and-correction` task `2.1` stayed open after Fry's runtime batch because `candle-transformers 0.8.4` does not expose a `phi3` Cargo feature even though the OpenSpec text asks for one.
+- **Decision:** Treat `2.1` as an **artifact truth repair**, not as remaining implementation work. `cargo info candle-transformers@0.8.4` shows no `phi3` feature, `src\core\conversation\slm.rs` already compiles against `candle_transformers::models::phi3`, and `cargo check` passes on the current tree. The truthful contract is that Quaid uses the crate's built-in Phi-3 module on the existing dependency baseline; there is no additional feature flag to add.
+- **Artifact scope:** Rewrite only the stale feature-flag wording in `openspec\changes\slm-extraction-and-correction\tasks.md` item `2.1` and the matching `proposal.md` dependency/impact bullet. The `slm-runtime` spec does **not** need a requirement change because it specifies behavior, not Cargo-feature mechanics.
+- **Coordinator next step:** Route a narrow OpenSpec truth pass (not a new runtime implementation batch) to update `2.1` to wording like "keep/use `candle-transformers` 0.8.4's built-in Phi-3 model surface; no extra Cargo feature exists," then close the task and continue from the next actually-open runtime/worker items.
+
+---
+recorded_at: 2026-05-04T07:22:12.881+08:00
+author: Leela
+change: release-v0.18.0
+topic: remote-head-reintegration
+---
+
+# Mom — lifecycle revision decisions
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Scope:** rejected `3.x` model-lifecycle artifact follow-up
+
+## Decisions
+
+1. **Curated aliases verify against source-pinned digests, not response headers.**
+   - For curated aliases, every downloaded file now comes from an in-source pin table.
+   - LFS artifacts use pinned SHA-256 values; non-LFS artifacts use pinned Git blob SHA-1 object ids from the source repo tree.
+   - Raw repo ids stay supported, but their cache manifests are surfaced as manifest-only rather than source-pinned.
+
+2. **The runtime no-silent-fetch seam is a local-cache loader, not the future SLM runner.**
+   - `load_model_from_local_cache()` is the batch’s fail-closed runtime seam: it verifies the cache locally and never calls download code.
+   - Until `slm.rs` lands, truthful proof is “runtime loader can fail closed without fetching,” not “full runtime inference path already exists.”
+
+3. **Crash cleanup is closed by stale temp-dir scavenging on later installs.**
+   - Atomic rename still prevents partial cache promotion.
+   - Follow-up installs now remove stale `.alias-download-*` directories while preserving fresh ones so interrupted downloads do not grow disk forever.
+
+# Mom — parser contract revision
+
+- **Timestamp:** 2026-05-05T17:17:29.932+08:00
+- **Change:** `slm-extraction-and-correction`
+- **Decision:** Take the narrower truthful path for the parser/window revision. The shipped slice keeps parser-side partial accept for unknown-kind and missing-field facts, and only whole-response parse failures participate in extraction queue retry/fail accounting.
+- **Why:** Current code and focused tests already implement per-fact validation error collection plus valid-sibling survival. Extending this slice to fail closed would require new worker behavior and proof tests; leaving the strict retry wording in OpenSpec would over-claim what the batch actually ships.
+- **Boundary:** `parse_response()` may return accepted facts plus `validation_errors`; `Worker::infer_and_parse_window()` records queue attempts only when parsing the whole response fails. Future implementation can still tighten this to fail closed, but that is not shipped by this revision.
+
+---
+timestamp: 2026-05-04T07:22:12.881+08:00
+author: Mom
+change: conversation-memory-foundations
+topic: whitespace-noop rename tracking
+---
+
+- Treat rename-only extracted whitespace no-ops as tracked-path moves, not deletions.
+- Preserve the existing page/raw-import state, but move the `file_state` row onto the new relative path so future reconciles still see the file as tracked.
+- Prove the seam with an `apply_reingest` test that renames an extracted preference without changing bytes, then asserts the new path is still classified as `unchanged`.
+
+# Mom — SLM runtime revision
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Context:** Reviewer rework for `slm-extraction-and-correction` runtime slice after Nibbler and Professor rejected Fry batch `2984150`.
+- **Decision:** Treat first lazy-load failures as terminal for the in-memory SLM runtime, not just generation panics. `LazySlmRunner` now runtime-disables and fails closed after any initial load panic or verified local-cache/model-construction failure, while generation panics still disable the runtime the same way.
+- **Why:** The first-use seam is the real crash boundary. If lazy load fails and the runtime keeps retrying, extraction keeps walking back into the same broken cache or constructor state and the daemon never reaches a stable fail-closed posture.
+- **Test posture:** Guard all `QUAID_MODEL_CACHE_DIR` mutating SLM tests with a per-process mutex so targeted runtime tests stay deterministic under Rust's parallel test scheduler.
+
+# Nibbler — lifecycle proof re-review
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Requested by:** macro88
+- **Scope:** `slm-extraction-and-correction` lifecycle proof-gap revision after `875cdd8`
+- **Reviewed commits:** `be32993`, `d72302a`
+- **Verdict:** **APPROVE (narrowed guarantee holds)**
+
+## Why
+
+The prior defect was real: the old tests only exercised raw repo-id downloads, so they never proved the curated-alias branch actually took the source-pinned path. That gap is now closed.
+
+This revision adds a compile-time test-only curated alias (`test-pinned`) that goes through the same `source_pins_for_alias(...) -> install_source_pinned_model_into_dir(...) -> verify_source_pin(...)` branch as the shipped curated aliases. The new integration coverage proves:
+
+1. curated aliases skip the metadata API and set `cached_model_status(...).source_pinned = true`;
+2. tampered weight bytes are rejected on the SHA-256 pinned path;
+3. tampered metadata/tokenizer bytes are rejected on the git-blob-SHA1 pinned path; and
+4. both digest families are also covered directly at the `verify_source_pin` seam.
+
+Task `3.2` is now worded honestly: source-pinned mixed-digest verification is claimed only for curated aliases, while raw repo-id downloads stay on the weaker server-header/manifest lane.
+
+## Validation
+
+- `cargo test --test model_lifecycle --no-default-features --features bundled,online-model,test-harness -- --nocapture`
+- `cargo test --lib --no-default-features --features bundled,online-model,test-harness verify_source_pin -- --nocapture`
+
+Both passed in this review pass.
+
+## Scope note
+
+This approval is still narrow: it closes the proof gap for **download-time curated-alias source pinning** and fixes the spec wording drift. It does **not** newly bless any broader claim about post-download local cache trust beyond the already-narrowed lifecycle slice.
+
+# Nibbler — parser/window truth review
+
+- **Timestamp:** 2026-05-05T17:17:29.932+08:00
+- **Change:** `slm-extraction-and-correction`
+- **Commit:** `6e2f2c3`
+- **Verdict:** APPROVE for forward progress on the parser/window artifact only
+
+## Why
+
+The narrowed truth is now aligned with the shipped seam:
+
+- `proposal.md` now says queue retry/fail accounting applies to **whole-response parse failures**, while per-fact validation errors are merely collected.
+- `fact-extraction-schema/spec.md` now says unknown-kind and missing-field facts are rejected **per fact**, with valid siblings surviving, and only whole-response parse failure counts toward `extraction.max_retries`.
+- `tasks.md` says the same thing explicitly: parser-side partial accept is in scope; worker retry/fail accounting for validation errors is deferred.
+- The code matches that narrowed contract: `parse_response()` returns accepted facts plus `validation_errors`, and `infer_and_parse_window()` records queue failure only when the whole response fails to parse.
+
+That is honest enough to unblock this slice. The prior mismatch was that the artifacts described fail-accounted validation behavior that the code did not implement; this commit removes that over-claim.
+
+## Boundary
+
+This approval is **not** approval of the still-open worker loop, cursor-advance, fact-write, or downstream close-flush behavior. In particular, any later claim that `session_close` safely recovers new facts from a pure-context flush still needs its own implementation and proof.
+
+## Validation reviewed
+
+- `cargo test --quiet --test slm_prompt_parsing --test extraction_window`
+
+# Professor — parser truth re-review
+
+- **Timestamp:** 2026-05-05T17:17:29.932+08:00
+- **Change:** `slm-extraction-and-correction`
+- **Commit reviewed:** `6e2f2c3` (`Narrow parser contract claims`)
+- **Verdict:** **APPROVE**
+
+## Why
+
+This revision takes the honest narrower path the prior rejection demanded. The shipped code still does parser-side partial accept only: `parse_response()` collects `validation_errors` while returning valid sibling facts, and `Worker::infer_and_parse_window()` only records queue attempts when the whole response fails to parse (`src/core/conversation/slm.rs:325-368`, `src/core/conversation/extractor.rs:157-175`).
+
+The truth surfaces now match that behavior closely enough for forward progress:
+
+- `proposal.md` narrows the worker claim to per-fact validation error collection plus retry/fail accounting for whole-response parse failures only.
+- `specs/fact-extraction-schema/spec.md` now states unknown-kind and missing-field facts are rejected per fact while valid siblings survive, and reserves retry/fail accounting for whole-response parse failure.
+- `tasks.md` rewrites `6.3`/`6.4`/`6.5` to the same batch boundary with an explicit scope note that validation-error retry accounting is deferred.
+- Focused tests prove the shipped seam: mixed-validity partial accept and parse-failure retry accounting are both covered (`tests/slm_prompt_parsing.rs`, `tests/extraction_window.rs`).
+
+## Boundary kept
+
+This approval is only for the parser/window truth repair. It does **not** reopen unrelated worker-loop, resolution, cursor-advance, or fact-write work that remains explicitly deferred elsewhere in the change.
+
+## Professor — parser/window batch review
+
+- **Change:** `slm-extraction-and-correction`
+- **Commit reviewed:** `3de3690` (`Recover extraction parser batch`)
+- **Verdict:** **REJECT**
+
+### Why
+
+The claimed `6.3–6.5` closure is not honest yet. The spec says parse **or validation** failure must count toward `extraction.max_retries` (`openspec/changes/slm-extraction-and-correction/specs/fact-extraction-schema/spec.md:40-57`), but the shipped path only bumps queue attempts when `parse_response(...)` returns `Err`.
+
+In the current code:
+
+- `parse_response(...)` converts unknown kinds / missing required fields into `validation_errors` while still returning `Ok(ExtractionResponse { ... })` (`src/core/conversation/slm.rs:325-368`)
+- `Worker::infer_and_parse_window(...)` calls `record_parse_failure(...)` only on `Err`, so mixed-validity or validation-only failures never increment attempts and never participate in retry/fail accounting (`src/core/conversation/extractor.rs:157-175`)
+
+That means a response containing an invalid fact can still be treated as a successful window with zero retry pressure, which undershoots the strict output-contract promised by the spec and overstates task `6.4`.
+
+### Non-blocking notes
+
+- Window slicing (`5.3`, `5.4`) and prompt/body shape coverage are otherwise clean.
+- Focused tests and full suite are green, but they do not currently prove the validation-failure accounting seam.
+
+### Next revision owner
+
+Per reviewer lockout semantics, **Mom** should own the next revision for this artifact. The fix should route validation errors into the same retry/fail accounting path and add an explicit test that unknown-kind / missing-field responses increment attempts just like malformed JSON.
+
+# Professor — runtime truth review
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Artifact:** `slm-extraction-and-correction` runtime slice at commit `a613747`
+- **Verdict:** APPROVE for forward progress
+- **Why:** Task `2.1` and the matching proposal dependency text now describe the real shipped seam: `candle-transformers` 0.8.4 already exposes `candle_transformers::models::phi3`, and there is no separate Cargo feature to add. The runtime behavior is also now stable at the reviewed boundary: `LazySlmRunner` disables itself after first-load cache/config/weights/panic failures, generation panics still fail closed, and the env-var mutex removes the parallel-test race on `QUAID_MODEL_CACHE_DIR`.
+- **Evidence checked:** `cargo test --quiet --test slm_runtime` passed (6/6). Focused lib proofs for `lazy_runner_runtime_disables_after_load_panic`, `lazy_runner_runtime_disables_after_cache_load_failure`, `infer_returns_typed_panic_error`, and `lazy_runner_reuses_loaded_model_after_cache_is_removed` all passed. `Cargo.toml` / `Cargo.lock` confirm the dependency is plain `candle-transformers = "0.8"` / `0.8.4`, with no Phi-3 feature toggle surface.
+- **Scope note:** This approval is intentionally narrow. Bender's section-6 partial-implementation findings remain open and should stay out of any closure claims for this runtime gate.
+
+# Professor — schema fail-closed review
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Requested by:** macro88
+- **Scope:** review of Mom's schema-mismatch revision in commit `0c84030`
+- **Verdict:** **APPROVE**
+
+## Why
+
+1. `src/core/db.rs` now rejects any schema-version mismatch (`!=`) in both the preflight gate and the post-open `quaid_config` check, so older binaries no longer attach to newer databases.
+2. The new future-schema regressions for both `open_with_model()` and `init()` prove refusal happens before normal open/init bootstrap work: the seeded v10 database keeps its original version marker and never gains `collections`, which `open_connection()` would have created.
+3. The `openspec/changes/slm-extraction-and-correction/tasks.md` edits are now honest: the checked boxes describe schema-version mismatches generically, and the test claim explicitly includes future-schema refusal.
+
+## Validation considered
+
+- Reviewed commit `0c84030` against `src/core/db.rs` and `openspec/changes/slm-extraction-and-correction/tasks.md`.
+- Ran `cargo test --lib core::db::tests:: -- --nocapture` successfully (40/40 passing).
+
+## Reviewer note
+
+This is a narrow correction, but it closes the fail-open defect cleanly without widening scope or adding migration behavior that the change never promised.
+
+## Professor review — commit 2984150 (`feat: add conversation slm runtime`)
+
+- **Verdict:** REJECT
+- **Requested by:** macro88
+- **Original author locked out for next revision:** Fry
+- **Next revision owner:** Mom
+
+### Blocking findings
+
+1. **The landed SLM proof is flaky under normal `cargo test` parallelism.**
+   - `src/core/conversation/slm.rs` unit tests mutate `QUAID_MODEL_CACHE_DIR` process-globally without any serialization.
+   - Reproduction: `cargo test core::conversation::slm::tests --lib -- --test-threads=4`
+   - Observed failure: `lazy_runner_reuses_loaded_model_after_cache_is_removed` intermittently panics with `manifest.json` missing because another test has swapped the cache root mid-run.
+   - This makes the claimed proof for tasks `2.5`–`2.7` unreliable until the env-sensitive tests are serialized or the cache-root seam is made test-local instead of process-global.
+
+2. **The OpenSpec still states impossible remaining work around a nonexistent `phi3` Cargo feature.**
+   - `tasks.md` still says task `2.1` is “Add \`phi3\` feature to the \`candle-transformers\` dependency in \`Cargo.toml\`”.
+   - `proposal.md` still claims `Cargo.toml` will “enable Phi-3 features” and that the dependency change is feature-flag based.
+   - `design.md` still says adding Phi-3.5 “means enabling features”.
+   - Verified against `candle-transformers 0.8.4`: there is no `phi3` Cargo feature to add, and commit `2984150` already compiles and imports `candle_transformers::models::phi3` without one.
+   - Leaving `2.1` merely unchecked is not truthful enough; the artifacts need scope repair or a blocked/not-applicable note naming the real dependency behavior.
+
+### Non-blocking note
+
+- The implementation slice itself is directionally sound: deterministic argmax inference, typed panic conversion, fenced-JSON parsing, and typed extraction payloads are all reasonable for this batch.
+
+### Validation reviewed
+
+- `cargo build --quiet`
+- `cargo test --quiet --test slm_runtime`
+- `cargo test --quiet core::conversation::slm::tests`
+- `cargo test core::conversation::slm::tests --lib -- --test-threads=4` **fails intermittently**
+- Checked `candle-transformers-0.8.4` crate metadata: no `phi3` feature exists
+
+### Required next revision
+
+- Fix the env-sensitive SLM tests so they are stable under normal parallel test execution.
+- Truth-repair the OpenSpec artifacts so the remaining `2.1` scope matches the actual `candle-transformers 0.8.4` surface.
+
+# Professor — worker guard review
+
+- **Timestamp:** 2026-05-05T17:17:29.932+08:00
+- **Artifact:** `slm-extraction-and-correction` worker-loop slice at commit `d63ebb0`
+- **Verdict:** APPROVE for forward progress
+- **Why:** `Worker::claim_next_job()` now returns `None` before any dequeue when either `extraction.enabled` is false or the SLM runtime is disabled, so the worker-loop boundary finally matches spec/task item `5.2`'s idle-without-claiming contract. The previously ignored acceptance test is live, the runtime-disabled twin regression is present, and this narrow worker/cursor slice stays within the reviewed boundary.
+- **Evidence checked:** `cargo test --quiet --test extraction_worker` passed (9/9), including the live `claim_next_job_returns_none_when_extraction_is_disabled` coverage and the new runtime-disabled guard test. Source review confirms the early return happens before `queue::dequeue(...)`, which preserves pending rows untouched while extraction is disabled.
+- **Scope note:** Approval is limited to the worker/cursor seam around `5.2`, `9.1`, and `9.3`. It does not clear broader extraction status, fact-resolution, or idle-close work that remains open in the change.
+
+2026-05-04T07:22:12.881+08:00
+
+- Decision: Treat `extracted/_history/**` as a reserved sidecar path in file-edit coverage proofs and verify repeated manual edits preserve one linear supersede chain (`old predecessor -> new archive -> head`).
+- Why: The risky regression is silent history forking or accidental sidecar re-ingest, not happy-path head creation.
+- Test impact: Keep one focused integration file that covers chain relinking, whitespace no-op, type/path gating, and sidecar behavior under the Windows coverage lane.
+
+# Scruffy — conversation-memory queue/core coverage decision
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 4.1-6.6 and 11.1-11.4
+- **Decision:** Cover the slice at the core seams, not through premature MCP wiring: keep round-trip and parse failures in `src\core\conversation\format.rs`, append/path/layout proofs in `tests\conversation_turn_capture.rs`, and queue collapse/order/retry/lease proofs in `tests\extraction_queue.rs`.
+- **Why:** This slice is plumbing. If the tests wait for `memory_add_turn` / `memory_close_session` tool wiring, coverage will lag the landed behavior and the branch will look under-tested for the wrong reason. The dedicated-collection path is therefore proved through the core root resolver and append path, with the current implementation creating a companion `*-memory` collection/root on first use.
+- **Coverage note:** On this Windows lane, `cargo test -j 1` passes and `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` reports 90.02% total line coverage, so the slice clears the requested floor without pretending branch coverage was rerun.
+
+# Scruffy — conversation-memory race-fix coverage decision
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 2.2-2.5 after commit `d98e010`
+- **Decision:** Treat the branch as still above the requested honest coverage floor based on the practical Windows lane (`cargo test -j 1` and `RUST_TEST_THREADS=1 cargo llvm-cov --lib --tests --summary-only -j 1`), but do not claim a full local branch-coverage rerun or a locally executed deterministic race regression from this environment.
+- **Why:** The measured repo-wide line coverage is 90.18%, and `src\commands\put.rs` remains well-covered at 94.26% line coverage after the race fix. But `cargo llvm-cov --branch` on the available stable toolchain fails because branch coverage is nightly-only, and the new contender test in `src\commands\put.rs` is `#[cfg(unix)]`, so this Windows lane cannot honestly say it re-executed that exact race proof.
+- **Test note:** No extra test was added in this lane because the missing proof is environmental, not a missing branch in the committed test suite.
+
+# Scruffy — conversation-memory slice 2 test decision
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 2.2-2.5 / 3.1-3.7
+- **Decision:** Treat the existing text-query supersede integration as necessary but insufficient. Keep dedicated proofs for exact-slug head filtering, progressive expansion refusing superseded neighbours by default, and graph traversal surfacing `superseded_by` edges distinctly.
+- **Why:** Those branches are where this slice can look covered while still lying: exact-slug query paths bypass the generic recall path, progressive retrieval can accidentally reintroduce historical pages during expansion, and graph traversal needs its own proof that supersede edges are first-class.
+- **Coverage note:** Current honest coverage is far below 90% for the branch, so this slice should be reported truthfully rather than treated as "covered enough" by the existing broad suite.
+
+# Scruffy — conversation-memory Wave 1 rerecheck
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 4.1-6.6 after commit `5c88104`
+- **Decision:** Keep the Wave 1 truth note closed without adding more tests in this lane. The full Windows rerecheck still clears the requested floor (`cargo test -j 1` passes; `RUST_TEST_THREADS=1 cargo llvm-cov --lib --tests --summary-only -j 1` reports 90.01% total line coverage), and the three revision seams already have direct proof in the landed suite.
+- **Why:** The new queue lease-token path is covered by stale-claim tests in `tests\\extraction_queue.rs`, the same-session cross-process serialization path is covered by the child-process lock test in `tests\\conversation_turn_capture.rs`, and the explicit metadata-fence path is covered by both round-trip and bare-trailing-JSON preservation tests in `src\\core\\conversation\\format.rs`. The remaining misses in those files are mostly config/error helpers and platform branches, so adding filler tests here would not make the task truth any more honest.
+- **Coverage note:** This is a truthful Windows/stable rerecheck only. It does not claim nightly branch coverage, and it does not pretend to execute Unix-only lock behavior from this host.
+
+---
+agent: scruffy
+date: 2026-05-04T07:22:12.881+08:00
+change: conversation-memory-foundations
+---
+
+# Zapp conversation-memory draft PR
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Change:** `conversation-memory-foundations`
+- **Scope:** Draft PR truth boundary for `feat/slm-conversation-mem`
+
+## Decision
+
+Open a draft PR against `main`, but scope the claim to the pushed schema/supersede foundations slice plus the OpenSpec truth repair only.
+
+## Why
+
+The branch compare currently carries broader roadmap and planning ancestry than the implementation that is actually landed on `feat/slm-conversation-mem`. Narrowing the PR body to the pushed slice keeps reviewer, docs, and launch messaging aligned with reality while the larger conversation-memory change is still in progress.
+
+## Guardrails
+
+- State explicitly that the larger `conversation-memory-foundations` change is still in progress.
+- Do not claim `memory_add_turn`, queue worker or extraction runtime behavior, or release readiness.
+- Keep the PR in draft until the wider implementation actually lands and is pushed.
+
+## Zapp — conversation-memory draft PR final-wave refresh
+
+**Date:** 2026-05-04T07:22:12.881+08:00  
+**Requested by:** macro88  
+**Change:** conversation-memory-foundations
+
+## Decision
+
+Refresh draft PR #153 so it truthfully says Wave 2 is now approved, then split the remaining product wave in the body: `memory_close_action` is the active in-flight seam, while the file-edit/history-preservation slice stays pre-gated and explicitly unclaimed. Keep the PR draft-only and carry the freshly reproduced OpenSpec conflict count.
+
+## Why
+
+Professor already approved Wave 2 across `b7a0b2d` and `e2fcb65`, so leaving the body at the older "Wave 2 in flight" boundary would now understate shipped progress. But Leela's wave plan still keeps task `10.x` behind Nibbler's pre-gate, so the honest refresh cannot present the whole final wave as landing together; it has to separate the active `memory_close_action` seam from the still-blocked file-edit/history slice while reporting the current six-file spec conflict list against `main`.
+
+---
+recorded_at: 2026-05-04T07:22:12.881+08:00
+author: Zapp
+change: conversation-memory-foundations
+topic: pr-153-last-product-slice
+---
+
+# Amy — conversation memory release docs
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Context:** `v0.18.0` release-doc truth pass for `conversation-memory-foundations`
+- **Decision:** Public release docs must split the shipped `v0.17.0` state from the branch-prep `v0.18.0` state, and must call out the tool-count delta explicitly (`v0.17.0` = 19 MCP tools, `v0.18.0` branch = 22).
+- **Why:** The branch adds `memory_add_turn`, `memory_close_session`, and `memory_close_action`, but GitHub Releases and `install.sh` still resolve to the published `v0.17.0` tag until `v0.18.0` exists. Treating those as the same state makes install docs, release copy, and tool-count claims untruthful.
+
+
+
+# Fry — conversation memory queue foundations
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Decision:** For `memory.location = dedicated-collection`, auto-create a sibling collection named `<write-target>-memory` rooted at `<write-target-root>-quaid-memory` on first use.
+- **Why:** This keeps conversation/extracted paths isolated from the main vault without inventing another config key in this slice, and avoids nesting the dedicated collection under the live vault root.
+- **Implication:** Future MCP/CLI surfaces should treat that derived collection contract as the current truthful default unless a later OpenSpec explicitly introduces user-configurable naming or root overrides.
+
+
+---
+recorded_at: 2026-05-04T07:22:12.881+08:00
+author: Fry
+change: conversation-memory-foundations
+topic: supersede-retrieval-surface
+---
+
+
+# Leela — conversation-memory conflict resolution
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **PR:** #153 (`feat/slm-conversation-mem`)
+- **Scope:** Resolve six OpenSpec add/add conflicts against `main`
+
+## Decision
+
+Keep the conflict resolutions on the truth-repaired branch versions of the six `conversation-memory-foundations` artifacts.
+
+## Why
+
+`main` carries earlier draft copies of the same change that still describe a v7→v8 schema bump, `pages.kind`, unchecked tasks, and broader future-slice claims. The branch copies were already updated to the shipped reality: schema v8 was the landed baseline before the remaining slices, all 70 tasks are complete, and the narrower conversation-routing / fixed lease-expiry truths are explicitly documented.
+
+## Applied rule
+
+1. Resolve the six add/add conflicts to the artifact text that matches the shipped implementation, not the first version that reached `main`.
+2. Preserve completed checkbox history and truth notes that explain the landed baseline and narrowed seams.
+3. Treat the merge as documentation-truth repair only; no unrelated code or `.squad/` churn enters the commit.
+
+
+## Leela — conversation-memory-foundations next waves
+
+**Date:** 2026-05-04T07:22:12.881+08:00  
+**Requested by:** macro88  
+**Change:** conversation-memory-foundations
+
+## Decision
+
+Batch the remaining `conversation-memory-foundations` scope (`4.1`–`12.5`) into three execution waves so the file contract freezes before public tool wiring, and the watcher/edit-history seam stays isolated until the capture path is green.
+
+### Wave 1 — conversation file contract + root resolution
+
+- **Tasks:** `4.1`–`4.6`, `11.1`–`11.2`
+- **Goal:** Freeze `Turn` / `ConversationFile`, canonical render shape, malformed-parse contract, multi-day ordinal continuation, and the shared vault-root resolver before any writer, queue, or MCP surface depends on them.
+- **Dependencies:** Approved `2.2`–`2.5` and `3.1`–`3.7` only.
+- **Parallelism:** `4.1`–`4.3` can proceed alongside `11.1`–`11.2`; `4.4`–`4.6` wait for both seams to settle.
+- **Reviewer / pre-gate notes:**
+  - **Professor** pre-gates any deviation from the current spec's frontmatter keys, heading shape, or path contract.
+  - Do **not** widen into watcher/file-edit work in this wave.
+
+### Wave 2 — capture request path + queue-backed session tools
+
+- **Tasks:** `5.1`–`5.5`, `6.1`–`6.6`, `7.1`–`7.6`, `8.1`–`8.6`, `11.3`–`11.4`, `12.1`–`12.3`
+- **Goal:** Land one coherent synchronous capture surface: append + fsync durability, queue collapse/lease semantics, `memory_add_turn`, `memory_close_session`, dedicated-collection first-use routing, and the first end-to-end conversation tests.
+- **Dependencies:** Wave 1 complete.
+- **Parallelism:** After `append_turn` and queue APIs settle, MCP wiring (`7.x`, `8.x`) can split from integration-test assembly (`12.1`–`12.3`), but `12.1`–`12.3` do not close until both tools and config-path behavior are green.
+- **Reviewer / pre-gate notes:**
+  - **Scruffy** pre-gates the latency and concurrency harness before anyone claims `5.5`, `6.6`, or `7.5`.
+  - **Professor** gates MCP contract shape, error mapping, and queue precedence/lease truth.
+  - Keep proposal-2 runtime out of scope: no worker, no idle-close daemon, no SLM calls.
+
+### Wave 3 — extracted-fact mutation + history-preservation closure
+
+- **Tasks:** `9.1`–`9.5`, `10.1`–`10.7`, `12.4`–`12.5`
+- **Goal:** Finish the remaining mutator surface: `memory_close_action` as the lone in-place lifecycle update, plus file-edit-aware supersede/history preservation for extracted facts, then close with final supersede/file-edit integration proofs.
+- **Dependencies:** Wave 1 complete; Wave 2 green for shared path/config seams; `10.x` also depends on the approved supersede/retrieval behavior from `2.2`–`3.7`.
+- **Parallelism:** `9.x` and `10.x` may run in separate lanes only after reviewer gates are cleared; `12.4`–`12.5` stay last as the change-closure proofs.
+- **Reviewer / pre-gate notes:**
+  - **Nibbler** is the mandatory pre-gate reviewer before any `10.x` implementation starts because this widens the watcher path, extracted-root routing, and optional `_history` writes.
+  - **Professor** gates the `9.x` optimistic-concurrency contract and performs final mutation-surface rereview.
+  - **Scruffy** owns watcher-regression and file-edit supersede coverage on `12.5`.
+  - If `10.x` is rejected, follow reviewer lockout rules and reassign the revision to a different author.
+
+
+### 2026-05-04T07:22:12.881+08:00: conversation-memory supersede race routing
+**By:** Leela
+**What:** Do not narrow the `conversation-memory-foundations` supersede/retrieval wording first. The next revision should close the same-target contender race by moving the effective supersede gate/claim ahead of any write-through file install for all contenders, while keeping the transaction-time reconcile as the final backstop. Route the revision to Bender; Fry and Mom remain locked out, Professor stays the gate reviewer, and Scruffy should be pulled in for the concurrency proof.
+**Why:** The current spec/tasks already promise a single direct successor and rejection of the second supersede write; narrowing now would redefine a real user-visible integrity failure rather than fix it. Bender is the best remaining fit because the blocker is a destructive race on the real write-through seam, and his lane is breaking shaky assumptions, validating rollback-free integrity, and defending regressions honestly.
+
+
+## Leela — conversation-memory foundations Wave 1 truth repair
+
+**Date:** 2026-05-04T07:22:12.881+08:00  
+**Requested by:** macro88  
+**Change:** conversation-memory-foundations
+
+## Decision
+
+Truth-repair the Wave 1 OpenSpec artifacts to describe the shipped queue lease recovery as a fixed 300-second window and the shipped `memory.location` routing/tests as conversation-root-only.
+
+## Why
+
+- `src/core/conversation/queue.rs` hardcodes `DEFAULT_LEASE_EXPIRY_SECONDS = 300`; there is no lease-expiry config key or runtime config read.
+- `src/core/conversation/turn_writer.rs` and `tests/conversation_turn_capture.rs` only resolve and prove conversation-file placement under `memory.location`.
+- Leaving broader wording in checked tasks/spec text keeps the Wave 1 closure dishonest even though the underlying code is correct for the narrower shipped slice.
+
+## Scope preserved
+
+- No product code changes are part of this repair.
+- Future extracted-root routing remains with the later extracted-fact/file-edit work; this repair only narrows wording to the shipped Wave 1 surface.
+
+
+
+# Nibbler — model lifecycle / airgap risk memo
+
+- **Timestamp:** 2026-05-05T06:49:17.593+08:00
+- **Requested by:** macro88
+- **Scope:** upcoming `3.1–3.6` model lifecycle + extraction enablement surface
+- **Verdict:** **REJECT current closure bar until the risks below are explicitly closed**
+
+## Blocking findings
+
+1. **Schema/version mismatch still fails open for newer databases.**
+   - `src\core\db.rs:127-133` and `src\core\db.rs:206-211` only reject `schema_version < SCHEMA_VERSION`.
+   - A future DB with `schema_version > 9` is allowed through open, which means an older binary can attach to a newer schema instead of failing closed.
+   - Acceptance bar: reject on any schema-version mismatch (`!=`), and prove it with a regression that seeds `schema_version = 10` and asserts the binary exits before doing normal open work.
+
+2. **The current “integrity check” is not anchored trust for SLM downloads.**
+   - `src\core\conversation\model_lifecycle.rs:391-438` accepts the expected SHA-256 from response headers (`ETag`, `x-sha256`, etc.) and compares the file against that value.
+   - That only proves the bytes match what the server said in that response. It does **not** prove the curated alias cache contains the intended model if the remote host, mirror, or overridden base URL is malicious.
+   - Acceptance bar: for shipped aliases (`phi-3.5-mini`, `gemma-3-*`), pin expected file hashes in source and verify against those pins. If raw repo IDs stay supported, the guarantee must be explicitly downgraded for them and never described as the same integrity level.
+
+3. **“Enable once, then airgapped forever” is still unproved and easy to accidentally violate in the runtime loader.**
+   - `src\commands\extraction.rs:28-36` makes download explicit at enable time, but nothing in the landed surface yet proves the future SLM load path will refuse network and use only a verified local cache.
+   - The upcoming runtime can still accidentally call `download_model()` (or equivalent fetch logic) when `extraction.enabled = true` and the cache is missing/corrupt, silently breaking the explicit-download promise.
+   - Acceptance bar: runtime load must be local-only; missing/invalid cache must runtime-disable extraction with an actionable reason; add a test that enables once, blocks network, deletes or corrupts cache, then proves the daemon does **not** fetch and instead reports disabled/failure state.
+
+4. **Partial-download cleanup is only proved on returned-error paths, not on crash/interruption paths.**
+   - `src\core\conversation\model_lifecycle.rs:288-316` installs via temp dir + rename, which avoids promoting a partial cache, but cleanup only happens when the function returns an error normally.
+   - A kill/crash during download leaves `.alias-download-*` directories behind. That is not a correctness break for cache selection, but it is an unclosed disk-growth seam and weakens the “partial download cleanup” claim.
+   - Acceptance bar: either narrow the claim to “no partial cache promotion” only, or add stale-temp-dir cleanup on next install/startup and prove it with an interrupted-download regression.
+
+5. **The current Windows proof lane for lifecycle/integrity is not honest.**
+   - `tests\model_lifecycle.rs:175` uses a non-blocking mock socket and panics on `WouldBlock`; on this Windows lane, `cargo test --no-default-features --features bundled,online-model --test model_lifecycle` currently fails in the stale-cache and bad-integrity cases.
+   - That means the claimed guarantees around cache recovery and integrity failure cleanup are not presently proved on Windows.
+   - Acceptance bar: replace or harden the mock server so the targeted lifecycle tests pass reliably on Windows before those guarantees are declared closed.
+
+## Required reviewer bar for Fry
+
+Fry does **not** get approval for `3.1–3.6` unless all of the following are true:
+
+1. Explicit enable/download is the **only** networked path.
+2. Runtime load is local-only and fail-closed.
+3. Curated aliases use pinned expected hashes, not header-echo trust.
+4. Schema mismatch rejects both older and newer DB versions.
+5. Partial-download behavior is either honestly narrowed or crash-cleaned.
+6. Windows-targeted lifecycle tests pass and cover: cache integrity failure, stale cache recovery, no silent runtime fetch, and future-schema rejection.
+
+
+
+# Scruffy — conversation-memory close-action test decision
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks `9.1`-`9.5`
+- **Decision:** Prove `memory_close_action` with focused MCP-handler tests in `src\mcp\server.rs`, and keep the conflict path deterministic by routing the public tool through a private helper that exposes a pre-write seam only to tests.
+- **Why:** The slice is mostly MCP orchestration over existing OCC machinery, so handler-local tests cover the real branches without inventing a broad integration harness. The pre-write seam lets the test land a competing write first, then assert the stale close returns `ConflictError` and does not leak the requested lifecycle status or note into the stored action item.
+- **Coverage note:** This lane covers success (`status` update + note append), `KindError`, invalid status rejection, and deterministic OCC conflict while preserving repo-wide line coverage above the 90% floor on Windows.
+
+
+2026-05-04T07:22:12.881+08:00
+
+- Decision: Treat `extracted/_history/**` as a reserved sidecar path in file-edit coverage proofs and verify repeated manual edits preserve one linear supersede chain (`old predecessor -> new archive -> head`).
+- Why: The risky regression is silent history forking or accidental sidecar re-ingest, not happy-path head creation.
+- Test impact: Keep one focused integration file that covers chain relinking, whitespace no-op, type/path gating, and sidecar behavior under the Windows coverage lane.
+
+
+
+# Scruffy — conversation-memory queue/core coverage decision
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 4.1-6.6 and 11.1-11.4
+- **Decision:** Cover the slice at the core seams, not through premature MCP wiring: keep round-trip and parse failures in `src\core\conversation\format.rs`, append/path/layout proofs in `tests\conversation_turn_capture.rs`, and queue collapse/order/retry/lease proofs in `tests\extraction_queue.rs`.
+- **Why:** This slice is plumbing. If the tests wait for `memory_add_turn` / `memory_close_session` tool wiring, coverage will lag the landed behavior and the branch will look under-tested for the wrong reason. The dedicated-collection path is therefore proved through the core root resolver and append path, with the current implementation creating a companion `*-memory` collection/root on first use.
+- **Coverage note:** On this Windows lane, `cargo test -j 1` passes and `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` reports 90.02% total line coverage, so the slice clears the requested floor without pretending branch coverage was rerun.
+
+
+
+# Scruffy — conversation-memory race-fix coverage decision
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 2.2-2.5 after commit `d98e010`
+- **Decision:** Treat the branch as still above the requested honest coverage floor based on the practical Windows lane (`cargo test -j 1` and `RUST_TEST_THREADS=1 cargo llvm-cov --lib --tests --summary-only -j 1`), but do not claim a full local branch-coverage rerun or a locally executed deterministic race regression from this environment.
+- **Why:** The measured repo-wide line coverage is 90.18%, and `src\commands\put.rs` remains well-covered at 94.26% line coverage after the race fix. But `cargo llvm-cov --branch` on the available stable toolchain fails because branch coverage is nightly-only, and the new contender test in `src\commands\put.rs` is `#[cfg(unix)]`, so this Windows lane cannot honestly say it re-executed that exact race proof.
+- **Test note:** No extra test was added in this lane because the missing proof is environmental, not a missing branch in the committed test suite.
+
+
+
+# Scruffy — conversation-memory slice 2 test decision
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 2.2-2.5 / 3.1-3.7
+- **Decision:** Treat the existing text-query supersede integration as necessary but insufficient. Keep dedicated proofs for exact-slug head filtering, progressive expansion refusing superseded neighbours by default, and graph traversal surfacing `superseded_by` edges distinctly.
+- **Why:** Those branches are where this slice can look covered while still lying: exact-slug query paths bypass the generic recall path, progressive retrieval can accidentally reintroduce historical pages during expansion, and graph traversal needs its own proof that supersede edges are first-class.
+- **Coverage note:** Current honest coverage is far below 90% for the branch, so this slice should be reported truthfully rather than treated as "covered enough" by the existing broad suite.
+
+
+
+# Scruffy — conversation-memory Wave 1 rerecheck
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Scope:** `conversation-memory-foundations` tasks 4.1-6.6 after commit `5c88104`
+- **Decision:** Keep the Wave 1 truth note closed without adding more tests in this lane. The full Windows rerecheck still clears the requested floor (`cargo test -j 1` passes; `RUST_TEST_THREADS=1 cargo llvm-cov --lib --tests --summary-only -j 1` reports 90.01% total line coverage), and the three revision seams already have direct proof in the landed suite.
+- **Why:** The new queue lease-token path is covered by stale-claim tests in `tests\\extraction_queue.rs`, the same-session cross-process serialization path is covered by the child-process lock test in `tests\\conversation_turn_capture.rs`, and the explicit metadata-fence path is covered by both round-trip and bare-trailing-JSON preservation tests in `src\\core\\conversation\\format.rs`. The remaining misses in those files are mostly config/error helpers and platform branches, so adding filler tests here would not make the task truth any more honest.
+- **Coverage note:** This is a truthful Windows/stable rerecheck only. It does not claim nightly branch coverage, and it does not pretend to execute Unix-only lock behavior from this host.
+
+
+---
+agent: scruffy
+date: 2026-05-04T07:22:12.881+08:00
+change: conversation-memory-foundations
+---
+
+
+# Zapp conversation-memory draft PR
+
+- **Timestamp:** 2026-05-04T07:22:12.881+08:00
+- **Change:** `conversation-memory-foundations`
+- **Scope:** Draft PR truth boundary for `feat/slm-conversation-mem`
+
+## Decision
+
+Open a draft PR against `main`, but scope the claim to the pushed schema/supersede foundations slice plus the OpenSpec truth repair only.
+
+## Why
+
+The branch compare currently carries broader roadmap and planning ancestry than the implementation that is actually landed on `feat/slm-conversation-mem`. Narrowing the PR body to the pushed slice keeps reviewer, docs, and launch messaging aligned with reality while the larger conversation-memory change is still in progress.
+
+## Guardrails
+
+- State explicitly that the larger `conversation-memory-foundations` change is still in progress.
+- Do not claim `memory_add_turn`, queue worker or extraction runtime behavior, or release readiness.
+- Keep the PR in draft until the wider implementation actually lands and is pushed.
+
+
+---
+recorded_at: 2026-05-04T07:22:12.881+08:00
+author: Zapp
+change: conversation-memory-foundations
+topic: pr-153-after-bender-race-fix
+---
+
+
+# Fry Batch 3 Recon
+
+- **Timestamp:** 2026-04-29T20:33:01.970+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Batch 3 reconnaissance and execution order for `v0.12.0`
+
+## Decision
+
+Implement Batch 3 in this order:
+
+1. Settle the UUID/frontmatter contract seam first (`memory_id` vs `quaid_id`) and thread that decision through the shared UUID helpers.
+2. Extract or reuse the existing rename-before-commit writer path so UUID write-back uses the same sentinel + dedup + post-rename stat + single-tx `file_state`/`raw_imports` rotation as `memory_put`.
+3. Add bulk-write guard helpers for WriteAdmin/offline-live-owner checks before exposing new CLI entrypoints.
+4. Only then wire `collection migrate-uuids` and `collection add --write-quaid-id`, followed immediately by task-aligned tests and OpenSpec checkbox updates.
+
+## Why
+
+The current tree has three coupled seams: the frontmatter key name is still `memory_id`, the only production rename-before-commit implementation lives in `src\commands\put.rs`, and live-owner refusal currently reports only `owner_session_id` even though pid/host data already exists in `serve_sessions`. Landing CLI surface changes before those seams are resolved would either duplicate the write path, produce dishonest task closures, or force follow-up churn across tests and error text.
+
+This ordering also keeps task checkboxes honest. `5a.5`/`17.5ww*` become true when the shared writer path is real, `17.5ii9` becomes true when the live-owner helper is wired, and `5a.5a`/`9.2a` only close once the CLI commands are actually surfaced on top of those lower-level guarantees.
+
+## Notes
+
+- Existing write-gate semantics already live in `src\core\vault_sync.rs::ensure_collection_write_allowed`; Batch 3 should preserve the restoring/`needs_full_sync` fail-closed behavior for WriteAdmin flows.
+- The reconciler preflight already points operators at `quaid collection migrate-uuids`, so the new CLI should be added in the same lane as the real write-back implementation, not earlier.
+
+
+
+# Leela Batch 3 lane
+
+- **Timestamp:** 2026-04-29T20:33:01.970+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Safe execution lane + release sequencing for Batch 3 / `v0.12.0`
+
+## Decision
+
+Use a separate clean worktree for Batch 3 implementation and release prep staging.
+
+- **Keep untouched:** `D:\repos\quaid` on `release/v0.11.0` (dirty `.squad/` state, ahead of origin by 1 commit)
+- **Implementation lane:** `D:\repos\quaid-vault-sync-batch3-v0120`
+- **Branch:** `spec/vault-sync-engine-batch3-v0120`
+- **Base:** `origin/main` at `fdc20a0` (`Cargo.toml` = `0.11.6`, latest published release = `v0.11.6`)
+
+## Why
+
+The current checkout is not safe for Batch 3 or release work: it is on an old release branch, has uncommitted `.squad/` changes, and diverges from `origin/main`. A sibling worktree isolates implementation from that state and lines Batch 3 up with the real release base.
+
+## Release sequencing constraints
+
+1. Batch 3 is still open in OpenSpec (`5a.5`, `5a.5a`, `9.2a`, `5a.7`, `17.5ww`, `17.5ww2`, `17.5ww3`, `17.5ii9`), so `v0.12.0` cannot ship yet.
+2. The next release must not start from `release/v0.11.0`; it must start from the clean main-based lane and merge back to `main` first, per the user instruction.
+3. `Cargo.toml` on main is still `0.11.6`; a `v0.12.0` tag would require a version bump before tagging.
+4. Release automation is tag-driven (`.github\workflows\release.yml`) and fails if the tag/version mismatch or the 17-file release manifest is incomplete.
+5. Coverage over 90% must be checked explicitly via `cargo llvm-cov`; CI reports coverage but does not fail the build for dipping below the requested threshold.
+
+## Routing
+
+- **Fry first:** implement Batch 3 in the clean worktree using the existing recon order (UUID/frontmatter seam → shared write path → live-owner guard → CLI surfaces/tests/OpenSpec checkboxes).
+- **Professor second:** review `src\core\vault_sync.rs`, `src\core\page_uuid.rs`, and any shared writer extraction before merge.
+- **Scruffy third:** run targeted test/coverage passes and verify the coverage report stays above 90%.
+- **Nibbler fourth:** adversarial review of serve-live refusal, write-gate enforcement, and rename-before-commit safety.
+- **Zapp last:** only after PR review is complete, comments are resolved, CI is green, and the branch is merged to `main`; then run the release checklist and tag/release `v0.12.0` from the merged state.
+
+
+
+# Leela Batch 3 branch ancestry
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Batch 3 branch ancestry and conflict-risk only
+
+## Decision
+
+No branch-base recovery is needed.
+
+The Batch 3 worktree branch `spec/vault-sync-engine-batch3-v0120` was created from `origin/main` at `fdc20a0` and then received one Batch 3 commit (`4401ed7`). It was not started from `origin/release/v0.11.0`.
+
+## Why
+
+- The branch reflog records the branch creation point as `origin/main`.
+- `HEAD` is a single-child commit on top of `fdc20a0`, which is `origin/main` / `v0.11.6`.
+- Relative to `origin/release/v0.11.0`, the branch is three commits ahead because it includes the newer main-line commits plus the Batch 3 commit; that is expected ancestry, not evidence of a wrong starting branch.
+
+## Recovery action
+
+Do not rebase, cherry-pick, or rebuild the branch for base-branch reasons. If merge conflicts appear later, treat them as normal forward-integration conflicts from subsequent changes, not as fallout from starting Batch 3 on the wrong base.
+
+
+
+# Nibbler Batch 3 rereview
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Worktree:** `D:\repos\quaid-vault-sync-batch3-v0120`
+- **Branch/Commit:** `spec/vault-sync-engine-batch3-v0120` @ `67f4091`
+- **Verdict:** **APPROVE**
+
+## Why
+
+1. The same-root alias bypass is closed in both directions:
+   - `collection add --write-quaid-id` now refuses before inserting a second row when any same-root alias is live-owned.
+   - Bulk UUID rewrite refusal now resolves live ownership by canonical root, not only the target collection row.
+2. The offline race is closed at the right seam:
+   - non-dry-run UUID write-back acquires a short-lived owner lease covering every same-root collection row before the rewrite loop starts;
+   - helper coverage proves the root-scoped lease claims aliases together and cleans up after drop.
+3. The operator-facing story is now honest:
+   - refusal text explicitly tells operators to stop serve first, rerun offline, then restart serve;
+   - task closure notes were narrowed to the actual proof: same-root alias refusal plus a root-scoped lease/source-invariant seam, not a broader claim.
+
+## Residual non-blocking risks
+
+- The end-to-end refusal tests remain Unix-gated, so on a Windows host the rerun evidence comes from helper/unit proof rather than executing the CLI path directly. That matches the current Unix-only command surface, but it is still narrower evidence than a native Unix validation lane.
+
+
+
+
+# Leela decision — v0.12.0 merge lane
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Requested by:** macro88
+- **PR:** `#123`
+- **Scope:** `release/v0.12.0` final merge lane
+
+## Decision
+
+Clear only the real merge blockers inside the release branch, then merge normally. That meant fixing the flaky env-var test race, adding coverage for the env-guard restore path so `codecov/patch` cleared, accepting the docs correction raised in review, resolving the review threads, and explicitly avoiding an admin merge.
+
+## Why
+
+- The branch itself was already the intended release-prep lane and was only blocked by merge policy.
+- The failing `Test` / `codecov/patch` gate and the unresolved review conversations were all scoped to the branch and could be repaired surgically without reopening release scope.
+- Admin merge would have hidden a real quality gate failure and violated the no-bypass rule already established for merge-lane work.
+
+## Outcome
+
+- PR `#123` merged cleanly into `main`.
+- The exact `main` SHA to tag for `v0.12.0` is `5a8bdf068bf54be52f9b2bc661af34056473221a`.
+
+
+
+

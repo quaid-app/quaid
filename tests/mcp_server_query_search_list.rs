@@ -18,8 +18,10 @@ use harness::{
     create_page, create_page_in_collection, extract_text, insert_collection, open_test_db,
     set_collection_state,
 };
+use quaid::core::conversation::turn_writer;
 use quaid::mcp::server::{
-    MemoryLinkInput, MemoryListInput, MemoryQueryInput, MemorySearchInput, QuaidServer,
+    MemoryLinkInput, MemoryListInput, MemoryPutInput, MemoryQueryInput, MemorySearchInput,
+    QuaidServer,
 };
 use rmcp::model::ErrorCode;
 
@@ -185,6 +187,51 @@ fn memory_query_defaults_to_write_target_when_multiple_collections_are_active() 
 }
 
 #[test]
+fn memory_query_defaults_to_memory_collection_when_dedicated_memory_location_is_enabled() {
+    let (_dir, conn) = open_test_db();
+    conn.execute(
+        "UPDATE config SET value = 'dedicated-collection' WHERE key = 'memory.location'",
+        [],
+    )
+    .unwrap();
+    let memory_root = turn_writer::resolve_memory_root(&conn).unwrap();
+    conn.execute(
+        "UPDATE collections SET needs_full_sync = 0 WHERE id = ?1",
+        [memory_root.collection_id],
+    )
+    .unwrap();
+    let server = QuaidServer::new(conn);
+    server
+        .memory_put(MemoryPutInput {
+            slug: format!("{}::notes/memory-target", memory_root.collection_name),
+            content: "---\ntitle: Memory Target\ntype: note\n---\nshared semantic marker\n"
+                .to_string(),
+            expected_version: None,
+            namespace: Some("q0000".to_string()),
+        })
+        .unwrap();
+
+    let result = server
+        .memory_query(MemoryQueryInput {
+            query: "shared semantic marker".to_string(),
+            collection: None,
+            namespace: Some("q0000".to_string()),
+            wing: None,
+            limit: None,
+            depth: None,
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["slug"],
+        format!("{}::notes/memory-target", memory_root.collection_name)
+    );
+}
+
+#[test]
 fn memory_search_returns_matching_pages() {
     let (_dir, conn) = open_test_db();
     let server = QuaidServer::new(conn);
@@ -207,6 +254,49 @@ fn memory_search_returns_matching_pages() {
 
     let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
     assert_eq!(rows[0]["slug"], "default::companies/acme");
+}
+
+#[test]
+fn memory_search_defaults_to_memory_collection_when_dedicated_memory_location_is_enabled() {
+    let (_dir, conn) = open_test_db();
+    conn.execute(
+        "UPDATE config SET value = 'dedicated-collection' WHERE key = 'memory.location'",
+        [],
+    )
+    .unwrap();
+    let memory_root = turn_writer::resolve_memory_root(&conn).unwrap();
+    conn.execute(
+        "UPDATE collections SET needs_full_sync = 0 WHERE id = ?1",
+        [memory_root.collection_id],
+    )
+    .unwrap();
+    let server = QuaidServer::new(conn);
+    server
+        .memory_put(MemoryPutInput {
+            slug: format!("{}::notes/memory-hit", memory_root.collection_name),
+            content: "---\ntitle: Memory Hit\ntype: note\n---\nshared needle\n".to_string(),
+            expected_version: None,
+            namespace: Some("q0000".to_string()),
+        })
+        .unwrap();
+
+    let result = server
+        .memory_search(MemorySearchInput {
+            query: "shared".to_string(),
+            collection: None,
+            namespace: Some("q0000".to_string()),
+            wing: None,
+            limit: None,
+            include_superseded: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["slug"],
+        format!("{}::notes/memory-hit", memory_root.collection_name)
+    );
 }
 
 #[test]
@@ -392,6 +482,49 @@ fn memory_list_defaults_to_write_target_when_multiple_collections_are_active() {
     let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["slug"], "default::notes/default-target");
+}
+
+#[test]
+fn memory_list_defaults_to_memory_collection_when_dedicated_memory_location_is_enabled() {
+    let (_dir, conn) = open_test_db();
+    conn.execute(
+        "UPDATE config SET value = 'dedicated-collection' WHERE key = 'memory.location'",
+        [],
+    )
+    .unwrap();
+    let memory_root = turn_writer::resolve_memory_root(&conn).unwrap();
+    conn.execute(
+        "UPDATE collections SET needs_full_sync = 0 WHERE id = ?1",
+        [memory_root.collection_id],
+    )
+    .unwrap();
+    let server = QuaidServer::new(conn);
+    server
+        .memory_put(MemoryPutInput {
+            slug: format!("{}::notes/memory-list", memory_root.collection_name),
+            content: "---\ntitle: Memory List\ntype: note\n---\nlisted from memory collection\n"
+                .to_string(),
+            expected_version: None,
+            namespace: Some("q0000".to_string()),
+        })
+        .unwrap();
+
+    let result = server
+        .memory_list(MemoryListInput {
+            collection: None,
+            namespace: Some("q0000".to_string()),
+            wing: Some("notes".to_string()),
+            page_type: Some("note".to_string()),
+            limit: None,
+        })
+        .unwrap();
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["slug"],
+        format!("{}::notes/memory-list", memory_root.collection_name)
+    );
 }
 
 #[test]

@@ -20,12 +20,13 @@ use serde::Deserialize;
 use crate::commands::{get, put};
 
 use crate::core::collections::{self, OpKind, SlugResolution};
-use crate::core::conversation::{extractor::SlmClient, slm::LazySlmRunner};
+use crate::core::conversation::{extractor::SlmClient, slm::LazySlmRunner, turn_writer};
 #[cfg(test)]
 use crate::core::graph::{GraphError, TemporalFilter};
 use crate::core::vault_sync;
 use crate::mcp::errors::{
-    ambiguous_slug_error, map_collection_error, map_config_error, map_db_error, page_not_found,
+    ambiguous_slug_error, map_collection_error, map_config_error, map_db_error,
+    map_turn_write_error, page_not_found,
 };
 #[cfg(test)]
 use crate::mcp::errors::{map_anyhow_error, map_graph_error, serialize_response};
@@ -68,11 +69,33 @@ pub(crate) fn resolve_slug_for_mcp(
     }
 }
 
-pub(crate) fn resolve_read_collection_filter_for_mcp(
+pub(crate) fn resolve_memory_collection_filter_for_mcp(
     db: &Connection,
     collection_name: Option<&str>,
 ) -> Result<Option<collections::Collection>, rmcp::Error> {
-    collections::resolve_read_collection_filter(db, collection_name).map_err(map_collection_error)
+    if collection_name.is_some() {
+        return collections::resolve_read_collection_filter(db, collection_name)
+            .map_err(map_collection_error);
+    }
+
+    if let Some(collection) =
+        collections::get_single_active_collection(db).map_err(map_collection_error)?
+    {
+        return Ok(Some(collection));
+    }
+
+    let memory_root = turn_writer::resolve_memory_root(db).map_err(map_turn_write_error)?;
+    collections::get_by_name(db, &memory_root.collection_name)
+        .map_err(map_collection_error)?
+        .ok_or_else(|| {
+            map_turn_write_error(turn_writer::TurnWriteError::Config {
+                message: format!(
+                    "memory root collection `{}` could not be resolved",
+                    memory_root.collection_name
+                ),
+            })
+        })
+        .map(Some)
 }
 
 pub(crate) fn page_id_for_resolved(

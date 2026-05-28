@@ -443,3 +443,74 @@ fn memory_search_compound_query_returns_valid_json_array() {
         "memory_search must always emit a JSON array (may be empty for compound-term AND miss)"
     );
 }
+
+#[test]
+fn search_numeric_query_matches_abbreviated_number_forms() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "search-numeric-alias.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "journal/2026-04-15",
+        "journal",
+        "Journal 2026-04-15",
+        "BTC update",
+        "BTC clearing $75K in April.",
+    );
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["--json", "search", "75000 April"]);
+
+    assert!(
+        output.status.success(),
+        "search should exit cleanly for numeric alias queries: {output:?}"
+    );
+
+    let parsed = parse_stdout_json(&output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert!(
+        result_slugs(results).contains("default::journal/2026-04-15"),
+        "numeric alias expansion should match $75K content: {results:?}"
+    );
+}
+
+#[test]
+fn memory_search_numeric_query_matches_abbreviated_number_forms() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "memory-search-numeric-alias.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "journal/2026-04-15",
+        "journal",
+        "Journal 2026-04-15",
+        "BTC update",
+        "BTC clearing $75K in April.",
+    );
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "call",
+            "memory_search",
+            r#"{"query":"75000 April","limit":10}"#,
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "memory_search should exit cleanly for numeric alias queries: {output:?}"
+    );
+
+    let parsed = parse_stdout_json(&output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert!(
+        result_slugs(results).contains("default::journal/2026-04-15"),
+        "memory_search numeric alias expansion should match $75K content: {results:?}"
+    );
+}

@@ -444,16 +444,16 @@ fn normalize_phi3_rope_scaling(config: &mut JsonValue) {
 }
 
 /// Parse the model's raw output into the typed
-/// [`ExtractionResponse`] envelope, accepting either a bare JSON
-/// object or a fenced ```` ```json ```` block; per-fact validation
-/// errors are collected rather than aborting the whole response.
+/// [`ExtractionResponse`] envelope, accepting a bare JSON object or a
+/// plain-prose wrapper around exactly one valid JSON object. Ordinary
+/// prose punctuation like parentheses or brackets is allowed, but
+/// structural wrappers outside the envelope are rejected so recovery
+/// fails closed.
+/// Per-fact validation errors are collected rather than aborting the
+/// whole response.
 pub fn parse_response(raw: &str) -> Result<ExtractionResponse, SlmError> {
     let trimmed = raw.trim();
-    let json = strip_json_fence(trimmed).unwrap_or(trimmed);
-    let envelope: RawExtractionEnvelope =
-        serde_json::from_str(json).map_err(|error| SlmError::Parse {
-            message: error.to_string(),
-        })?;
+    let envelope = parse_raw_envelope(trimmed)?;
 
     let mut facts = Vec::new();
     let mut validation_errors = Vec::new();
@@ -493,6 +493,23 @@ pub fn parse_response(raw: &str) -> Result<ExtractionResponse, SlmError> {
     })
 }
 
+fn parse_raw_envelope(raw: &str) -> Result<RawExtractionEnvelope, SlmError> {
+    match serde_json::from_str(raw) {
+        Ok(envelope) => Ok(envelope),
+        Err(primary_error) => {
+            let Some(candidate) = recover_commentary_wrapped_object(raw) else {
+                return Err(SlmError::Parse {
+                    message: primary_error.to_string(),
+                });
+            };
+
+            serde_json::from_str(candidate).map_err(|error| SlmError::Parse {
+                message: error.to_string(),
+            })
+        }
+    }
+}
+
 fn safetensor_paths(model_dir: &Path) -> Result<Vec<PathBuf>, SlmError> {
     let mut paths = fs::read_dir(model_dir)
         .map_err(|error| SlmError::Weights {
@@ -518,15 +535,324 @@ fn safetensor_paths(model_dir: &Path) -> Result<Vec<PathBuf>, SlmError> {
     Ok(paths)
 }
 
-fn strip_json_fence(raw: &str) -> Option<&str> {
-    let first_newline = raw.find('\n')?;
-    let header = raw[..first_newline].trim();
-    if !(header.eq_ignore_ascii_case("```json") || header == "```") {
+fn recover_commentary_wrapped_object(raw: &str) -> Option<&str> {
+    let candidates = extract_top_level_json_object_spans(raw);
+    let [candidate] = candidates.as_slice() else {
         return None;
+    };
+    let prefix = &raw[..candidate.0];
+    let suffix = &raw[candidate.1..];
+    if !candidate_has_adjacent_container_chars(prefix, suffix)
+        && !candidate_is_inside_container(prefix, suffix)
+        && wrapper_is_plain_commentary(prefix)
+        && wrapper_is_plain_commentary(suffix)
+    {
+        Some(&raw[candidate.0..candidate.1])
+    } else {
+        None
     }
-    let body = raw[first_newline + 1..].trim_end();
-    let inner = body.strip_suffix("```")?;
-    Some(inner.trim())
+}
+
+fn candidate_has_adjacent_container_chars(prefix: &str, suffix: &str) -> bool {
+    matches!(
+        prefix.chars().rev().find(|ch| !ch.is_whitespace()),
+        Some('(' | '[' | '"' | '\'')
+    ) || matches!(
+        suffix.chars().find(|ch| !ch.is_whitespace()),
+        Some(')' | ']' | '"' | '\'')
+    )
+}
+
+fn candidate_is_inside_container(prefix: &str, suffix: &str) -> bool {
+    candidate_is_inside_bracket_or_parenthesis_container(prefix)
+        || candidate_is_inside_quote_container(prefix, suffix)
+}
+
+fn candidate_is_inside_bracket_or_parenthesis_container(prefix: &str) -> bool {
+    let mut stack = Vec::new();
+
+    for ch in prefix.chars() {
+        match ch {
+            '(' | '[' => stack.push(ch),
+            ')' => {
+                if matches!(stack.last(), Some('(')) {
+                    stack.pop();
+                }
+            }
+            ']' => {
+                if matches!(stack.last(), Some('[')) {
+                    stack.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    !stack.is_empty()
+}
+
+fn candidate_is_inside_quote_container(prefix: &str, _suffix: &str) -> bool {
+    unmatched_quote_delimiter(prefix).is_some()
+}
+
+fn unmatched_quote_delimiter(text: &str) -> Option<char> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut active_quote = None;
+    let mut escape = false;
+
+    for (index, ch) in chars.iter().copied().enumerate() {
+        match active_quote {
+            Some('"') => {
+                if escape {
+                    escape = false;
+                } else if ch == '\\' {
+                    escape = true;
+                } else if ch == '"' {
+                    active_quote = None;
+                }
+            }
+            Some('\'') => {
+                if ch == '\'' && single_quote_is_delimiter(&chars, index) {
+                    active_quote = None;
+                }
+            }
+            None => match ch {
+                '"' => active_quote = Some('"'),
+                '\'' if single_quote_is_delimiter(&chars, index) => active_quote = Some('\''),
+                _ => {}
+            },
+            Some(_) => {}
+        }
+    }
+
+    active_quote
+}
+
+fn single_quote_is_delimiter(chars: &[char], index: usize) -> bool {
+    let prev = index
+        .checked_sub(1)
+        .and_then(|prev| chars.get(prev))
+        .copied();
+    let next = chars.get(index + 1).copied();
+
+    !prev
+        .zip(next)
+        .is_some_and(|(prev, next)| prev.is_ascii_alphanumeric() && next.is_ascii_alphanumeric())
+}
+
+fn wrapper_is_plain_commentary(wrapper: &str) -> bool {
+    wrapper
+        .trim()
+        .split('\n')
+        .all(commentary_line_is_plain_text)
+}
+
+fn commentary_line_is_plain_text(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if line_is_structural_wrapper(trimmed) || line_is_bracket_or_parenthesis_wrapper(trimmed) {
+        return false;
+    }
+    if line_is_prompt_echo_label(trimmed) || line_is_prompt_echo_sentence(trimmed) {
+        return false;
+    }
+
+    let chars = trimmed.chars().collect::<Vec<_>>();
+    chars.iter().enumerate().all(|(index, ch)| match ch {
+        '{' | '}' | '<' | '>' | '`' => false,
+        ':' => !colon_looks_structural(&chars, index),
+        _ => true,
+    })
+}
+
+fn line_is_structural_wrapper(line: &str) -> bool {
+    line.starts_with("```")
+        || line.starts_with("~~~")
+        || line.starts_with('<')
+        || line.ends_with('>')
+        || line_starts_with_list_marker(line)
+}
+
+fn line_is_bracket_or_parenthesis_wrapper(line: &str) -> bool {
+    let compact = line
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+
+    compact
+        .chars()
+        .all(|ch| matches!(ch, '[' | ']' | '(' | ')'))
+        || fully_wrapped_line_is_structural(&compact)
+}
+
+fn line_is_prompt_echo_label(line: &str) -> bool {
+    let normalized = normalize_prompt_echo_line(line.trim_end_matches(':'));
+
+    matches!(
+        normalized.as_str(),
+        "example"
+            | "examples"
+            | "schema"
+            | "json schema"
+            | "response schema"
+            | "output schema"
+            | "allowed output"
+            | "allowed outputs"
+            | "allowed output only"
+            | "allowed outputs only"
+            | "allowed response"
+            | "allowed responses"
+            | "allowed response only"
+            | "allowed responses only"
+            | "response format"
+            | "output format"
+            | "return"
+            | "return only"
+    )
+}
+
+fn line_is_prompt_echo_sentence(line: &str) -> bool {
+    matches!(
+        normalize_prompt_echo_line(line).as_str(),
+        "you are not a chat partner return exactly one json object and nothing else"
+            | "skip ephemeral content greetings clarifications transient task state"
+            | "skip facts you already extracted in prior windows"
+            | "facts must be supported by the windowed turns do not infer beyond what was said"
+            | "required kind summary plus the type specific structured field s"
+            | "return facts empty array if nothing durable"
+    )
+}
+
+fn normalize_prompt_echo_line(line: &str) -> String {
+    let normalized = line
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn fully_wrapped_line_is_structural(line: &str) -> bool {
+    let inner = if (line.starts_with('[') && line.ends_with(']'))
+        || (line.starts_with('(') && line.ends_with(')'))
+    {
+        &line[1..line.len() - 1]
+    } else {
+        return false;
+    };
+
+    let inner = inner.trim();
+    inner.is_empty()
+        || !inner.chars().any(char::is_alphanumeric)
+        || inner.chars().any(|ch| {
+            matches!(
+                ch,
+                '{' | '}' | '[' | ']' | '(' | ')' | '<' | '>' | '`' | '"'
+            )
+        })
+        || line_starts_with_list_marker(inner)
+}
+
+fn line_starts_with_list_marker(line: &str) -> bool {
+    line_starts_with_unordered_list_marker(line) || line_starts_with_ordered_list_marker(line)
+}
+
+fn line_starts_with_unordered_list_marker(line: &str) -> bool {
+    matches!(line.chars().next(), Some('-' | '*' | '+'))
+        && line[1..].chars().next().is_none_or(char::is_whitespace)
+}
+
+fn line_starts_with_ordered_list_marker(line: &str) -> bool {
+    let digit_count = line.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digit_count == 0 {
+        return false;
+    }
+
+    let Some(rest) = line.get(digit_count..) else {
+        return false;
+    };
+    let Some(marker) = rest.chars().next() else {
+        return false;
+    };
+    if !matches!(marker, '.' | ')') {
+        return false;
+    }
+
+    rest[marker.len_utf8()..]
+        .chars()
+        .next()
+        .is_none_or(char::is_whitespace)
+}
+
+fn colon_looks_structural(chars: &[char], index: usize) -> bool {
+    let prev = chars[..index].iter().rev().find(|ch| !ch.is_whitespace());
+    let next = chars[index + 1..].iter().find(|ch| !ch.is_whitespace());
+    prev.zip(next).is_some_and(|(prev, next)| {
+        is_json_like_wrapper_char(*prev) && is_json_like_wrapper_char(*next)
+    })
+}
+
+fn is_json_like_wrapper_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '"' | '\'' | '[' | ']' | '{' | '}' | '(' | ')' | '-' | '0'..='9'
+    )
+}
+
+fn extract_top_level_json_object_spans(raw: &str) -> Vec<(usize, usize)> {
+    let mut objects = Vec::new();
+    let mut start = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (index, ch) in raw.char_indices() {
+        let Some(object_start) = start else {
+            if ch == '{' {
+                start = Some(index);
+                depth = 1;
+            }
+            continue;
+        };
+
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    objects.push((object_start, index + ch.len_utf8()));
+                    start = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    objects
 }
 
 /// Validate that the required string fields on a [`RawFact`] are
@@ -604,14 +930,45 @@ mod tests {
     use tokenizers::Tokenizer;
 
     #[test]
-    fn parse_response_accepts_json_code_fence() {
-        let parsed = parse_response("```json\n{\"facts\":[]}\n```").unwrap();
+    fn parse_response_rejects_json_code_fence() {
+        let error = parse_response("```json\n{\"facts\":[]}\n```").unwrap_err();
+        assert!(matches!(error, SlmError::Parse { .. }));
+    }
+
+    #[test]
+    fn parse_response_accepts_leading_commentary_when_json_follows() {
+        let parsed = parse_response("Sure:\n{\"facts\":[]}").unwrap();
         assert!(parsed.facts.is_empty());
     }
 
     #[test]
-    fn parse_response_rejects_leading_commentary() {
-        let error = parse_response("Sure:\n{\"facts\":[]}").unwrap_err();
+    fn parse_response_rejects_xml_tag_wrapper() {
+        let error = parse_response("<response>{\"facts\":[]}</response>").unwrap_err();
+        assert!(matches!(error, SlmError::Parse { .. }));
+    }
+
+    #[test]
+    fn parse_response_rejects_list_item_wrapper() {
+        let error = parse_response("- {\"facts\":[]}").unwrap_err();
+        assert!(matches!(error, SlmError::Parse { .. }));
+    }
+
+    #[test]
+    fn parse_response_rejects_multiple_json_objects() {
+        let error = parse_response("{\"facts\":[]}{\"facts\":[]}").unwrap_err();
+        assert!(matches!(error, SlmError::Parse { .. }));
+    }
+
+    #[test]
+    fn parse_response_rejects_schema_example_plus_answer() {
+        let error = parse_response("The schema is {\"facts\":[]}\nActual answer: {\"facts\":[]}")
+            .unwrap_err();
+        assert!(matches!(error, SlmError::Parse { .. }));
+    }
+
+    #[test]
+    fn parse_response_rejects_commentary_without_json_envelope() {
+        let error = parse_response("Sure: I found a preference for coffee over tea.").unwrap_err();
         assert!(matches!(error, SlmError::Parse { .. }));
     }
 

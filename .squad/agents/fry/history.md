@@ -4,6 +4,9 @@
 
 ## Learnings
 
+- [2026-05-28T03:03:24.240+00:00] Single-object prompt-echo labels in `src/core/conversation/slm.rs` must fail closed just like other scaffolding; the smallest safe seam is a narrow `line_is_prompt_echo_label()` guard, with regressions in `tests/slm_prompt_parsing.rs` for `Example:`, `Schema:`, and `Allowed outputs only:` while existing prose wrappers keep recovering.
+- [2026-05-28T03:03:24.240+00:00] Quote-delimited `{"facts":[...]}` envelopes in `src/core/conversation/slm.rs` must fail closed just like bracket/paren containers; the safe seam is extending adjacent-wrapper detection only, with regression coverage in `tests/slm_prompt_parsing.rs` so plain prose wrappers still recover.
+- [2026-05-28T03:03:24.240+00:00] The last safe `parse_response()` recovery rule in `src/core/conversation/slm.rs` is to fail closed whenever a `(` or `[` stays unclosed across the recovered `{"facts":[...]}` span; standalone prose wrappers like `(JSON below)` and `[one fact]` still recover because they close before the envelope, and the seam is covered in `tests/slm_prompt_parsing.rs`.
 - [2026-05-04T07:22:12.881+08:00] Release-lane truth prep is two coupled checks, not one: bump the version-gated manifest only on the release-bound commit, then audit every public/install surface for moved doc links or stale “upcoming tag” copy so the branch can be tagged without shipping broken release-note pointers.
 - [2026-05-04T07:22:12.881+08:00] `memory_close_action` stayed truest once its MCP surface was tightened back to the spec-sized `{slug, status, note?}` contract and its OCC race proof used an internal pre-write seam, not extra public routing arguments or timing-based concurrency tests.
 - [2026-05-04T07:22:12.881+08:00] Conversation-session Wave 2 needed two tiny but coupled contracts to stay truthful: persist `closed_at` in conversation frontmatter so `memory_close_session` can re-close idempotently without rewriting, and qualify queue `session_id` values with namespace internally so identical session ids do not collapse across namespace-local extraction queues.
@@ -49,3 +52,42 @@
 - Decisions archived: 1 entry (2026-04-29)
 - Team synchronized
 - [2026-05-15T10:21:41.579+00:00] Release housekeeping for v0.22.3 is safest when treated as one operational chain: prune only remote branches whose exact tip is already an ancestor of `origin/main`, run the release gate (`cargo test`) before touching tags, and stop at a local commit/tag if publishing is blocked by auth or branch protections.
+
+---
+
+## Session: 2026-05-28T030324Z — SLM Parser Edge Case Closure
+
+**Status:** ✓ Complete
+
+**Scope:** Close the final SLM parser edge case so bracket/paren container wrappers fail closed even when prose appears inside the same container around the recovered JSON envelope.
+
+**Work:**
+- Tightened parser recovery in `src/core/conversation/slm.rs` to reject open bracket/paren containers spanning recovered JSON
+- Added regression tests for `Sure (see {"facts":[]} below) thanks` and `[see {"facts":[]} below]`
+- Preserved empty-chunk behavior per directive
+- Validated with focused cargo tests
+
+**Files Modified:**
+- `src/core/conversation/slm.rs`
+- `tests/slm_prompt_parsing.rs`
+- `tests/conversation_turn_capture.rs`
+
+**Decision:** Surgical patch, target edge case only. No collateral refactor. Regression tests validate closed-fail semantics. Ready for merge.
+
+
+## Session: SLM quoted envelope wrapper fix (2026-05-28)
+- Fry tightened parser recovery in `src/core/conversation/slm.rs`
+- Added quote-delimited wrapper rejection + plain-prose preservation logic
+- Regression coverage: `tests/slm_prompt_parsing.rs`
+- Validation: `cargo fmt --all` + `cargo test --test slm_prompt_parsing` passed
+- Professor: APPROVE (quoted wrappers now fail closed, plain prose still recovers)
+- Bender: ACCEPT (no blocking objection, ready to merge)
+- [2026-05-28T03:03:24.240+00:00] Prompt-echo wrapper lockdown seam complete: `parse_response()` now treats standalone labels (`Example:`, `Schema:`, `Allowed outputs only:`) as scaffolding via `line_is_prompt_echo_label()`. All 37 parser tests pass, no regressions. Bender approved. Ready for merge.
+
+## 2026-05-28 Parser Lane Session
+
+**Completed:** Surgical parser fix for SLM quoted-region containment + prompt-echo rejection
+
+**Files:** src/core/conversation/slm.rs, tests/slm_prompt_parsing.rs
+
+**Outcome:** 37/37 tests pass. Peer-reviewed by Professor. APPROVED and ready to merge.

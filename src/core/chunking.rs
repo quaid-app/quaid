@@ -20,7 +20,7 @@ fn truth_chunks(page: &Page) -> Vec<Chunk> {
     let mut current_lines: Vec<String> = Vec::new();
     let mut saw_heading = false;
 
-    for line in page.compiled_truth.lines() {
+    for line in content.lines() {
         if let Some(heading) = line.strip_prefix("## ") {
             saw_heading = true;
             if !current_lines.is_empty() {

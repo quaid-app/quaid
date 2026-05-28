@@ -12,7 +12,8 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use quaid::commands::ingest;
+use quaid::commands::{get, ingest};
+use quaid::core::chunking::chunk_page;
 use quaid::core::conversation::format::{parse, parse_str, render};
 use quaid::core::conversation::turn_writer::append_turn;
 use quaid::core::db;
@@ -670,6 +671,40 @@ fn memory_add_turn_full_flow_creates_file_collapses_queue_and_syncs_conversation
         assert_eq!(ingested.0, 1);
         assert_eq!(ingested.1, "session-e2e");
     }
+}
+
+#[test]
+fn ingested_canonical_conversation_page_does_not_emit_blank_chunks() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, db_path, server) = open_turn_server(vault_root.path());
+    let result = server
+        .memory_add_turn(MemoryAddTurnInput {
+            session_id: "session-chunks".to_string(),
+            role: "user".to_string(),
+            content: "I like to drink coffee more than tea.".to_string(),
+            timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+            metadata: None,
+            namespace: None,
+        })
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let conversation_path = vault_root.path().join(
+        payload["conversation_path"]
+            .as_str()
+            .unwrap()
+            .replace('/', std::path::MAIN_SEPARATOR_STR),
+    );
+
+    let db = db::open(db_path.to_str().unwrap()).unwrap();
+    ingest::run(&db, conversation_path.to_str().unwrap(), true).unwrap();
+    let page = get::get_page(&db, "session-chunks").unwrap();
+    let chunks = chunk_page(&page);
+
+    assert!(!chunks.is_empty(), "conversation page should still chunk");
+    assert!(
+        chunks.iter().all(|chunk| !chunk.content.trim().is_empty()),
+        "canonical conversation re-ingest must not create blank chunks: {chunks:?}"
+    );
 }
 
 #[test]

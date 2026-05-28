@@ -4,6 +4,7 @@
 
 ## Learnings
 
+- [2026-05-27T08:12:22+00:00] The extraction parser can safely recover one JSON envelope from plain prose wrappers even when the prose includes parentheses or brackets, as long as the surrounding lines are not structural wrappers like fences, list markers, tags, or bracket-only envelope containers.
 - [2026-04-29T21:29:11.071+08:00] Pre-tag release truth for a new CLI write path is not just the feature name; docs also need the operating constraints (for example Unix-only, offline-only, or blocked while `serve` owns the collection) so branch-only behavior is described honestly.
 - [2026-05-04T07:22:12.881+08:00] When a release lane adds MCP tools, the docs need a published-vs-branch split for tool counts as well as version numbers; for this lane the truthful release story is public `v0.17.0` = 19 tools, branch `v0.18.0` = 22 tools.
 - [2026-05-14T10:44:54.579+00:00] Roadmap truth needs a second split beyond version numbers: a phase can be partially shipped in the current public release while its entity-centric follow-ons stay untagged. Update the roadmap, getting-started guide, homepage, and MCP/reference copy together when that happens.

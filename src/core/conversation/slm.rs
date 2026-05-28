@@ -773,9 +773,9 @@ fn normalize_prompt_echo_line(line: &str) -> String {
 }
 
 fn fully_wrapped_line_is_structural(line: &str) -> bool {
-    let inner = if line.starts_with('[') && line.ends_with(']') {
-        &line[1..line.len() - 1]
-    } else if line.starts_with('(') && line.ends_with(')') {
+    let inner = if (line.starts_with('[') && line.ends_with(']'))
+        || (line.starts_with('(') && line.ends_with(')'))
+    {
         &line[1..line.len() - 1]
     } else {
         return false;

@@ -4,6 +4,7 @@
 
 ## Learnings
 
+- [2026-05-28T03:03:24.240+00:00] Quote-delimited `{"facts":[...]}` envelopes in `src/core/conversation/slm.rs` must fail closed just like bracket/paren containers; the safe seam is extending adjacent-wrapper detection only, with regression coverage in `tests/slm_prompt_parsing.rs` so plain prose wrappers still recover.
 - [2026-05-28T03:03:24.240+00:00] The last safe `parse_response()` recovery rule in `src/core/conversation/slm.rs` is to fail closed whenever a `(` or `[` stays unclosed across the recovered `{"facts":[...]}` span; standalone prose wrappers like `(JSON below)` and `[one fact]` still recover because they close before the envelope, and the seam is covered in `tests/slm_prompt_parsing.rs`.
 - [2026-05-04T07:22:12.881+08:00] Release-lane truth prep is two coupled checks, not one: bump the version-gated manifest only on the release-bound commit, then audit every public/install surface for moved doc links or stale “upcoming tag” copy so the branch can be tagged without shipping broken release-note pointers.
 - [2026-05-04T07:22:12.881+08:00] `memory_close_action` stayed truest once its MCP surface was tightened back to the spec-sized `{slug, status, note?}` contract and its OCC race proof used an internal pre-write seam, not extra public routing arguments or timing-based concurrency tests.
@@ -71,3 +72,12 @@
 - `tests/conversation_turn_capture.rs`
 
 **Decision:** Surgical patch, target edge case only. No collateral refactor. Regression tests validate closed-fail semantics. Ready for merge.
+
+
+## Session: SLM quoted envelope wrapper fix (2026-05-28)
+- Fry tightened parser recovery in `src/core/conversation/slm.rs`
+- Added quote-delimited wrapper rejection + plain-prose preservation logic
+- Regression coverage: `tests/slm_prompt_parsing.rs`
+- Validation: `cargo fmt --all` + `cargo test --test slm_prompt_parsing` passed
+- Professor: APPROVE (quoted wrappers now fail closed, plain prose still recovers)
+- Bender: ACCEPT (no blocking objection, ready to merge)

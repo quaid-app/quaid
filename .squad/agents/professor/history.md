@@ -64,3 +64,10 @@ Batch 3 revision received multi-agent re-review for same-root alias race and off
 - Decision inbox merged: 63 files
 - Decisions archived: 1 entry (2026-04-29)
 - Team synchronized
+
+## Session: SLM quoted envelope wrapper review (2026-05-28)
+- Reviewed Fry's parser changes in `src/core/conversation/slm.rs`
+- Reviewed regression test coverage in `tests/slm_prompt_parsing.rs`
+- Verdict: APPROVE
+- Rationale: Parser enforces narrower contract, quoted wrappers fail closed, plain prose recovers
+- OpenSpec: No additional wording needed

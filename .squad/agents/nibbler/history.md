@@ -8,6 +8,7 @@
 - [2026-04-29T21:29:11.071+08:00] Batch 3 rereview: same-root bulk rewrite defenses are only credible when refusal and temporary ownership both key off the canonical root, and the closure note says exactly that instead of implying broader proof.
 - [2026-04-29T21:29:11.071+08:00] Coverage backfill on Windows is only review-safe when it stays on fail-closed/helper seams and the task text explicitly says the untouched Unix-only destructive path is still proved elsewhere.
 - [2026-04-30T12:07:19.084+08:00] Batch 5 IPC pre-read: local write proxy auth is only review-safe when kernel-backed peer credentials gate the channel before any protocol message is trusted, and the socket path is published only after directory/socket permission audit passes.
+- [2026-05-27T08:12:22Z] `src/core/conversation/slm.rs` parser recovery is only review-safe when it recovers exactly one top-level `{ "facts": [...] }` envelope wrapped in plain commentary; bracketed/parenthesized wrappers like `[{"facts":[]}]` or `({"facts":[]})` must fail closed, with regressions in `tests/slm_prompt_parsing.rs`.
 ## 2026-04-29T13:29:11Z — Batch 3 review close
 
 - **Professor:** Rejected Batch 3 on incomplete task closure (`12.6b`/`17.5ii9`). Error text lacks "stop serve first" guidance. Tests incomplete.

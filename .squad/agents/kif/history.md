@@ -14,6 +14,7 @@
 - GitHub Pages + coverage HTML is a valid *secondary* dashboard pattern (via peaceiris/actions-gh-pages) but not required; Codecov handles primary reporting. Both can run in parallel with zero conflict.
 - Coverage gates should align with Phase gates: Phase 1 = aspirational (≥70%), Phase 3 = enforced with PR checks (delta <2%).
 - Release/coverage review sign-off blocks on doc-surface parity: GitHub-visible coverage outputs and checksum file format must match README + website copy exactly, or the plan is not release-ready.
+- SLM envelope recovery must fail closed when `(`, `)`, `[` or `]` immediately touch the recovered JSON payload; prose elsewhere on the line does not make that structural container safe to unwrap.
 
 ## Session Log
 

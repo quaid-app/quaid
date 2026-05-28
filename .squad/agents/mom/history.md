@@ -24,6 +24,7 @@
 - [2026-05-04T07:22:12.881+08:00] When a leased queue row can be re-claimed, `job_id` stops being an ownership proof. Bind `done`/`failed` transitions to the dequeue generation already carried by the row (here: `attempts`) or a stale worker can close a newer lease after expiry.
 - [2026-05-04T07:22:12.881+08:00] Watcher-driven archive-on-edit stays linear if the old head becomes the archive row and any existing predecessor is rewired onto that archive before the live head is updated. Whitespace-only saves need two proofs together: the handler must refuse to churn page/raw/file-state rows, and diff/full-hash classification must also suppress the same path so the no-op stays quiet on the next reconcile.
 - [2026-05-04T07:22:12.881+08:00] A rename-only extracted whitespace no-op still needs a tracked-path handoff. If the early return deletes the old `file_state` row without moving it to the new path, the page becomes untracked even though page/raw state stayed unchanged.
+- [2026-05-27T08:12:22Z] `src/core/conversation/slm.rs` now treats chatty recovery as a single-envelope contract: bare JSON and fenced JSON still parse, but prose-wrapped recovery is allowed only when the full response contains exactly one balanced top-level object. Repeated envelopes and schema-example-plus-answer output must fail closed; `tests/slm_prompt_parsing.rs` carries the regression seam and the OpenSpec task note was tightened to match the landed behavior.
 
 ---
 

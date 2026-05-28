@@ -147,3 +147,7 @@
 - Decision inbox merged: 63 files
 - Decisions archived: 1 entry (2026-04-29)
 - Team synchronized
+
+## Learnings
+
+- In `src/core/conversation/slm.rs`, a line that is fully wrapped in `()` or `[]` should still count as plain commentary when the inside is real prose (for example `(JSON below)` or `[one fact]`). Keep rejecting the line as a structural wrapper when that inner content is empty or JSON/container-like so `({"facts":[]})` and `[{"facts":[]}]` still fail closed.

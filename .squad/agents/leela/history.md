@@ -6,6 +6,10 @@
 
 ## Learnings
 
+- 2026-05-27T08:12:22Z — **Final parser lockdown rule:** SLM extraction may recover only plain-prose wrappers around exactly one `{ "facts": [...] }` envelope. Markdown fences, XML-ish tags, list markers, and any other structural wrapper syntax must fail closed even when they contain valid JSON.
+- 2026-05-18T02:54:45.237+00:00 — **Playground warning split rule:** When one playground action surfaces both `extraction_worker_run_failed` and `embedding refresh failed` warnings, scope them as separate background lanes first. The extraction contract lives in `src/core/conversation/slm.rs` + `src/core/conversation/extractor.rs`; embedding refresh noise lives in `src/core/vault_sync/embedding.rs` + `src/core/inference.rs`.
+- 2026-05-18T02:54:45.237+00:00 — **Archived-spec bugfix rule:** Archived OpenSpec artifacts can define the contract you are regressing against (here `openspec/changes/archive/2026-05-06-slm-extraction-and-correction/specs/fact-extraction-schema/spec.md`), but they should not be treated as the active owner of a new runtime regression. If no active change explicitly owns the fix, route a new minimal bugfix change rather than hiding it under unrelated active work.
+
 - 2026-05-15T10:21:41.579+00:00 — **Issue-housekeeping truth rule:** Close contradiction-resolution requests once head-only supersede chains and supersede-aware reads are shipped in code/docs; keeping the stale issue open after `superseded_by` semantics land misstates current capability.
 - 2026-05-15T10:21:41.579+00:00 — **Queue-issue reframing rule:** A landed SQLite-backed extraction queue plus daemon lifecycle commands means “build a queue” is no longer the truthful open issue. Reframe remaining work around the missing generic submit/status/cancel surface instead of re-asking for infrastructure that already shipped.
 - 2026-05-15T10:21:41.579+00:00 — **GitHub-ops blocker handling:** When repo housekeeping needs close/edit actions but `gh auth status` reports no login, record the exact blocked `gh issue` commands in the decision inbox and only check the tasks that were actually completed without those writes.

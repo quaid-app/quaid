@@ -882,3 +882,61 @@ No additional quote-specific wording looks necessary for this seam. The current 
 
 ## Residual risk
 This is still a heuristic prose-vs-structure classifier, so some chatty outputs containing more exotic structural punctuation may now fail closed even if a human would consider them commentary. That is the correct bias for this worker contract.
+
+# Fry decision — prompt-echo wrapper lockdown
+
+---
+timestamp: 2026-05-28T03:03:24.240+00:00
+author: Fry
+requested_by: Fry
+change: fix-playground-extraction-warnings
+topic: prompt-echo wrapper lockdown
+---
+
+- **Decision:** Treat standalone prompt/schema/example labels such as `Example:`, `Schema:`, and `Allowed outputs only:` as scaffolding, not plain commentary, when `parse_response()` considers recovering a single `{"facts":[...]}` envelope.
+- **Why:** Those wrappers are prompt echoes rather than genuine chatty prose, so accepting them would keep unwrapping through instruction scaffolding. The safe surgical seam is a narrow label detector in commentary classification, which still preserves genuine prose wrappers like `Sure:` and `(JSON below)`.
+- **Boundary:** This does not widen recovery, does not alter the existing multi-object/container/list/tag/fence rejections, and does not require OpenSpec wording changes.
+
+# Bender Review — Prompt-Echo Wrapper Fail-Closed Validation
+
+---
+date: 2026-05-28T03:03:24Z
+author: bender
+status: approved
+---
+
+Bender validated Fry's parser seam in `src/core/conversation/slm.rs` that treats
+standalone prompt-echo labels (`Example:`, `Schema:`, `Allowed outputs only:`, etc.)
+as non-commentary, causing `parse_response` to fail closed instead of recovering.
+
+## Evidence
+
+**Commands run:**
+```
+cargo test --test slm_prompt_parsing --quiet
+cargo test --test slm_prompt_parsing "parse_response_should_reject_single_object" --quiet
+cargo test --test slm_prompt_parsing "parse_response_should_recover" --quiet
+cargo test --test slm_prompt_parsing "parse_response_should_reject_annotated" --quiet
+```
+
+**Results:** 37/37 pass. No regressions.
+
+## Contract verification
+
+| Category | Tests | Result |
+|---|---|---|
+| Prompt-echo/scaffolding wrappers fail closed | `_example_wrapper`, `_schema_wrapper`, `_allowed_outputs_wrapper` | ✅ All reject |
+| Plain prose recovery still works | 5 `should_recover_*` tests | ✅ All recover |
+| Prior structural/container fail-closed cases | Fenced, XML, list markers, JSON envelopes | ✅ All reject |
+| List-syntax annotated wrappers | Bulleted + numbered list wrappers | ✅ Both reject |
+
+## Design note
+
+`line_is_prompt_echo_label` uses `trim_end_matches(':')` so "Example:" and "Example"
+both match; "Example: some explanatory text" does NOT match and still recovers. This
+is the correct and intentional behavior — the fail-closed gate targets standalone
+schema/example scaffold labels, not prose lines that happen to mention an example.
+
+## Verdict
+
+**APPROVE.** Implementation is correct and complete. Ready to merge.

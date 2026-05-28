@@ -4,6 +4,7 @@
 
 ## Learnings
 
+- [2026-05-28T03:03:24.240+00:00] Single-object prompt-echo labels in `src/core/conversation/slm.rs` must fail closed just like other scaffolding; the smallest safe seam is a narrow `line_is_prompt_echo_label()` guard, with regressions in `tests/slm_prompt_parsing.rs` for `Example:`, `Schema:`, and `Allowed outputs only:` while existing prose wrappers keep recovering.
 - [2026-05-28T03:03:24.240+00:00] Quote-delimited `{"facts":[...]}` envelopes in `src/core/conversation/slm.rs` must fail closed just like bracket/paren containers; the safe seam is extending adjacent-wrapper detection only, with regression coverage in `tests/slm_prompt_parsing.rs` so plain prose wrappers still recover.
 - [2026-05-28T03:03:24.240+00:00] The last safe `parse_response()` recovery rule in `src/core/conversation/slm.rs` is to fail closed whenever a `(` or `[` stays unclosed across the recovered `{"facts":[...]}` span; standalone prose wrappers like `(JSON below)` and `[one fact]` still recover because they close before the envelope, and the seam is covered in `tests/slm_prompt_parsing.rs`.
 - [2026-05-04T07:22:12.881+08:00] Release-lane truth prep is two coupled checks, not one: bump the version-gated manifest only on the release-bound commit, then audit every public/install surface for moved doc links or stale “upcoming tag” copy so the branch can be tagged without shipping broken release-note pointers.
@@ -81,3 +82,4 @@
 - Validation: `cargo fmt --all` + `cargo test --test slm_prompt_parsing` passed
 - Professor: APPROVE (quoted wrappers now fail closed, plain prose still recovers)
 - Bender: ACCEPT (no blocking objection, ready to merge)
+- [2026-05-28T03:03:24.240+00:00] Prompt-echo wrapper lockdown seam complete: `parse_response()` now treats standalone labels (`Example:`, `Schema:`, `Allowed outputs only:`) as scaffolding via `line_is_prompt_echo_label()`. All 37 parser tests pass, no regressions. Bender approved. Ready for merge.

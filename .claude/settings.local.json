@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/macro/repos/quaid log --oneline -25)",
+      "Bash(gh issue *)",
+      "Bash(gh pr *)"
+    ]
+  }
+}

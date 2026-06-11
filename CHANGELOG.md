@@ -4,6 +4,62 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
+## v0.22.6 — namespaced search and numeric FTS fixes
+
+### Fixed
+
+- **Namespaced `memory_search` results.** `memory_search` (and `memory_query`)
+  called with a `namespace` now return results for pages extracted from
+  sessions stored under that namespace, instead of an empty array (#212).
+- **FTS5 numeric aliasing.** Bare numeric query tokens are expanded at query
+  time into grouped and abbreviated aliases, so a search for `75000` now
+  matches content written as `75,000` or `$75K` (#196). Implicit-AND semantics
+  between top-level tokens are preserved.
+
+### Migration
+
+- No schema migration. Numeric aliasing is query-time only — existing FTS
+  indexes do not need to be rebuilt.
+
+## v0.22.5 — extraction warning fixes
+
+### Fixed
+
+- **Blank embedding chunks from conversation day-files.** Single-turn
+  conversation day-files no longer enqueue empty embedding chunks when the
+  vault watcher re-ingests the canonical file (#217).
+- **SLM extraction parser hardening.** Quote-delimited and prompt-echo
+  wrappers around the extraction JSON envelope now fail closed, while
+  commentary-wrapped `{"facts":[...]}` output still recovers instead of
+  retry-failing the extraction worker.
+
+### Migration
+
+- No schema migration. Existing v0.22.x databases remain compatible.
+
+## v0.22.4 — playground, shutdown handling, model cache management
+
+### Added
+
+- **Playground UI webapp.** A local web playground under `playground/` for
+  exercising search, conversation capture, and extraction against a quaid
+  database.
+- **Graceful shutdown signal handling.** The serve/daemon runtime arms a
+  dedicated SIGTERM/SIGINT shutdown signal for orderly worker termination.
+- **Online model cache management.** `quaid model` gains cache inspection and
+  validation: cache directory/key retrieval, required-file verification for
+  online embedding model caches, and cleanup of temporary download files when
+  hash verification fails (see `docs/model-cache.md`).
+
+### Fixed
+
+- **Vault-sync handshake timeout.** The watcher handshake timeout is now
+  configurable via an environment variable instead of a fixed value.
+
+### Migration
+
+- No schema migration. Existing v0.22.x databases remain compatible.
+
 ## v0.22.3 — post-release bug fixes
 
 ### Fixed

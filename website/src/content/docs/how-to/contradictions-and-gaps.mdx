@@ -11,45 +11,62 @@ Two intelligence-layer surfaces work together: `check` finds places where the me
 ## Run a contradiction check
 
 ```bash
-quaid check people/alice --db ~/memory.db    # one page
-quaid check --all --db ~/memory.db           # every page
-quaid check --type person --db ~/memory.db   # all pages of one type
+quaid check people/alice --db ~/memory.db                 # one page
+quaid check --all --db ~/memory.db                        # every page
+quaid check --all --type assertion_conflict --db ~/memory.db  # filter by contradiction type
 ```
 
-`check` reads the `assertions` table and flags subject-predicate-object triples that disagree. Common patterns:
+`check` re-extracts the page's assertions, then flags pairs of subject-predicate-object triples about the same `(subject, predicate)` whose objects differ while their `valid_from` / `valid_until` windows overlap. Detection is exact-match over the `assertions` table — it does not infer conflicts from arbitrary prose, timelines, or unstructured frontmatter.
 
-- Two assertions about the same `(subject, predicate)` with overlapping `valid_from` / `valid_until`.
-- A timeline entry that contradicts a compiled-truth assertion.
-- A frontmatter field that disagrees with content in the body.
-
-Output is human-readable by default, JSON with `--json`. Materialized contradictions live in the `contradictions` table.
+Output is human-readable by default (each line starts with the contradiction id, e.g. `#3 [a] ↔ [b]: …`), JSON with `--json`. Materialized contradictions live in the `contradictions` table.
 
 ## Where assertions come from
 
 Assertions are populated three ways:
 
-1. **Declared in frontmatter**:
+1. **A small frontmatter allowlist** — the scalar fields `is_a`, `works_at`, and `founded`:
 
    ```yaml
    ---
    title: Alice
    type: person
-   assertions:
-     - subject: alice
-       predicate: employed_by
-       object: river-ai
-       valid_from: 2024-01-15
+   works_at: River AI
    ---
    ```
 
-2. **Parsed from `## Assertions` sections** in the body.
-3. **Inferred** by ingestion heuristics from common patterns (e.g. "Alice joined RiverAI in 2024").
+2. **Parsed from a `## Assertions` section** in the body. Three sentence patterns are recognized: `X works at Y`, `X is a Y`, and `X founded Y`. Prose outside this section is never scanned.
+
+3. **Mirrored from extracted-fact pages.** Facts the conversation pipeline writes under `extracted/` (kinds `decision`, `preference`, `fact`, `action_item`) are mirrored automatically as `(type key, kind, summary)` triples with `asserted_by = 'extraction'` — no `## Assertions` heading needed. Superseded fact pages are skipped, so resolved history doesn't conflict with current truth.
+
+You can also insert rows into `assertions` directly (`asserted_by = 'manual'`); re-running `check` preserves manual rows.
 
 ## Resolve a contradiction
 
-There's no automated resolver — contradictions are surfaced for human (or agent) review. The typical resolution:
+Each contradiction has an id (shown by `quaid check` and `memory_check`). Resolve it with:
 
-- **Wrong assertion?** Delete it from the source (frontmatter or body), re-run `put`, re-run `check`.
+```bash
+# Keep one page: the other page in the pair is superseded by it,
+# and the contradiction is stamped resolved.
+quaid check --resolve 3 --keep people/alice --db ~/memory.db
+
+# Dismiss without superseding (e.g. false positive):
+quaid check --resolve 3 --db ~/memory.db
+```
+
+Over MCP, pass `resolve` (and optionally `keep`) to `memory_check`:
+
+```bash
+quaid call memory_check '{"resolve":3,"keep":"people/alice"}' --db ~/memory.db
+```
+
+Resolution semantics:
+
+- Resolving stamps `contradictions.resolved_at`; resolved rows disappear from `quaid check`, `memory_check`, and the `memory_stats` contradiction count.
+- A resolved contradiction is a durable dismissal: the identical conflict (same pages, same description) is not re-raised on later checks. A materially different conflict (e.g. a new object value) is still detected as a new contradiction.
+- Superseding a page — via `--keep`, a `supersedes:` write, or the extraction pipeline — auto-resolves open contradictions touching the superseded page.
+
+When neither side should win outright, fix the data instead:
+
 - **Both true at different times?** Add `valid_until` to the older assertion so the intervals don't overlap.
 - **Both true now, but seem to disagree?** Edit the predicate; the contradiction was lexical, not semantic.
 

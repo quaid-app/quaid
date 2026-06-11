@@ -153,3 +153,80 @@ fn open_backfills_raw_import_content_hash_for_existing_rows() {
         quaid::core::raw_imports::content_hash_hex(b"hello")
     );
 }
+
+#[test]
+fn open_rebuilds_assertions_check_to_allow_extraction_provenance() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test_memory.db");
+    let path_str = db_path.to_str().unwrap();
+
+    let conn = open(path_str).unwrap();
+    conn.execute(
+        "INSERT INTO pages (slug, uuid, type, title)
+         VALUES ('notes/assert-test', ?1, 'concept', 'notes/assert-test')",
+        [quaid::core::page_uuid::generate_uuid_v7()],
+    )
+    .unwrap();
+    let page_id: i64 = conn
+        .query_row(
+            "SELECT id FROM pages WHERE slug = 'notes/assert-test'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(conn);
+
+    // Simulate a database created before 'extraction' was an allowed
+    // asserted_by value.
+    let conn = Connection::open(path_str).unwrap();
+    conn.execute_batch(
+        "DROP TABLE assertions;
+         CREATE TABLE assertions (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+             subject         TEXT    NOT NULL,
+             predicate       TEXT    NOT NULL,
+             object          TEXT    NOT NULL,
+             valid_from      TEXT    DEFAULT NULL,
+             valid_until     TEXT    DEFAULT NULL,
+             supersedes_id   INTEGER DEFAULT NULL REFERENCES assertions(id),
+             confidence      REAL    DEFAULT 1.0,
+             asserted_by     TEXT    NOT NULL DEFAULT 'agent',
+             source_ref      TEXT    NOT NULL DEFAULT '',
+             evidence_text   TEXT    NOT NULL DEFAULT '',
+             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             CHECK (valid_from IS NULL OR valid_until IS NULL OR valid_until >= valid_from),
+             CHECK (asserted_by IN ('agent', 'manual', 'import', 'enrichment'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_assertions_subj ON assertions(subject);
+         CREATE INDEX IF NOT EXISTS idx_assertions_pred ON assertions(predicate);",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by)
+         VALUES (?1, 'Alice', 'works_at', 'Acme Corp', 'manual')",
+        [page_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let conn = open(path_str).unwrap();
+    // Legacy rows survive the rebuild...
+    let (subject, asserted_by): (String, String) = conn
+        .query_row(
+            "SELECT subject, asserted_by FROM assertions WHERE page_id = ?1",
+            [page_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(subject, "Alice");
+    assert_eq!(asserted_by, "manual");
+
+    // ...and 'extraction' provenance is now accepted.
+    conn.execute(
+        "INSERT INTO assertions (page_id, subject, predicate, object, asserted_by)
+         VALUES (?1, 'timezone', 'fact', 'Matt is based in UTC+2', 'extraction')",
+        [page_id],
+    )
+    .unwrap();
+}

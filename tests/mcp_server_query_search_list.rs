@@ -58,6 +58,9 @@ fn memory_query_auto_depth_expands_linked_results() {
             limit: Some(1),
             depth: Some("auto".to_string()),
             include_superseded: None,
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -106,6 +109,9 @@ fn memory_query_auto_depth_does_not_expand_across_collections() {
             limit: Some(5),
             depth: Some("auto".to_string()),
             include_superseded: None,
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -144,6 +150,9 @@ fn memory_query_explicit_collection_filter_returns_only_named_collection() {
             limit: None,
             depth: None,
             include_superseded: None,
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -178,6 +187,9 @@ fn memory_query_defaults_to_write_target_when_multiple_collections_are_active() 
             limit: None,
             depth: None,
             include_superseded: None,
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -220,6 +232,9 @@ fn memory_query_defaults_to_memory_collection_when_dedicated_memory_location_is_
             limit: None,
             depth: None,
             include_superseded: None,
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -249,6 +264,8 @@ fn memory_search_returns_matching_pages() {
             wing: None,
             limit: None,
             include_superseded: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -288,6 +305,8 @@ fn memory_search_defaults_to_memory_collection_when_dedicated_memory_location_is
             wing: None,
             limit: None,
             include_superseded: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -312,6 +331,8 @@ fn memory_search_natural_language_question_mark_returns_valid_response() {
         wing: None,
         limit: None,
         include_superseded: None,
+        relevance_floor: None,
+        max_chunks_per_doc: None,
     });
 
     assert!(
@@ -353,6 +374,8 @@ fn memory_search_explicit_collection_filter_returns_only_named_collection() {
             wing: None,
             limit: None,
             include_superseded: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -382,6 +405,8 @@ fn memory_search_defaults_to_single_active_collection() {
             wing: None,
             limit: None,
             include_superseded: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
 
@@ -541,6 +566,9 @@ fn read_tools_unknown_collection_filter_errors_clearly() {
             limit: None,
             depth: None,
             include_superseded: None,
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap_err();
     assert_eq!(query_error.code, ErrorCode(-32001));
@@ -556,6 +584,8 @@ fn read_tools_unknown_collection_filter_errors_clearly() {
             wing: None,
             limit: None,
             include_superseded: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap_err();
     assert_eq!(search_error.code, ErrorCode(-32001));

@@ -4,10 +4,69 @@
 )]
 
 use anyhow::Result;
+use clap::Subcommand;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::core::gaps::list_gaps;
+use crate::core::collections::{self, OpKind, SlugResolution};
+use crate::core::gaps::{list_gaps, resolve_gap};
+
+/// Subactions of `quaid gaps` (plain `quaid gaps` lists unresolved gaps).
+#[derive(Clone, Debug, Subcommand)]
+pub enum GapsAction {
+    /// Mark a knowledge gap resolved by the page that answered it
+    Resolve {
+        /// Numeric gap id (see `quaid gaps`)
+        id: i64,
+        /// Slug of the page that answers the gap
+        slug: String,
+    },
+}
+
+/// Handle `quaid gaps resolve <id> <slug>`: validate that the slug resolves
+/// to an existing page, then flip the gap's `resolved_at`/`resolved_by_slug`.
+pub fn resolve(db: &Connection, id: i64, slug: &str, json: bool) -> Result<()> {
+    let (collection_id, resolved_slug) = match collections::parse_slug(db, slug, OpKind::Read)? {
+        SlugResolution::Resolved {
+            collection_id,
+            slug,
+            ..
+        } => (collection_id, slug),
+        SlugResolution::NotFound { slug } => {
+            anyhow::bail!("page not found: {slug}");
+        }
+        SlugResolution::Ambiguous { slug, candidates } => {
+            anyhow::bail!(
+                "ambiguous slug `{slug}`; candidates: {}",
+                candidates
+                    .into_iter()
+                    .map(|candidate| candidate.full_address)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    };
+    let page_exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pages WHERE collection_id = ?1 AND slug = ?2)",
+        rusqlite::params![collection_id, &resolved_slug],
+        |row| row.get(0),
+    )?;
+    if !page_exists {
+        anyhow::bail!("page not found: {resolved_slug}");
+    }
+
+    resolve_gap(id, &resolved_slug, db)?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"id": id, "resolved_by_slug": resolved_slug})
+        );
+    } else {
+        println!("Gap {id} resolved by {resolved_slug}.");
+    }
+    Ok(())
+}
 
 pub fn run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()> {
     let gaps = list_gaps(resolved, limit as usize, db)?;
@@ -21,6 +80,7 @@ pub fn run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()
             confidence_score: Option<f64>,
             sensitivity: String,
             resolved_at: Option<String>,
+            resolved_by_slug: Option<String>,
             detected_at: String,
         }
 
@@ -33,6 +93,7 @@ pub fn run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()
                 confidence_score: g.confidence_score,
                 sensitivity: g.sensitivity,
                 resolved_at: g.resolved_at,
+                resolved_by_slug: g.resolved_by_slug,
                 detected_at: g.detected_at,
             })
             .collect();

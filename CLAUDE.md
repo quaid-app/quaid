@@ -116,7 +116,7 @@ See `src/schema.sql` for the current DDL. Key tables:
 Core (Phase 1): `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 
 Full surface (Phase 2+): `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`,
-`memory_timeline`, `memory_tags`, `memory_check`, `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
+`memory_timeline`, `memory_tags`, `memory_check`, `memory_gap`, `memory_gaps`, `memory_gap_resolve`, `memory_stats`, `memory_raw`
 
 ## Optimistic concurrency
 

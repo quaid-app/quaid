@@ -444,6 +444,7 @@ mod tests {
         .expect("verified status should inspect local cache only");
     }
 
+    #[serial_test::serial]
     #[test]
     fn clean_force_removes_alias_cache_from_temp_root() {
         let cache_root = tempfile::TempDir::new().expect("cache root");

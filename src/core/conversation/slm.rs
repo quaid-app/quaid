@@ -972,6 +972,7 @@ mod tests {
         assert!(matches!(error, SlmError::Parse { .. }));
     }
 
+    #[serial_test::serial]
     #[test]
     fn infer_returns_typed_panic_error() {
         let temp = tempfile::tempdir().unwrap();
@@ -987,6 +988,7 @@ mod tests {
         assert!(error.to_string().contains("boom"));
     }
 
+    #[serial_test::serial]
     #[test]
     fn lazy_runner_reuses_loaded_model_after_cache_is_removed() {
         let temp = tempfile::tempdir().unwrap();
@@ -1006,6 +1008,7 @@ mod tests {
         assert!(!runtime.is_runtime_disabled());
     }
 
+    #[serial_test::serial]
     #[test]
     fn lazy_runner_runtime_disables_after_cache_load_failure() {
         let temp = tempfile::tempdir().unwrap();

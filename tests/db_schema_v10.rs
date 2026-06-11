@@ -114,6 +114,7 @@ fn fresh_v10_schema_includes_conversation_memory_artifacts_and_defaults() {
                  'extraction.idle_close_ms',
                  'extraction.retention_days',
                  'fact_resolution.dedup_cosine_min',
+                 'fact_resolution.key_match_cosine_min',
                  'fact_resolution.supersede_cosine_min'
              )
              ORDER BY key",
@@ -143,6 +144,10 @@ fn fresh_v10_schema_includes_conversation_memory_artifacts_and_defaults() {
             (
                 "fact_resolution.dedup_cosine_min".to_string(),
                 "0.92".to_string()
+            ),
+            (
+                "fact_resolution.key_match_cosine_min".to_string(),
+                "0.85".to_string()
             ),
             (
                 "fact_resolution.supersede_cosine_min".to_string(),

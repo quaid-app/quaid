@@ -1,10 +1,15 @@
 //! Heuristic subject-predicate-object extraction plus pairwise contradiction
 //! detection across pages. Regex patterns scan a page's `## Assertions`
-//! section and a small frontmatter allowlist, persist the resulting triples,
-//! and compare them under temporal validity to surface conflicts.
+//! section and a small frontmatter allowlist, extracted-fact pages written by
+//! the conversation pipeline are mirrored as `(type_key, kind, summary)`
+//! triples, and the persisted triples are compared under temporal validity to
+//! surface conflicts. Resolution stamps `contradictions.resolved_at`, either
+//! directly or when a participating page is superseded.
 //!
-//! See also: `types` for `Page` and frontmatter helpers, and `markdown` for
-//! the section-splitting primitives the scanner builds on.
+//! See also: `types` for `Page` and frontmatter helpers, `markdown` for
+//! the section-splitting primitives the scanner builds on, and
+//! `crate::core::supersede` for the page-level supersede helpers that
+//! auto-resolve contradictions touching a superseded page.
 
 #![expect(
     clippy::expect_used,
@@ -26,6 +31,14 @@ const OPEN_RANGE_START: &str = "";
 const OPEN_RANGE_END: &str = "9999-12-31T23:59:59Z";
 const MIN_OBJECT_LEN: usize = 6;
 const SUPPORTED_FRONTMATTER_PREDICATES: [&str; 3] = ["is_a", "works_at", "founded"];
+/// `(kind, type-key field)` pairs for extracted-fact pages written by the
+/// conversation pipeline; mirrors `RawFact::type_key_field`.
+const EXTRACTED_FACT_KINDS: [(&str, &str); 4] = [
+    ("decision", "chose"),
+    ("preference", "about"),
+    ("fact", "about"),
+    ("action_item", "what"),
+];
 
 /// A heuristic subject-predicate-object triple extracted from page content.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -41,6 +54,8 @@ pub struct Triple {
 /// A stored contradiction row surfaced by `quaid check`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Contradiction {
+    /// Row id; pass to `quaid check --resolve <id>` to mark it resolved.
+    pub id: i64,
     /// Slug of the page where the contradiction was attributed.
     pub page_slug: String,
     /// Slug of the other page involved in the conflict (same as `page_slug` for
@@ -65,6 +80,13 @@ pub enum AssertionError {
         slug: String,
     },
 
+    /// Requested contradiction id does not exist in the database.
+    #[error("contradiction not found: {id}")]
+    ContradictionNotFound {
+        /// Contradiction id that could not be resolved.
+        id: i64,
+    },
+
     /// Underlying SQLite failure.
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
@@ -74,6 +96,7 @@ pub enum AssertionError {
 struct ExtractedAssertion {
     triple: Triple,
     evidence_text: String,
+    asserted_by: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -97,14 +120,17 @@ pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, Asser
         .map(|assertion| assertion.triple.clone())
         .collect();
 
-    for assertion in extract_from_content(&page.compiled_truth) {
+    for assertion in extract_from_content(&page.compiled_truth)
+        .into_iter()
+        .chain(extract_from_fact_page(page))
+    {
         if seen.insert(assertion.triple.clone()) {
             extracted.push(assertion);
         }
     }
 
     conn.execute(
-        "DELETE FROM assertions WHERE page_id = ?1 AND asserted_by = 'import'",
+        "DELETE FROM assertions WHERE page_id = ?1 AND asserted_by IN ('import', 'extraction')",
         [page_id],
     )?;
 
@@ -113,18 +139,108 @@ pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, Asser
             "INSERT INTO assertions (
                 page_id, subject, predicate, object, valid_from, valid_until,
                 confidence, asserted_by, source_ref, evidence_text
-            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0.8, 'import', '', ?5)",
+            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0.8, ?5, '', ?6)",
             rusqlite::params![
                 page_id,
                 assertion.triple.subject,
                 assertion.triple.predicate,
                 assertion.triple.object,
+                assertion.asserted_by,
                 assertion.evidence_text,
             ],
         )?;
     }
 
     Ok(extracted.len())
+}
+
+/// Mirror an extracted-fact page (written by the conversation pipeline) into
+/// a `(type_key, kind, summary)` triple so contradiction detection sees SLM
+/// facts without requiring a literal `## Assertions` section. Superseded
+/// pages are skipped: their content is resolved history, not current truth.
+fn extract_from_fact_page(page: &Page) -> Option<ExtractedAssertion> {
+    if page.superseded_by.is_some() {
+        return None;
+    }
+
+    let kind = crate::core::types::frontmatter_get_str(&page.frontmatter, "kind")?;
+    let key_field = EXTRACTED_FACT_KINDS
+        .iter()
+        .find(|(fact_kind, _)| *fact_kind == kind)
+        .map(|(_, key_field)| *key_field)?;
+    let type_key = normalize_evidence(crate::core::types::frontmatter_get_str(
+        &page.frontmatter,
+        key_field,
+    )?);
+    if type_key.is_empty() {
+        return None;
+    }
+
+    let summary = if page.summary.trim().is_empty() {
+        page.compiled_truth.trim()
+    } else {
+        page.summary.trim()
+    };
+    let object = normalize_evidence(summary);
+    if !is_valid_object(&object) {
+        return None;
+    }
+
+    Some(ExtractedAssertion {
+        triple: Triple {
+            subject: type_key,
+            predicate: kind.to_string(),
+            object,
+        },
+        evidence_text: "extracted fact".to_string(),
+        asserted_by: "extraction",
+    })
+}
+
+/// Stamp `resolved_at` on a contradiction. Returns `true` when the row was
+/// newly resolved, `false` when it already carried a `resolved_at`, and
+/// [`AssertionError::ContradictionNotFound`] when the id does not exist.
+pub fn resolve_contradiction(
+    contradiction_id: i64,
+    conn: &Connection,
+) -> Result<bool, AssertionError> {
+    let updated = conn.execute(
+        "UPDATE contradictions
+         SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?1 AND resolved_at IS NULL",
+        [contradiction_id],
+    )?;
+    if updated > 0 {
+        return Ok(true);
+    }
+
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM contradictions WHERE id = ?1",
+        [contradiction_id],
+        |row| row.get(0),
+    )?;
+    if exists > 0 {
+        Ok(false)
+    } else {
+        Err(AssertionError::ContradictionNotFound {
+            id: contradiction_id,
+        })
+    }
+}
+
+/// Stamp `resolved_at` on every open contradiction touching `page_id`;
+/// called from the supersede write path so conflicts involving a superseded
+/// page do not linger as open items. Returns the number of resolved rows.
+pub fn resolve_open_contradictions_for_page(
+    page_id: i64,
+    conn: &Connection,
+) -> Result<usize, rusqlite::Error> {
+    conn.execute(
+        "UPDATE contradictions
+         SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE resolved_at IS NULL AND (page_id = ?1 OR other_page_id = ?1)",
+        [page_id],
+    )
 }
 
 fn assertion_subject(page: &Page) -> &str {
@@ -274,6 +390,10 @@ fn load_assertions_for_subject(
     Ok(assertions)
 }
 
+/// Returns whether a contradiction with the same pair, type, and description
+/// has already been recorded — resolved or not. Resolved rows count so a
+/// deliberate resolution (`resolve_contradiction`) acts as a durable
+/// dismissal instead of being re-raised on the next check run.
 fn contradiction_exists(
     conn: &Connection,
     page_id: i64,
@@ -285,8 +405,7 @@ fn contradiction_exists(
          WHERE page_id = ?1
            AND other_page_id = ?2
            AND type = ?3
-           AND description = ?4
-           AND resolved_at IS NULL",
+           AND description = ?4",
         rusqlite::params![page_id, other_page_id, CONTRADICTION_TYPE, description],
         |row| row.get(0),
     )?;
@@ -298,7 +417,8 @@ fn load_contradiction(
     contradiction_id: i64,
 ) -> Result<Contradiction, AssertionError> {
     conn.query_row(
-        "SELECT p.slug,
+        "SELECT c.id,
+                p.slug,
                 COALESCE(other.slug, p.slug),
                 c.type,
                 c.description,
@@ -310,11 +430,12 @@ fn load_contradiction(
         [contradiction_id],
         |row| {
             Ok(Contradiction {
-                page_slug: row.get(0)?,
-                other_page_slug: row.get(1)?,
-                r#type: row.get(2)?,
-                description: row.get(3)?,
-                detected_at: row.get(4)?,
+                id: row.get(0)?,
+                page_slug: row.get(1)?,
+                other_page_slug: row.get(2)?,
+                r#type: row.get(3)?,
+                description: row.get(4)?,
+                detected_at: row.get(5)?,
             })
         },
     )
@@ -429,6 +550,7 @@ fn extract_from_frontmatter(
                     object,
                 },
                 evidence_text: "frontmatter".to_string(),
+                asserted_by: "import",
             })
         })
         .collect()
@@ -495,6 +617,7 @@ fn collect_pattern_matches(
                 evidence_text: normalize_evidence(
                     captures.get(0).map(|m| m.as_str()).unwrap_or_default(),
                 ),
+                asserted_by: "import",
             });
         }
     }
@@ -1062,7 +1185,7 @@ mod tests {
         }
 
         #[test]
-        fn resolved_conflict_is_redetected() {
+        fn resolved_conflict_is_not_redetected_for_identical_description() {
             let conn = open_test_db();
             insert_page(&conn, "people/alice", "Alice timeline.");
             insert_assertion(
@@ -1097,16 +1220,11 @@ mod tests {
 
             let contradictions = check_assertions("people/alice", &conn).unwrap();
 
-            assert_eq!(
-                contradictions.len(),
-                1,
-                "resolved contradiction should be re-detected"
+            assert!(
+                contradictions.is_empty(),
+                "resolution acts as a durable dismissal for the identical conflict"
             );
-            assert_eq!(
-                contradiction_count(&conn),
-                2,
-                "old resolved + new unresolved"
-            );
+            assert_eq!(contradiction_count(&conn), 1, "only the resolved row");
         }
 
         #[test]

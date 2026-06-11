@@ -406,6 +406,12 @@ pub struct MemoryCheckInput {
     /// Optional slug restricting the check to a single page; omitted runs
     /// detection across every page.
     pub slug: Option<String>,
+    /// Optional contradiction id to mark resolved (stamps `resolved_at`)
+    /// instead of running detection.
+    pub resolve: Option<i64>,
+    /// Optional slug of the page to keep when resolving; the other page in
+    /// the contradiction is superseded by it. Requires `resolve`.
+    pub keep: Option<String>,
 }
 
 /// Input schema for the `memory_timeline` MCP tool.
@@ -2404,6 +2410,8 @@ mod tests {
         let error = server
             .memory_check(MemoryCheckInput {
                 slug: Some("notes/check-restoring".to_string()),
+                resolve: None,
+                keep: None,
             })
             .unwrap_err();
 
@@ -2435,6 +2443,8 @@ mod tests {
         let error = server
             .memory_check(MemoryCheckInput {
                 slug: Some("notes/check-needs-sync".to_string()),
+                resolve: None,
+                keep: None,
             })
             .unwrap_err();
 

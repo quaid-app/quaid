@@ -184,7 +184,14 @@ fn resolve_coexists_when_no_head_matches_key() {
         &conn,
         1,
         "",
-        |_, _| panic!("similarity should not run when there are no matching heads"),
+        |left, right| {
+            // Fuzzy key matching compares normalized type keys; report the
+            // dissimilar key pair as well below the acceptance threshold.
+            if left == "programming-language" && right == "editor" {
+                return Ok(0.2);
+            }
+            panic!("body similarity should not run when fuzzy key match is below threshold");
+        },
     )
     .unwrap();
 

@@ -216,13 +216,21 @@ enum Commands {
     },
     /// N-hop graph neighbourhood
     Graph(commands::graph::GraphArgs),
-    /// Check for contradictions using assertions from frontmatter or ## Assertions sections
+    /// Check for contradictions across assertions (frontmatter allowlist,
+    /// ## Assertions sections, extracted facts), or resolve one by id
     Check {
         slug: Option<String>,
         #[arg(long)]
         all: bool,
         #[arg(long)]
         r#type: Option<String>,
+        /// Mark a contradiction resolved by id (stamps resolved_at)
+        #[arg(long, conflicts_with_all = ["slug", "all", "type"])]
+        resolve: Option<i64>,
+        /// Slug of the page to keep when resolving; the other page in the
+        /// contradiction is superseded by it
+        #[arg(long, requires = "resolve")]
+        keep: Option<String>,
     },
     /// List unresolved knowledge gaps
     Gaps {
@@ -483,9 +491,18 @@ async fn main() -> Result<()> {
             detail,
         } => commands::timeline::add(&db, &slug, &date, &summary, source, detail),
         Commands::Graph(args) => commands::graph::run_cli(&db, args, cli.json),
-        Commands::Check { slug, all, r#type } => {
-            commands::check::run(&db, slug, all, r#type, cli.json)
-        }
+        Commands::Check {
+            slug,
+            all,
+            r#type,
+            resolve,
+            keep,
+        } => match resolve {
+            Some(contradiction_id) => {
+                commands::check::run_resolve(&db, contradiction_id, keep.as_deref(), cli.json)
+            }
+            None => commands::check::run(&db, slug, all, r#type, cli.json),
+        },
         Commands::Gaps { limit, resolved } => commands::gaps::run(&db, limit, resolved, cli.json),
         Commands::Compact => commands::compact::run(&db),
         Commands::Collection { action } => commands::collection::run(&db, action, cli.json),

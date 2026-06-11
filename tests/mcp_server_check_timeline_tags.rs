@@ -33,6 +33,8 @@ fn memory_check_on_clean_page_returns_empty_array() {
     let result = server
         .memory_check(MemoryCheckInput {
             slug: Some("people/alice".to_string()),
+            resolve: None,
+            keep: None,
         })
         .unwrap();
 
@@ -54,6 +56,8 @@ fn memory_check_detects_contradiction_on_page() {
     let result = server
         .memory_check(MemoryCheckInput {
             slug: Some("people/alice".to_string()),
+            resolve: None,
+            keep: None,
         })
         .unwrap();
 
@@ -80,12 +84,16 @@ fn memory_check_filters_output_to_requested_slug() {
     server
         .memory_check(MemoryCheckInput {
             slug: Some("people/bob".to_string()),
+            resolve: None,
+            keep: None,
         })
         .unwrap();
 
     let result = server
         .memory_check(MemoryCheckInput {
             slug: Some("people/alice".to_string()),
+            resolve: None,
+            keep: None,
         })
         .unwrap();
 
@@ -118,12 +126,16 @@ fn memory_check_explicit_collection_slug_filters_to_resolved_page_when_slug_coll
     server
         .memory_check(MemoryCheckInput {
             slug: Some("default::people/alice".to_string()),
+            resolve: None,
+            keep: None,
         })
         .unwrap();
 
     let result = server
         .memory_check(MemoryCheckInput {
             slug: Some("memory::people/alice".to_string()),
+            resolve: None,
+            keep: None,
         })
         .unwrap();
 
@@ -147,7 +159,11 @@ fn memory_check_without_slug_returns_all_unresolved_contradictions() {
     );
 
     let result = server
-        .memory_check(MemoryCheckInput { slug: None })
+        .memory_check(MemoryCheckInput {
+            slug: None,
+            resolve: None,
+            keep: None,
+        })
         .unwrap();
 
     let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();

@@ -8,6 +8,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
+use crate::core::assertions;
 use crate::core::collections::{self, OpKind, SlugResolution};
 
 /// Failure mode raised when establishing or validating a supersede relationship
@@ -159,8 +160,91 @@ pub fn reconcile_supersede_chain(
                     .unwrap_or_else(|| page_slug.to_owned()),
             });
         }
+        resolve_contradictions_for_superseded_page(conn, target.id)?;
     }
 
+    Ok(())
+}
+
+/// Flip `superseded_by` on `predecessor_id` so it points at `successor_id`,
+/// validating self-reference, cross-collection moves, and head-only rules for
+/// both ends, then auto-resolve open contradictions touching the superseded
+/// page. Used by the contradiction-resolution surface (`quaid check
+/// --resolve <id> --keep <slug>` and MCP `memory_check`).
+pub fn mark_page_superseded(
+    conn: &Connection,
+    successor_id: i64,
+    predecessor_id: i64,
+) -> Result<(), SupersedeError> {
+    let successor_slug = canonical_slug_by_page_id(conn, successor_id)?;
+    if successor_id == predecessor_id {
+        return Err(SupersedeError::SelfReference {
+            slug: successor_slug,
+        });
+    }
+
+    let predecessor_slug = canonical_slug_by_page_id(conn, predecessor_id)?;
+    let (successor_collection, successor_successor): (i64, Option<i64>) = conn.query_row(
+        "SELECT collection_id, superseded_by FROM pages WHERE id = ?1",
+        [successor_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let predecessor_collection: i64 = conn.query_row(
+        "SELECT collection_id FROM pages WHERE id = ?1",
+        [predecessor_id],
+        |row| row.get(0),
+    )?;
+    if successor_collection != predecessor_collection {
+        return Err(SupersedeError::CrossCollection {
+            slug: predecessor_slug,
+        });
+    }
+    if let Some(successor_successor_id) = successor_successor {
+        return Err(SupersedeError::NonHeadTarget {
+            slug: successor_slug,
+            successor_slug: canonical_slug_by_page_id(conn, successor_successor_id)?,
+        });
+    }
+
+    let updated = conn.execute(
+        "UPDATE pages
+         SET superseded_by = ?1
+         WHERE id = ?2 AND superseded_by IS NULL",
+        params![successor_id, predecessor_id],
+    )?;
+    if updated == 0 {
+        let existing_successor: Option<i64> = conn
+            .query_row(
+                "SELECT superseded_by FROM pages WHERE id = ?1",
+                [predecessor_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        return Err(SupersedeError::NonHeadTarget {
+            slug: predecessor_slug,
+            successor_slug: successor_slug_by_id(conn, existing_successor)?
+                .unwrap_or(successor_slug),
+        });
+    }
+
+    resolve_contradictions_for_superseded_page(conn, predecessor_id)?;
+    Ok(())
+}
+
+/// Auto-resolve open contradictions touching a page that just lost its head
+/// status; the superseding revision is now the authoritative truth, so the
+/// conflict no longer needs triage.
+fn resolve_contradictions_for_superseded_page(
+    conn: &Connection,
+    superseded_page_id: i64,
+) -> Result<(), SupersedeError> {
+    let resolved = assertions::resolve_open_contradictions_for_page(superseded_page_id, conn)?;
+    if resolved > 0 {
+        eprintln!(
+            "INFO: supersede auto-resolved {resolved} open contradiction(s) touching superseded page id={superseded_page_id}"
+        );
+    }
     Ok(())
 }
 

@@ -6227,6 +6227,7 @@ mod tests {
         assert!(err.contains("load_frontmatter_map"));
     }
 
+    #[serial_test::serial]
     #[test]
     fn default_restore_stability_max_iters_uses_env_var_when_set() {
         let _guard = env_mutation_lock().lock().unwrap();
@@ -6235,6 +6236,7 @@ mod tests {
         assert_eq!(value, 12);
     }
 
+    #[serial_test::serial]
     #[test]
     fn default_restore_stability_max_iters_falls_back_to_default_when_var_is_zero() {
         let _guard = env_mutation_lock().lock().unwrap();
@@ -6243,6 +6245,7 @@ mod tests {
         assert_eq!(value, DEFAULT_RESTORE_STABILITY_MAX_ITERS);
     }
 
+    #[serial_test::serial]
     #[test]
     fn default_restore_stability_max_iters_guard_restores_previous_value() {
         let _guard = env_mutation_lock().lock().unwrap();

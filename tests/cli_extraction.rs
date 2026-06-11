@@ -17,7 +17,7 @@ use std::process::{Command, Output};
 use quaid::core::{
     conversation::format,
     db,
-    types::{ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole},
+    types::{CONVERSATION_FORMAT_VERSION, ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole},
 };
 use rusqlite::{params, Connection};
 
@@ -91,6 +91,7 @@ fn write_conversation_file(
     let file = ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_string(),
+            format_version: CONVERSATION_FORMAT_VERSION,
             session_id: session_id.to_string(),
             date: relative_path
                 .split('/')

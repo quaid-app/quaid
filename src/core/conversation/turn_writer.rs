@@ -154,7 +154,10 @@ pub fn append_turn(
                 session_id: session_id.to_owned(),
             });
         }
-        append_turn_block(&full_path, &turn)?;
+        // Appended blocks must match the day-file's format version:
+        // escaping a turn into a legacy file (or vice versa) would
+        // desynchronize render and parse for that file.
+        append_turn_block(&full_path, &turn, existing.frontmatter.format_version)?;
     } else {
         write_new_file(&full_path, &path_info, session_id, timestamp, &turn)?;
     }
@@ -361,6 +364,7 @@ fn write_new_file(
     let conversation = ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_owned(),
+            format_version: format::CONVERSATION_FORMAT_VERSION,
             session_id: session_id.to_owned(),
             date: path_info.date.clone(),
             started_at: timestamp.to_owned(),
@@ -374,12 +378,16 @@ fn write_new_file(
     write_conversation_file(full_path, &conversation)
 }
 
-fn append_turn_block(full_path: &Path, turn: &Turn) -> Result<(), TurnWriteError> {
+fn append_turn_block(
+    full_path: &Path,
+    turn: &Turn,
+    format_version: i64,
+) -> Result<(), TurnWriteError> {
     let mut file = OpenOptions::new().append(true).open(full_path)?;
     writeln!(file)?;
     writeln!(file, "{}", format::TURN_BOUNDARY)?;
     writeln!(file)?;
-    file.write_all(format::render_turn_block(turn).as_bytes())?;
+    file.write_all(format::render_turn_block(turn, format_version).as_bytes())?;
     file.sync_all()?;
     Ok(())
 }

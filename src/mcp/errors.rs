@@ -94,7 +94,7 @@ pub fn map_db_error(e: SqliteError) -> rmcp::Error {
             return rmcp::Error::new(
                 ErrorCode(-32009),
                 format!(
-                    "conflict: {}",
+                    "ConflictError: {}",
                     msg.as_deref().unwrap_or("unique constraint violation")
                 ),
                 None,
@@ -237,6 +237,7 @@ pub fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
         | vault_sync::VaultSyncError::Conflict(vault_sync::ConflictError::ConcurrentRename {
             ..
         }) => ErrorCode(-32009),
+        vault_sync::VaultSyncError::Occ(_) => ErrorCode(-32009),
         _ => ErrorCode(-32003),
     };
     rmcp::Error::new(code, e.to_string(), None)

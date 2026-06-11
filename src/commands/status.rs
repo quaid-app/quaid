@@ -35,6 +35,7 @@ pub fn run(db: &Connection, json_output: bool) -> Result<u8> {
         UnitState::Running => 0u8,
         UnitState::InstalledStopped => 1,
         UnitState::NotInstalled => 2,
+        UnitState::ProbeFailed => 3, // service-manager probe errored — unknown state
         UnitState::Unsupported => 0, // not an error: just no platform integration
     };
 
@@ -44,6 +45,7 @@ pub fn run(db: &Connection, json_output: bool) -> Result<u8> {
                 "installed": matches!(daemon_unit, UnitState::Running | UnitState::InstalledStopped),
                 "running": matches!(daemon_unit, UnitState::Running),
                 "platform_supported": !matches!(daemon_unit, UnitState::Unsupported),
+                "probe_failed": matches!(daemon_unit, UnitState::ProbeFailed),
             },
             "runtime_host": runtime_host.as_ref().map(|h| json!({
                 "session_type": h.session_type,
@@ -71,6 +73,9 @@ pub fn run(db: &Connection, json_output: bool) -> Result<u8> {
             UnitState::InstalledStopped => println!("  state: installed; stopped"),
             UnitState::NotInstalled => {
                 println!("  state: not installed (run `quaid daemon install` to set up)")
+            }
+            UnitState::ProbeFailed => {
+                println!("  state: unknown (service-manager status probe failed)")
             }
             UnitState::Unsupported => {
                 println!("  state: platform not supported (macOS and Linux only)")
@@ -112,12 +117,16 @@ pub fn run(db: &Connection, json_output: bool) -> Result<u8> {
 #[derive(Debug, Clone, Copy)]
 #[allow(
     dead_code,
-    reason = "Unsupported variant is only constructed on non-macOS/Linux targets; the cfg-gated daemon_unit_status uses the same enum across all targets so the variant is unreachable on macOS/Linux but still part of the type"
+    reason = "Unsupported and ProbeFailed variants are only constructed on a subset of targets; the cfg-gated daemon_unit_status uses the same enum across all targets so some variants are unreachable per-platform but still part of the type"
 )]
 enum UnitState {
     Running,
     InstalledStopped,
     NotInstalled,
+    /// The service-manager probe itself errored (e.g. `launchctl` /
+    /// `systemctl` could not be executed) — distinct from a clean
+    /// "not installed" answer.
+    ProbeFailed,
     Unsupported,
 }
 
@@ -127,7 +136,7 @@ fn daemon_unit_status() -> UnitState {
         Ok(crate::platform::UnitStatus::Running) => UnitState::Running,
         Ok(crate::platform::UnitStatus::InstalledStopped) => UnitState::InstalledStopped,
         Ok(crate::platform::UnitStatus::NotInstalled) => UnitState::NotInstalled,
-        Err(_) => UnitState::NotInstalled,
+        Err(_) => UnitState::ProbeFailed,
     }
 }
 
@@ -137,7 +146,7 @@ fn daemon_unit_status() -> UnitState {
         Ok(crate::platform::UnitStatus::Running) => UnitState::Running,
         Ok(crate::platform::UnitStatus::InstalledStopped) => UnitState::InstalledStopped,
         Ok(crate::platform::UnitStatus::NotInstalled) => UnitState::NotInstalled,
-        Err(_) => UnitState::NotInstalled,
+        Err(_) => UnitState::ProbeFailed,
     }
 }
 

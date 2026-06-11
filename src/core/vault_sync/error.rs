@@ -132,6 +132,12 @@ pub enum VaultSyncError {
     #[error(transparent)]
     Conflict(#[from] ConflictError),
 
+    /// Surfaces an optimistic-concurrency conflict from the page write
+    /// path itself (the compare-and-swap UPDATE matched zero rows).
+    /// Cross-platform, unlike the unix-only vault [`ConflictError`].
+    #[error(transparent)]
+    Occ(#[from] crate::core::types::OccError),
+
     /// Surfaces a watcher-thread failure (initialisation, crash,
     /// channel exhaustion).
     #[cfg(unix)]

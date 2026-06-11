@@ -15,7 +15,19 @@ use crate::core::{
     entities, links, markdown, novelty, page_uuid, palace, raw_imports, supersede, vault_sync,
 };
 
+/// Outcome of a single-file ingest, used to keep human and `--json`
+/// output rendering in one place at the end of [`run_with_output`].
+enum IngestOutcome {
+    Ingested,
+    AlreadyIngested,
+    NotNovel,
+}
+
 pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
+    run_with_output(db, path, force, false)
+}
+
+pub fn run_with_output(db: &Connection, path: &str, force: bool, json: bool) -> Result<()> {
     let file = Path::new(path);
     let raw_bytes = fs::read(file)?;
     let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
@@ -38,11 +50,10 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
 
     db.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
-    let outcome = (|| -> Result<()> {
+    let outcome = (|| -> Result<IngestOutcome> {
         if !force && is_already_ingested(db, &raw_bytes)? {
             refresh_source_mapping_for_duplicate(db, &slug, path, &raw_bytes)?;
-            println!("Already ingested (exact bytes match), use --force to re-ingest");
-            return Ok(());
+            return Ok(IngestOutcome::AlreadyIngested);
         }
 
         // Novelty check: skip near-duplicate content unless --force
@@ -51,7 +62,7 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
                 match novelty::check_novelty(&compiled_truth, &existing_page, db) {
                     Ok(false) => {
                         eprintln!("Skipping ingest: content not novel (slug: {slug})");
-                        return Ok(());
+                        return Ok(IngestOutcome::NotNovel);
                     }
                     Ok(true) => {} // novel content, proceed
                     Err(e) => {
@@ -126,14 +137,33 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         entities::try_run_for_page(db, page_id, 1, &slug, &compiled_truth, &entity_patterns);
         raw_imports::rotate_active_raw_import(db, page_id, path, &raw_bytes)?;
-        println!("Ingested {slug}");
 
-        Ok(())
+        Ok(IngestOutcome::Ingested)
     })();
 
     match outcome {
-        Ok(()) => {
+        Ok(outcome) => {
             db.execute_batch("COMMIT;")?;
+            if json {
+                let status = match outcome {
+                    IngestOutcome::Ingested => "ingested",
+                    IngestOutcome::AlreadyIngested => "already_ingested",
+                    IngestOutcome::NotNovel => "skipped_not_novel",
+                };
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": status, "slug": slug, "path": path })
+                );
+            } else {
+                match outcome {
+                    IngestOutcome::Ingested => println!("Ingested {slug}"),
+                    IngestOutcome::AlreadyIngested => {
+                        println!("Already ingested (exact bytes match), use --force to re-ingest")
+                    }
+                    // The skip reason was already printed to stderr above.
+                    IngestOutcome::NotNovel => {}
+                }
+            }
             Ok(())
         }
         Err(err) => {

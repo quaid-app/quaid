@@ -10,10 +10,34 @@ use rusqlite::Connection;
 
 use crate::core::migrate;
 
-pub fn run(db: &Connection, path: &str, _raw: bool, _import_id: Option<String>) -> Result<()> {
+pub fn run(
+    db: &Connection,
+    path: &str,
+    raw: bool,
+    import_id: Option<String>,
+    json: bool,
+) -> Result<()> {
+    anyhow::ensure!(
+        import_id.is_none() || raw,
+        "--import-id requires --raw (raw payloads are addressed by import id)"
+    );
     let output = Path::new(path);
-    let count = migrate::export_dir(db, output)?;
-    println!("Exported {count} page(s) to {path}");
+    let (count, mode) = if raw {
+        (
+            migrate::export_raw_dir(db, output, import_id.as_deref())?,
+            "raw",
+        )
+    } else {
+        (migrate::export_dir(db, output)?, "semantic")
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "exported_pages": count, "path": path, "mode": mode })
+        );
+    } else {
+        println!("Exported {count} page(s) to {path}");
+    }
     Ok(())
 }
 
@@ -64,6 +88,7 @@ mod tests {
             export_dir.to_str().expect("export path"),
             false,
             None,
+            false,
         )
         .unwrap();
 

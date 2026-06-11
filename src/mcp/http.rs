@@ -63,8 +63,9 @@ pub struct HttpConfig {
     /// Bind address. Loopback (`127.0.0.1`/`::1`) is the default; any
     /// other value is refused in v1 (see module docs).
     pub bind: IpAddr,
-    /// Optional path to a bearer token file. Currently parsed and
-    /// validated but not enforced — see v1 known limitations.
+    /// Optional path to a bearer token file. Bearer-auth enforcement is
+    /// not implemented in v1, so [`bind_with_token_guard`] refuses any
+    /// config that sets this (fail-closed; never a silent no-op).
     pub token_file: Option<PathBuf>,
     /// When `true`, loopback binds are unauthenticated (stdio-equivalent
     /// security profile). When `false`, loopback requires a token —

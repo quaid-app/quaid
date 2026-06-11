@@ -118,14 +118,14 @@ impl QuaidServer {
         match (existing_version, input.expected_version) {
             (None, Some(expected)) => {
                 return Err(conflict_error(
-                    format!("conflict: page does not exist at version {expected}"),
+                    format!("ConflictError: page does not exist at version {expected}"),
                     Some(serde_json::json!({ "current_version": null })),
                 ));
             }
             (Some(current), None) => {
                 return Err(conflict_error(
                     format!(
-                        "conflict: page already exists (current version: {current}). Provide expected_version to update."
+                        "ConflictError: page already exists (current version: {current}). Provide expected_version to update."
                     ),
                     Some(serde_json::json!({ "current_version": current })),
                 ));
@@ -141,9 +141,12 @@ impl QuaidServer {
         )
         .map_err(|err| {
             let message = err.to_string();
-            if message.contains("Conflict:") {
+            // Normalise the canonical (`ConflictError: `) and legacy
+            // (`Conflict: `) spellings onto the single `ConflictError: `
+            // prefix used for every -32009 response.
+            if message.contains("ConflictError") || message.contains("Conflict:") {
                 conflict_error(
-                    message.replace("Conflict: ", "conflict: "),
+                    message.replace("Conflict: ", "ConflictError: "),
                     Some(serde_json::json!({ "current_version": existing_version })),
                 )
             } else {

@@ -311,7 +311,8 @@ fn search_compound_terms_finds_docs_when_any_token_matches() {
     );
 }
 
-/// When at least one page matches ALL tokens (AND path), results must include it.
+/// When at least one page matches ALL tokens (AND path), it must rank first;
+/// partial-match pages blend in below it instead of being suppressed.
 #[test]
 fn search_compound_terms_and_path_takes_precedence() {
     let dir = tempfile::TempDir::new().expect("temp dir");
@@ -344,10 +345,73 @@ fn search_compound_terms_and_path_takes_precedence() {
     let parsed = parse_stdout_json(&output);
     let results = parsed.as_array().expect("output must be a JSON array");
     assert_eq!(
+        results[0].get("slug").and_then(Value::as_str),
+        Some("default::concepts/combined"),
+        "the AND hit must rank first"
+    );
+    assert_eq!(
         result_slugs(results),
-        BTreeSet::from(["default::concepts/combined".to_owned()]),
-        "non-raw CLI search must keep canonical slugs and stop at the AND hit instead of \
-         widening to OR results"
+        BTreeSet::from([
+            "default::concepts/combined".to_owned(),
+            "default::concepts/neural-only".to_owned(),
+        ]),
+        "non-raw CLI search must blend OR-recall hits below the AND hit"
+    );
+}
+
+/// Tiered blending: a page matching all four query terms ranks first, and a
+/// page matching only three of four still surfaces below it instead of being
+/// suppressed by the AND pass.
+#[test]
+fn search_blends_three_of_four_term_match_below_full_match() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "compound-blend.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "notes/marginal",
+        "concept",
+        "Marginal",
+        "Marginal note",
+        "A glancing aside on quasar harmonics, tideflow, and basalt drift.",
+    );
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "notes/relevant",
+        "concept",
+        "Relevant",
+        "Relevant note",
+        "Quasar harmonics and tideflow interact strongly. Harmonics dominate \
+         tideflow measurements when quasar emissions spike.",
+    );
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &["--json", "search", "quasar harmonics tideflow basalt"],
+    );
+    assert!(
+        output.status.success(),
+        "search should exit cleanly: {output:?}"
+    );
+
+    let parsed = parse_stdout_json(&output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert_eq!(
+        results[0].get("slug").and_then(Value::as_str),
+        Some("default::notes/marginal"),
+        "the 4-of-4 AND hit must rank first: {results:?}"
+    );
+    assert_eq!(
+        result_slugs(results),
+        BTreeSet::from([
+            "default::notes/marginal".to_owned(),
+            "default::notes/relevant".to_owned(),
+        ]),
+        "the 3-of-4 match must blend in below the AND hit instead of being suppressed: {results:?}"
     );
 }
 
@@ -393,9 +457,8 @@ fn search_raw_mode_bypasses_or_fallback() {
 }
 
 /// MCP memory_search returns a valid JSON array (safety contract — no crash).
-/// NOTE: compound-term OR fallback is NOT applied to memory_search per the
-/// compound-term-recall design decision (MCP agents needing compound recall
-/// should use memory_query which includes the hybrid/vector arm).
+/// memory_search now routes through the tiered AND→OR path (surface parity
+/// with CLI `quaid search`), so the compound query also yields results here.
 #[test]
 fn memory_search_compound_query_returns_valid_json_array() {
     let dir = tempfile::TempDir::new().expect("temp dir");
@@ -438,9 +501,14 @@ fn memory_search_compound_query_returns_valid_json_array() {
     );
 
     let parsed = parse_stdout_json(&output);
-    assert!(
-        parsed.is_array(),
-        "memory_search must always emit a JSON array (may be empty for compound-term AND miss)"
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert_eq!(
+        result_slugs(results),
+        BTreeSet::from([
+            "default::concepts/neural".to_owned(),
+            "default::concepts/inference".to_owned(),
+        ]),
+        "memory_search must widen to OR recall when the AND pass misses"
     );
 }
 
@@ -583,5 +651,210 @@ fn memory_search_numeric_query_matches_grouped_number_forms() {
     assert!(
         result_slugs(results).contains("default::journal/2026-04-16"),
         "memory_search numeric alias expansion should match 75,000 content: {results:?}"
+    );
+}
+
+// ── Regression: reverse-direction numeric aliases (issue #196 symmetry) ──────
+
+/// Seed one page with grouped content (`75,000`) and one with the plain
+/// numeral (`75000`); both must be reachable from abbreviated queries.
+fn seed_reverse_numeric_corpus(conn: &Connection) {
+    insert_page_with_namespace(
+        conn,
+        "",
+        "journal/grouped",
+        "journal",
+        "Journal grouped",
+        "Revenue update",
+        "Revenue reached 75,000 in April.",
+    );
+    insert_page_with_namespace(
+        conn,
+        "",
+        "journal/plain",
+        "journal",
+        "Journal plain",
+        "Salary update",
+        "Salary set to 75000 in April.",
+    );
+}
+
+#[test]
+fn search_abbreviated_numeric_query_matches_full_and_grouped_content() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "search-numeric-reverse.db");
+    let conn = open_test_db(&db_path);
+    seed_reverse_numeric_corpus(&conn);
+    drop(conn);
+
+    for query in ["75k April", "$75K April"] {
+        let output = run_quaid(&db_path, &["--json", "search", query]);
+        assert!(
+            output.status.success(),
+            "search should exit cleanly for abbreviated numeric query {query:?}: {output:?}"
+        );
+
+        let parsed = parse_stdout_json(&output);
+        let results = parsed.as_array().expect("output must be a JSON array");
+        let slugs = result_slugs(results);
+        assert!(
+            slugs.contains("default::journal/grouped") && slugs.contains("default::journal/plain"),
+            "query {query:?} must match both 75,000 and 75000 content: {results:?}"
+        );
+    }
+}
+
+#[test]
+fn memory_search_abbreviated_numeric_query_matches_full_and_grouped_content() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "memory-search-numeric-reverse.db");
+    let conn = open_test_db(&db_path);
+    seed_reverse_numeric_corpus(&conn);
+    drop(conn);
+
+    for payload in [
+        r#"{"query":"75k April","limit":10}"#,
+        r#"{"query":"$75K April","limit":10}"#,
+    ] {
+        let output = run_quaid(&db_path, &["call", "memory_search", payload]);
+        assert!(
+            output.status.success(),
+            "memory_search should exit cleanly for abbreviated numeric payload {payload}: {output:?}"
+        );
+
+        let parsed = parse_stdout_json(&output);
+        let results = parsed.as_array().expect("output must be a JSON array");
+        let slugs = result_slugs(results);
+        assert!(
+            slugs.contains("default::journal/grouped") && slugs.contains("default::journal/plain"),
+            "memory_search payload {payload} must match both 75,000 and 75000 content: {results:?}"
+        );
+    }
+}
+
+/// Formatted query `$75,000` sanitizes to the two tokens `75 000`; the fused
+/// single-token alias must reach content holding the plain numeral `75000`.
+#[test]
+fn search_formatted_numeric_query_matches_single_token_content() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "search-numeric-formatted.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "journal/plain",
+        "journal",
+        "Journal plain",
+        "Salary update",
+        "Salary set to 75000 in April.",
+    );
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["--json", "search", "$75,000"]);
+    assert!(
+        output.status.success(),
+        "search should exit cleanly for formatted numeric query: {output:?}"
+    );
+
+    let parsed = parse_stdout_json(&output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert!(
+        result_slugs(results).contains("default::journal/plain"),
+        "formatted query $75,000 must match single-token 75000 content: {results:?}"
+    );
+}
+
+/// One-decimal abbreviations must alias in both directions: plain-numeral
+/// query ↔ `$1.5M` content and `$1.5M` query ↔ plain-numeral content.
+#[test]
+fn search_decimal_abbreviated_numeric_aliases_work_in_both_directions() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "search-numeric-decimal.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "journal/decimal",
+        "journal",
+        "Journal decimal",
+        "Raise update",
+        "Raise closed at $1.5M in May.",
+    );
+    insert_page_with_namespace(
+        &conn,
+        "",
+        "journal/numeral",
+        "journal",
+        "Journal numeral",
+        "Round update",
+        "Round closed at 1500000 in May.",
+    );
+    drop(conn);
+
+    let output = run_quaid(&db_path, &["--json", "search", "1500000"]);
+    assert!(
+        output.status.success(),
+        "search should exit cleanly for plain-numeral query: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert!(
+        result_slugs(results).contains("default::journal/decimal"),
+        "query 1500000 must match $1.5M content: {results:?}"
+    );
+
+    let output = run_quaid(&db_path, &["--json", "search", "$1.5M"]);
+    assert!(
+        output.status.success(),
+        "search should exit cleanly for decimal-abbreviated query: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert!(
+        result_slugs(results).contains("default::journal/numeral"),
+        "query $1.5M must match 1500000 content: {results:?}"
+    );
+}
+
+// ── memory_search tiered fallback (surface parity with CLI search) ───────────
+
+/// A two-term memory_search query where only one term exists in the corpus
+/// must return results via the tiered OR fallback instead of an empty array.
+#[test]
+fn memory_search_two_term_query_falls_back_to_or_when_and_misses() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "memory-search-or-fallback.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(
+        &conn,
+        "concepts/quantum",
+        "concept",
+        "Quantum Computing",
+        "Quantum computing uses qubits for parallel computation.",
+    );
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "call",
+            "memory_search",
+            r#"{"query":"quantum jellyfish","limit":10}"#,
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "memory_search should exit cleanly: {output:?}"
+    );
+
+    let parsed = parse_stdout_json(&output);
+    let results = parsed.as_array().expect("output must be a JSON array");
+    assert_eq!(
+        result_slugs(results),
+        BTreeSet::from(["default::concepts/quantum".to_owned()]),
+        "memory_search must widen to OR when only one of two terms matches: {results:?}"
     );
 }

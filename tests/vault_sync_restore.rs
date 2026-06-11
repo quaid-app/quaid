@@ -989,3 +989,47 @@ fn restore_offline_source_uses_short_lived_lease_and_inline_attach() {
         "offline restore must not drop its lease before the inline attach finishes"
     );
 }
+
+// ── Security hardening: restore path-traversal rejection ──────────
+
+#[test]
+fn validated_restore_relative_path_accepts_normal_nested_paths() {
+    let path =
+        validated_restore_relative_path("work", "notes/a", PathBuf::from("notes/a.md")).unwrap();
+    assert_eq!(path, PathBuf::from("notes/a.md"));
+}
+
+#[test]
+fn validated_restore_relative_path_rejects_parent_traversal() {
+    let error =
+        validated_restore_relative_path("work", "notes/a", PathBuf::from("../evil.md")).unwrap_err();
+    assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
+    let message = error.to_string();
+    assert!(message.contains("refusing restore path"), "message={message}");
+}
+
+#[test]
+fn validated_restore_relative_path_rejects_embedded_traversal() {
+    let error =
+        validated_restore_relative_path("work", "notes/a", PathBuf::from("notes/../../evil.md"))
+            .unwrap_err();
+    assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
+}
+
+#[test]
+fn validated_restore_relative_path_rejects_absolute_paths() {
+    let error = validated_restore_relative_path("work", "notes/a", PathBuf::from("/etc/passwd"))
+        .unwrap_err();
+    assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
+}
+
+// NOTE on end-to-end coverage: the materialize-time guard
+// (`validated_restore_relative_path`, exercised by the unit tests above)
+// is a defense-in-depth layer. A full `begin_restore` traversal test is
+// not meaningful for it because the offline restore runs a full-hash
+// reconcile (the safety pipeline) before materialization, which
+// normalizes a tampered `file_state.relative_path` back to the value
+// implied by the on-disk source tree — so the malicious path never
+// reaches materialize in the happy offline path. The guard's value is
+// catching a corrupt/tampered row that survives or bypasses reconcile,
+// which the direct unit tests above cover.

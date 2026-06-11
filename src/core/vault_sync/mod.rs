@@ -300,8 +300,9 @@ use restore::finalize_outcome_label;
 #[cfg(unix)]
 pub use restore::ConflictError;
 pub use restore::{
-    begin_restore, AttachReason, FinalizeCaller, FinalizeCliOutcome, FinalizeOutcome, RestoreError,
-    RestoreManifest, RestoreManifestEntry, WriteBackOutcome,
+    begin_restore, validated_restore_relative_path, AttachReason, FinalizeCaller,
+    FinalizeCliOutcome, FinalizeOutcome, RestoreError, RestoreManifest, RestoreManifestEntry,
+    WriteBackOutcome,
 };
 #[cfg(test)]
 use restore::{

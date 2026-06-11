@@ -35,6 +35,19 @@ struct Cli {
     #[arg(long, env = "QUAID_MODEL", global = true, default_value = "small")]
     model: String,
 
+    /// Allow downloading a custom model that has no curated SHA-256 pin
+    /// (its files cannot be integrity-verified). Must be combined with
+    /// --model-revision; curated aliases never need it.
+    #[arg(long, global = true)]
+    allow_unverified_model: bool,
+
+    /// Explicit Hugging Face revision (commit SHA) to pin a custom model
+    /// download to. Required together with --allow-unverified-model for
+    /// custom model ids; Quaid never silently downloads the mutable
+    /// `main` revision.
+    #[arg(long, global = true, value_name = "SHA")]
+    model_revision: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -357,6 +370,10 @@ fn validate_flags_from_args(
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    core::inference::configure_model_download_policy(core::inference::ModelDownloadPolicy {
+        allow_unverified: cli.allow_unverified_model,
+        revision: cli.model_revision.clone(),
+    });
     let requested_model =
         core::inference::coerce_model_for_build(&core::inference::resolve_model(&cli.model));
 
@@ -364,7 +381,13 @@ async fn main() -> Result<()> {
     match early_command(&cli) {
         EarlyCommand::Version => return commands::version::run(),
         EarlyCommand::Init(path) => return commands::init::run(&path, &requested_model),
-        EarlyCommand::Model(action) => return commands::model::run(action),
+        EarlyCommand::Model(action) => {
+            return commands::model::run(
+                action,
+                cli.allow_unverified_model,
+                cli.model_revision.as_deref(),
+            )
+        }
         EarlyCommand::None => {}
     }
 

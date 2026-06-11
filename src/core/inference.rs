@@ -346,6 +346,45 @@ fn model_runtime() -> &'static Mutex<ModelRuntime> {
     MODEL_RUNTIME.get_or_init(|| Mutex::new(ModelRuntime::default()))
 }
 
+/// Operator-supplied policy for downloading custom (non-curated) embedding
+/// models, threaded from the `--allow-unverified-model` and
+/// `--model-revision` CLI flags. The default (deny, no pin) means a custom
+/// model with no curated SHA-256 hashes is never downloaded implicitly —
+/// in particular Quaid never silently fetches the mutable `main` revision.
+#[derive(Debug, Clone, Default)]
+pub struct ModelDownloadPolicy {
+    /// Operator explicitly accepted that the custom model's files cannot
+    /// be integrity-verified against curated hashes.
+    pub allow_unverified: bool,
+    /// Explicit Hugging Face revision (commit SHA) to pin the download to.
+    pub revision: Option<String>,
+}
+
+static MODEL_DOWNLOAD_POLICY: OnceLock<Mutex<ModelDownloadPolicy>> = OnceLock::new();
+
+fn model_download_policy_cell() -> &'static Mutex<ModelDownloadPolicy> {
+    MODEL_DOWNLOAD_POLICY.get_or_init(|| Mutex::new(ModelDownloadPolicy::default()))
+}
+
+/// Sets the process-wide custom-model download policy (see
+/// [`ModelDownloadPolicy`]). Called once from CLI flag parsing; contexts
+/// that never configure it (daemon, MCP server) keep the deny-by-default
+/// policy.
+pub fn configure_model_download_policy(policy: ModelDownloadPolicy) {
+    let mut current = model_download_policy_cell()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *current = policy;
+}
+
+#[cfg(feature = "online-model")]
+fn model_download_policy() -> ModelDownloadPolicy {
+    model_download_policy_cell()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
 /// Sets the process-wide embedding model. Subsequent calls to [`embed`] and
 /// [`search_vec`] will load the new model on first use; the previously loaded
 /// model is dropped if the configuration changes.
@@ -774,6 +813,36 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
         return Ok(paths);
     }
 
+    // Resolve the download revision before any network or filesystem work.
+    // Curated aliases use their authoritative pin; custom models require an
+    // explicit operator-supplied pin plus the unverified-download opt-in —
+    // there is no silent fallback to the mutable `main` revision.
+    let revision = match model.sha256_hashes.and_then(|h| h.revision) {
+        Some(revision) => revision.to_owned(),
+        None => {
+            let policy = model_download_policy();
+            match (policy.allow_unverified, policy.revision) {
+                (true, Some(revision)) => revision,
+                (false, Some(_)) => {
+                    return Err(format!(
+                        "custom model {} has no curated SHA-256 pin, so its files cannot be \
+                         integrity-verified. Re-run with --allow-unverified-model (alongside \
+                         --model-revision) to accept the unverified download.",
+                        model.model_id
+                    ));
+                }
+                (_, None) => {
+                    return Err(format!(
+                        "refusing to download unpinned custom model {}: Quaid will not silently \
+                         fetch the mutable `main` revision. Re-run with --allow-unverified-model \
+                         and --model-revision <commit-sha> to pin the download explicitly.",
+                        model.model_id
+                    ));
+                }
+            }
+        }
+    };
+
     std::fs::create_dir_all(&cache_dir)
         .map_err(|e| format!("create model cache {}: {e}", cache_dir.display()))?;
 
@@ -785,13 +854,13 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
 
     if model.sha256_hashes.is_none() {
         eprintln!(
-            "Warning: custom model {} has no pinned SHA-256 hashes; skipping integrity verification.",
+            "Warning: custom model {} has no pinned SHA-256 hashes; downloading operator-pinned revision {revision} without integrity verification (--allow-unverified-model).",
             model.model_id
         );
     }
 
     for file_name in ["config.json", "tokenizer.json", "model.safetensors"] {
-        download_model_file(&client, model, file_name, &cache_dir)?;
+        download_model_file(&client, model, file_name, &cache_dir, &revision)?;
     }
 
     existing_model_paths(&cache_dir).ok_or_else(|| {
@@ -833,6 +902,7 @@ fn download_model_file(
     model: &ModelConfig,
     file_name: &str,
     cache_dir: &Path,
+    revision: &str,
 ) -> Result<(), String> {
     let validated_model_id = validate_model_id(&model.model_id)?;
     let destination = cache_dir.join(file_name);
@@ -840,12 +910,9 @@ fn download_model_file(
     let mut temp_guard = TempFileCleanupGuard::new(temp_destination);
     let mut file = file;
     let base_url = huggingface_base_url();
-    // Use pinned revision for standard aliases; fall back to `main` only for
-    // custom/unpinned models so upstream changes never silently break SHA checks.
-    let revision = model
-        .sha256_hashes
-        .and_then(|h| h.revision)
-        .unwrap_or("main");
+    // `revision` is the curated pin for standard aliases, or the explicit
+    // operator-supplied --model-revision pin for custom models; there is
+    // no implicit `main` fallback.
     let url = format!(
         "{}/{}/resolve/{}/{}",
         base_url.trim_end_matches('/'),

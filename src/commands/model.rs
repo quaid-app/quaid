@@ -11,8 +11,8 @@ use anyhow::{bail, Result};
 use clap::Subcommand;
 
 use crate::core::conversation::model_lifecycle::{
-    download_model, inspect_model_caches, remove_model_cache_entries, ConsoleProgressReporter,
-    ModelCacheCleanReport, ModelCacheEntry,
+    download_model, download_model_pinned, inspect_model_caches, remove_model_cache_entries,
+    resolve_model_alias, ConsoleProgressReporter, ModelCacheCleanReport, ModelCacheEntry,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Subcommand)]
@@ -46,11 +46,14 @@ pub enum ModelAction {
     },
 }
 
-pub fn run(action: ModelAction) -> Result<()> {
+pub fn run(
+    action: ModelAction,
+    allow_unverified_model: bool,
+    model_revision: Option<&str>,
+) -> Result<()> {
     match action {
         ModelAction::Pull { alias } => {
-            let mut progress = ConsoleProgressReporter::default();
-            let cache_dir = tokio::task::block_in_place(|| download_model(&alias, &mut progress))?;
+            let cache_dir = pull(&alias, allow_unverified_model, model_revision)?;
             println!("Model cached at {}", cache_dir.display());
             Ok(())
         }
@@ -77,6 +80,50 @@ pub fn run(action: ModelAction) -> Result<()> {
             force,
         } => clean(alias.as_deref(), list, all, force),
     }
+}
+
+/// Resolve and download a model alias, enforcing the unpinned-download
+/// policy *before* any network or download machinery runs: curated
+/// aliases keep their authoritative pins (and refuse overrides), while
+/// custom model ids require both `--allow-unverified-model` and an
+/// explicit `--model-revision <commit-sha>`.
+fn pull(
+    alias: &str,
+    allow_unverified_model: bool,
+    model_revision: Option<&str>,
+) -> Result<std::path::PathBuf> {
+    let resolved = resolve_model_alias(alias)?;
+    let mut progress = ConsoleProgressReporter::default();
+    if resolved.revision.is_some() {
+        if allow_unverified_model || model_revision.is_some() {
+            bail!(
+                "model `{alias}` is a curated alias with a pinned revision; \
+                 --model-revision/--allow-unverified-model only apply to custom model ids"
+            );
+        }
+        return Ok(tokio::task::block_in_place(|| {
+            download_model(alias, &mut progress)
+        })?);
+    }
+
+    let Some(revision) = model_revision else {
+        bail!(
+            "refusing to download unpinned model `{alias}`: custom models have no curated \
+             SHA/revision pin, and Quaid will not silently fetch the mutable `main` revision. \
+             Re-run with --allow-unverified-model and --model-revision <commit-sha> to pin \
+             the download explicitly."
+        );
+    };
+    if !allow_unverified_model {
+        bail!(
+            "custom model `{alias}` has no curated SHA-256 pin, so its files cannot be \
+             integrity-verified. Re-run with --allow-unverified-model (alongside \
+             --model-revision {revision}) to accept the unverified download."
+        );
+    }
+    Ok(tokio::task::block_in_place(|| {
+        download_model_pinned(alias, Some(revision), &mut progress)
+    })?)
 }
 
 fn clean(alias: Option<&str>, list: bool, all: bool, force: bool) -> Result<()> {
@@ -403,11 +450,15 @@ mod tests {
 
     #[test]
     fn run_status_and_clean_list_paths_do_not_require_downloads() {
-        run(ModelAction::Status {
-            alias: Some("phi-3.5-mini".to_owned()),
-            verbose: false,
-            verify: false,
-        })
+        run(
+            ModelAction::Status {
+                alias: Some("phi-3.5-mini".to_owned()),
+                verbose: false,
+                verify: false,
+            },
+            false,
+            None,
+        )
         .expect("status should inspect local cache only");
 
         clean(None, false, false, false).expect("default clean lists candidates only");
@@ -429,18 +480,26 @@ mod tests {
             .expect("runtime");
         let error = runtime
             .block_on(async {
-                run(ModelAction::Pull {
-                    alias: "phi-3.5-mini".to_owned(),
-                })
+                run(
+                    ModelAction::Pull {
+                        alias: "phi-3.5-mini".to_owned(),
+                    },
+                    false,
+                    None,
+                )
             })
             .expect_err("offline build reports unsupported downloads");
         assert!(error.to_string().contains("online-model"));
 
-        run(ModelAction::Status {
-            alias: Some("phi-3.5-mini".to_owned()),
-            verbose: false,
-            verify: true,
-        })
+        run(
+            ModelAction::Status {
+                alias: Some("phi-3.5-mini".to_owned()),
+                verbose: false,
+                verify: true,
+            },
+            false,
+            None,
+        )
         .expect("verified status should inspect local cache only");
     }
 
@@ -451,12 +510,16 @@ mod tests {
         let cache_dir = cache_root.path().join("org-test-model");
         std::fs::create_dir(&cache_dir).expect("cache dir");
 
-        run(ModelAction::Clean {
-            alias: Some("org/test-model".to_owned()),
-            list: false,
-            all: false,
-            force: true,
-        })
+        run(
+            ModelAction::Clean {
+                alias: Some("org/test-model".to_owned()),
+                list: false,
+                all: false,
+                force: true,
+            },
+            false,
+            None,
+        )
         .expect("clean removes corrupt alias cache");
 
         assert!(!cache_dir.exists());

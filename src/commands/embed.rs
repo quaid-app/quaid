@@ -9,10 +9,14 @@ use rusqlite::Connection;
 use crate::commands::get::get_page_by_key;
 use crate::core::chunking::chunk_page;
 use crate::core::collections::OpKind;
-use crate::core::inference::{embed, embedding_to_blob};
+use crate::core::inference::{embed, embedding_to_blob, EMBEDDER_VERSION};
 use crate::core::vault_sync;
 
 const DEFAULT_BATCH_SIZE: usize = 32;
+
+/// `quaid_config` key recording the [`EMBEDDER_VERSION`] the store was last
+/// fully re-embedded under. A missing key marks a legacy store (version 1).
+const EMBEDDER_VERSION_KEY: &str = "embedder_version";
 
 #[derive(Debug, Clone)]
 struct PageRef {
@@ -61,8 +65,10 @@ pub fn run_with_batch(
             (1, chunks.len())
         }
     } else {
+        let embedder_version_mismatch = stored_embedder_version(db)? != Some(EMBEDDER_VERSION);
         let mut embedded_pages = 0_usize;
         let mut embedded_chunks = 0_usize;
+        let mut failed_pages = 0_usize;
         let mut last_page_id = 0_i64;
 
         loop {
@@ -84,6 +90,7 @@ pub fn run_with_batch(
                                 &e
                             )
                         );
+                        failed_pages += 1;
                         continue;
                     }
                 };
@@ -93,7 +100,13 @@ pub fn run_with_batch(
                     continue;
                 }
 
-                if !page_needs_refresh(db, page_ref.id, &model_name, &chunks)? {
+                if !page_needs_refresh(
+                    db,
+                    page_ref.id,
+                    &model_name,
+                    &chunks,
+                    embedder_version_mismatch,
+                )? {
                     continue;
                 }
 
@@ -108,11 +121,19 @@ pub fn run_with_batch(
                             &e
                         )
                     );
+                    failed_pages += 1;
                     continue;
                 }
                 embedded_pages += 1;
                 embedded_chunks += chunks.len();
             }
+        }
+
+        // A clean full pass means every page's embeddings are now current, so
+        // record the pipeline version; any failure keeps the old version so
+        // the next pass retries the skipped pages.
+        if failed_pages == 0 {
+            record_embedder_version(db)?;
         }
 
         (embedded_pages, embedded_chunks)
@@ -170,12 +191,52 @@ fn page_id_by_key(db: &Connection, collection_id: i64, slug: &str) -> Result<i64
     })
 }
 
+/// Reads the embedder version recorded by the last clean full embed pass.
+/// `None` marks a legacy store last embedded before version tracking.
+fn stored_embedder_version(db: &Connection) -> Result<Option<i64>> {
+    let value: Option<String> = db
+        .query_row(
+            "SELECT value FROM quaid_config WHERE key = ?1",
+            [EMBEDDER_VERSION_KEY],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?;
+
+    match value {
+        Some(raw) => {
+            let parsed = raw.parse::<i64>().map_err(|_| {
+                anyhow::anyhow!("quaid_config.{EMBEDDER_VERSION_KEY} must be an integer: {raw}")
+            })?;
+            Ok(Some(parsed))
+        }
+        None => Ok(None),
+    }
+}
+
+fn record_embedder_version(db: &Connection) -> Result<()> {
+    db.execute(
+        "INSERT INTO quaid_config (key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![EMBEDDER_VERSION_KEY, EMBEDDER_VERSION.to_string()],
+    )?;
+    Ok(())
+}
+
 fn page_needs_refresh(
     db: &Connection,
     page_id: i64,
     model_name: &str,
     chunks: &[crate::core::types::Chunk],
+    embedder_version_mismatch: bool,
 ) -> Result<bool> {
+    if embedder_version_mismatch {
+        return Ok(true);
+    }
+
     let mut stmt = db.prepare(
         "SELECT chunk_type, content_hash, heading_path \
          FROM page_embeddings \

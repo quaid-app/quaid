@@ -8,6 +8,13 @@ PRAGMA foreign_keys = ON;
 -- ============================================================
 -- quaid_config: persisted embedding model metadata
 -- ============================================================
+-- Init writes: model_id, model_alias, embedding_dim, schema_version.
+-- Runtime keys:
+--   embedder_version — embedding pipeline version (pooling / query
+--   instruction / chunking semantics; see EMBEDDER_VERSION in
+--   src/core/inference.rs) recorded after a clean `quaid embed --all` or
+--   `--stale` pass; a missing or mismatched value makes the next full embed
+--   pass refresh every page once.
 CREATE TABLE IF NOT EXISTS quaid_config (
     key   TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL

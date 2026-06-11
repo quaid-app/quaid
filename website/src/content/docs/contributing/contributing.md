@@ -21,7 +21,7 @@ Read [Build your first memory](/tutorials/first-memory/) first if you haven't. R
 quaid/
 ├── src/
 │   ├── main.rs               # CLI entrypoint (clap dispatch)
-│   ├── schema.sql            # Full v5 DDL (embedded via include_str!)
+│   ├── schema.sql            # Full v10 DDL (embedded via include_str!)
 │   ├── core/                 # Library modules
 │   │   ├── db.rs             # SQLite connection, schema init, WAL, sqlite-vec
 │   │   ├── types.rs          # All structs

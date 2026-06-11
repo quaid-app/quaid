@@ -121,11 +121,17 @@ pub fn run(
     slug: &str,
     namespace: Option<&str>,
     expected_version: Option<i64>,
+    json: bool,
 ) -> anyhow::Result<()> {
     vault_sync::ensure_unix_platform("quaid put").map_err(anyhow::Error::new)?;
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
-    put_from_cli_string(db, slug, &input, namespace, expected_version)?;
+    let status = put_from_cli_string(db, slug, &input, namespace, expected_version)?;
+    if json {
+        println!("{}", serde_json::json!({ "result": status }));
+    } else {
+        println!("{status}");
+    }
     Ok(())
 }
 
@@ -136,7 +142,7 @@ fn put_from_cli_string(
     content: &str,
     namespace: Option<&str>,
     expected_version: Option<i64>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     crate::core::namespace::validate_optional_namespace(namespace)?;
     let op_kind = if expected_version.is_some() {
         crate::core::collections::OpKind::WriteUpdate
@@ -150,17 +156,14 @@ fn put_from_cli_string(
     let canonical_slug = format!("{}::{}", resolved.collection_name, resolved.slug);
     match vault_sync::live_serve_endpoint_for_root_path(db, &collection.root_path) {
         Ok(Some(endpoint)) => {
-            let status =
-                proxy_put_via_live_serve(&endpoint, &canonical_slug, content, expected_version)?;
-            println!("{status}");
-            return Ok(());
+            return proxy_put_via_live_serve(&endpoint, &canonical_slug, content, expected_version);
         }
         Ok(None) => {}
         Err(other) => return Err(anyhow::Error::new(other)),
     }
     let _lease = vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
         .map_err(anyhow::Error::new)?;
-    put_from_string_with_namespace(db, &canonical_slug, content, namespace, expected_version)
+    put_from_string_status_with_namespace(db, &canonical_slug, content, namespace, expected_version)
 }
 
 #[cfg(not(unix))]
@@ -170,8 +173,8 @@ fn put_from_cli_string(
     content: &str,
     namespace: Option<&str>,
     expected_version: Option<i64>,
-) -> anyhow::Result<()> {
-    put_from_string_with_namespace(db, slug_input, content, namespace, expected_version)
+) -> anyhow::Result<String> {
+    put_from_string_status_with_namespace(db, slug_input, content, namespace, expected_version)
 }
 
 /// Apply page content supplied by the caller.
@@ -570,7 +573,7 @@ fn stage_page_record(
     tx: &rusqlite::Transaction<'_>,
     prepared: &PreparedPut,
     expected_version: Option<i64>,
-) -> Result<StagedPageRecord, rusqlite::Error> {
+) -> Result<StagedPageRecord, vault_sync::VaultSyncError> {
     let (created, version) = match prepared.current_version {
         None => {
             tx.execute(
@@ -652,9 +655,10 @@ fn stage_page_record(
             };
 
             if rows == 0 {
-                return Err(rusqlite::Error::InvalidParameterName(format!(
-                    "Conflict: page updated elsewhere (current version: {current})"
-                )));
+                return Err(crate::core::types::OccError::Conflict {
+                    current_version: current,
+                }
+                .into());
             }
 
             (false, current + 1)
@@ -750,10 +754,11 @@ fn persist_page_record(
     relative_path: &str,
     file_stat: Option<&file_state::FileStat>,
     expected_version: Option<i64>,
-) -> Result<PutOutcome, rusqlite::Error> {
+) -> Result<PutOutcome, vault_sync::VaultSyncError> {
     let tx = db.unchecked_transaction()?;
     let staged = stage_page_record(&tx, prepared, expected_version)?;
     commit_staged_page_record(tx, prepared, staged, raw_bytes, relative_path, file_stat)
+        .map_err(Into::into)
 }
 
 #[cfg(not(unix))]
@@ -772,7 +777,6 @@ fn persist_with_vault_write(
         None,
         expected_version,
     )
-    .map_err(Into::into)
 }
 
 #[cfg(unix)]
@@ -796,8 +800,7 @@ fn persist_with_vault_write(
             relative_path,
             None,
             expected_version,
-        )
-        .map_err(Into::into);
+        );
     }
 
     let collection = vault_sync::load_collection_by_id(db, prepared.collection_id)?;
@@ -845,7 +848,7 @@ fn persist_with_vault_write(
         Ok(staged) => staged,
         Err(error) => {
             let _ = tx.rollback();
-            return Err(error.into());
+            return Err(error);
         }
     };
     maybe_block_after_supersede_claim(db, prepared.supersedes.as_deref());
@@ -2615,7 +2618,7 @@ mod tests {
                 None,
                 None,
             ) {
-                Ok(()) => {
+                Ok(_) => {
                     proxied = true;
                     break;
                 }

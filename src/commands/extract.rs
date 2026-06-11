@@ -34,7 +34,7 @@ pub struct ExtractArgs {
     force: bool,
 }
 
-pub fn run(db: &Connection, args: ExtractArgs) -> Result<()> {
+pub fn run(db: &Connection, args: ExtractArgs, json: bool) -> Result<()> {
     if !args.all && args.session_id.is_none() {
         bail!("provide <session-id> or --all");
     }
@@ -99,14 +99,21 @@ pub fn run(db: &Connection, args: ExtractArgs) -> Result<()> {
         enqueued.push(target.display_id.clone());
     }
 
-    println!(
-        "Enqueued manual extraction for {} session(s):",
-        enqueued.len()
-    );
-    for session_id in &enqueued {
-        println!("  - {session_id}");
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "enqueued_sessions": enqueued, "count": enqueued.len() })
+        );
+    } else {
+        println!(
+            "Enqueued manual extraction for {} session(s):",
+            enqueued.len()
+        );
+        for session_id in &enqueued {
+            println!("  - {session_id}");
+        }
+        println!("Track progress with `quaid extraction status`.");
     }
-    println!("Track progress with `quaid extraction status`.");
     Ok(())
 }
 

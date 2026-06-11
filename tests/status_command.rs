@@ -94,3 +94,45 @@ fn status_human_output_reports_no_runtime_host_for_empty_database() {
     assert!(stdout.contains("none (no live daemon or serve_host)"));
     assert!(stdout.contains("transports:"));
 }
+
+/// Exit code 3 ("unexpected error") is reachable: when the daemon unit file
+/// exists but the service-manager probe itself fails (here: `systemctl`
+/// missing from PATH), `quaid status` must report the probe failure instead
+/// of misclassifying the daemon as not installed (exit 2).
+#[cfg(target_os = "linux")]
+#[test]
+fn status_exits_3_when_service_manager_probe_fails() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let home_dir = dir.path().join("home");
+    let unit_dir = home_dir.join(".config").join("systemd").join("user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    fs::write(unit_dir.join("quaid-daemon.service"), "[Unit]\n").unwrap();
+    // Empty PATH: spawning `systemctl` fails, so the probe returns Err(_).
+    let empty_bin = dir.path().join("empty-bin");
+    fs::create_dir_all(&empty_bin).unwrap();
+    let (conn, db_path) = open_test_db_file(&dir);
+    drop(conn);
+
+    let mut command = Command::new(common::quaid_bin());
+    common_subprocess::configure_test_command(&mut command);
+    let output = command
+        .env("HOME", &home_dir)
+        .env("USERPROFILE", &home_dir)
+        .env("PATH", &empty_bin)
+        .arg("--db")
+        .arg(&db_path)
+        .args(["status", "--json"])
+        .output()
+        .expect("run quaid status");
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["daemon"]["probe_failed"], true);
+    assert_eq!(payload["daemon"]["installed"], false);
+}

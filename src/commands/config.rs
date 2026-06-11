@@ -14,7 +14,7 @@ pub enum ConfigAction {
     List,
 }
 
-pub fn run(db: &Connection, action: ConfigAction) -> Result<()> {
+pub fn run(db: &Connection, action: ConfigAction, json: bool) -> Result<()> {
     match action {
         ConfigAction::Get { key } => {
             let value: Result<String, _> =
@@ -22,8 +22,20 @@ pub fn run(db: &Connection, action: ConfigAction) -> Result<()> {
                     row.get(0)
                 });
             match value {
-                Ok(v) => println!("{v}"),
-                Err(rusqlite::Error::QueryReturnedNoRows) => println!("Not set"),
+                Ok(v) => {
+                    if json {
+                        println!("{}", serde_json::json!({ "key": key, "value": v }));
+                    } else {
+                        println!("{v}");
+                    }
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    if json {
+                        println!("{}", serde_json::json!({ "key": key, "value": null }));
+                    } else {
+                        println!("Not set");
+                    }
+                }
                 Err(e) => return Err(e.into()),
             }
         }
@@ -32,16 +44,29 @@ pub fn run(db: &Connection, action: ConfigAction) -> Result<()> {
                 "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
                 rusqlite::params![key, value],
             )?;
-            println!("Set {key} = {value}");
+            if json {
+                println!("{}", serde_json::json!({ "key": key, "value": value }));
+            } else {
+                println!("Set {key} = {value}");
+            }
         }
         ConfigAction::List => {
             let mut stmt = db.prepare("SELECT key, value FROM config ORDER BY key")?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
-            for row in rows {
-                let (k, v) = row?;
-                println!("{k}={v}");
+            if json {
+                let mut map = serde_json::Map::new();
+                for row in rows {
+                    let (k, v) = row?;
+                    map.insert(k, serde_json::Value::String(v));
+                }
+                println!("{}", serde_json::to_string_pretty(&map)?);
+            } else {
+                for row in rows {
+                    let (k, v) = row?;
+                    println!("{k}={v}");
+                }
             }
         }
     }
@@ -71,6 +96,7 @@ mod tests {
                 key: "test_key".into(),
                 value: "test_value".into(),
             },
+            false,
         )
         .unwrap();
 
@@ -93,6 +119,7 @@ mod tests {
                 key: "version".into(),
                 value: "99".into(),
             },
+            false,
         )
         .unwrap();
 
@@ -115,6 +142,7 @@ mod tests {
             ConfigAction::Get {
                 key: "missing".into(),
             },
+            false,
         )
         .unwrap();
     }
@@ -133,6 +161,7 @@ mod tests {
             ConfigAction::Get {
                 key: "theme".into(),
             },
+            false,
         )
         .unwrap();
     }
@@ -146,6 +175,7 @@ mod tests {
             ConfigAction::Get {
                 key: "theme".into(),
             },
+            false,
         )
         .unwrap_err();
 
@@ -161,6 +191,7 @@ mod tests {
                 key: "alpha".into(),
                 value: "1".into(),
             },
+            false,
         )
         .unwrap();
         run(
@@ -169,9 +200,10 @@ mod tests {
                 key: "beta".into(),
                 value: "2".into(),
             },
+            false,
         )
         .unwrap();
 
-        run(&conn, ConfigAction::List).unwrap();
+        run(&conn, ConfigAction::List, false).unwrap();
     }
 }

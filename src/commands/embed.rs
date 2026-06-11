@@ -22,7 +22,7 @@ struct PageRef {
 }
 
 pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Result<()> {
-    run_with_batch(db, slug, all, stale, None)
+    run_with_batch(db, slug, all, stale, None, false)
 }
 
 pub fn run_with_batch(
@@ -31,6 +31,7 @@ pub fn run_with_batch(
     all: bool,
     stale: bool,
     batch_size: Option<usize>,
+    json: bool,
 ) -> Result<()> {
     // Modes are mutually exclusive: exactly one of <SLUG>, --all, or --stale.
     if slug.is_some() && (all || stale) {
@@ -93,7 +94,10 @@ pub fn run_with_batch(
                     continue;
                 }
 
-                if !page_needs_refresh(db, page_ref.id, &model_name, &chunks)? {
+                // `--all` forces a re-embed of every page; only the default
+                // bulk path and `--stale` skip pages whose chunk metadata
+                // already matches the index.
+                if !all && !page_needs_refresh(db, page_ref.id, &model_name, &chunks)? {
                     continue;
                 }
 
@@ -118,7 +122,17 @@ pub fn run_with_batch(
         (embedded_pages, embedded_chunks)
     };
 
-    println!("Embedded {embedded_chunks} chunks across {embedded_pages} page(s).");
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "embedded_chunks": embedded_chunks,
+                "embedded_pages": embedded_pages,
+            })
+        );
+    } else {
+        println!("Embedded {embedded_chunks} chunks across {embedded_pages} page(s).");
+    }
     Ok(())
 }
 
@@ -442,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn run_with_all_skips_unchanged_pages() {
+    fn run_with_all_force_re_embeds_unchanged_pages() {
         let conn = open_test_db();
         insert_test_page(
             &conn,
@@ -456,13 +470,29 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
             .expect("initial metadata count");
 
-        // --all on unchanged content must skip (spec: skip if content_hash unchanged)
+        // Tamper with stored chunk text WITHOUT touching content_hash: the
+        // hash-based skip would leave this in place, but `--all` must force
+        // a full re-embed that rewrites the row from the page content.
+        conn.execute(
+            "UPDATE page_embeddings SET chunk_text = 'tampered' WHERE chunk_index = 0",
+            [],
+        )
+        .expect("tamper chunk text");
+
         run(&conn, None, true, false).expect("second all embed");
         let second_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
             .expect("second metadata count");
+        let tampered_left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings WHERE chunk_text = 'tampered'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("tampered row count");
 
         assert_eq!(first_count, second_count);
+        assert_eq!(tampered_left, 0, "--all must force re-embed");
     }
 
     #[test]

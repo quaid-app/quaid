@@ -430,7 +430,7 @@ pub enum ConflictError {
     /// incremented the version between the caller's read and the
     /// commit attempt.
     #[error(
-        "Conflict: ConflictError StaleExpectedVersion collection_id={collection_id} relative_path={relative_path} expected_version={expected_version} current version: {current_version}"
+        "ConflictError: collection_id={collection_id} relative_path={relative_path} reason=StaleExpectedVersion expected_version={expected_version} current version: {current_version}"
     )]
     StaleExpectedVersion {
         /// Collection id the conflicting row belongs to.

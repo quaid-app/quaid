@@ -4,6 +4,43 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
+## Unreleased
+
+### Fixed
+
+- **CLI ↔ MCP dispatch parity.** `quaid call` / `quaid pipe` now route
+  `memory_correct` and `memory_correct_continue`, matching the 24-tool MCP
+  registry. A parity test pins the dispatcher to the registry.
+- **Global `--json` flag.** `--json` is now honoured by `put`, `ingest`,
+  `export`, `extract`, `embed`, `link`, `link-close`, `unlink`, `tags`,
+  `timeline-add`, `compact`, and `config`; `quaid --json status` and
+  `quaid status --json` are equivalent.
+- **Dead flags implemented.** `quaid export --raw [--import-id <id>]` now
+  performs a byte-exact restore from `raw_imports`; `quaid embed --all`
+  forces a re-embed (bypassing the unchanged-hash skip) while `--stale`
+  keeps the skip.
+- **`quaid status` exit code 3.** A failed service-manager probe
+  (`launchctl`/`systemctl` error) now exits 3 as documented, instead of
+  being misreported as "not installed" (exit 2). JSON output gains a
+  `daemon.probe_failed` field.
+- **Schema-mismatch message accuracy.** Opening a database with an older
+  (e.g. v9, shipped with quaid v0.20.x-v0.21.x) or newer schema version
+  no longer claims the file predates the Quaid rename; the message now
+  distinguishes older/newer/legacy cases and instructs backing up the old
+  file before `quaid init` (the previous remediation dead-looped).
+
+### Changed
+
+- **Conflict message prefix.** All JSON-RPC `-32009` conflict messages now
+  carry the single canonical `ConflictError: ` prefix (previously a mix of
+  `conflict: `, `Conflict: `, and `ConflictError: `). The JSON-RPC error
+  code is unchanged; consumers pattern-matching the old spellings should
+  match `ConflictError` instead.
+
+### Migration
+
+- No schema migration. Existing v0.22.x databases remain compatible.
+
 ## v0.22.3 — post-release bug fixes
 
 ### Fixed

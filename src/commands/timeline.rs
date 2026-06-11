@@ -107,6 +107,7 @@ pub fn add(
     summary: &str,
     source: Option<String>,
     detail: Option<String>,
+    json: bool,
 ) -> Result<()> {
     let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -143,7 +144,18 @@ pub fn add(
         ],
     )?;
 
-    println!("Added timeline entry for {canonical_slug}");
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "added",
+                "slug": canonical_slug,
+                "date": date,
+            })
+        );
+    } else {
+        println!("Added timeline entry for {canonical_slug}");
+    }
     Ok(())
 }
 
@@ -229,7 +241,16 @@ mod tests {
         )
         .unwrap();
 
-        let error = add(&conn, "notes/alice", "2026-04-22", "blocked", None, None).unwrap_err();
+        let error = add(
+            &conn,
+            "notes/alice",
+            "2026-04-22",
+            "blocked",
+            None,
+            None,
+            false,
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("CollectionRestoringError"));
     }
@@ -262,6 +283,7 @@ mod tests {
             "something happened",
             None,
             None,
+            false,
         )
         .expect("add entry");
         run(&conn, "notes/structured", 10, false).expect("run with structured entry");
@@ -279,6 +301,7 @@ mod tests {
             "event text",
             Some("src".to_owned()),
             Some("some detail".to_owned()),
+            false,
         )
         .expect("add entry");
         run(&conn, "notes/structured-json", 10, true).expect("run json with structured entry");
@@ -310,6 +333,7 @@ mod tests {
             "something",
             Some("test-src".to_owned()),
             Some("some detail".to_owned()),
+            false,
         )
         .expect("add with source and detail");
         let count: i64 = conn

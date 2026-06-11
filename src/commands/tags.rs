@@ -12,8 +12,16 @@ use crate::core::vault_sync;
 /// Manage tags on a page: list, add, or remove.
 ///
 /// Tags live in the `tags` table — no OCC, no page version bump.
-/// Without `--add` or `--remove`, prints current tags one per line.
-pub fn run(db: &Connection, slug: &str, add: &[String], remove: &[String]) -> Result<()> {
+/// Without `--add` or `--remove`, prints current tags one per line
+/// (or, with `--json`, the resulting tag list as a JSON array in
+/// every mode).
+pub fn run(
+    db: &Connection,
+    slug: &str,
+    add: &[String],
+    remove: &[String],
+    json: bool,
+) -> Result<()> {
     let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     if !add.is_empty() || !remove.is_empty() {
@@ -36,7 +44,10 @@ pub fn run(db: &Connection, slug: &str, add: &[String], remove: &[String]) -> Re
         )?;
     }
 
-    if add.is_empty() && remove.is_empty() {
+    if json {
+        let tags = list_tags(db, page_id)?;
+        println!("{}", serde_json::to_string_pretty(&tags)?);
+    } else if add.is_empty() && remove.is_empty() {
         let tags = list_tags(db, page_id)?;
         for tag in &tags {
             println!("{tag}");
@@ -104,7 +115,7 @@ mod tests {
         let conn = open_test_db();
         insert_page(&conn, "people/alice");
 
-        run(&conn, "people/alice", &["investor".into()], &[]).unwrap();
+        run(&conn, "people/alice", &["investor".into()], &[], false).unwrap();
 
         let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
         let tags = list_tags(&conn, page_id).unwrap();
@@ -116,8 +127,8 @@ mod tests {
         let conn = open_test_db();
         insert_page(&conn, "people/alice");
 
-        run(&conn, "people/alice", &["investor".into()], &[]).unwrap();
-        run(&conn, "people/alice", &["investor".into()], &[]).unwrap();
+        run(&conn, "people/alice", &["investor".into()], &[], false).unwrap();
+        run(&conn, "people/alice", &["investor".into()], &[], false).unwrap();
 
         let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
         let tags = list_tags(&conn, page_id).unwrap();
@@ -134,9 +145,10 @@ mod tests {
             "people/alice",
             &["investor".into(), "founder".into()],
             &[],
+            false,
         )
         .unwrap();
-        run(&conn, "people/alice", &[], &["investor".into()]).unwrap();
+        run(&conn, "people/alice", &[], &["investor".into()], false).unwrap();
 
         let page_id = resolve_page_id(&conn, 1, "people/alice").unwrap();
         let tags = list_tags(&conn, page_id).unwrap();
@@ -148,7 +160,7 @@ mod tests {
         let conn = open_test_db();
         insert_page(&conn, "people/alice");
 
-        let result = run(&conn, "people/alice", &[], &["ghost".into()]);
+        let result = run(&conn, "people/alice", &[], &["ghost".into()], false);
         assert!(result.is_ok());
     }
 
@@ -156,7 +168,7 @@ mod tests {
     fn tags_on_nonexistent_page_returns_error() {
         let conn = open_test_db();
 
-        let result = run(&conn, "people/nobody", &["tag".into()], &[]);
+        let result = run(&conn, "people/nobody", &["tag".into()], &[], false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("page not found"));
     }
@@ -174,7 +186,7 @@ mod tests {
             )
             .unwrap();
 
-        run(&conn, "people/alice", &["investor".into()], &[]).unwrap();
+        run(&conn, "people/alice", &["investor".into()], &[], false).unwrap();
 
         let version_after: i64 = conn
             .query_row(
@@ -197,6 +209,7 @@ mod tests {
             "people/alice",
             &["zebra".into(), "alpha".into(), "mid".into()],
             &[],
+            false,
         )
         .unwrap();
 
@@ -215,7 +228,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = run(&conn, "people/alice", &["investor".into()], &[]).unwrap_err();
+        let error = run(&conn, "people/alice", &["investor".into()], &[], false).unwrap_err();
 
         assert!(error.to_string().contains("CollectionRestoringError"));
     }

@@ -71,6 +71,16 @@ pub struct HybridSearch<'a> {
     /// read from `config.graph_depth` (default `0`). Set `Some(0)` to
     /// disable graph expansion for this invocation.
     pub hops: Option<u32>,
+    /// Optional per-call relevance floor in `[0.0, 1.0]`. When `None`, the
+    /// floor is read from `config.search.relevance_floor` (seeded `0.0` =
+    /// disabled). Applied to the vector arm's raw cosine scores pre-merge
+    /// and to the merged scores post-fusion; results below the floor are
+    /// dropped even if fewer than `limit` rows remain.
+    pub relevance_floor: Option<f64>,
+    /// Optional per-call cap on rows retained per page in the merged
+    /// results. When `None`, the cap is read from
+    /// `config.search.max_chunks_per_doc_default` (seeded `0` = unlimited).
+    pub max_chunks_per_doc: Option<usize>,
 }
 
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
@@ -150,20 +160,96 @@ pub fn hybrid_search(
     // Absolute cosine floor on the vector arm, applied to the raw cosine
     // scores before the per-arm normalization in the merge step. The seeded
     // default `0.0` is identity behaviour: no hit is dropped.
-    let relevance_floor = read_config_f64(conn, "search.relevance_floor", 0.0)?;
+    let relevance_floor = match q.relevance_floor {
+        Some(floor) => floor.clamp(0.0, 1.0),
+        None => configured_relevance_floor(conn)?,
+    };
     if relevance_floor > 0.0 {
         vec_results.retain(|result| result.score >= relevance_floor);
     }
 
-    let mut merged = match read_merge_strategy(conn)? {
+    let merged = match read_merge_strategy(conn)? {
         SearchMergeStrategy::SetUnion => merge_set_union(&fts_results, &vec_results),
         SearchMergeStrategy::Rrf => merge_rrf(&fts_results, &vec_results),
     };
+
+    // Post-fusion quality passes (dedup → floor), each an identity no-op at
+    // its seeded default. The floor runs before graph expansion so a
+    // below-floor noise hit is never used as an expansion seed.
+    let max_chunks_per_doc = match q.max_chunks_per_doc {
+        Some(value) => value,
+        None => configured_max_chunks_per_doc(conn)?,
+    };
+    let merged = dedup_chunks_per_page(merged, max_chunks_per_doc);
+    let mut merged = filter_below_floor(merged, relevance_floor);
 
     apply_graph_expansion(conn, &mut merged, q.hops, q.collection)?;
 
     merged.truncate(q.limit);
     Ok(merged)
+}
+
+/// Read the configured post-fusion relevance floor
+/// (`config.search.relevance_floor`, seeded `0.0` = disabled), clamped into
+/// the valid `[0.0, 1.0]` range.
+pub fn configured_relevance_floor(conn: &Connection) -> Result<f64, SearchError> {
+    Ok(read_config_f64(conn, "search.relevance_floor", 0.0)?.clamp(0.0, 1.0))
+}
+
+/// Read the configured per-page result cap
+/// (`config.search.max_chunks_per_doc_default`, seeded `0` = unlimited).
+pub fn configured_max_chunks_per_doc(conn: &Connection) -> Result<usize, SearchError> {
+    read_config_usize(conn, "search.max_chunks_per_doc_default", 0)
+}
+
+/// Collapse multi-chunk hits from the same page down to at most
+/// `max_per_page` representatives, accumulating the number of collapsed
+/// siblings into the strongest surviving row's `dedup_collapsed_count`.
+///
+/// Candidates are expected in score-descending order (the order every
+/// retrieval arm and merge strategy produces); relative order is preserved.
+/// `max_per_page == 0` means unlimited and returns the input unchanged —
+/// the seeded identity default.
+pub fn dedup_chunks_per_page(
+    candidates: Vec<SearchResult>,
+    max_per_page: usize,
+) -> Vec<SearchResult> {
+    if max_per_page == 0 {
+        return candidates;
+    }
+
+    let mut kept: Vec<SearchResult> = Vec::with_capacity(candidates.len());
+    let mut kept_by_page: HashMap<String, Vec<usize>> = HashMap::new();
+    for candidate in candidates {
+        let entry = kept_by_page.entry(candidate.slug.clone()).or_default();
+        if entry.len() < max_per_page {
+            entry.push(kept.len());
+            kept.push(candidate);
+        } else {
+            let strongest = entry
+                .iter()
+                .copied()
+                .max_by(|left, right| kept[*left].score.total_cmp(&kept[*right].score))
+                .unwrap_or(entry[0]);
+            kept[strongest].dedup_collapsed_count += 1 + candidate.dedup_collapsed_count;
+        }
+    }
+    kept
+}
+
+/// Drop candidates whose score falls below `floor`, even if fewer than the
+/// requested number of results remain ("fewer-than-k" contract).
+///
+/// `floor <= 0.0` disables filtering and returns the input unchanged — the
+/// seeded identity default. Scores exactly at the floor are kept.
+pub fn filter_below_floor(candidates: Vec<SearchResult>, floor: f64) -> Vec<SearchResult> {
+    if floor <= 0.0 {
+        return candidates;
+    }
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate.score >= floor)
+        .collect()
 }
 
 /// Bounded outbound graph expansion knobs.
@@ -380,6 +466,7 @@ pub fn expand_graph(
                         summary,
                         score,
                         wing,
+                        ..Default::default()
                     });
                 if visited.insert(target_slug.clone()) {
                     total_visited += 1;
@@ -537,6 +624,7 @@ fn exact_slug_result_with_namespace(
             summary: row.get(2)?,
             score: 1.0,
             wing: row.get(3)?,
+            ..Default::default()
         })
     });
 
@@ -729,6 +817,7 @@ fn query_exact_slug_canonical(
             summary: row.get(2)?,
             score: 1.0,
             wing: row.get(3)?,
+            ..Default::default()
         })
     })
 }
@@ -775,6 +864,11 @@ fn merge_set_union(
 
 fn merge_rrf(fts_results: &[SearchResult], vec_results: &[SearchResult]) -> Vec<SearchResult> {
     const RRF_K: f64 = 60.0;
+    // Normalize the raw reciprocal-rank sum (max 2/(RRF_K+1) for a rank-0
+    // hit in both lists) onto the same [0, 1] scale as set-union scores, so
+    // one relevance floor and one gap-logging threshold work for both
+    // strategies.
+    let rrf_scale = (RRF_K + 1.0) / 2.0;
 
     let mut merged: HashMap<String, SearchResult> = HashMap::new();
 
@@ -798,6 +892,10 @@ fn merge_rrf(fts_results: &[SearchResult], vec_results: &[SearchResult]) -> Vec<
                 score: contribution,
                 ..result.clone()
             });
+    }
+
+    for result in merged.values_mut() {
+        result.score *= rrf_scale;
     }
 
     let mut results: Vec<_> = merged.into_values().collect();
@@ -852,6 +950,7 @@ mod tests {
             summary: format!("summary for {slug}"),
             score,
             wing: "people".to_owned(),
+            ..Default::default()
         }
     }
 
@@ -1617,6 +1716,33 @@ mod tests {
 
         assert_eq!(slugs, vec!["b", "a", "c"]);
         assert!(results[0].score > results[1].score);
+        // Normalized scale: a dual-list hit at ranks 1 and 0 lands just
+        // below 1.0; single-list hits land near 0.5.
+        assert!(
+            results[0].score > 0.9 && results[0].score <= 1.0,
+            "dual-list RRF hit must score near 1.0, got {}",
+            results[0].score
+        );
+        assert!(
+            (results[1].score - 0.5).abs() < 0.01,
+            "rank-0 single-list RRF hit must score ~0.5, got {}",
+            results[1].score
+        );
+    }
+
+    #[test]
+    fn merge_rrf_dual_rank_zero_hit_scores_exactly_one() {
+        let fts = vec![result("a", 10.0)];
+        let vec = vec![result("a", 8.0)];
+
+        let results = merge_rrf(&fts, &vec);
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            (results[0].score - 1.0).abs() < 1e-12,
+            "rank-0 hit in both lists must normalize to 1.0, got {}",
+            results[0].score
+        );
     }
 
     #[test]

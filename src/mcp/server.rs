@@ -320,6 +320,12 @@ pub struct MemoryQueryInput {
     pub depth: Option<String>,
     /// Include superseded historical pages in results
     pub include_superseded: Option<bool>,
+    /// Graph-expansion hop count override; absent reads `config.graph_depth`, `0` disables
+    pub hops: Option<u32>,
+    /// Relevance floor (0.0-1.0) below which results are dropped (may return fewer results); absent reads `config.search.relevance_floor`
+    pub relevance_floor: Option<f64>,
+    /// Maximum results retained per page (`0` = unlimited); absent reads `config.search.max_chunks_per_doc_default`
+    pub max_chunks_per_doc: Option<u32>,
 }
 
 /// Input schema for the `memory_search` MCP tool.
@@ -337,6 +343,10 @@ pub struct MemorySearchInput {
     pub limit: Option<u32>,
     /// Include superseded historical pages in results
     pub include_superseded: Option<bool>,
+    /// Relevance floor (0.0-1.0) below which results are dropped (may return fewer results); absent reads `config.search.relevance_floor`
+    pub relevance_floor: Option<f64>,
+    /// Maximum results retained per page (`0` = unlimited); absent reads `config.search.max_chunks_per_doc_default`
+    pub max_chunks_per_doc: Option<u32>,
 }
 
 /// Input schema for the `memory_list` MCP tool.
@@ -435,7 +445,7 @@ pub struct MemoryGapInput {
     pub query: String,
     /// Optional page slug to bind the gap to
     pub slug: Option<String>,
-    /// Optional context about the gap
+    /// Optional context about the gap. Discarded by default to avoid leaking sensitive query text; persisted (length-capped) only when the `gaps.store_context` config key is `true`
     pub context: Option<String>,
 }
 
@@ -446,6 +456,15 @@ pub struct MemoryGapsInput {
     pub resolved: Option<bool>,
     /// Maximum number of gaps to return (default: 20, max: 1000)
     pub limit: Option<u32>,
+}
+
+/// Input schema for the `memory_gap_resolve` MCP tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryGapResolveInput {
+    /// Numeric id of the gap to resolve (see `memory_gaps`)
+    pub id: i64,
+    /// Slug of the page that answers the gap
+    pub slug: String,
 }
 
 /// Input schema for the `memory_stats` MCP tool (no parameters).
@@ -514,6 +533,7 @@ impl QuaidServer {
         // gaps
         memory_gap,
         memory_gaps,
+        memory_gap_resolve,
         // conversation
         memory_add_turn,
         memory_close_session,
@@ -585,7 +605,7 @@ mod tests {
     /// test catches it before the post-split MCP wire surface diverges from
     /// the pre-split baseline.
     #[test]
-    fn tool_registry_lists_all_24_tools() {
+    fn tool_registry_lists_all_25_tools() {
         let names: std::collections::BTreeSet<String> = QuaidServer::tool_box()
             .list()
             .into_iter()
@@ -607,6 +627,7 @@ mod tests {
             "memory_tags",
             "memory_gap",
             "memory_gaps",
+            "memory_gap_resolve",
             "memory_stats",
             "memory_collections",
             "memory_namespace_create",
@@ -621,7 +642,7 @@ mod tests {
         .map(|s| (*s).to_string())
         .collect();
         assert_eq!(names, expected, "tool registry drift");
-        assert_eq!(names.len(), 24, "expected 24 tools, got {}", names.len());
+        assert_eq!(names.len(), 25, "expected 25 tools, got {}", names.len());
     }
 
     #[test]
@@ -1240,6 +1261,9 @@ mod tests {
                 limit: None,
                 depth: None,
                 include_superseded: None,
+                hops: None,
+                relevance_floor: None,
+                max_chunks_per_doc: None,
             })
             .unwrap();
 

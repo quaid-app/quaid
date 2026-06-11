@@ -89,6 +89,12 @@ enum Commands {
         /// Override `config.graph_depth` for this invocation. `0` disables graph expansion.
         #[arg(long)]
         hops: Option<u32>,
+        /// Drop results scoring below this floor (0.0-1.0); may return fewer results. `0.0` disables. Overrides `config.search.relevance_floor`.
+        #[arg(long, value_parser = parse_unit_interval)]
+        relevance_floor: Option<f64>,
+        /// Maximum results retained per page; `0` means unlimited. Overrides `config.search.max_chunks_per_doc_default`.
+        #[arg(long)]
+        max_chunks_per_doc: Option<usize>,
     },
     /// Semantic / hybrid query
     Query {
@@ -109,6 +115,12 @@ enum Commands {
         /// Override `config.graph_depth` for this invocation. `0` disables graph expansion.
         #[arg(long)]
         hops: Option<u32>,
+        /// Drop results scoring below this floor (0.0-1.0); may return fewer results. `0.0` disables. Overrides `config.search.relevance_floor`.
+        #[arg(long, value_parser = parse_unit_interval)]
+        relevance_floor: Option<f64>,
+        /// Maximum results retained per page; `0` means unlimited. Overrides `config.search.max_chunks_per_doc_default`.
+        #[arg(long)]
+        max_chunks_per_doc: Option<usize>,
     },
     /// Ingest a source document
     Ingest {
@@ -224,8 +236,10 @@ enum Commands {
         #[arg(long)]
         r#type: Option<String>,
     },
-    /// List unresolved knowledge gaps
+    /// List unresolved knowledge gaps, or resolve one (`gaps resolve <id> <slug>`)
     Gaps {
+        #[command(subcommand)]
+        action: Option<commands::gaps::GapsAction>,
         #[arg(long, default_value = "20")]
         limit: u32,
         #[arg(long)]
@@ -337,6 +351,18 @@ fn early_command(cli: &Cli) -> EarlyCommand {
     }
 }
 
+/// Clap value parser for floor-style flags constrained to `[0.0, 1.0]`.
+fn parse_unit_interval(value: &str) -> Result<f64, String> {
+    let parsed: f64 = value
+        .parse()
+        .map_err(|err| format!("not a number: {err}"))?;
+    if (0.0..=1.0).contains(&parsed) {
+        Ok(parsed)
+    } else {
+        Err(format!("must be between 0.0 and 1.0, got {parsed}"))
+    }
+}
+
 fn validate_flags_from_args(
     all: bool,
     links: bool,
@@ -404,6 +430,8 @@ async fn main() -> Result<()> {
             include_superseded,
             raw,
             hops,
+            relevance_floor,
+            max_chunks_per_doc,
         } => commands::search::run(
             &db,
             &query,
@@ -414,6 +442,8 @@ async fn main() -> Result<()> {
             cli.json,
             raw,
             hops,
+            relevance_floor,
+            max_chunks_per_doc,
         ),
         Commands::Query {
             query,
@@ -424,6 +454,8 @@ async fn main() -> Result<()> {
             namespace,
             include_superseded,
             hops,
+            relevance_floor,
+            max_chunks_per_doc,
         } => {
             commands::query::run(
                 &db,
@@ -436,6 +468,8 @@ async fn main() -> Result<()> {
                 include_superseded,
                 cli.json,
                 hops,
+                relevance_floor,
+                max_chunks_per_doc,
             )
             .await
         }
@@ -486,7 +520,16 @@ async fn main() -> Result<()> {
         Commands::Check { slug, all, r#type } => {
             commands::check::run(&db, slug, all, r#type, cli.json)
         }
-        Commands::Gaps { limit, resolved } => commands::gaps::run(&db, limit, resolved, cli.json),
+        Commands::Gaps {
+            action,
+            limit,
+            resolved,
+        } => match action {
+            Some(commands::gaps::GapsAction::Resolve { id, slug }) => {
+                commands::gaps::resolve(&db, id, &slug, cli.json)
+            }
+            None => commands::gaps::run(&db, limit, resolved, cli.json),
+        },
         Commands::Compact => commands::compact::run(&db),
         Commands::Collection { action } => commands::collection::run(&db, action, cli.json),
         Commands::Namespace { action } => commands::namespace::run(&db, action, cli.json),

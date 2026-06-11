@@ -60,6 +60,7 @@ fn result(slug: &str, score: f64) -> SearchResult {
         summary: slug.to_owned(),
         score,
         wing: String::new(),
+        ..Default::default()
     }
 }
 

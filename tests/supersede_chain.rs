@@ -78,6 +78,7 @@ fn search_result(slug: &str) -> SearchResult {
         summary: slug.to_string(),
         score: 1.0,
         wing: "facts".to_string(),
+        ..Default::default()
     }
 }
 
@@ -228,6 +229,8 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 wing: None,
                 limit: None,
                 include_superseded: None,
+                relevance_floor: None,
+                max_chunks_per_doc: None,
             })
             .unwrap(),
     ))
@@ -241,6 +244,8 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 wing: None,
                 limit: None,
                 include_superseded: Some(true),
+                relevance_floor: None,
+                max_chunks_per_doc: None,
             })
             .unwrap(),
     ))
@@ -265,6 +270,9 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 limit: Some(10),
                 depth: None,
                 include_superseded: None,
+                hops: None,
+                relevance_floor: None,
+                max_chunks_per_doc: None,
             })
             .unwrap(),
     ))
@@ -279,6 +287,9 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 limit: Some(10),
                 depth: None,
                 include_superseded: Some(true),
+                hops: None,
+                relevance_floor: None,
+                max_chunks_per_doc: None,
             })
             .unwrap(),
     ))

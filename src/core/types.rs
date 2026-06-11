@@ -154,7 +154,7 @@ pub struct TimelineEntry {
 // ── SearchResult ──────────────────────────────────────────────
 
 /// A single result from FTS5, vector, or hybrid search.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchResult {
     /// Slug of the page that produced the hit.
     pub slug: String,
@@ -166,6 +166,29 @@ pub struct SearchResult {
     pub score: f64,
     /// Memory-palace wing of the page, exposed for downstream filtering.
     pub wing: String,
+    /// MMR-adjusted relevance score; populated only when the MMR rerank
+    /// pass is active (absent under the identity default `mmr_lambda=1.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmr_score: Option<f32>,
+    /// Additive cross-reference boost folded into `score`; `0.0` (and
+    /// omitted from JSON) while cross-reference scoring is inactive.
+    #[serde(default, skip_serializing_if = "f32_is_zero")]
+    pub cross_ref_boost: f32,
+    /// Number of same-page sibling hits collapsed into this representative
+    /// row by the per-page dedup pass; `0` (and omitted from JSON) when no
+    /// collapse occurred.
+    #[serde(default, skip_serializing_if = "u32_is_zero")]
+    pub dedup_collapsed_count: u32,
+}
+
+/// `skip_serializing_if` helper: omit inactive (zero) boost values.
+fn f32_is_zero(value: &f32) -> bool {
+    *value == 0.0
+}
+
+/// `skip_serializing_if` helper: omit zero collapse counters.
+fn u32_is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 // ── Chunk ───────────────────────────────────────────────────────

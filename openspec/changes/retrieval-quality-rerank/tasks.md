@@ -1,28 +1,48 @@
 ## 1. Config plumbing and result-shape extension
 
-- [ ] 1.1 Add `relevance_floor`, `mmr_lambda`, `max_chunks_per_doc_default`, `cross_ref_boost_weight`, `cross_ref_boost_cap`, `rerank_extractive`, `rerank_extractive_top_n`, `rerank_extractive_budget_ms` to the `config` table seed defaults in `src/schema.sql` (identity values for the no-op rollout: `mmr_lambda=1.0`, `relevance_floor=0.0`, `max_chunks_per_doc_default=0`, `cross_ref_boost_weight=0.0`, `rerank_extractive=false`)
-- [ ] 1.2 Add config-read helpers in `src/core/db.rs` or `src/core/config.rs` for each new key with typed getters and `[0.0, 1.0]` range validation on writes
-- [ ] 1.3 Extend `SearchResult` in `src/core/types.rs` with optional `mmr_score: Option<f32>`, `cross_ref_boost: f32`, `dedup_collapsed_count: u32` fields; default values when filters are inactive
-- [ ] 1.4 Update `cargo test` to confirm existing roundtrip and search tests still pass with the extended struct
+> **Naming decision (Sections 1–3 implementation):** all new config keys use
+> the established `search.*` prefix instead of the unprefixed names below —
+> `search.relevance_floor` (already seeded by the Wave 0 retrieval fixes;
+> reused, not duplicated), `search.mmr_lambda`,
+> `search.max_chunks_per_doc_default`, `search.cross_ref_boost_weight`,
+> `search.cross_ref_boost_cap`, `search.rerank_extractive`,
+> `search.rerank_extractive_top_n`, `search.rerank_extractive_budget_ms`.
+>
+> **Reconciliation with Wave 0:** `search.relevance_floor` landed in Wave 0
+> as an absolute raw-cosine floor on the vector arm pre-merge. That behavior
+> is kept; Sections 3.x add the post-fusion floor pass driven by the same
+> key (and the same per-call override). Both are identity no-ops at the
+> seeded `0.0`.
+
+- [x] 1.1 Add `relevance_floor`, `mmr_lambda`, `max_chunks_per_doc_default`, `cross_ref_boost_weight`, `cross_ref_boost_cap`, `rerank_extractive`, `rerank_extractive_top_n`, `rerank_extractive_budget_ms` to the `config` table seed defaults in `src/schema.sql` (identity values for the no-op rollout: `mmr_lambda=1.0`, `relevance_floor=0.0`, `max_chunks_per_doc_default=0`, `cross_ref_boost_weight=0.0`, `rerank_extractive=false`) — *done with the `search.*` prefix; `search.relevance_floor` was already seeded by Wave 0*
+- [x] 1.2 Add config-read helpers in `src/core/db.rs` or `src/core/config.rs` for each new key with typed getters and `[0.0, 1.0]` range validation on writes — *typed getters `configured_relevance_floor` / `configured_max_chunks_per_doc` live in `src/core/search.rs` next to the existing config readers; the floor getter clamps reads into `[0.0, 1.0]`. `quaid config set` is generic and has no per-key write validation today, so range validation is enforced on the CLI flags (clap value parser) and MCP parameters instead. Getters for the Section 4–6 keys land with their consuming sections to avoid dead plumbing.*
+- [x] 1.3 Extend `SearchResult` in `src/core/types.rs` with optional `mmr_score: Option<f32>`, `cross_ref_boost: f32`, `dedup_collapsed_count: u32` fields; default values when filters are inactive — *fields are `#[serde(default)]` and skipped during serialization at their inactive values, so default-config JSON output is unchanged*
+- [x] 1.4 Update `cargo test` to confirm existing roundtrip and search tests still pass with the extended struct — *validated with targeted runs of the search/gaps/progressive test files (full suite is too heavy for the dev container; CI runs it)*
 
 ## 2. Intra-document deduplication (`result-deduplication` capability)
 
-- [ ] 2.1 Implement `dedup_chunks_per_page(candidates, max_per_page)` in `src/core/search.rs` returning representatives with populated `dedup_collapsed_count`
-- [ ] 2.2 Wire `dedup_chunks_per_page` as the first post-fusion pass in `hybrid_search`
-- [ ] 2.3 Apply the same dedup pass on the initial set and on every expansion step inside `progressive_retrieve` (`src/core/progressive.rs`)
-- [ ] 2.4 Add `--max-chunks-per-doc N` CLI flag to `src/commands/search.rs` and `src/commands/query.rs`; flag value of `0` means "unlimited" per the spec
-- [ ] 2.5 Pass-through `max_chunks_per_doc` parameter on `memory_search` and `memory_query` MCP tools in `src/mcp/server.rs`
-- [ ] 2.6 Write `tests/search_dedup.rs` covering: three-chunk collapse, single-chunk passthrough, `dedup_collapsed_count` correctness, `--max-chunks-per-doc 2` behavior, `progressive_retrieve` re-application
+> **Note:** both retrieval arms currently emit page-level rows (FTS indexes
+> pages; the vector arm takes `MAX` cosine per page with `GROUP BY p.id`),
+> so the merged candidate set is already unique per page and this pass is an
+> identity safeguard until chunk-level candidates land. The pass is wired
+> and tested against synthetic multi-row-per-page candidate lists.
+
+- [x] 2.1 Implement `dedup_chunks_per_page(candidates, max_per_page)` in `src/core/search.rs` returning representatives with populated `dedup_collapsed_count`
+- [x] 2.2 Wire `dedup_chunks_per_page` as the first post-fusion pass in `hybrid_search`
+- [x] 2.3 Apply the same dedup pass on the initial set and on every expansion step inside `progressive_retrieve` (`src/core/progressive.rs`)
+- [x] 2.4 Add `--max-chunks-per-doc N` CLI flag to `src/commands/search.rs` and `src/commands/query.rs`; flag value of `0` means "unlimited" per the spec
+- [x] 2.5 Pass-through `max_chunks_per_doc` parameter on `memory_search` and `memory_query` MCP tools in `src/mcp/server.rs`
+- [x] 2.6 Write `tests/search_dedup.rs` covering: three-chunk collapse, single-chunk passthrough, `dedup_collapsed_count` correctness, `--max-chunks-per-doc 2` behavior, `progressive_retrieve` re-application
 
 ## 3. Confidence threshold filter (`confidence-thresholding` capability)
 
-- [ ] 3.1 Implement `filter_below_floor(candidates, floor)` in `src/core/search.rs`
-- [ ] 3.2 Wire the floor pass after dedup and cross-reference boost (after Section 4 lands) and before MMR
-- [ ] 3.3 Apply floor inside `progressive_retrieve` on initial and expansion-step candidates; below-floor candidates are not expanded
-- [ ] 3.4 Add `--relevance-floor F` CLI flag to `quaid search` and `quaid query` with `[0.0, 1.0]` validation
-- [ ] 3.5 Add `relevance_floor` parameter to `memory_search` and `memory_query` MCP tool schemas
-- [ ] 3.6 Confirm under-fill returns successfully (no error, no padding); update CLI/MCP response wording as needed
-- [ ] 3.7 Write `tests/search_confidence.rs` covering: below/at/above-floor cases, post-boost score comparison, empty-result success path, `--relevance-floor 0.0` disable, MCP parameter override
+- [x] 3.1 Implement `filter_below_floor(candidates, floor)` in `src/core/search.rs`
+- [x] 3.2 Wire the floor pass after dedup and cross-reference boost (after Section 4 lands) and before MMR — *wired after dedup and before graph expansion; the boost insertion point (Section 4) and MMR (Section 5) remain open*
+- [x] 3.3 Apply floor inside `progressive_retrieve` on initial and expansion-step candidates; below-floor candidates are not expanded
+- [x] 3.4 Add `--relevance-floor F` CLI flag to `quaid search` and `quaid query` with `[0.0, 1.0]` validation
+- [x] 3.5 Add `relevance_floor` parameter to `memory_search` and `memory_query` MCP tool schemas
+- [x] 3.6 Confirm under-fill returns successfully (no error, no padding); update CLI/MCP response wording as needed — *covered by tests; existing empty-result wording ("No results found." / empty JSON array) already matches the fewer-than-k contract*
+- [x] 3.7 Write `tests/search_confidence.rs` covering: below/at/above-floor cases, post-boost score comparison, empty-result success path, `--relevance-floor 0.0` disable, MCP parameter override — *post-boost comparison deferred to Section 4 (cross-ref boost not yet implemented)*
 
 ## 4. Cross-reference boost (`cross-reference-scoring` capability)
 

@@ -14,12 +14,29 @@ use crate::core::fts::{sanitize_fts_query, search_fts_tiered, FtsQuery};
 use crate::core::gaps;
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
-use crate::core::search::{hybrid_search, HybridSearch};
-use crate::mcp::errors::{map_namespace_error, map_search_error, map_serialize_error};
+use crate::core::search::{
+    configured_max_chunks_per_doc, configured_relevance_floor, dedup_chunks_per_page,
+    filter_below_floor, hybrid_search, HybridSearch,
+};
+use crate::mcp::errors::{
+    invalid_params, map_namespace_error, map_search_error, map_serialize_error,
+};
 use crate::mcp::server::{
     resolve_memory_collection_filter_for_mcp, MemoryQueryInput, MemorySearchInput, QuaidServer,
 };
 use crate::mcp::validation::MAX_LIMIT;
+
+/// Reject a caller-supplied relevance floor outside `[0.0, 1.0]`.
+fn validate_relevance_floor(floor: Option<f64>) -> Result<Option<f64>, rmcp::Error> {
+    if let Some(value) = floor {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(invalid_params(format!(
+                "relevance_floor must be between 0.0 and 1.0, got {value}"
+            )));
+        }
+    }
+    Ok(floor)
+}
 
 impl QuaidServer {
     /// `memory_query` MCP tool: run hybrid semantic + FTS5 retrieval with
@@ -41,6 +58,8 @@ impl QuaidServer {
             resolve_memory_collection_filter_for_mcp(&db, input.collection.as_deref())?;
         let include_superseded = input.include_superseded.unwrap_or(false);
 
+        let relevance_floor = validate_relevance_floor(input.relevance_floor)?;
+
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
         let results = hybrid_search(
             &db,
@@ -52,17 +71,20 @@ impl QuaidServer {
                 include_superseded,
                 canonical: true,
                 limit,
-                hops: None,
+                hops: input.hops,
+                relevance_floor,
+                max_chunks_per_doc: input.max_chunks_per_doc.map(|value| value as usize),
             },
         )
         .map_err(map_search_error)?;
 
-        // Auto-log knowledge gap on weak results
-        if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
+        // Auto-log knowledge gap on weak results, recording query-free
+        // diagnostics as the context (never the query text itself).
+        if gaps::should_log_gap(&results) {
             let _ = gaps::log_gap(
                 None,
                 &input.query,
-                "",
+                &gaps::auto_gap_context("hybrid_search", &results),
                 results.first().map(|r| r.score),
                 &db,
             );
@@ -121,6 +143,8 @@ impl QuaidServer {
             resolve_memory_collection_filter_for_mcp(&db, input.collection.as_deref())?;
         let include_superseded = input.include_superseded.unwrap_or(false);
 
+        let relevance_floor = validate_relevance_floor(input.relevance_floor)?;
+
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         // `search_fts_tiered` applies numeric-alias expansion in its AND
         // pass, so sanitization is the only preprocessing needed here.
@@ -138,6 +162,19 @@ impl QuaidServer {
             },
         )
         .map_err(map_search_error)?;
+
+        // Post-retrieval quality passes (dedup → floor); identity no-ops at
+        // the seeded config defaults. Parameter values, when given, override
+        // the `search.*` config keys.
+        let max_per_page = match input.max_chunks_per_doc {
+            Some(value) => value as usize,
+            None => configured_max_chunks_per_doc(&db).map_err(map_search_error)?,
+        };
+        let floor = match relevance_floor {
+            Some(value) => value,
+            None => configured_relevance_floor(&db).map_err(map_search_error)?,
+        };
+        let results = filter_below_floor(dedup_chunks_per_page(results, max_per_page), floor);
 
         let json = serde_json::to_string_pretty(&results).map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))

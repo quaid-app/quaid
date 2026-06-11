@@ -138,13 +138,19 @@ Always append to the `timeline` section with a sourced, dated entry. Never overw
 
 Once findings are ingested and a resolution page/slug exists:
 
-1. Obtain approval through the session's `memory_gap_approve` workflow, providing:
-   - `gap_id`
-   - `resolution_slug` — the slug of the page containing the answer
-
-2. After approval is granted, confirm the gap appears in resolved state:
+1. Resolve the gap with the page that answers it (resolution is brain-internal
+   and needs no approval — approval workflows only gate sensitivity escalation):
    ```bash
-   quaid gaps --resolved true --json | jq '.[] | select(.id == <gap_id>)'
+   quaid gaps resolve <gap_id> <resolution_slug>
+   # or via MCP:
+   quaid call memory_gap_resolve '{"id": <gap_id>, "slug": "<resolution_slug>"}'
+   ```
+   The slug must resolve to an existing page; unknown gap ids return a
+   not-found error.
+
+2. Confirm the gap appears in resolved state:
+   ```bash
+   quaid gaps --resolved --json | jq '.[] | select(.id == <gap_id>)'
    ```
 
 ---

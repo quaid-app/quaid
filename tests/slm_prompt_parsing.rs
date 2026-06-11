@@ -19,7 +19,7 @@ use quaid::core::conversation::{
 };
 use quaid::core::db;
 use quaid::core::types::{
-    ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
+    CONVERSATION_FORMAT_VERSION, ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
     ExtractionJobStatus, PreferenceStrength, RawFact, Turn, TurnRole, WindowedTurns,
 };
 use rusqlite::Connection;
@@ -599,6 +599,7 @@ fn sample_conversation() -> ConversationFile {
     ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_string(),
+            format_version: CONVERSATION_FORMAT_VERSION,
             session_id: "s1".to_string(),
             date: "2026-05-03".to_string(),
             started_at: "2026-05-03T10:00:00Z".to_string(),
@@ -622,6 +623,7 @@ fn coffee_preference_conversation() -> ConversationFile {
     ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_string(),
+            format_version: CONVERSATION_FORMAT_VERSION,
             session_id: "s1".to_string(),
             date: "2026-05-03".to_string(),
             started_at: "2026-05-03T10:00:00Z".to_string(),

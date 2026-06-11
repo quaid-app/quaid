@@ -8,7 +8,7 @@
 
 use quaid::core::conversation::extractor::compute_windows;
 use quaid::core::types::{
-    ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionTriggerKind, Turn,
+    CONVERSATION_FORMAT_VERSION, ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionTriggerKind, Turn,
     TurnRole,
 };
 
@@ -55,6 +55,7 @@ fn conversation_with_cursor(cursor: i64, last: i64) -> ConversationFile {
     ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_string(),
+            format_version: CONVERSATION_FORMAT_VERSION,
             session_id: "s1".to_string(),
             date: "2026-05-03".to_string(),
             started_at: "2026-05-03T10:00:00Z".to_string(),

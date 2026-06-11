@@ -1769,9 +1769,12 @@ fn download_artifact(
         "{}/{}/resolve/{}/{}",
         huggingface_base_url().trim_end_matches('/'),
         alias.repo_id,
-        alias.revision.as_deref().ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
-            alias: alias.requested_alias.clone(),
-        })?,
+        alias
+            .revision
+            .as_deref()
+            .ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
+                alias: alias.requested_alias.clone(),
+            })?,
         relative_path
     );
     let mut response = client
@@ -1873,9 +1876,12 @@ fn download_source_pinned_artifact(
         "{}/{}/resolve/{}/{}",
         huggingface_base_url().trim_end_matches('/'),
         alias.repo_id,
-        alias.revision.as_deref().ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
-            alias: alias.requested_alias.clone(),
-        })?,
+        alias
+            .revision
+            .as_deref()
+            .ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
+                alias: alias.requested_alias.clone(),
+            })?,
         relative_path
     );
     let mut response = client

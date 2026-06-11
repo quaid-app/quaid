@@ -17,7 +17,10 @@ use std::process::{Command, Output};
 use quaid::core::{
     conversation::format,
     db,
-    types::{CONVERSATION_FORMAT_VERSION, ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole},
+    types::{
+        ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole,
+        CONVERSATION_FORMAT_VERSION,
+    },
 };
 use rusqlite::Connection;
 

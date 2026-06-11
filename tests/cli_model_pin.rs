@@ -54,7 +54,10 @@ fn model_pull_refuses_custom_model_with_revision_but_no_allow_flag() {
         "--model-revision",
         "0123456789abcdef0123456789abcdef01234567",
     ]);
-    assert!(!output.status.success(), "must require --allow-unverified-model");
+    assert!(
+        !output.status.success(),
+        "must require --allow-unverified-model"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--allow-unverified-model"),

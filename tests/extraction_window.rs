@@ -8,8 +8,8 @@
 
 use quaid::core::conversation::extractor::compute_windows;
 use quaid::core::types::{
-    CONVERSATION_FORMAT_VERSION, ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionTriggerKind, Turn,
-    TurnRole,
+    ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionTriggerKind, Turn,
+    TurnRole, CONVERSATION_FORMAT_VERSION,
 };
 
 #[test]

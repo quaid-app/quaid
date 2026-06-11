@@ -19,8 +19,9 @@ use quaid::core::conversation::{
 };
 use quaid::core::db;
 use quaid::core::types::{
-    CONVERSATION_FORMAT_VERSION, ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
+    ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
     ExtractionJobStatus, PreferenceStrength, RawFact, Turn, TurnRole, WindowedTurns,
+    CONVERSATION_FORMAT_VERSION,
 };
 use rusqlite::Connection;
 

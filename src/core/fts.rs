@@ -2,11 +2,19 @@
 //! query-sanitization and tiered-fallback helpers callers need to drive it
 //! safely from natural-language input. Quoted phrases, boolean operators,
 //! and prefix wildcards in expert (`--raw`) queries pass through unchanged;
-//! everyday callers sanitize first and let the tiered helper widen
-//! precision-first AND queries into OR-fallback for compound terms.
+//! everyday callers (CLI `quaid search`, MCP `memory_search`, and
+//! `hybrid_search`) sanitize first and use the tiered helper, which runs a
+//! precision-first AND pass and blends OR-recall hits below the AND hits to
+//! fill any spare `limit` slots. Numeric tokens are aliased symmetrically in
+//! both passes: `75000` ↔ `75k`/`"75 000"`, `1500000` ↔ `"1 5m"` (the
+//! tokenized form of `$1.5M`), and formatted multi-token numerals
+//! (`75` + `000`, the tokenized form of `$75,000`) fuse back into the
+//! single-token numeral.
 //!
 //! See also: `inference` for the semantic counterpart, and `search` for the
 //! hybrid composer that fuses these results with vector hits.
+
+use std::collections::HashSet;
 
 use rusqlite::Connection;
 
@@ -139,8 +147,10 @@ pub struct FtsQuery<'a> {
 /// function as its precision-first AND pass before widening to OR fallback.
 ///
 /// Default callers are sanitized upstream:
-/// - `src/commands/search.rs` applies `sanitize_fts_query` unless `--raw` is set.
-/// - `src/mcp/server.rs` (`memory_search`) always sanitizes.
+/// - `src/commands/search.rs` applies `sanitize_fts_query` unless `--raw` is
+///   set, then calls [`search_fts_tiered`].
+/// - `src/mcp/tools/search.rs` (`memory_search`) always sanitizes and calls
+///   [`search_fts_tiered`].
 /// - `hybrid_search` in `src/core/search.rs` sanitizes before calling
 ///   [`search_fts_tiered`].
 pub fn search_fts(conn: &Connection, q: FtsQuery<'_>) -> Result<Vec<SearchResult>, SearchError> {
@@ -174,15 +184,19 @@ pub(crate) fn expand_numeric_fts_query(sanitized: &str) -> String {
     token_queries_with_numeric_aliases(sanitized).join(" AND ")
 }
 
-/// Natural-language FTS5 search with tiered AND→OR fallback for compound-term
+/// Natural-language FTS5 search with tiered AND→OR blending for compound-term
 /// recall.
 ///
-/// Tries an AND query first (highest precision). If AND returns no results and
-/// the sanitized query has more than one token, retries with an explicit OR
-/// chain so documents matching any individual term are surfaced.
+/// Tries an AND query first (highest precision). When the AND pass leaves
+/// spare `limit` slots and the sanitized query has more than one token, an
+/// explicit OR chain runs as a recall pass: its hits are appended below the
+/// AND hits (deduplicated by slug, scored strictly below the weakest AND hit)
+/// until `limit` results are accumulated. When the AND pass is empty, the OR
+/// results are returned as-is with their own BM25 ranking.
 ///
 /// Callers must pass a **sanitized** `q.query` from `sanitize_fts_query`
-/// (crate-internal; CLI consumers route through `src/commands/search.rs`).
+/// (crate-internal; CLI consumers route through `src/commands/search.rs`,
+/// MCP consumers through `memory_search` in `src/mcp/tools/search.rs`).
 /// See [`FtsQuery`] for per-field documentation.
 pub fn search_fts_tiered(
     conn: &Connection,
@@ -215,8 +229,8 @@ fn search_fts_tiered_internal(
     canonical_slug: bool,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let and_query = expand_numeric_fts_query(sanitized_query);
-    // AND pass — highest precision; use this if it returns any results.
-    let and_results = search_fts_internal(
+    // AND pass — highest precision; these hits always rank first.
+    let mut results = search_fts_internal(
         &and_query,
         wing_filter,
         collection_filter,
@@ -226,16 +240,16 @@ fn search_fts_tiered_internal(
         limit,
         canonical_slug,
     )?;
-    if !and_results.is_empty() {
-        return Ok(and_results);
+    if results.len() >= limit {
+        return Ok(results);
     }
 
     let or_query = expand_fts_query_or(sanitized_query);
     if or_query == and_query {
-        return Ok(Vec::new());
+        return Ok(results);
     }
 
-    search_fts_internal(
+    let or_results = search_fts_internal(
         &or_query,
         wing_filter,
         collection_filter,
@@ -244,14 +258,126 @@ fn search_fts_tiered_internal(
         conn,
         limit,
         canonical_slug,
-    )
+    )?;
+    if results.is_empty() {
+        // Pure OR fallback — keep the OR pass's own BM25 ranking and scores.
+        return Ok(or_results);
+    }
+    blend_or_hits_below_and(&mut results, or_results, limit);
+    Ok(results)
+}
+
+/// Append OR-pass hits below the AND-pass hits, deduplicated by slug, until
+/// `limit` results are accumulated.
+///
+/// OR-hit scores are demoted strictly below the weakest AND score while
+/// preserving the OR pass's relative ranking, so score-sorted consumers
+/// (e.g. the hybrid merge in `core::search`) never rank a recall-only OR hit
+/// above a precision AND hit.
+fn blend_or_hits_below_and(
+    and_results: &mut Vec<SearchResult>,
+    or_results: Vec<SearchResult>,
+    limit: usize,
+) {
+    let seen: HashSet<String> = and_results
+        .iter()
+        .map(|result| result.slug.clone())
+        .collect();
+    let and_floor = and_results.last().map_or(0.0, |result| result.score);
+    let step = and_floor.abs().max(1.0) * 1e-6;
+    let mut demoted = and_floor;
+    for mut hit in or_results {
+        if and_results.len() >= limit {
+            break;
+        }
+        if seen.contains(&hit.slug) {
+            continue;
+        }
+        demoted -= step;
+        hit.score = demoted;
+        and_results.push(hit);
+    }
 }
 
 fn token_queries_with_numeric_aliases(sanitized: &str) -> Vec<String> {
-    sanitized
-        .split_whitespace()
-        .map(expand_numeric_token_query)
-        .collect()
+    let tokens: Vec<&str> = sanitized.split_whitespace().collect();
+    let mut queries = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        if let Some((fused, consumed)) = fuse_numeric_token_run(&tokens[index..]) {
+            queries.push(expand_numeric_token_query(&fused));
+            index += consumed;
+        } else {
+            queries.push(expand_numeric_token_query(tokens[index]));
+            index += 1;
+        }
+    }
+    queries
+}
+
+/// Detect a run of adjacent tokens that together form one numeral and return
+/// the fused single-token numeral plus the number of tokens consumed.
+///
+/// Two shapes are recognised, both produced by sanitizing formatted numerals:
+/// - grouped numerals: a 1-3 digit lead group followed by one or more 3-digit
+///   groups (`75` + `000` → `75000`, the sanitized form of `$75,000`);
+/// - one-decimal abbreviations: an all-digit integer part followed by a
+///   single digit plus magnitude suffix (`1` + `5M` → `1500000`, the
+///   sanitized form of `$1.5M`).
+///
+/// The fused numeral's aliases (see [`numeric_token_aliases`]) always include
+/// the phrase form of the original run, so fusing never loses the
+/// adjacent-token match the unfused query would have had.
+fn fuse_numeric_token_run(tokens: &[&str]) -> Option<(String, usize)> {
+    let first = *tokens.first()?;
+    if !first.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+
+    // Grouped numeral: 1-3 digit lead group plus 3-digit groups.
+    if (1..=3).contains(&first.len()) {
+        let mut fused = first.to_owned();
+        let mut consumed = 1;
+        for token in &tokens[1..] {
+            if token.len() == 3 && token.chars().all(|ch| ch.is_ascii_digit()) {
+                fused.push_str(token);
+                consumed += 1;
+            } else {
+                break;
+            }
+        }
+        if consumed > 1 {
+            return Some((fused, consumed));
+        }
+    }
+
+    // One-decimal abbreviation: integer part plus a `<digit><suffix>` token.
+    let second = *tokens.get(1)?;
+    let mut chars = second.chars();
+    let frac = chars.next()?;
+    let suffix = chars.next()?;
+    if chars.next().is_some() || !frac.is_ascii_digit() {
+        return None;
+    }
+    let divisor = magnitude_divisor(suffix)?;
+    let int_part = first.parse::<u64>().ok()?;
+    if int_part == 0 {
+        return None;
+    }
+    let frac_part = u64::from(frac as u8 - b'0');
+    let value = int_part
+        .checked_mul(divisor)?
+        .checked_add(frac_part * (divisor / 10))?;
+    Some((value.to_string(), 2))
+}
+
+fn magnitude_divisor(suffix: char) -> Option<u64> {
+    match suffix.to_ascii_lowercase() {
+        'k' => Some(1_000),
+        'm' => Some(1_000_000),
+        'b' => Some(1_000_000_000),
+        _ => None,
+    }
 }
 
 fn expand_numeric_token_query(token: &str) -> String {
@@ -264,6 +390,16 @@ fn expand_numeric_token_query(token: &str) -> String {
 }
 
 fn numeric_token_aliases(token: &str) -> Vec<String> {
+    if let Some(numeral) = abbreviated_token_numeral(token) {
+        // `75k` → add the full numeral and its grouped phrase so the
+        // abbreviated query also matches `75000` and `75,000` content.
+        let mut aliases = vec![token.to_owned(), numeral.clone()];
+        if let Some(grouped) = grouped_numeric_phrase(&numeral) {
+            aliases.push(format!("\"{grouped}\""));
+        }
+        return aliases;
+    }
+
     if !token.chars().all(|ch| ch.is_ascii_digit()) {
         return vec![token.to_owned()];
     }
@@ -272,10 +408,29 @@ fn numeric_token_aliases(token: &str) -> Vec<String> {
     if let Some(grouped) = grouped_numeric_phrase(token) {
         aliases.push(format!("\"{grouped}\""));
     }
-    if let Some(abbreviated) = abbreviated_numeric_alias(token) {
-        aliases.push(abbreviated);
+    for abbreviated in abbreviated_numeric_aliases(token) {
+        // One-decimal forms are two-token phrases ("1 5m") and need quoting.
+        if abbreviated.contains(' ') {
+            aliases.push(format!("\"{abbreviated}\""));
+        } else {
+            aliases.push(abbreviated);
+        }
     }
     aliases
+}
+
+/// Parse an abbreviated-magnitude token (`\d+[kKmMbB]`) into its full
+/// numeral string: `75k`/`75K` → `75000`, `1M` → `1000000`. Returns `None`
+/// for any other shape or on overflow.
+fn abbreviated_token_numeral(token: &str) -> Option<String> {
+    let suffix = token.chars().next_back()?;
+    let divisor = magnitude_divisor(suffix)?;
+    let digits = &token[..token.len() - suffix.len_utf8()];
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let value = digits.parse::<u64>().ok()?.checked_mul(divisor)?;
+    Some(value.to_string())
 }
 
 fn grouped_numeric_phrase(token: &str) -> Option<String> {
@@ -295,18 +450,37 @@ fn grouped_numeric_phrase(token: &str) -> Option<String> {
     Some(groups.join(" "))
 }
 
-fn abbreviated_numeric_alias(token: &str) -> Option<String> {
-    let value = token.parse::<u64>().ok()?;
+/// Abbreviated-magnitude aliases for an all-digit token. Exact multiples
+/// yield single-token forms (`75000` → `75k`); one-decimal values yield the
+/// two-token phrase that formatted content tokenizes to (`1500000` → `1 5m`,
+/// matching `$1.5M`; `75500` → `75 5k`, matching `$75.5K`).
+fn abbreviated_numeric_aliases(token: &str) -> Vec<String> {
+    let Ok(value) = token.parse::<u64>() else {
+        return Vec::new();
+    };
+    let Some(times_ten) = value.checked_mul(10) else {
+        return Vec::new();
+    };
+    let mut aliases = Vec::new();
     for (divisor, suffix) in [
         (1_000_000_000_u64, "b"),
         (1_000_000_u64, "m"),
         (1_000_u64, "k"),
     ] {
-        if value >= divisor && value % divisor == 0 {
-            return Some(format!("{}{suffix}", value / divisor));
+        if value < divisor {
+            continue;
+        }
+        if value % divisor == 0 {
+            aliases.push(format!("{}{suffix}", value / divisor));
+        } else if times_ten % divisor == 0 {
+            aliases.push(format!(
+                "{} {}{suffix}",
+                value / divisor,
+                (value % divisor) / (divisor / 10)
+            ));
         }
     }
-    None
+    aliases
 }
 
 #[expect(
@@ -946,9 +1120,10 @@ mod tests {
         assert_eq!(results[0].slug, "concepts/inference-engine");
     }
 
-    /// Precision-first: when AND finds results, OR fallback must NOT be triggered.
+    /// Precision-first blending: AND hits rank first and OR-recall hits fill
+    /// the remaining limit slots below them, deduplicated by slug.
     #[test]
-    fn search_tiered_returns_and_results_without_or_fallback() {
+    fn search_tiered_blends_or_hits_below_and_results() {
         let conn = open_test_db();
         insert_page(
             &conn,
@@ -975,15 +1150,6 @@ mod tests {
             "Inference in formal logic.",
         );
 
-        let and_results = search_fts(
-            &conn,
-            FtsQuery {
-                query: "neural network inference",
-                limit: 1000,
-                ..Default::default()
-            },
-        )
-        .unwrap();
         let tiered_results = search_fts_tiered(
             &conn,
             FtsQuery {
@@ -994,8 +1160,34 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(tiered_results.len(), and_results.len());
-        assert_eq!(tiered_results[0].slug, "concepts/combined");
+        assert_eq!(
+            tiered_results.len(),
+            3,
+            "OR-recall hits must blend in below the AND hit"
+        );
+        assert_eq!(
+            tiered_results[0].slug, "concepts/combined",
+            "the AND hit must rank first"
+        );
+        assert!(
+            tiered_results[1..]
+                .iter()
+                .all(|result| result.score < tiered_results[0].score),
+            "every blended OR hit must score strictly below the AND hit"
+        );
+
+        // The blend respects the remaining-slot budget.
+        let limited = search_fts_tiered(
+            &conn,
+            FtsQuery {
+                query: "neural network inference",
+                limit: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].slug, "concepts/combined");
     }
 
     /// Single-token query: no OR fallback attempted; empty returns empty.

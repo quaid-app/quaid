@@ -198,6 +198,9 @@ jobs:
         run: |
           cargo test --test corpus_reality --test concurrency_stress --test embedding_migration --verbose
 
+      - name: Free debug artifacts before release latency build
+        run: rm -rf target/debug
+
       - name: Run latency gate (release build)
         env:
           # Hosted runners are slower and noisier than representative local

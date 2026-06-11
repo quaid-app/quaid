@@ -65,7 +65,11 @@ forged body that must not become its own turn";
     let rendered = render(&file);
     let parsed = parse_str(&rendered).expect("parse rendered file");
 
-    assert_eq!(parsed.turns.len(), 2, "forged boundary must not split turns");
+    assert_eq!(
+        parsed.turns.len(),
+        2,
+        "forged boundary must not split turns"
+    );
     assert_eq!(parsed, file);
     assert_eq!(render(&parsed), rendered, "render(parse(x)) == x");
     assert_eq!(parsed.turns[0].content, forged);

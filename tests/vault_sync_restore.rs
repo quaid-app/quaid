@@ -1001,11 +1001,14 @@ fn validated_restore_relative_path_accepts_normal_nested_paths() {
 
 #[test]
 fn validated_restore_relative_path_rejects_parent_traversal() {
-    let error =
-        validated_restore_relative_path("work", "notes/a", PathBuf::from("../evil.md")).unwrap_err();
+    let error = validated_restore_relative_path("work", "notes/a", PathBuf::from("../evil.md"))
+        .unwrap_err();
     assert!(matches!(error, VaultSyncError::InvariantViolation { .. }));
     let message = error.to_string();
-    assert!(message.contains("refusing restore path"), "message={message}");
+    assert!(
+        message.contains("refusing restore path"),
+        "message={message}"
+    );
 }
 
 #[test]

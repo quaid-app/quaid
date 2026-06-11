@@ -297,16 +297,15 @@ const REQUEST_HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// forward the connection (validated head bytes included) to the
 /// internal SSE server or answer with `403 Forbidden` and close.
 async fn guard_connection(mut client: TcpStream, internal_addr: SocketAddr) {
-    let head = match tokio::time::timeout(REQUEST_HEAD_TIMEOUT, read_request_head(&mut client))
-        .await
-    {
-        Ok(Ok(head)) => head,
-        Ok(Err(error)) => {
-            eprintln!("mcp_http_guard_read_failed error={error}");
-            return;
-        }
-        Err(_elapsed) => return,
-    };
+    let head =
+        match tokio::time::timeout(REQUEST_HEAD_TIMEOUT, read_request_head(&mut client)).await {
+            Ok(Ok(head)) => head,
+            Ok(Err(error)) => {
+                eprintln!("mcp_http_guard_read_failed error={error}");
+                return;
+            }
+            Err(_elapsed) => return,
+        };
 
     let head_text = String::from_utf8_lossy(&head);
     if let Err(reason) = validate_loopback_request_head(&head_text) {

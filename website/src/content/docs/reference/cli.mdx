@@ -92,7 +92,7 @@ Hybrid retrieval: FTS5 + vector similarity, fused via set-union. Use `--depth au
 quaid query "who is interested in offline-first knowledge systems?"
 ```
 
-## Ingest — import, export, embed
+## Ingest — files, export, embed
 
 ### `ingest <PATH>`
 
@@ -102,13 +102,7 @@ Single-file ingestion with SHA-256 idempotency. Re-running on the same file is a
 | ---- | ---- | ------- |
 | `--force` | flag | false |
 
-### `import <PATH>`
-
-Batch import a markdown directory. Page types are inferred from a PARA-style folder layout (`project(s)/`, `area(s)/`, `resource(s)/`, `archive(s)/`) after stripping numeric prefixes such as `1-projects/`.
-
-| Flag | Type | Default |
-| ---- | ---- | ------- |
-| `--validate-only` | flag | false |
+There is no `import` command. To bring in a markdown directory, attach it as a collection (`quaid collection add <name> <path>`, then `quaid collection sync <name>`); page types are inferred from a PARA-style folder layout (`project(s)/`, `area(s)/`, `resource(s)/`, `archive(s)/`) after stripping numeric prefixes such as `1-projects/`.
 
 ### `export <PATH>`
 
@@ -136,6 +130,38 @@ quaid embed people/alice          # one page
 quaid embed --stale                # only re-embed pages whose chunks changed
 quaid embed --all                  # scan every page; skip current chunks
 quaid embed --all --batch-size 16  # scan pages in smaller batches
+```
+
+## Conversation extraction and models
+
+### `extraction <enable|disable|status>`
+
+Manage SLM-based conversation extraction.
+
+```bash
+quaid extraction enable    # enable extraction and eagerly cache the configured model
+quaid extraction disable   # disable extraction; cached model files are kept
+quaid extraction status    # show extraction configuration and cache state
+```
+
+### `extract [SESSION_ID]`
+
+Re-enqueue manual extraction for one or more conversation sessions.
+
+| Flag | Type | Notes |
+| ---- | ---- | ----- |
+| `--all` | flag | Re-extract every known session; conflicts with `SESSION_ID` |
+| `--since <DATE>` | YYYY-MM-DD | Restrict `--all` to day-files dated on or after the date |
+| `--force` | flag | Reset conversation cursors to turn 0 first; requires `SESSION_ID` |
+
+### `model <pull|status|clean>`
+
+Manage cached local models.
+
+```bash
+quaid model pull <alias>            # download an extraction SLM into the model cache
+quaid model status [alias]          # cache status; --verbose, --verify
+quaid model clean [alias]           # remove stale/invalid entries; --list, --all, --force
 ```
 
 ## Graph — links and backlinks
@@ -283,6 +309,18 @@ quaid collection quarantine list notes
 
 Subcommands: `add` · `list` · `info` · `sync` · `restore` · `restore-reset` · `reconcile-reset` · `ignore add|remove|list|clear` · `quarantine list|export|discard|restore`.
 
+## Namespaces
+
+### `namespace <create|list|destroy>`
+
+Manage isolated memory scopes within the same database. Pages written with a namespace are invisible to queries that don't specify it.
+
+```bash
+quaid namespace create project-alpha --ttl 720   # optional TTL in hours
+quaid namespace list
+quaid namespace destroy project-alpha             # removes the namespace and all its pages
+```
+
 ## Configuration
 
 ### `config`
@@ -310,6 +348,27 @@ QUAID_DB=~/memory.db quaid serve
 ```
 
 `serve` ships on macOS and Linux today; Windows parity is on the roadmap.
+
+Flags (all require `--http`): `--port <N>` (default 3112) · `--bind <ADDR>` (loopback only in v1) · `--token-file <PATH>` · `--trust-loopback`.
+
+### `daemon <run|install|uninstall|start|stop|restart|status|logs>`
+
+Background-daemon lifecycle. `install` writes a platform-native service unit (launchd on macOS, systemd on Linux) pointing at the active database, then starts it; `run` runs the daemon in the foreground (this is what the service unit invokes). `run` and `install` accept the same HTTP/SSE flags as `serve`.
+
+```bash
+quaid daemon install                 # install + start the background daemon
+quaid daemon install --http --port 3112 --trust-loopback
+quaid daemon status
+quaid daemon logs
+```
+
+### `status`
+
+Process-level status: whether the daemon is installed/running, active MCP transports, and recent runtime activity. Distinct from `quaid stats`, which reports content-level statistics.
+
+| Flag | Type |
+| ---- | ---- |
+| `--json` | flag |
 
 ### `skills`
 

@@ -4,7 +4,7 @@
 
   <a href="https://github.com/quaid-app/quaid/actions/workflows/ci.yml"><img src="https://github.com/quaid-app/quaid/workflows/CI/badge.svg" alt="CI"></a>
   <a href="https://github.com/quaid-app/quaid/releases/latest"><img src="https://img.shields.io/github/v/release/quaid-app/quaid" alt="Release"></a>
-  <a href="https://quaid-app.github.io/quaid-evals"><img src="https://img.shields.io/badge/DAB%20score-193%2F215%20(90%25)-brightgreen" alt="DAB 90%"></a>
+  <a href="https://github.com/quaid-app/quaid/issues/220"><img src="https://img.shields.io/badge/DAB%20v1.0-140%2F200%20(70%25)-orange" alt="DAB v1.0 140/200"></a>
   <a href="https://github.com/quaid-app/quaid/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 
   <br><br>
@@ -23,9 +23,9 @@ Most agent memory systems require a cloud service, a running database, or an API
 
 - **Local-first** — single SQLite file, no cloud dependency, works offline
 - **PARA-native** — organizes memory as a knowledge base (Projects, Areas, Resources, Archives), not a flat list of facts
-- **24 MCP tools, knowledge-graph path output, daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport in the current published release (`v0.22.3`)**
+- **24 MCP tools, knowledge-graph path output, daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport in the current published release (`v0.22.6`)**
 - **Hybrid retrieval** — FTS5 full-text + local BGE vector embeddings, combined via RRF
-- **Verified by benchmarks** — [193/215 (90%) on DAB](https://quaid-app.github.io/quaid-evals), P@5 on MSMARCO ahead of BM25 baseline
+- **Verified by benchmarks** — [140/200 (70%) on DAB v1.0](https://github.com/quaid-app/quaid/issues/220), P@5 on MSMARCO ahead of BM25 baseline
 
 ---
 
@@ -97,7 +97,7 @@ Add to your `.mcp.json`:
 }
 ```
 
-The current published release (`v0.22.3`) exposes 24 MCP tools over stdio, graph path output, and an opt-in HTTP/SSE transport via `quaid serve --http` or `quaid daemon run --http`.
+The current published release (`v0.22.6`) exposes 24 MCP tools over stdio, graph path output, and an opt-in HTTP/SSE transport via `quaid serve --http` or `quaid daemon run --http`.
 
 ---
 
@@ -114,13 +114,13 @@ Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the 
 ### Download a binary
 
 ```bash
-VERSION="<published-tag>"   # for example: v0.22.3
+VERSION="<published-tag>"   # for example: v0.22.6
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
 ```
 
-Use a published tag here. GitHub Releases publish `v0.22.3`, including the knowledge graph layer, daemon runtime, and HTTP/SSE transport.
+Use a published tag here. The [latest GitHub Release](https://github.com/quaid-app/quaid/releases/latest) includes the knowledge graph layer, daemon runtime, and HTTP/SSE transport.
 
 ### Build from source
 
@@ -137,13 +137,13 @@ On Windows PowerShell, run `powershell -ExecutionPolicy Bypass -File .\scripts\s
 
 ## How it works
 
-Two ideas borrowed from Andrej Karpathy's compiled knowledge model:
+Two ideas borrowed from [Garry Tan's compiled knowledge model](https://gist.github.com/garrytan/49c88e83cf8d7ae95e087426368809cb):
 
 **Compiled truth (above the line)** — always current, rewritten when new information arrives. What we know now.
 
 **Timeline (below the line)** — append-only, never rewritten. What happened and when.
 
-Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 24 tools in the current published release (`v0.22.3`) — with no REST API and no network dependency. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http`.
+Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 24 tools in the current published release (`v0.22.6`) — with no REST API and no network dependency. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http`.
 
 **Hybrid retrieval:** FTS5 keyword search for exact recall (names, slugs, tags) combined with local BGE vector embeddings for semantic search. Set-union merge, exact-match short-circuit.
 
@@ -193,7 +193,7 @@ quaid gaps
 # Start MCP server (stdio, default)
 quaid serve
 
-# Start MCP server with opt-in HTTP/SSE transport (available in v0.22.3)
+# Start MCP server with opt-in HTTP/SSE transport
 quaid serve --http --port 3112 --trust-loopback
 
 # Install background daemon (macOS launchd or Linux systemd)
@@ -214,7 +214,7 @@ quaid status
 
 ## MCP tools
 
-The current published release (`v0.22.3`) exposes 24 MCP tools over stdio, plus graph path output, daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport:
+The current published release (`v0.22.6`) exposes 24 MCP tools over stdio, plus graph path output, daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport:
 
 | Category | Tools |
 |----------|-------|
@@ -249,9 +249,13 @@ Retrieval quality is verified by [quaid-evals](https://github.com/quaid-app/quai
 
 | Benchmark | Score | Reference |
 |-----------|-------|-----------|
-| DAB (FTS + semantic + MCP) | **193/215 (90%)** | — |
+| DAB v1.0 (FTS + semantic + MCP) | **140/200 (70%)** on `v0.22.6` | [#220](https://github.com/quaid-app/quaid/issues/220) |
 | MSMARCO P@5 | — | GBrain: 49.1% |
 | LoCoMo | — | Mem0: 91.6% |
+
+DAB v1.0 rescored the suite out of 200 points; scores published before v1.0
+(such as 193/215) used the original 215-point rubric and are not directly
+comparable.
 
 [View full benchmark history →](https://quaid-app.github.io/quaid-evals)
 
@@ -293,7 +297,7 @@ PARA folder inference: `1. Projects` → `project`, `2. Areas` → `area`, `3. R
 
 ## Contributing
 
-Read [`docs/spec.md`](docs/spec.md) first — it's the authoritative design record. Every meaningful change needs an OpenSpec proposal in [`openspec/changes/`](openspec/changes/) before implementation.
+Read [`openspec/specs/`](openspec/specs/) and [`src/schema.sql`](src/schema.sql) first — together they are the authoritative design record ([`docs/spec.md`](docs/spec.md) is historical). Every meaningful change needs an OpenSpec proposal in [`openspec/changes/`](openspec/changes/) before implementation.
 
 **Good first contributions:**
 - Improve skill content in [`skills/`](skills/)

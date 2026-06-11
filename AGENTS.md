@@ -6,7 +6,7 @@ Persistent memory for AI agents. SQLite + FTS5 + local vector embeddings. One st
 
 Quaid stores your knowledge as structured pages in a single SQLite file (`memory.db`).
 Pages have a `compiled_truth` section (always-current intelligence) and a `timeline` section
-(append-only evidence). This is Karpathy's compiled knowledge model in a database.
+(append-only evidence). This is Garry Tan's compiled knowledge model in a database.
 
 ## Before you start
 
@@ -50,7 +50,7 @@ quaid serve                     # start MCP server
 
 - Single writer. No auth. No multi-tenant.
 - `memory_put` uses optimistic concurrency (`expected_version`). Re-fetch before writing.
-- `memory_gap` always creates gaps with `sensitivity = 'internal'`. Escalation requires `memory_gap_approve`.
+- `memory_gap` always creates gaps with `sensitivity = 'internal'`. There is no MCP tool for escalation; sensitivity is escalated through the research skill's approval workflow (`skills/research/SKILL.md`), which records an approval before any external use.
 - Ingest is idempotent for exact-byte duplicates and keeps the active source in `raw_imports`.
 
 ## Testing rules

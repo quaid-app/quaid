@@ -12,7 +12,7 @@ Quaid moves through three arcs. Each arc is a directional bet, not a feature lis
 </Aside>
 
 <Aside type="note" title="Release truth">
-**Latest published release:** `v0.22.3`. **Main branch manifest:** `v0.22.3` in `Cargo.toml`.
+**Latest published release:** `v0.22.6`. **Main branch manifest:** `v0.22.6` in `Cargo.toml`.
 
 That means the remaining items below are roadmap work or branch-only follow-ons, not an already-cut `v0.23.0` release lane.
 </Aside>
@@ -62,7 +62,7 @@ The foundation. Storage that doesn't lose data, retrieval that doesn't hallucina
 Phase 5 shipped conversation memory and the local Phi-3.5 Mini extraction path. Phase 6 foundations also shipped in the current public release: graph autowiring, graph path output, `quaid graph extract-entities`, and graph retrieval controls. The remaining Arc 2 work is performance, entity-graph follow-ons, and benchmark reruns.
 
 <Aside type="note" title="Honest about today">
-The latest published release (`v0.22.3`) is the installable public build today, while the published DAB v1 release-gate number (**94.4%**) was recorded on `v0.22.2`. Quaid still trails peers on public conversational-memory benchmarks even though Phase 5 is shipped. The remaining gap is published benchmark reruns plus the still-open entity-graph and enrichment follow-ons. **Targets after the next delivery slices remain LongMemEval > 40% and LoCoMo > 40%.**
+The latest published release (`v0.22.6`) is the installable public build today. The latest DAB v1.0 run scored **140/200 (70%)** on `v0.22.6` ([#220](https://github.com/quaid-app/quaid/issues/220)); pre-v1.0 scores used a 215-point rubric and are not directly comparable. Quaid still trails peers on public conversational-memory benchmarks even though Phase 5 is shipped. The remaining gap is published benchmark reruns plus the still-open entity-graph and enrichment follow-ons. **Targets after the next delivery slices remain LongMemEval > 40% and LoCoMo > 40%.**
 </Aside>
 
 ### Phase 5 - Conversation memory + SLM extraction
@@ -108,7 +108,7 @@ Outcome: a graph that already wires itself from page structure today, with riche
   <Card title="Frontmatter and wikilink autowiring" icon="check-circle">
     <Badge text="Shipped in v0.22.0" variant="success" />
 
-    `links:`, `parent:`, `children:`, `related:`, and body `[[slug]]` references now create derived graph edges automatically. The current published release (`v0.22.3`) carries this foundation.
+    `links:`, `parent:`, `children:`, `related:`, and body `[[slug]]` references now create derived graph edges automatically. The current published release (`v0.22.6`) carries this foundation.
 
     [GitHub #72](https://github.com/quaid-app/quaid/issues/72)
   </Card>

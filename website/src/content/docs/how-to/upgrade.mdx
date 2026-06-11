@@ -21,7 +21,7 @@ no aliases, and no automatic migration.
 1. Install `quaid` via the shell installer or GitHub Releases.
 2. Rebuild every MCP client config (`command: quaid`, `args: ["serve"]`, `memory_*` tool prefix). Clients silently expose zero tools until this is done.
 3. Update shell profile exports to `QUAID_DB`, `QUAID_MODEL`, `QUAID_CHANNEL`, etc.
-4. Pre-rename databases are schema-incompatible with `quaid` (`SCHEMA_VERSION` is now `6`). To recover data, use your pre-rename binary to export pages, then run `quaid init` and `quaid import`. If you no longer have that binary, consult the GitHub Release history for that project — this repository does not carry a migration tool.
+4. Pre-rename databases are schema-incompatible with `quaid` (`SCHEMA_VERSION` is `10` in the current release). To recover data, use your pre-rename binary to export pages, then run `quaid init` and `quaid collection add <name> <export-dir>`. If you no longer have that binary, consult the GitHub Release history for that project — this repository does not carry a migration tool.
 
 No shims, no aliases, no automatic migration. Keep this page plus the pre-rename release notes as your migration reference; this repository no longer carries a standalone `MIGRATION.md`.
 </Aside>
@@ -33,7 +33,7 @@ quaid version
 quaid stats
 ```
 
-Note the binary version and the schema version on the memory (`schema_version` in `quaid_config`, currently `6`).
+Note the binary version and the schema version on the memory (`schema_version` in `quaid_config`, currently `10`).
 
 ## Find the new release
 

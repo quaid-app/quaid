@@ -127,7 +127,7 @@ tool names match the `memory_*` prefix.
 ## Data recovery
 
 Databases created with the pre-rename binary are **schema-incompatible** with `quaid`.
-The internal configuration table was renamed and `SCHEMA_VERSION` was bumped to `6`.
+The internal configuration table was renamed and `SCHEMA_VERSION` was bumped (it is `10` in the current release).
 `quaid` will refuse to open a pre-rename database.
 
 **This repository does not provide a migration tool.** If you need to recover your pages:

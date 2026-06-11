@@ -29,7 +29,7 @@ This tutorial uses `~/memory.db` throughout. Substitute another path if you pref
     codeLabel="CLI"
     codeTone="terminal"
   >
-    <p>Creates a SQLite file at `~/memory.db` with the v5 schema, the FTS5 index, the active embedding model registered, and the embedded skills extracted to `~/.quaid/skills/` on first run.</p>
+    <p>Creates a SQLite file at `~/memory.db` with the v10 schema, the FTS5 index, the active embedding model registered, and the embedded skills extracted to `~/.quaid/skills/` on first run.</p>
   </GuideStep>
 
   <GuideStep
@@ -109,7 +109,7 @@ quaid list --type person --db ~/memory.db`}
 
 You created a SQLite file, wrote a page that follows the compiled-truth + timeline model, and ran two different retrieval strategies against it. Specifically:
 
-- **`init`** wrote the v5 schema, registered `BAAI/bge-small-en-v1.5` (or whichever model you used), and extracted the embedded skills.
+- **`init`** wrote the v10 schema, registered `BAAI/bge-small-en-v1.5` (or whichever model you used), and extracted the embedded skills.
 - **`put`** parsed the frontmatter, split the body at the `---` separator, ran novelty deduplication, and enqueued an embedding job.
 - **`search`** hit the FTS5 virtual table; **`query`** ran FTS5 *and* the local vector index in parallel and fused the results with set-union.
 - **`query --depth auto`** then ran progressive retrieval, expanding context until it hit the 4000-token default budget.

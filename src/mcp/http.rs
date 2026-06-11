@@ -29,6 +29,17 @@
 //!   `--token-file` is rejected at startup with an explicit "deferred"
 //!   error rather than allowed to give operators a false sense of
 //!   security.
+//! - **Origin/Host validation** defends the loopback listener against
+//!   DNS-rebinding: rmcp 0.1.5 exposes no middleware hook, so the
+//!   operator-configured port is owned by a thin guard listener that
+//!   parses each connection's first request head, rejects any request
+//!   whose `Host` is not loopback or whose `Origin`/`Referer` names a
+//!   non-loopback origin, and only then forwards the connection to
+//!   rmcp's SSE server on a loopback-only ephemeral port. The first
+//!   request on each TCP connection is validated; subsequent requests
+//!   reusing an already-validated connection are forwarded as-is
+//!   (browsers never share a connection across origins, so a rebinding
+//!   attacker cannot piggyback on a legitimate client's connection).
 //!
 //! Lifting these limitations requires either an rmcp upgrade that
 //! exposes a `Router`/`tower::Layer` hook, or replacing rmcp's internal
@@ -36,12 +47,14 @@
 //! lower-level `RoleServer` directly. Tracked as a follow-up to the
 //! `daemon-and-http-transport` change.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 
 use rmcp::transport::SseServer;
 use rusqlite::Connection;
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::mcp::server::QuaidServer;
 
@@ -180,11 +193,38 @@ pub async fn run_http(
 ) -> anyhow::Result<()> {
     let bind_addr = bind_with_token_guard(&config)?;
 
+    // The operator-configured port is owned by the Origin/Host guard
+    // listener, not by rmcp: bind it first so startup fails fast when the
+    // port is taken, exactly as the previous direct rmcp bind did.
+    let guard_listener = TcpListener::bind(bind_addr).await?;
+
     // `SseServer::serve` uses default sse_path="/sse" and
     // post_path="/message" plus a fresh `CancellationToken`. We grab the
     // token from `server.config.ct` after construction so the caller can
-    // share-cancel for shutdown.
-    let server = SseServer::serve(bind_addr).await?;
+    // share-cancel for shutdown. rmcp 0.1.5 binds and serves its axum
+    // router internally with no middleware hook, so the SSE server gets a
+    // loopback-only ephemeral port and only guard-validated connections
+    // are forwarded to it.
+    let (server, internal_addr) = serve_sse_on_internal_loopback_port().await?;
+
+    let guard_ct = server.config.ct.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = guard_ct.cancelled() => break,
+                accepted = guard_listener.accept() => {
+                    match accepted {
+                        Ok((stream, _peer)) => {
+                            tokio::spawn(guard_connection(stream, internal_addr));
+                        }
+                        Err(error) => {
+                            eprintln!("mcp_http_guard_accept_failed error={error}");
+                        }
+                    }
+                }
+            }
+        }
+    });
 
     // `with_service` spawns a worker per incoming SSE connection that
     // calls the provider closure to instantiate a fresh service. We
@@ -217,6 +257,221 @@ pub async fn run_http(
     inner_ct.cancelled().await;
 
     Ok(())
+}
+
+/// Start rmcp's SSE server on a loopback-only ephemeral port and return
+/// it together with the address the guard listener should forward to.
+/// rmcp 0.1.5 does not report the port it actually bound, so a probe
+/// listener reserves one first; the tiny bind race is retried.
+async fn serve_sse_on_internal_loopback_port() -> std::io::Result<(SseServer, SocketAddr)> {
+    let mut last_error = None;
+    for _ in 0..16 {
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let internal_addr = probe.local_addr()?;
+        drop(probe);
+        match SseServer::serve(internal_addr).await {
+            Ok(server) => return Ok((server, internal_addr)),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "could not reserve an internal loopback port for the SSE server",
+        )
+    }))
+}
+
+/// Maximum bytes of request head the guard will buffer while looking for
+/// the end of the header block.
+const MAX_REQUEST_HEAD_BYTES: usize = 16 * 1024;
+
+/// How long the guard waits for a client to finish sending its first
+/// request head before dropping the connection.
+const REQUEST_HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Validate the first request on an accepted connection and either
+/// forward the connection (validated head bytes included) to the
+/// internal SSE server or answer with `403 Forbidden` and close.
+async fn guard_connection(mut client: TcpStream, internal_addr: SocketAddr) {
+    let head = match tokio::time::timeout(REQUEST_HEAD_TIMEOUT, read_request_head(&mut client))
+        .await
+    {
+        Ok(Ok(head)) => head,
+        Ok(Err(error)) => {
+            eprintln!("mcp_http_guard_read_failed error={error}");
+            return;
+        }
+        Err(_elapsed) => return,
+    };
+
+    let head_text = String::from_utf8_lossy(&head);
+    if let Err(reason) = validate_loopback_request_head(&head_text) {
+        eprintln!("mcp_http_guard_rejected reason={reason}");
+        let body = format!("Forbidden: {reason}\n");
+        let response = format!(
+            "HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = client.write_all(response.as_bytes()).await;
+        let _ = client.shutdown().await;
+        return;
+    }
+
+    let mut upstream = match TcpStream::connect(internal_addr).await {
+        Ok(upstream) => upstream,
+        Err(error) => {
+            eprintln!("mcp_http_guard_upstream_connect_failed error={error}");
+            return;
+        }
+    };
+    if upstream.write_all(&head).await.is_err() {
+        return;
+    }
+    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+}
+
+/// Read from `client` until the end of the HTTP request head
+/// (`\r\n\r\n`, or a bare `\n\n` from lenient clients) is buffered,
+/// returning every byte read so the forwarder can replay them verbatim.
+async fn read_request_head(client: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut buffer = Vec::with_capacity(1024);
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = client.read(&mut chunk).await?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "connection closed before request head completed",
+            ));
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if head_end(&buffer).is_some() {
+            return Ok(buffer);
+        }
+        if buffer.len() > MAX_REQUEST_HEAD_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "request head exceeds the guard's size limit",
+            ));
+        }
+    }
+}
+
+fn head_end(buffer: &[u8]) -> Option<usize> {
+    buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+        .or_else(|| {
+            buffer
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| index + 2)
+        })
+}
+
+/// Validate an HTTP request head against the loopback-only policy:
+/// exactly one `Host` header naming a loopback host, and — when present
+/// — `Origin` / `Referer` headers naming loopback origins. Anything
+/// else is rejected, which is what defeats DNS-rebinding: a rebound
+/// hostname still arrives in `Host` (and browser requests carry the
+/// attacker page's `Origin`).
+pub fn validate_loopback_request_head(head: &str) -> Result<(), String> {
+    let mut host_values = Vec::new();
+    let mut origin_values = Vec::new();
+    let mut referer_values = Vec::new();
+    for line in head.lines().skip(1) {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "host" => host_values.push(value),
+            "origin" => origin_values.push(value),
+            "referer" => referer_values.push(value),
+            _ => {}
+        }
+    }
+
+    match host_values.as_slice() {
+        [] => return Err("missing Host header".to_owned()),
+        [host] => {
+            if !is_loopback_host(host) {
+                return Err(format!("Host `{host}` is not a loopback host"));
+            }
+        }
+        _ => return Err("multiple Host headers".to_owned()),
+    }
+    for origin in origin_values {
+        if !url_has_loopback_host(origin) {
+            return Err(format!("Origin `{origin}` is not a loopback origin"));
+        }
+    }
+    for referer in referer_values {
+        if !url_has_loopback_host(referer) {
+            return Err(format!("Referer `{referer}` is not a loopback origin"));
+        }
+    }
+    Ok(())
+}
+
+/// Returns `true` when a `host[:port]` value names the loopback
+/// interface: `localhost`, an IPv4 loopback (`127.0.0.0/8`), or the
+/// IPv6 loopback (`::1`, bracketed or bare).
+pub fn is_loopback_host(value: &str) -> bool {
+    let value = value.trim();
+    // Bracketed IPv6, optionally with a port: `[::1]` / `[::1]:3112`.
+    if let Some(rest) = value.strip_prefix('[') {
+        let Some((host, after)) = rest.split_once(']') else {
+            return false;
+        };
+        if !(after.is_empty() || after.starts_with(':')) {
+            return false;
+        }
+        return host.parse::<Ipv6Addr>().is_ok_and(|ip| ip.is_loopback());
+    }
+    // Bare IPv6 (no port possible without brackets).
+    if let Ok(ip) = value.parse::<Ipv6Addr>() {
+        return ip.is_loopback();
+    }
+    // `host[:port]` with at most one colon.
+    let host = match value.split_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
+        Some(_) => return false,
+        None => value,
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Returns `true` when an `Origin`/`Referer` value is an `http(s)` URL
+/// whose authority is a loopback host. The literal `null` origin and
+/// non-HTTP schemes are not loopback.
+fn url_has_loopback_host(value: &str) -> bool {
+    let value = value.trim();
+    let lowered = value.to_ascii_lowercase();
+    let rest = if let Some(rest) = lowered.strip_prefix("http://") {
+        rest
+    } else if let Some(rest) = lowered.strip_prefix("https://") {
+        rest
+    } else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Strip URL userinfo if present so `evil@localhost` style tricks
+    // cannot smuggle a non-loopback host past the check.
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    is_loopback_host(authority)
 }
 
 #[cfg(test)]

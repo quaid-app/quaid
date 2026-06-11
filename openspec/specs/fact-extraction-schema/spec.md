@@ -41,25 +41,14 @@ The system SHALL write extracted-fact pages as markdown files in the user's vaul
 - **THEN** the file exists on disk but no new page row exists in the database; the page row appears only after the watcher resumes and ingests the file
 
 ### Requirement: SLM output contract is JSON-only with per-fact validation
-The system's extraction prompt SHALL constrain the SLM to emit a single JSON object of shape `{"facts": [<fact>, ...]}` where each `<fact>` matches the structured field requirements above plus a `summary` field (the prose body). The SLM SHALL NOT emit markdown fences, prose, or commentary outside the JSON object. Empty result SHALL be `{"facts": []}`. The system's parser SHALL: (a) defensively strip leading/trailing whitespace and accidental ```json fences, (b) `serde_json::from_str` into a typed response struct, (c) validate each fact against its kind-specific schema, (d) reject any unknown kinds at the per-fact level, recording validation errors while still returning the valid facts from the same response. Whole-response parse failure SHALL count toward `extraction.max_retries`; after the cap is exceeded the queue job SHALL be marked `failed`.
+The system's extraction prompt SHALL constrain the SLM to emit a single JSON object of shape `{"facts": [<fact>, ...]}` where each `<fact>` matches the structured field requirements above plus a `summary` field (the prose body). The SLM SHALL NOT emit markdown fences, prose, or commentary outside the JSON object. Empty result SHALL be `{"facts": []}`. The prompt SHALL include an explicit reminder that the model is not a chat partner and SHALL pin at least one simple preference-style output example so short playground-style user statements remain in the JSON contract. The system's parser SHALL: (a) defensively trim leading/trailing whitespace, (b) `serde_json::from_str` into a typed response struct, (c) recover only when exactly one valid `{ "facts": [...] }` object is surrounded by genuinely plain prose commentary, including ordinary prose punctuation such as parentheses or brackets, (d) reject structural wrappers such as markdown fences, XML-ish tags, list markers, extra containers, bracketed/parenthesized envelope wrappers, or multiple top-level objects, and (e) validate each fact against its kind-specific schema, rejecting unknown kinds at the per-fact level while still returning the valid facts from the same response. Whole-response parse failure SHALL count toward `extraction.max_retries`; after the cap is exceeded the queue job SHALL be marked `failed`.
 
-#### Scenario: Bare JSON output parses cleanly
-- **WHEN** the SLM emits `{"facts": [{"kind": "preference", "about": "programming-language", "strength": "high", "summary": "Matt prefers Rust"}]}`
-- **THEN** the parser extracts one fact with the correct fields and the worker proceeds to resolution
+#### Scenario: Single-turn preference window stays inside the JSON envelope
+- **WHEN** the worker prompts the SLM for a window whose only new user turn is a direct preference statement such as `I like to drink coffee more than tea`
+- **THEN** the prompt still constrains the SLM to return a valid `{"facts":[...]}` or `{"facts":[]}` JSON object
+- **AND** the worker does not fail that window solely because the model drifted into chatty non-JSON prose
 
-#### Scenario: JSON wrapped in accidental code fence still parses
-- **WHEN** the SLM emits ` ```json\n{"facts": []}\n``` ` (leading/trailing fence)
-- **THEN** the parser strips the fence, parses the inner JSON as `{"facts": []}`, and the worker advances the cursor without writing any facts
-
-#### Scenario: Malformed output retries up to the cap
-- **WHEN** the SLM emits non-JSON prose for the same window three times in succession
-- **THEN** the queue job is marked `failed` after the third attempt with `last_error` containing the truncated raw output, and a subsequent `quaid extract <session> --force` is required to re-run
-
-#### Scenario: Unknown kind is rejected per fact while valid siblings survive
-- **WHEN** the SLM emits a fact with `kind: opinion` (not in the canonical four)
-- **THEN** the parser records a validation error for that fact, no `kind: opinion` page is written, and any other valid facts in the same response remain available to proceed through resolution
-
-#### Scenario: Missing required field is rejected per fact while valid siblings survive
-- **WHEN** the SLM emits one fact missing its required type-specific field and another fact in the same response is valid
-- **THEN** the parser records a validation error for the malformed fact, omits it from the accepted fact list, and still returns the valid sibling fact
+#### Scenario: Structural wrappers fail closed
+- **WHEN** the SLM returns a valid `{"facts":[...]}` envelope wrapped in markdown fences, XML-ish tags, list markers, extra brackets/parentheses, or alongside another top-level JSON object
+- **THEN** the parser rejects the whole response instead of unwrapping through that structural wrapper
 

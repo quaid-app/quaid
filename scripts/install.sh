@@ -295,7 +295,7 @@ main() {
   printf '%s\n' "       QUAID_CHANNEL, QUAID_INSTALL_DIR, etc."
   printf '%s\n' "    3. Migrate your database: export with the old binary, then run:"
   printf '%s\n' "         quaid init ~/.quaid/memory.db"
-  printf '%s\n' "         quaid collection add backup <backup-dir>"
+  printf '%s\n' "         quaid collection add <collection-name> <backup-dir> --db ~/.quaid/memory.db"
   printf '%s\n' "  See https://github.com/quaid-app/quaid for the full migration guide."
   printf '%s\n' "───────────────────────────────────────────────────────────────────────────────"
   printf '%s\n' ""

@@ -294,7 +294,8 @@ main() {
   printf '%s\n' "    2. Replace old env vars in your shell profile with QUAID_DB, QUAID_MODEL,"
   printf '%s\n' "       QUAID_CHANNEL, QUAID_INSTALL_DIR, etc."
   printf '%s\n' "    3. Migrate your database: export with the old binary, then run:"
-  printf '%s\n' "         quaid init ~/.quaid/memory.db && quaid import <backup-dir/>"
+  printf '%s\n' "         quaid init ~/.quaid/memory.db"
+  printf '%s\n' "         quaid collection add backup <backup-dir>"
   printf '%s\n' "  See https://github.com/quaid-app/quaid for the full migration guide."
   printf '%s\n' "───────────────────────────────────────────────────────────────────────────────"
   printf '%s\n' ""
@@ -303,11 +304,14 @@ main() {
     print_manual_hints
   else
     if ! write_profile; then
+      # The binary is installed and smoke-tested; a missing profile line is not
+      # an install failure. Warn with manual steps and exit 0 so curl|sh
+      # automation reports success.
       printf '%s\n' "" >&2
       printf '%s\n' "Warning: quaid was installed, but PATH/QUAID_DB were not persisted automatically." >&2
       print_manual_hints >&2
       print_sandboxed_hint >&2
-      return 1
+      return 0
     fi
   fi
 

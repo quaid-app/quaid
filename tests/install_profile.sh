@@ -399,7 +399,8 @@ QUAID_NO_PROFILE=0
 tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
 
-# T19: main() fails loudly and prints manual recovery when profile persistence fails
+# T19: main() warns loudly but exits 0 when profile persistence fails — the
+# binary is already installed and smoke-tested, so curl|sh must report success.
 . "$INSTALL_SH"
 resolve_version()  { VERSION="v0.0.0-test"; }
 resolve_platform() { PLATFORM="linux-x86_64"; }
@@ -420,18 +421,18 @@ OLD_SHELL_T19="${SHELL:-}"
 HOME="$T19_HOME"
 SHELL=/usr/bin/zsh
 if main >"$TEST_HOME/t19_main.out" 2>"$TEST_HOME/t19_main.err"; then
-  not_ok "T19: main() should exit non-zero when profile persistence fails"
-else
   if grep -Fq "Cannot create shell profile ${T19_HOME}/.zshrc" "$TEST_HOME/t19_main.err" &&
      grep -Fq 'quaid was installed, but PATH/QUAID_DB were not persisted automatically.' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'Complete setup by adding these to your shell profile:' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'export PATH="' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'export QUAID_DB="$HOME/.quaid/memory.db"' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'download first, then run:' "$TEST_HOME/t19_main.err"; then
-    ok "T19: main() drives the real detect_profile failure and prints recovery guidance"
+    ok "T19: main() exits 0 on profile failure and prints recovery guidance"
   else
-    not_ok "T19: main() did not print the expected real failure and recovery output"
+    not_ok "T19: main() did not print the expected warning and recovery output"
   fi
+else
+  not_ok "T19: main() must exit 0 when the binary installed but the profile write failed"
 fi
 if grep -Fq "Installed quaid to" "$TEST_HOME/t19_main.out"; then
   ok "T19b: main() still reports where the binary was installed before failing"
@@ -449,6 +450,23 @@ chmod 700 "$T19_HOME"
 _win_allow_write "$T19_HOME"
 tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
+
+# ---------------------------------------------------------------
+# Rename-notice content — T20
+# ---------------------------------------------------------------
+
+# T20: the rename notice must reference real subcommands only — no 'quaid import'
+# (the Commands enum has no Import variant; migration uses init + collection add).
+if grep -q 'quaid import' "$INSTALL_SH"; then
+  not_ok "T20: install.sh references nonexistent 'quaid import' command"
+else
+  ok "T20: install.sh does not reference nonexistent 'quaid import' command"
+fi
+if grep -q 'quaid collection add' "$INSTALL_SH"; then
+  ok "T20b: rename notice points at 'quaid collection add' for migration"
+else
+  not_ok "T20b: rename notice is missing the 'quaid collection add' migration step"
+fi
 
 # ---------------------------------------------------------------
 # Summary

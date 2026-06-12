@@ -1078,7 +1078,11 @@ fn fresh_collection_dirty_status(
     collection_id: i64,
     recovery_root: &Path,
 ) -> Result<CollectionDirtyStatus, ReconcileError> {
-    let conn = Connection::open(db_path)?;
+    let conn = crate::core::db::open_runtime(db_path).map_err(|error| {
+        ReconcileError::Other(format!(
+            "fresh_collection_dirty_status: open_runtime failed: {error}"
+        ))
+    })?;
     is_collection_dirty(&conn, collection_id, recovery_root)
 }
 
@@ -3411,6 +3415,9 @@ mod tests {
         let db_path = dir.path().join("memory.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        // Stamp the schema version so fresh connections opened through
+        // `db::open_runtime` accept this fixture as initialized.
+        crate::core::db::set_version(&conn).unwrap();
         (dir, db_path, conn)
     }
 

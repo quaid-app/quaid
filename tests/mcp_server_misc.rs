@@ -106,8 +106,11 @@ fn memory_add_turn_returns_conflict_error_for_closed_session() {
 
 #[test]
 fn memory_add_turn_returns_config_error_for_missing_writable_root() {
+    // An empty root_path would be healed on demand by write-target
+    // provisioning, so simulate the unusable write target by marking the
+    // configured collection non-writable instead.
     let (_dir, conn) = open_test_db();
-    conn.execute("UPDATE collections SET root_path = '' WHERE id = 1", [])
+    conn.execute("UPDATE collections SET writable = 0 WHERE id = 1", [])
         .unwrap();
     let server = QuaidServer::new(conn);
 

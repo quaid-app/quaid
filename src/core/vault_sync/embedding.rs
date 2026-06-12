@@ -68,7 +68,7 @@ pub(crate) fn resume_orphaned_embedding_jobs(conn: &Connection) -> Result<usize,
 /// failed `run_once` calls so a transient extractor error does not
 /// hot-loop the CPU.
 pub(super) fn run_extraction_worker(db_path: String, stop: Arc<AtomicBool>, session_id: String) {
-    let conn = match Connection::open(&db_path) {
+    let conn = match crate::core::db::open_runtime(&db_path) {
         Ok(conn) => conn,
         Err(error) => {
             eprintln!(

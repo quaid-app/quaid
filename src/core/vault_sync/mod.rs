@@ -72,7 +72,6 @@ use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{self, Collection, CollectionState, OpKind, SlugResolution};
 use crate::core::conversation::idle_close;
 use crate::core::conversation::janitor;
-#[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
 use crate::core::file_state;
@@ -389,7 +388,7 @@ impl Drop for ServeRuntime {
         // on its way out, so do it from Drop. Best-effort: a stuck SQLite
         // open here would just leak the row to the next sweep.
         if let Some(path) = self.transport_only_db_path.take() {
-            if let Ok(conn) = Connection::open(&path) {
+            if let Ok(conn) = db::open_runtime(&path) {
                 let _ = unregister_session(&conn, &self.session_id);
             }
         }
@@ -1002,8 +1001,7 @@ pub fn mark_collection_needs_full_sync_via_fresh_connection(
     collection_id: i64,
 ) -> Result<(), VaultSyncError> {
     let db_path = database_path(conn)?;
-    let fresh = Connection::open(db_path)?;
-    fresh.busy_timeout(Duration::from_millis(0))?;
+    let fresh = db::open_runtime(&db_path)?;
     mark_collection_needs_full_sync(&fresh, collection_id)
 }
 
@@ -1986,6 +1984,12 @@ pub fn resolve_slug_for_op(
     input: &str,
     op_kind: OpKind,
 ) -> Result<ResolvedSlug, VaultSyncError> {
+    // Write resolution may fall back to the write-target collection, whose
+    // default root is no longer provisioned at open; heal the empty-root
+    // placeholder on demand before resolving.
+    if !matches!(op_kind, OpKind::Read) {
+        db::provision_default_collection_root(conn)?;
+    }
     match collections::parse_slug(conn, input, op_kind)? {
         SlugResolution::Resolved {
             collection_id,
@@ -2721,7 +2725,7 @@ pub fn run_rcrt_pass(
 /// database without double-spawning the runtime.
 pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
-    let conn = Connection::open(&db_path)?;
+    let conn = db::open_runtime(&db_path)?;
     sweep_stale_sessions(&conn)?;
     let session_id = register_session(&conn, SessionType::Serve)?;
 
@@ -2754,7 +2758,7 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
 /// per [`start_serve_runtime`].
 pub fn start_daemon_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
-    let conn = Connection::open(&db_path)?;
+    let conn = db::open_runtime(&db_path)?;
     sweep_stale_sessions(&conn)?;
 
     if let Some(existing) = find_active_daemon_session(&conn)? {
@@ -2894,7 +2898,7 @@ fn run_supervisor_loop(
     let mut last_embedding_drain =
         Instant::now() - Duration::from_secs(embedding::drain_interval_secs());
     while !stop_signal.load(Ordering::SeqCst) {
-        if let Ok(conn) = Connection::open(&db_path) {
+        if let Ok(conn) = db::open_runtime(&db_path) {
             if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
                 let _ = sweep_stale_sessions(&conn);
                 let _ = heartbeat_session(&conn, &session_id_for_thread);
@@ -3030,7 +3034,7 @@ fn run_supervisor_loop(
         }
         thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
     }
-    if let Ok(conn) = Connection::open(&db_path) {
+    if let Ok(conn) = db::open_runtime(&db_path) {
         #[cfg(unix)]
         let _ = cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path);
         let _ = clear_supervisor_handles_for_session(&session_id_for_thread);
@@ -3075,7 +3079,7 @@ struct LeaseGuard {
 impl Drop for LeaseGuard {
     fn drop(&mut self) {
         if let Some(db_path) = self.db_path.as_deref() {
-            if let Ok(conn) = Connection::open(db_path) {
+            if let Ok(conn) = db::open_runtime(db_path) {
                 let _ = unregister_session(&conn, &self.session_id);
             }
         }
@@ -3145,7 +3149,7 @@ fn start_short_lived_owner_leases_with_interval(
             if stop_signal.load(Ordering::SeqCst) {
                 break;
             }
-            if let Ok(conn) = Connection::open(&db_path_for_thread) {
+            if let Ok(conn) = db::open_runtime(&db_path_for_thread) {
                 let _ = heartbeat_session(&conn, &session_id_for_thread);
             }
         }

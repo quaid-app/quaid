@@ -159,10 +159,13 @@ fn page_refs_after(db: &Connection, last_page_id: i64, batch_size: usize) -> Res
 }
 
 fn page_id_by_key(db: &Connection, collection_id: i64, slug: &str) -> Result<i64> {
-    db.query_row(
-        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![collection_id, slug],
-        |row| row.get(0),
+    crate::core::pages::resolve(
+        db,
+        &crate::core::pages::PageKey {
+            collection_id,
+            namespace: None,
+            slug,
+        },
     )
     .map_err(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),

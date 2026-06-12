@@ -528,14 +528,26 @@ fn resolve_target_fact(conn: &Connection, fact_slug: &str) -> Result<TargetFact,
             other => CorrectionError::VaultSync(other),
         })?;
 
+    let page_id = crate::core::pages::resolve_optional(
+        conn,
+        &crate::core::pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace: None,
+            slug: &resolved.slug,
+        },
+    )?;
+    let Some(page_id) = page_id else {
+        return Err(CorrectionError::NotFound {
+            slug: resolved.canonical_slug(),
+        });
+    };
     let row = conn
         .query_row(
             "SELECT type, frontmatter, COALESCE(NULLIF(compiled_truth, ''), summary, ''),
                     summary, superseded_by, namespace
              FROM pages
-             WHERE collection_id = ?1 AND slug = ?2
-             LIMIT 1",
-            params![resolved.collection_id, &resolved.slug],
+             WHERE id = ?1",
+            params![page_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,

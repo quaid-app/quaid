@@ -492,10 +492,16 @@ pub fn sync_frontmatter_edges(
         DEFAULT_FRONTMATTER_EDGE_WEIGHT,
     );
     let source_slug = lookup_slug(conn, page_id)?;
+    let source_namespace = crate::core::pages::page_namespace(conn, page_id)?.unwrap_or_default();
 
     let mut keep: HashSet<(i64, String)> = HashSet::new();
     for edge in edges {
-        match resolve_target_in_collection(conn, collection_id, &edge.target)? {
+        match resolve_target_in_collection(
+            conn,
+            collection_id,
+            Some(&source_namespace),
+            &edge.target,
+        )? {
             Some(target_id) => {
                 upsert_derived_edge(
                     conn,
@@ -559,9 +565,10 @@ pub fn sync_wikilink_edges(
         }
     }
 
+    let source_namespace = crate::core::pages::page_namespace(conn, page_id)?.unwrap_or_default();
     let mut keep: HashSet<(i64, String)> = HashSet::new();
     for target in &targets {
-        match resolve_target_in_collection(conn, collection_id, target)? {
+        match resolve_target_in_collection(conn, collection_id, Some(&source_namespace), target)? {
             Some(target_id) => {
                 upsert_derived_edge(
                     conn,
@@ -626,14 +633,17 @@ fn delete_stale_derived_rows(
 fn resolve_target_in_collection(
     conn: &Connection,
     collection_id: i64,
+    namespace: Option<&str>,
     slug: &str,
 ) -> Result<Option<i64>, rusqlite::Error> {
-    conn.query_row(
-        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        params![collection_id, slug],
-        |row| row.get::<_, i64>(0),
+    crate::core::pages::resolve_optional(
+        conn,
+        &crate::core::pages::PageKey {
+            collection_id,
+            namespace,
+            slug,
+        },
     )
-    .optional()
 }
 
 fn lookup_slug(conn: &Connection, page_id: i64) -> Result<Option<String>, rusqlite::Error> {

@@ -7,6 +7,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::core::collections::OpKind;
+use crate::core::pages;
 use crate::core::vault_sync;
 
 /// Manage tags on a page: list, add, or remove.
@@ -47,10 +48,13 @@ pub fn run(db: &Connection, slug: &str, add: &[String], remove: &[String]) -> Re
 }
 
 fn resolve_page_id(db: &Connection, collection_id: i64, slug: &str) -> Result<i64> {
-    db.query_row(
-        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![collection_id, slug],
-        |row| row.get(0),
+    pages::resolve(
+        db,
+        &pages::PageKey {
+            collection_id,
+            namespace: None,
+            slug,
+        },
     )
     .map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),

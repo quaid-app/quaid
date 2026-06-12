@@ -59,14 +59,13 @@ fn cli_put_source_routes_live_owner_through_ipc_without_direct_fallback() {
     );
     assert!(
         cli_source.contains(
-            "proxy_put_via_live_serve(&endpoint, &canonical_slug, content, expected_version)?;"
+            "proxy_put_via_live_serve(&endpoint, &canonical_slug, content, expected_version)"
         ),
         "live owner branch must proxy through IPC"
     );
-    let return_idx = cli_source[proxy_idx..]
-        .find("return Ok(());")
-        .map(|offset| proxy_idx + offset)
-        .expect("live owner branch returns immediately after proxy");
+    let return_idx = cli_source
+        .find("return proxy_put_via_live_serve(")
+        .expect("live owner branch returns immediately via the proxy call");
     assert!(
         return_idx < direct_idx,
         "live owner branch must return after IPC proxy instead of falling back to direct write"

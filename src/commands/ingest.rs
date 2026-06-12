@@ -45,9 +45,14 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             return Ok(());
         }
 
-        // Novelty check: skip near-duplicate content unless --force
+        // Novelty check: skip near-duplicate content unless --force.
+        // Compare only against the page this ingest would overwrite —
+        // collection 1 / global namespace, where ingest writes — never a
+        // same-slug page from another collection (#75).
         if !force {
-            if let Ok(existing_page) = crate::commands::get::get_page(db, &slug) {
+            if let Ok(existing_page) =
+                crate::commands::get::get_page_by_key_with_namespace(db, 1, &slug, Some(""))
+            {
                 match novelty::check_novelty(&compiled_truth, &existing_page, db) {
                     Ok(false) => {
                         eprintln!("Skipping ingest: content not novel (slug: {slug})");

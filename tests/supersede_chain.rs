@@ -438,3 +438,129 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
         ]
     );
 }
+
+#[test]
+fn put_of_chain_tail_superseding_the_head_is_rejected_to_prevent_cycles() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let root = dir.path().join("vault");
+    let server = QuaidServer::new(open_test_db(&db_path));
+    let conn = open_test_db(&db_path);
+    set_default_root(&conn, &root);
+
+    put_page(
+        &server,
+        "facts/a",
+        "---\ntitle: Fact A\ntype: fact\n---\ncycle guard marker\n",
+        None,
+    );
+    put_page(
+        &server,
+        "facts/b",
+        "---\ntitle: Fact B\ntype: fact\nsupersedes: facts/a\n---\ncycle guard marker\n",
+        None,
+    );
+
+    // Re-put the superseded chain tail claiming it supersedes the head.
+    // Accepting this would set b.superseded_by = a, producing a headless
+    // a<->b cycle that head-only retrieval can never surface.
+    let error = server
+        .memory_put(MemoryPutInput {
+            slug: "facts/a".to_string(),
+            content:
+                "---\ntitle: Fact A\ntype: fact\nsupersedes: facts/b\n---\ncycle guard marker\n"
+                    .to_string(),
+            expected_version: Some(1),
+            namespace: None,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode(-32009));
+    assert!(error.message.contains("SupersedeConflictError"));
+
+    let b_id: i64 = conn
+        .query_row("SELECT id FROM pages WHERE slug = 'facts/b'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let pointers: Vec<(String, Option<i64>)> = conn
+        .prepare("SELECT slug, superseded_by FROM pages WHERE slug LIKE 'facts/%' ORDER BY slug")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        pointers,
+        vec![
+            ("facts/a".to_string(), Some(b_id)),
+            ("facts/b".to_string(), None),
+        ],
+        "the rejected put must leave the chain head intact (no cycle)"
+    );
+}
+
+#[test]
+fn reputting_superseded_page_with_its_existing_predecessor_link_stays_allowed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let root = dir.path().join("vault");
+    let server = QuaidServer::new(open_test_db(&db_path));
+    let conn = open_test_db(&db_path);
+    set_default_root(&conn, &root);
+
+    put_page(
+        &server,
+        "facts/a",
+        "---\ntitle: Fact A\ntype: fact\n---\nreingest marker\n",
+        None,
+    );
+    put_page(
+        &server,
+        "facts/b",
+        "---\ntitle: Fact B\ntype: fact\nsupersedes: facts/a\n---\nreingest marker\n",
+        None,
+    );
+    put_page(
+        &server,
+        "facts/c",
+        "---\ntitle: Fact C\ntype: fact\nsupersedes: facts/b\n---\nreingest marker\n",
+        None,
+    );
+
+    // Re-putting historical b while re-asserting its EXISTING predecessor
+    // link (what re-ingesting an exported chain does) is idempotent and must
+    // not trip the cycle guard.
+    put_page(
+        &server,
+        "facts/b",
+        "---\ntitle: Fact B\ntype: fact\nsupersedes: facts/a\n---\nreingest marker\n",
+        Some(1),
+    );
+
+    let b_id: i64 = conn
+        .query_row("SELECT id FROM pages WHERE slug = 'facts/b'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let c_id: i64 = conn
+        .query_row("SELECT id FROM pages WHERE slug = 'facts/c'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let pointers: Vec<(String, Option<i64>)> = conn
+        .prepare("SELECT slug, superseded_by FROM pages WHERE slug LIKE 'facts/%' ORDER BY slug")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        pointers,
+        vec![
+            ("facts/a".to_string(), Some(b_id)),
+            ("facts/b".to_string(), Some(c_id)),
+            ("facts/c".to_string(), None),
+        ],
+        "idempotent re-assertion must keep the chain exactly as it was"
+    );
+}

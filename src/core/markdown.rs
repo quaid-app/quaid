@@ -39,7 +39,12 @@ pub fn parse_frontmatter(raw: &str) -> (Frontmatter, String) {
     };
 
     let yaml_str = &raw[frontmatter_start..frontmatter_end];
-    let map = parse_yaml_to_map(yaml_str);
+    let Ok(map) = parse_yaml_to_map(yaml_str) else {
+        // Unparseable YAML: treat the whole input as body so the raw
+        // frontmatter block survives verbatim instead of being silently
+        // dropped on the next render.
+        return (Frontmatter::new(), raw.to_string());
+    };
     let body = &raw[body_start.unwrap_or(raw.len())..];
     (map, body.to_string())
 }
@@ -160,6 +165,13 @@ pub fn render_page(page: &Page) -> String {
         for key in keys {
             if let Some(value) = rendered_frontmatter.get(key) {
                 out.push_str(key);
+                if let JsonValue::String(scalar) = value {
+                    match yaml_scalar(scalar) {
+                        Some(rendered) => push_scalar_value(&mut out, &rendered),
+                        None => out.push_str(": null\n"),
+                    }
+                    continue;
+                }
                 match render_yaml_value(value) {
                     Some(rendered) => {
                         let force_block =
@@ -216,23 +228,23 @@ fn next_line(s: &str, start: usize) -> (&str, usize) {
 
 /// Parse a YAML string into frontmatter values.
 ///
-/// Non-string keys are silently skipped. Returns an empty map on any parse failure.
-fn parse_yaml_to_map(yaml_str: &str) -> Frontmatter {
+/// Non-string keys are silently skipped. Returns `Err` on any parse failure
+/// so callers can preserve the raw block instead of dropping it.
+fn parse_yaml_to_map(yaml_str: &str) -> Result<Frontmatter, serde_yaml::Error> {
     if yaml_str.trim().is_empty() {
-        return Frontmatter::new();
+        return Ok(Frontmatter::new());
     }
 
-    let Ok(map) = serde_yaml::from_str::<serde_yaml::Mapping>(yaml_str) else {
-        return Frontmatter::new();
-    };
+    let map = serde_yaml::from_str::<serde_yaml::Mapping>(yaml_str)?;
 
-    map.into_iter()
+    Ok(map
+        .into_iter()
         .filter_map(|(k, v)| {
             let key = k.as_str()?.to_string();
             let value = serde_json::to_value(v).ok()?;
             Some((key, value))
         })
-        .collect()
+        .collect())
 }
 
 fn render_yaml_value(value: &JsonValue) -> Option<String> {
@@ -240,7 +252,9 @@ fn render_yaml_value(value: &JsonValue) -> Option<String> {
         JsonValue::Null => Some("null".to_string()),
         JsonValue::Bool(value) => Some(value.to_string()),
         JsonValue::Number(value) => Some(value.to_string()),
-        JsonValue::String(value) => Some(yaml_scalar(value)),
+        // Strings are handled by `yaml_scalar` + `push_scalar_value` in
+        // `render_page`; this fallback keeps the function total.
+        JsonValue::String(value) => yaml_scalar(value).map(|s| s.trim_end_matches('\n').to_owned()),
         JsonValue::Array(_) | JsonValue::Object(_) => {
             let rendered = serde_yaml::to_string(value).ok()?;
             Some(strip_yaml_document(&rendered))
@@ -256,23 +270,39 @@ fn strip_yaml_document(rendered: &str) -> String {
         .to_string()
 }
 
-fn yaml_scalar(value: &str) -> String {
-    if value.is_empty()
-        || value == "null"
-        || value.starts_with(' ')
-        || value.ends_with(' ')
-        || value.contains(':')
-        || value.contains('#')
-        || value.contains('[')
-        || value.contains(']')
-        || value.contains('{')
-        || value.contains('}')
-        || value.contains('"')
-        || value.contains('\'')
-    {
-        format!("'{}'", value.replace('\'', "''"))
-    } else {
-        value.to_string()
+/// Serialize a string scalar with serde_yaml so quoting decisions match the
+/// parser exactly: scalars that would re-resolve to another YAML type
+/// (`"true"`, `"007"`, `"2024"`) are quoted, scalars that would break the
+/// document (`"- item"`) are quoted, and multiline strings come back as
+/// block scalars. The returned string keeps serde_yaml's own layout,
+/// including the trailing newline and block-scalar content indentation.
+fn yaml_scalar(value: &str) -> Option<String> {
+    let rendered = serde_yaml::to_string(value).ok()?;
+    Some(
+        rendered
+            .strip_prefix("---\n")
+            .unwrap_or(&rendered)
+            .to_string(),
+    )
+}
+
+/// Append a serde_yaml-rendered scalar after `<key>`, preserving the
+/// emitter's layout byte-for-byte. Single-line scalars become
+/// `key: <scalar>\n`; block scalars keep their header on the key line
+/// (`key: |-`) with the content lines — already indented two spaces by
+/// serde_yaml — emitted verbatim so chomping-indicator newlines survive.
+fn push_scalar_value(out: &mut String, rendered: &str) {
+    out.push_str(": ");
+    match rendered.split_once('\n') {
+        Some((first, rest)) => {
+            out.push_str(first);
+            out.push('\n');
+            out.push_str(rest);
+        }
+        None => {
+            out.push_str(rendered);
+            out.push('\n');
+        }
     }
 }
 

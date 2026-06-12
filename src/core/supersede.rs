@@ -46,6 +46,17 @@ pub enum SupersedeError {
         slug: String,
     },
 
+    /// The writing page is itself already superseded — establishing a new
+    /// supersede pointer from a non-head page would create a chain cycle
+    /// invisible to head-only retrieval.
+    #[error("SupersedeConflictError: page `{slug}` is already superseded by `{successor_slug}` and cannot supersede another page")]
+    NonHeadWriter {
+        /// Slug of the non-head page that attempted the supersede.
+        slug: String,
+        /// Slug of the successor that already supersedes the writing page.
+        successor_slug: String,
+    },
+
     /// Target lives in a different collection from the new revision.
     #[error("SupersedeConflictError: supersede target `{slug}` must stay in the same collection")]
     CrossCollection {
@@ -221,6 +232,32 @@ fn ensure_target_is_valid(
                 slug: target.canonical_slug.clone(),
                 successor_slug: canonical_slug_by_page_id(conn, successor_id)?,
             });
+        }
+    }
+
+    // Cycle guard: a page that is itself superseded may not establish a NEW
+    // supersede pointer — writing chain-tail A with `supersedes: B` would
+    // produce a headless A<->B cycle invisible to head-only retrieval
+    // (mirrors the non-head writer rejection in conversation/file_edit.rs).
+    // Re-asserting an existing predecessor link (the target already points
+    // at the writer, i.e. `current_successor == current_page_id`) stays
+    // allowed so idempotent re-ingest of exported chains keeps working.
+    if let Some(page_id) = current_page_id {
+        if current_successor != Some(page_id) {
+            let writer_successor: Option<i64> = conn
+                .query_row(
+                    "SELECT superseded_by FROM pages WHERE id = ?1",
+                    [page_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            if let Some(successor_id) = writer_successor {
+                return Err(SupersedeError::NonHeadWriter {
+                    slug: page_slug.to_owned(),
+                    successor_slug: canonical_slug_by_page_id(conn, successor_id)?,
+                });
+            }
         }
     }
 

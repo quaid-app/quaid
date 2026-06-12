@@ -168,6 +168,7 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
     let superseded_a: Value = serde_json::from_str(&extract_text(
         &server
             .memory_get(MemoryGetInput {
+                namespace: None,
                 slug: "facts/a".to_string(),
             })
             .unwrap(),
@@ -176,6 +177,7 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
     let head_c: Value = serde_json::from_str(&extract_text(
         &server
             .memory_get(MemoryGetInput {
+                namespace: None,
                 slug: "facts/c".to_string(),
             })
             .unwrap(),
@@ -342,6 +344,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
     let graph: Value = serde_json::from_str(&extract_text(
         &server
             .memory_graph(MemoryGraphInput {
+                namespace: None,
                 slug: "facts/c".to_string(),
                 depth: Some(2),
                 temporal: Some("all".to_string()),

@@ -51,7 +51,7 @@ impl QuaidServer {
             let resolved = resolve_slug_for_mcp(&db, slug, OpKind::WriteUpdate)?;
             vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
                 .map_err(map_vault_sync_error)?;
-            Some(page_id_for_resolved(&db, &resolved)?)
+            Some(page_id_for_resolved(&db, &resolved, None)?)
         } else {
             None
         };

@@ -2750,8 +2750,14 @@ fn apply_reingest(
     let absolute_path = root_path.join(relative_path);
     let raw_bytes = fs::read(&absolute_path)?;
     let parsed = parse_vault_file(&raw_bytes, &absolute_path, root_path)?;
-    let current_page =
-        load_existing_page_identity(conn, collection_id, existing_page_id, &parsed.slug)?;
+    let namespace = crate::core::pages::derive_namespace_from_relative_path(relative_path);
+    let current_page = load_existing_page_identity(
+        conn,
+        collection_id,
+        existing_page_id,
+        &namespace,
+        &parsed.slug,
+    )?;
 
     // Fail closed: an existing page must already have raw_imports history.
     // row_count == 0 means the restore anchor is absent; silently bootstrapping the first
@@ -2777,7 +2783,7 @@ fn apply_reingest(
     }
 
     if let Some((page_id, _)) = current_page.as_ref() {
-        let prior_page = crate::commands::get::get_page_by_key(conn, collection_id, &parsed.slug)
+        let prior_page = crate::commands::get::get_page_by_id(conn, *page_id)
             .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?;
         let edited_page = EditedPage {
             slug: parsed.slug.clone(),
@@ -2885,12 +2891,13 @@ fn apply_reingest(
     } else {
         tx.execute(
             "INSERT INTO pages
-                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline,
-                   frontmatter, wing, room, version,
+                 (collection_id, namespace, slug, uuid, type, title, summary, compiled_truth,
+                  timeline, frontmatter, wing, room, version,
                   created_at, updated_at, truth_updated_at, timeline_updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12, ?12, ?12)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?13, ?13, ?13)",
             rusqlite::params![
                 collection_id,
+                namespace,
                 parsed.slug,
                 page_uuid,
                 parsed.page_type,
@@ -2947,6 +2954,7 @@ fn load_existing_page_identity(
     conn: &Connection,
     collection_id: i64,
     preferred_page_id: Option<i64>,
+    namespace: &str,
     slug: &str,
 ) -> Result<Option<(i64, Option<String>)>, ReconcileError> {
     if let Some(page_id) = preferred_page_id {
@@ -2960,11 +2968,13 @@ fn load_existing_page_identity(
             .map_err(Into::into);
     }
 
+    // Exact namespace match: a file under `<ns>/extracted/...` must never
+    // bind to (or overwrite) a same-slug page in another namespace.
     conn.query_row(
         "SELECT id, uuid
          FROM pages
-         WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![collection_id, slug],
+         WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
+        rusqlite::params![collection_id, namespace, slug],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()

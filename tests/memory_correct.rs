@@ -87,6 +87,7 @@ impl Harness {
         let result = self
             .server
             .memory_get(MemoryGetInput {
+                namespace: None,
                 slug: slug.to_string(),
             })
             .unwrap();

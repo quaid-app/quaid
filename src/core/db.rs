@@ -288,6 +288,7 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     ensure_serve_session_columns(&conn)?;
     ensure_collection_name_guards(&conn)?;
     ensure_raw_import_hash_schema(&conn)?;
+    ensure_pages_namespace_backfill(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
@@ -616,6 +617,80 @@ fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
             )?;
         }
         tx.commit()?;
+    }
+
+    Ok(())
+}
+
+/// Backfill `pages.namespace` for rows whose `file_state` path carries a
+/// `<ns>/extracted/...` namespace prefix.
+///
+/// Before namespace-aware reingest landed, the vault watcher inserted every
+/// page into the global (`''`) namespace, including extracted facts written
+/// to `<ns>/extracted/...` (issue #212). This idempotent fixup derives the
+/// namespace strictly from the tracked file path and re-homes those rows.
+/// Rows whose target `(collection, namespace, slug)` is already occupied are
+/// skipped (and counted) rather than violating the uniqueness constraint.
+///
+/// NOTE for the migration-ladder workstream (Area 17): this is an
+/// `ensure_`-style open-time fixup by design and intentionally does NOT bump
+/// `SCHEMA_VERSION`; fold it into the versioned ladder when that lands.
+fn ensure_pages_namespace_backfill(conn: &Connection) -> Result<(), DbError> {
+    if !table_exists(conn, "pages")? || !table_exists(conn, "file_state")? {
+        return Ok(());
+    }
+
+    let candidates: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT p.id, fs.relative_path
+             FROM pages p
+             JOIN file_state fs ON fs.page_id = p.id
+             WHERE p.namespace = ''
+               AND fs.relative_path LIKE '%/extracted/%'
+             ORDER BY p.id",
+        )?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let mut backfilled = 0usize;
+    let mut conflicts_skipped = 0usize;
+    let tx = conn.unchecked_transaction()?;
+    for (page_id, relative_path) in candidates {
+        let namespace = crate::core::pages::derive_namespace_from_relative_path(
+            std::path::Path::new(&relative_path),
+        );
+        if namespace.is_empty() {
+            continue;
+        }
+        let updated = tx.execute(
+            "UPDATE pages
+             SET namespace = ?1
+             WHERE id = ?2
+               AND namespace = ''
+               AND NOT EXISTS (
+                   SELECT 1 FROM pages p2
+                   WHERE p2.collection_id = pages.collection_id
+                     AND p2.namespace = ?1
+                     AND p2.slug = pages.slug
+               )",
+            params![namespace, page_id],
+        )?;
+        if updated == 1 {
+            backfilled += 1;
+        } else {
+            conflicts_skipped += 1;
+        }
+    }
+    tx.commit()?;
+
+    if backfilled > 0 || conflicts_skipped > 0 {
+        eprintln!(
+            "INFO: namespace_backfill pages_backfilled={backfilled} conflicts_skipped={conflicts_skipped}"
+        );
     }
 
     Ok(())

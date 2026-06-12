@@ -27,6 +27,7 @@ use thiserror::Error;
 
 use crate::core::conversation::{format, queue, turn_writer};
 use crate::core::db;
+use crate::core::db::with_immediate_transaction;
 use crate::core::inference::{embed, embedding_evidence_kind, EmbeddingEvidenceKind};
 use crate::core::types::{
     frontmatter_insert_string, ExtractionJob, Frontmatter, Page, RawFact, Turn, WindowedTurns,
@@ -884,21 +885,4 @@ fn write_markdown(
 
 fn path_to_slash(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
-}
-
-fn with_immediate_transaction<T>(
-    conn: &Connection,
-    action: impl FnOnce(&Connection) -> Result<T, FactResolutionError>,
-) -> Result<T, FactResolutionError> {
-    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
-    match action(conn) {
-        Ok(value) => {
-            conn.execute_batch("COMMIT TRANSACTION")?;
-            Ok(value)
-        }
-        Err(error) => {
-            let _ = conn.execute_batch("ROLLBACK TRANSACTION");
-            Err(error)
-        }
-    }
 }

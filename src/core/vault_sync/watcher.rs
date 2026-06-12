@@ -54,8 +54,6 @@ use notify::{
     RecommendedWatcher,
 };
 #[cfg(unix)]
-use rusqlite::Connection;
-#[cfg(unix)]
 use tokio::sync::mpsc;
 
 #[cfg(unix)]
@@ -369,7 +367,7 @@ pub(super) fn watch_callback(
             match sender.try_send(action) {
                 Ok(()) => {}
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    if let Ok(conn) = Connection::open(&db_path) {
+                    if let Ok(conn) = crate::core::db::open_runtime(&db_path) {
                         let _ = super::mark_collection_needs_full_sync(&conn, collection_id);
                     }
                     eprintln!(

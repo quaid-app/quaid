@@ -188,6 +188,11 @@ pub enum VaultSyncError {
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
+    /// Surfaces a [`crate::core::types::DbError`] from the connection
+    /// factory (`db::open_runtime`) or default-collection provisioning.
+    #[error(transparent)]
+    Db(#[from] crate::core::types::DbError),
+
     /// Surfaces a `std::io::Error` from a filesystem operation.
     #[error(transparent)]
     Io(#[from] io::Error),

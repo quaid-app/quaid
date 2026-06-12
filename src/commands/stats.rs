@@ -192,6 +192,13 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        // Configure a real root: `gather_stats` only lists collections with a
+        // non-empty root, and open no longer provisions the default root.
+        conn.execute(
+            "UPDATE collections SET root_path = ?1 WHERE id = 1",
+            [dir.path().display().to_string()],
+        )
+        .unwrap();
         std::mem::forget(dir);
         conn
     }

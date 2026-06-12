@@ -17,6 +17,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::core::db;
+use crate::core::db::with_immediate_transaction;
 use crate::core::types::{ExtractionJob, ExtractionTriggerKind};
 
 /// Default cap on extraction attempts before a job is parked in
@@ -414,29 +415,6 @@ fn read_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExtractionJob> {
                 )
             })?,
     })
-}
-
-fn with_immediate_transaction<T>(
-    conn: &Connection,
-    action: impl FnOnce(&Connection) -> Result<T, ExtractionQueueError>,
-) -> Result<T, ExtractionQueueError> {
-    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
-    match action(conn) {
-        Ok(value) => match conn.execute_batch("COMMIT TRANSACTION") {
-            Ok(()) => Ok(value),
-            Err(commit_error) => {
-                // SQLITE_BUSY on COMMIT does not auto-rollback, so the transaction
-                // would otherwise stay open and wedge subsequent BEGIN IMMEDIATEs
-                // on this shared connection.
-                let _ = conn.execute_batch("ROLLBACK TRANSACTION");
-                Err(ExtractionQueueError::from(commit_error))
-            }
-        },
-        Err(error) => {
-            let _ = conn.execute_batch("ROLLBACK TRANSACTION");
-            Err(error)
-        }
-    }
 }
 
 #[cfg(test)]

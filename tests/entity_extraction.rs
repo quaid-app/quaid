@@ -75,6 +75,32 @@ fn count_entity_pattern_links(conn: &Connection) -> i64 {
     .unwrap()
 }
 
+/// `entities::run_for_page` with a generous extraction deadline.
+///
+/// The production 5 ms budget is load-sensitive: on a saturated CI runner the
+/// first pattern can already blow it, skipping extraction and flaking any
+/// assertion-count expectation. Routing tests pin a deterministic deadline via
+/// the explicit seam; budget behaviour itself is covered by the
+/// `extract_entities` over-budget test.
+fn run_for_page_generous(
+    conn: &Connection,
+    page_id: i64,
+    collection_id: i64,
+    page_slug: &str,
+    compiled_truth: &str,
+    patterns: &[EntityPattern],
+) -> Result<entities::RoutingSummary, entities::EntityError> {
+    entities::run_for_page_with_deadline(
+        conn,
+        page_id,
+        collection_id,
+        page_slug,
+        compiled_truth,
+        patterns,
+        Duration::from_secs(30),
+    )
+}
+
 // ── 6.x: pattern config and validation ────────────────────────
 
 #[test]
@@ -305,7 +331,7 @@ fn budget_overrun_logs_knowledge_gap() {
     assert!(outcome.over_budget);
 
     // Force the wired gap-logging via the helper for budget overrun.
-    let summary = entities::run_for_page(&conn, page_id, 1, "people/alice", "", &[]).unwrap();
+    let summary = run_for_page_generous(&conn, page_id, 1, "people/alice", "", &[]).unwrap();
     assert_eq!(summary.matches_seen, 0);
     let gap_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM knowledge_gaps", [], |row| row.get(0))
@@ -323,7 +349,7 @@ fn match_with_both_resolved_inserts_assertion_no_link() {
     insert_page(&conn, "companies/brex", "Brex", "body");
 
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
-    let summary = entities::run_for_page(
+    let summary = run_for_page_generous(
         &conn,
         source,
         1,
@@ -360,7 +386,7 @@ fn unresolved_match_still_inserts_assertion_no_link() {
     insert_page(&conn, "people/alice", "Alice", "body");
 
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
-    let summary = entities::run_for_page(
+    let summary = run_for_page_generous(
         &conn,
         source,
         1,
@@ -387,7 +413,7 @@ fn unresolved_evidence_does_not_include_raw_capture_text() {
     insert_page(&conn, "people/alice", "Alice", "body");
 
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
-    entities::run_for_page(
+    run_for_page_generous(
         &conn,
         source,
         1,
@@ -450,7 +476,7 @@ fn idempotent_reingest_does_not_duplicate_assertions() {
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
 
     for _ in 0..3 {
-        entities::run_for_page(
+        run_for_page_generous(
             &conn,
             source,
             1,
@@ -475,7 +501,7 @@ fn reingest_removes_entity_assertions_no_longer_in_page_text() {
     insert_page(&conn, "companies/stripe", "Stripe", "body");
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
 
-    entities::run_for_page(
+    run_for_page_generous(
         &conn,
         source,
         1,
@@ -484,7 +510,7 @@ fn reingest_removes_entity_assertions_no_longer_in_page_text() {
         &patterns,
     )
     .unwrap();
-    entities::run_for_page(
+    run_for_page_generous(
         &conn,
         source,
         1,
@@ -574,7 +600,7 @@ fn over_budget_run_for_page_logs_gap_and_preserves_existing_entity_assertions() 
     insert_page(&conn, "companies/brex", "Brex", "body");
     let patterns = entities::load_patterns_from(None, &conn).unwrap();
 
-    entities::run_for_page(
+    run_for_page_generous(
         &conn,
         source,
         1,

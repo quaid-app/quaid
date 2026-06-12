@@ -234,6 +234,7 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
     let graph: Value = serde_json::from_str(&extract_text(
         &server
             .memory_graph(MemoryGraphInput {
+                namespace: None,
                 slug: "preferences/foo".to_string(),
                 depth: Some(3),
                 temporal: Some("all".to_string()),

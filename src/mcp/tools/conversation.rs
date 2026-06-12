@@ -219,12 +219,21 @@ impl QuaidServer {
         )
         .map_err(|error| map_close_action_put_error(&db, &resolved, error))?;
 
+        // The put above wrote the global namespace; read the version back
+        // from exactly that row.
+        let page_id = crate::core::pages::resolve(
+            &db,
+            &crate::core::pages::PageKey {
+                collection_id: resolved.collection_id,
+                namespace: Some(""),
+                slug: &resolved.slug,
+            },
+        )
+        .map_err(map_db_error)?;
         let (updated_at, version): (String, i64) = db
             .query_row(
-                "SELECT updated_at, version
-                 FROM pages
-                 WHERE collection_id = ?1 AND slug = ?2",
-                rusqlite::params![resolved.collection_id, &resolved.slug],
+                "SELECT updated_at, version FROM pages WHERE id = ?1",
+                [page_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(map_db_error)?;

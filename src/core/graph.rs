@@ -101,10 +101,15 @@ pub fn neighborhood_graph(
     filter: TemporalFilter,
     conn: &Connection,
 ) -> Result<GraphResult, GraphError> {
+    // Legacy slug-only entry: prefer the global namespace, then order
+    // deterministically instead of binding to an arbitrary row when a slug
+    // exists in several namespaces.
     let root_id: i64 = conn
-        .query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT id FROM pages WHERE slug = ?1              ORDER BY CASE WHEN namespace = '' THEN 0 ELSE 1 END, namespace, collection_id              LIMIT 1",
+            [slug],
+            |row| row.get(0),
+        )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => GraphError::PageNotFound {
                 slug: slug.to_string(),

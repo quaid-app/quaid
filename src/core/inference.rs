@@ -2376,8 +2376,18 @@ mod tests {
         let _base_url = EnvVarGuard::set("QUAID_HF_BASE_URL", format!("http://{}", address));
         let _cache_dir = EnvVarGuard::set("QUAID_MODEL_CACHE_DIR", cache_dir.path());
 
+        // The hardened download policy refuses unpinned custom models; this
+        // test exercises the mock-download plumbing, so opt in explicitly and
+        // restore deny-by-default before releasing the env lock.
+        configure_model_download_policy(ModelDownloadPolicy {
+            allow_unverified: true,
+            revision: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned()),
+        });
+
         let model = resolve_model("org/custom-model");
-        let hydrated = hydrate_model_config(&model).expect("hydrate custom model");
+        let hydrated = hydrate_model_config(&model);
+        configure_model_download_policy(ModelDownloadPolicy::default());
+        let hydrated = hydrated.expect("hydrate custom model");
         server.join().expect("join mock server");
 
         assert_eq!(hydrated.model_id, "org/custom-model");

@@ -50,6 +50,9 @@ pub mod namespace;
 pub mod novelty;
 /// Stable per-page UUID derivation and lookup.
 pub mod page_uuid;
+/// Namespace-aware page identity resolution (the only sanctioned
+/// `(collection, namespace, slug)` → page-id lookup path).
+pub mod pages;
 /// Memory-palace classification: wing/room derivation and intent routing.
 pub mod palace;
 /// Token-budgeted expansion of search hits into context-window-sized payloads.

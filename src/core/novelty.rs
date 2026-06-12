@@ -3,10 +3,6 @@
 //! Phase 1 treats novelty as a conservative duplicate filter:
 //! - lexical overlap is measured with lowercased whitespace-token Jaccard
 //! - stored embeddings are consulted when present for a near-duplicate check
-//!
-//! The current embedding backend is a deterministic SHA-256 placeholder, not a
-//! semantic model, so tests intentionally only lock down duplicate-vs-different
-//! behavior and avoid paraphrase expectations.
 
 use std::collections::HashSet;
 
@@ -48,17 +44,20 @@ pub fn check_novelty(
     })?;
     let query_blob = embedding_to_blob(&query_embedding);
 
+    // Scope strictly to the page being compared against (by its unique
+    // UUID), not to every same-slug page across all collections — a slug
+    // can exist independently in several collections (#75).
     let sql = format!(
         "SELECT MAX(1.0 - vec_distance_cosine(pev.embedding, ?1)) \
          FROM {vec_table} pev \
          JOIN page_embeddings pe ON pev.rowid = pe.vec_rowid \
          JOIN pages p ON p.id = pe.page_id \
-         WHERE pe.model = ?2 AND p.slug = ?3"
+         WHERE pe.model = ?2 AND p.uuid = ?3"
     );
 
     let max_similarity = conn.query_row(
         &sql,
-        params![query_blob, model_name, existing_page.slug.as_str()],
+        params![query_blob, model_name, existing_page.uuid.as_str()],
         |row| row.get::<_, Option<f64>>(0),
     )?;
 

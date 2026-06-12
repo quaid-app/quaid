@@ -1,20 +1,60 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::core::markdown;
-use crate::core::page_uuid;
 use crate::core::types::Frontmatter;
 
-/// Export all pages as markdown files to the given output directory.
-pub fn export_dir(db: &Connection, output_path: &Path) -> Result<usize> {
-    let pages = all_pages(db)?;
+/// One exported page together with the collection/namespace key that
+/// disambiguates same-slug pages across collections and namespaces.
+struct ExportEntry {
+    collection: String,
+    namespace: String,
+    page: crate::core::types::Page,
+}
 
-    for page in &pages {
-        let rendered = markdown::render_page(page);
-        let file_path = output_path.join(format!("{}.md", page.slug));
+/// Relative export path for a page.
+///
+/// When `flat` is set (single collection, no namespaces) the legacy
+/// `<slug>.md` layout is preserved for compatibility with existing
+/// re-ingest scripts; otherwise pages are keyed as
+/// `<collection>/<namespace?>/<slug>.md`.
+fn export_relative_path(flat: bool, entry: &ExportEntry) -> PathBuf {
+    if flat {
+        return PathBuf::from(format!("{}.md", entry.page.slug));
+    }
+    let mut path = PathBuf::from(&entry.collection);
+    if !entry.namespace.is_empty() {
+        path.push(&entry.namespace);
+    }
+    path.push(format!("{}.md", entry.page.slug));
+    path
+}
+
+/// Whether the export set can use the legacy flat `<slug>.md` layout:
+/// every page lives in the same collection and the global namespace, so
+/// slugs alone are collision-free.
+fn flat_layout(entries: &[ExportEntry]) -> bool {
+    entries
+        .iter()
+        .all(|entry| entry.namespace.is_empty() && entry.collection == entries[0].collection)
+}
+
+/// Export all pages as markdown files to the given output directory.
+///
+/// Pages are keyed by `(collection, namespace, slug)`; the flat `<slug>.md`
+/// layout is kept when only a single collection with no namespaces exists.
+/// Pages without a persisted UUID are skipped with a warning instead of
+/// aborting the whole export.
+pub fn export_dir(db: &Connection, output_path: &Path) -> Result<usize> {
+    let entries = all_pages(db)?;
+    let flat = flat_layout(&entries);
+
+    for entry in &entries {
+        let rendered = markdown::render_page(&entry.page);
+        let file_path = output_path.join(export_relative_path(flat, entry));
 
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent)?;
@@ -22,18 +62,20 @@ pub fn export_dir(db: &Connection, output_path: &Path) -> Result<usize> {
         fs::write(&file_path, &rendered)?;
     }
 
-    Ok(pages.len())
+    Ok(entries.len())
 }
 
 /// Validate round-trip fidelity: export then re-parse and compare.
 /// Used only in tests.
 #[cfg(test)]
 fn validate_roundtrip(db: &Connection, output_path: &Path) -> Result<()> {
-    let pages = all_pages(db)?;
+    let entries = all_pages(db)?;
+    let flat = flat_layout(&entries);
 
-    for page in &pages {
+    for entry in &entries {
+        let page = &entry.page;
         let rendered = markdown::render_page(page);
-        let file_path = output_path.join(format!("{}.md", page.slug));
+        let file_path = output_path.join(export_relative_path(flat, entry));
 
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent)?;
@@ -69,12 +111,15 @@ fn validate_roundtrip(db: &Connection, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
+fn all_pages(db: &Connection) -> Result<Vec<ExportEntry>> {
     let mut stmt = db.prepare(
-        "SELECT slug, type, title, summary, compiled_truth, timeline, \
-                uuid, frontmatter, wing, room, superseded_by, version, created_at, updated_at, \
-                truth_updated_at, timeline_updated_at, id \
-         FROM pages ORDER BY slug",
+        "SELECT p.slug, p.type, p.title, p.summary, p.compiled_truth, p.timeline, \
+                p.uuid, p.frontmatter, p.wing, p.room, p.superseded_by, p.version, \
+                p.created_at, p.updated_at, \
+                p.truth_updated_at, p.timeline_updated_at, p.id, c.name, p.namespace \
+         FROM pages p \
+         JOIN collections c ON c.id = p.collection_id \
+         ORDER BY c.name, p.namespace, p.slug",
     )?;
 
     let rows = stmt.query_map([], |row| {
@@ -83,15 +128,12 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
 
         Ok((
             row.get::<_, i64>(16)?,
+            row.get::<_, String>(17)?,
+            row.get::<_, String>(18)?,
+            row.get::<_, Option<String>>(6)?,
             crate::core::types::Page {
                 slug: row.get(0)?,
-                uuid: row.get::<_, Option<String>>(6)?.ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        6,
-                        rusqlite::types::Type::Null,
-                        Box::new(page_uuid::PageUuidError::EmptyFrontmatterUuid),
-                    )
-                })?,
+                uuid: String::new(),
                 page_type: row.get(1)?,
                 superseded_by: row.get(10)?,
                 title: row.get(2)?,
@@ -110,9 +152,19 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
         ))
     })?;
 
-    let mut pages = Vec::new();
+    let mut entries = Vec::new();
     for row in rows {
-        let (page_id, mut page) = row?;
+        let (page_id, collection, namespace, uuid, mut page) = row?;
+        // Skip-and-warn instead of aborting the entire export: a single
+        // legacy row without a UUID must not block exporting everything else.
+        let Some(uuid) = uuid else {
+            eprintln!(
+                "Warning: skipping export of page '{}::{}' (id {page_id}): missing uuid",
+                collection, page.slug
+            );
+            continue;
+        };
+        page.uuid = uuid;
         if !page.frontmatter.contains_key("supersedes") {
             if let Ok(predecessor_slug) = db.query_row(
                 "SELECT slug FROM pages WHERE superseded_by = ?1 LIMIT 1",
@@ -125,9 +177,13 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
                 );
             }
         }
-        pages.push(page);
+        entries.push(ExportEntry {
+            collection,
+            namespace,
+            page,
+        });
     }
-    Ok(pages)
+    Ok(entries)
 }
 
 #[cfg(test)]

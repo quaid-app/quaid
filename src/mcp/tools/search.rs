@@ -49,6 +49,7 @@ impl QuaidServer {
                 collection: collection_filter.as_ref().map(|collection| collection.id),
                 namespace: namespace_filter,
                 include_superseded,
+                include_quarantined: false,
                 canonical: true,
                 limit,
                 hops: None,

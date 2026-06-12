@@ -48,6 +48,9 @@ use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 ///   the `foo` namespace and the global `""` namespace.
 /// - `include_superseded`: when `false`, hides pages with non-NULL
 ///   `superseded_by`.
+/// - `include_quarantined`: when `false`, hides pages with non-NULL
+///   `quarantined_at`. Quarantined pages must be fetched explicitly (e.g.
+///   `memory_get`/raw access), never surfaced by retrieval.
 /// - `canonical`: when `true`, results return slugs in
 ///   `<collection>::<slug>` form.
 /// - `limit`: maximum number of rows to return after merge.
@@ -63,6 +66,8 @@ pub struct HybridSearch<'a> {
     pub namespace: Option<&'a str>,
     /// When `false`, hides pages whose `superseded_by` is non-NULL.
     pub include_superseded: bool,
+    /// When `false`, hides pages whose `quarantined_at` is non-NULL.
+    pub include_quarantined: bool,
     /// When `true`, results return slugs in `<collection>::<slug>` form.
     pub canonical: bool,
     /// Maximum number of rows to return after the merge step.
@@ -94,6 +99,7 @@ pub fn hybrid_search(
             q.collection,
             q.namespace,
             q.include_superseded,
+            q.include_quarantined,
             conn,
             q.canonical,
         )? {
@@ -311,6 +317,7 @@ pub fn expand_graph(
          JOIN pages p2 ON l.to_page_id = p2.id{collection_join} \
          WHERE p1.collection_id = ?1 AND p1.slug = ?2 \
            AND p2.superseded_by IS NULL \
+           AND p2.quarantined_at IS NULL \
            AND (l.valid_from IS NULL OR l.valid_from <= date('now')) \
            AND (l.valid_until IS NULL OR l.valid_until >= date('now'))\
            {collection_clause}"
@@ -456,17 +463,23 @@ fn exact_slug_result(
         collection_filter,
         None,
         include_superseded,
+        false,
         conn,
         canonical_slug,
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "internal exact-slug helper threads the full HybridSearch filter set; a struct here would duplicate HybridSearch"
+)]
 fn exact_slug_result_with_namespace(
     slug: &str,
     wing: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
     include_superseded: bool,
+    include_quarantined: bool,
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Option<SearchResult>, SearchError> {
@@ -477,6 +490,7 @@ fn exact_slug_result_with_namespace(
             collection_filter,
             namespace_filter,
             include_superseded,
+            include_quarantined,
             conn,
         );
     }
@@ -508,6 +522,9 @@ fn exact_slug_result_with_namespace(
     }
     if !include_superseded {
         query.push_str(" AND superseded_by IS NULL");
+    }
+    if !include_quarantined {
+        query.push_str(" AND quarantined_at IS NULL");
     }
     if let Some(namespace) = namespace_filter.filter(|namespace| !namespace.is_empty()) {
         query.push_str(" ORDER BY CASE WHEN namespace = ?");
@@ -549,6 +566,7 @@ fn exact_slug_result_canonical(
         collection_filter,
         None,
         include_superseded,
+        false,
         conn,
     )
 }
@@ -559,6 +577,7 @@ fn exact_slug_result_canonical_with_namespace(
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
     include_superseded: bool,
+    include_quarantined: bool,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
     if let Some(collection_id) = collection_filter {
@@ -568,6 +587,7 @@ fn exact_slug_result_canonical_with_namespace(
             collection_id,
             namespace_filter,
             include_superseded,
+            include_quarantined,
             conn,
         );
     }
@@ -601,6 +621,7 @@ fn exact_slug_result_canonical_with_namespace(
         resolved.0,
         namespace_filter,
         include_superseded,
+        include_quarantined,
         conn,
     );
 
@@ -625,6 +646,7 @@ fn exact_slug_result_canonical_for_collection(
         collection_id,
         None,
         include_superseded,
+        false,
         conn,
     )
 }
@@ -635,6 +657,7 @@ fn exact_slug_result_canonical_for_collection_with_namespace(
     collection_id: i64,
     namespace_filter: Option<&str>,
     include_superseded: bool,
+    include_quarantined: bool,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
     let stripped_slug = if let Some((collection_name, relative_slug)) = slug.split_once("::") {
@@ -654,6 +677,7 @@ fn exact_slug_result_canonical_for_collection_with_namespace(
         collection_id,
         namespace_filter,
         include_superseded,
+        include_quarantined,
         conn,
     );
 
@@ -670,6 +694,7 @@ fn query_exact_slug_canonical(
     collection_id: i64,
     namespace_filter: Option<&str>,
     include_superseded: bool,
+    include_quarantined: bool,
     conn: &Connection,
 ) -> Result<SearchResult, rusqlite::Error> {
     let mut query = String::from(
@@ -700,6 +725,9 @@ fn query_exact_slug_canonical(
     }
     if !include_superseded {
         query.push_str(" AND p.superseded_by IS NULL");
+    }
+    if !include_quarantined {
+        query.push_str(" AND p.quarantined_at IS NULL");
     }
     if let Some(namespace) = namespace_filter.filter(|namespace| !namespace.is_empty()) {
         query.push_str(" ORDER BY CASE WHEN p.namespace = ?");

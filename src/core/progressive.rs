@@ -11,7 +11,7 @@ const MAX_DEPTH: u32 = 3;
 /// Expand an initial result set by following outbound links until the token
 /// budget is exhausted or the depth cap is reached.
 ///
-/// Token count is approximated as `len(compiled_truth) / 4`.
+/// Token count is approximated as `(len(compiled_truth) + len(timeline)) / 4`.
 /// Results are deduplicated by slug. Initial results appear first, followed
 /// by expansion results ordered by link distance.
 ///
@@ -64,11 +64,16 @@ pub fn progressive_retrieve_with_namespace(
     let mut results: Vec<SearchResult> = Vec::new();
     let mut tokens_used: usize = 0;
 
-    // Consume initial results, tracking budget
+    // Consume initial results, tracking budget. Entries that do not fit are
+    // skipped (not `break`) so one oversized page cannot starve later
+    // results — the same policy the expansion loop below applies. Entries
+    // whose slug cannot be costed are skipped rather than riding for free.
     for r in &initial {
-        let cost = token_cost(&r.slug, conn);
+        let Some(cost) = token_cost(&r.slug, conn) else {
+            continue;
+        };
         if tokens_used + cost > budget {
-            break;
+            continue;
         }
         seen.insert(r.slug.clone());
         tokens_used += cost;
@@ -98,7 +103,9 @@ pub fn progressive_retrieve_with_namespace(
                     continue;
                 }
 
-                let cost = token_cost(&neighbour.slug, conn);
+                let Some(cost) = token_cost(&neighbour.slug, conn) else {
+                    continue;
+                };
                 if tokens_used + cost > budget {
                     continue;
                 }
@@ -115,19 +122,21 @@ pub fn progressive_retrieve_with_namespace(
     Ok(results)
 }
 
-/// Approximate token cost of a page: `len(compiled_truth) / 4`.
-fn token_cost(slug: &str, conn: &Connection) -> usize {
-    let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, slug) else {
-        return 0;
-    };
+/// Approximate token cost of a page: `(len(compiled_truth) + len(timeline)) / 4`.
+///
+/// Returns `None` when the slug cannot be resolved or the page row is
+/// missing, so callers can skip the entry instead of treating it as free.
+fn token_cost(slug: &str, conn: &Connection) -> Option<usize> {
+    let (collection_id, resolved_slug) = resolve_slug_key(conn, slug)?;
 
     conn.query_row(
-        "SELECT LENGTH(compiled_truth) FROM pages WHERE collection_id = ?1 AND slug = ?2",
+        "SELECT LENGTH(compiled_truth) + LENGTH(timeline) \
+         FROM pages WHERE collection_id = ?1 AND slug = ?2",
         rusqlite::params![collection_id, resolved_slug],
         |row| row.get::<_, i64>(0),
     )
+    .ok()
     .map(|len| (len as usize) / 4)
-    .unwrap_or(0)
 }
 
 fn page_is_head(slug: &str, conn: &Connection) -> bool {
@@ -148,6 +157,10 @@ fn page_is_head(slug: &str, conn: &Connection) -> bool {
 /// When `collection_filter` is `Some(id)`, only target pages belonging to that
 /// collection are returned, enforcing the MCP read-filter contract during
 /// `depth="auto"` expansion.
+///
+/// Quarantined targets are always excluded — retrieval never surfaces
+/// quarantined pages; they remain reachable only via explicit access paths
+/// such as `memory_get` and raw imports.
 fn outbound_neighbours(
     slug: &str,
     collection_filter: Option<i64>,
@@ -176,6 +189,7 @@ fn outbound_neighbours(
          JOIN pages p1 ON l.from_page_id = p1.id \
          JOIN pages p2 ON l.to_page_id = p2.id{collection_join} \
          WHERE p1.collection_id = ?1 AND p1.slug = ?2 \
+           AND p2.quarantined_at IS NULL \
            AND (l.valid_from IS NULL OR l.valid_from <= date('now')) \
            AND (l.valid_until IS NULL OR l.valid_until >= date('now')) \
            AND (?3 IS NULL OR p2.collection_id = ?3) \

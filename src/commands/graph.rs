@@ -7,6 +7,7 @@ use rusqlite::Connection;
 
 use crate::core::entities;
 use crate::core::graph::{self, GraphError, TemporalFilter};
+use crate::core::pages;
 use crate::core::vault_sync;
 
 /// Top-level args for the `quaid graph` command.
@@ -79,18 +80,20 @@ pub fn run_to<W: Write>(
 
     let resolved = vault_sync::resolve_page_for_read(db, slug)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    let page_id: i64 = db
-        .query_row(
-            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-            rusqlite::params![resolved.collection_id, &resolved.slug],
-            |row| row.get(0),
-        )
-        .map_err(|error| match error {
-            rusqlite::Error::QueryReturnedNoRows => {
-                anyhow::anyhow!("page not found: {}", resolved.canonical_slug())
-            }
-            other => anyhow::anyhow!(other),
-        })?;
+    let page_id: i64 = pages::resolve(
+        db,
+        &pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace: None,
+            slug: &resolved.slug,
+        },
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => {
+            anyhow::anyhow!("page not found: {}", resolved.canonical_slug())
+        }
+        other => anyhow::anyhow!(other),
+    })?;
 
     let root_slug = resolved.canonical_slug();
     let result = match graph::neighborhood_graph_for_page(

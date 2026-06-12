@@ -403,17 +403,18 @@ fn lookup_by_slug(
     collection_id: i64,
     slug: &str,
 ) -> Result<Option<SurfaceResolution>, rusqlite::Error> {
-    conn.query_row(
-        "SELECT id, slug FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        params![collection_id, slug],
-        |row| {
-            Ok(SurfaceResolution::Resolved {
-                page_id: row.get(0)?,
-                slug: row.get(1)?,
-            })
+    Ok(crate::core::pages::resolve_optional(
+        conn,
+        &crate::core::pages::PageKey {
+            collection_id,
+            namespace: None,
+            slug,
         },
-    )
-    .optional()
+    )?
+    .map(|page_id| SurfaceResolution::Resolved {
+        page_id,
+        slug: slug.to_owned(),
+    }))
 }
 
 fn lookup_by_title_ci(

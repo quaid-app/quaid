@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::core::collections::OpKind;
+use crate::core::pages;
 use crate::core::vault_sync;
 
 #[derive(Debug, Serialize)]
@@ -24,16 +25,18 @@ pub fn run(db: &Connection, slug: &str, limit: u32, json: bool) -> Result<()> {
     let canonical_slug = resolved.canonical_slug();
     let page = crate::commands::get::get_page_by_key(db, resolved.collection_id, &resolved.slug)?;
 
-    let page_id: i64 = db
-        .query_row(
-            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-            rusqlite::params![resolved.collection_id, &resolved.slug],
-            |row| row.get(0),
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
-            other => other.into(),
-        })?;
+    let page_id: i64 = pages::resolve(
+        db,
+        &pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace: None,
+            slug: &resolved.slug,
+        },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
+        other => other.into(),
+    })?;
 
     // Query structured timeline_entries table
     let mut stmt = db.prepare(
@@ -113,16 +116,18 @@ pub fn add(
     let canonical_slug = resolved.canonical_slug();
     vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    let page_id: i64 = db
-        .query_row(
-            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-            rusqlite::params![resolved.collection_id, &resolved.slug],
-            |row| row.get(0),
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
-            other => other.into(),
-        })?;
+    let page_id: i64 = pages::resolve(
+        db,
+        &pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace: None,
+            slug: &resolved.slug,
+        },
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
+        other => other.into(),
+    })?;
 
     let summary_hash = {
         use sha2::{Digest, Sha256};

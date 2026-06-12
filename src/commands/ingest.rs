@@ -115,10 +115,13 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
                 room
             ],
         )?;
-        let page_id: i64 = db.query_row(
-            "SELECT id FROM pages WHERE collection_id = 1 AND slug = ?1",
-            [&slug],
-            |row| row.get(0),
+        let page_id: i64 = crate::core::pages::resolve(
+            db,
+            &crate::core::pages::PageKey {
+                collection_id: 1,
+                namespace: Some(""),
+                slug: &slug,
+            },
         )?;
         supersede::reconcile_supersede_chain(db, 1, "", page_id, &slug, supersedes.as_deref())
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -189,6 +192,7 @@ fn refresh_source_mapping_for_duplicate(
              FROM raw_imports ri
              JOIN pages p ON p.id = ri.page_id
              WHERE p.collection_id = 1
+               AND p.namespace = ''
                AND p.slug = ?2
                AND ri.is_active = 1
                AND ri.raw_bytes = ?4

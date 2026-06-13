@@ -3,6 +3,11 @@
 //! version checks, and crash-partial bootstrap recovery so the rest of the
 //! crate can assume an open `Connection` is at the current schema version.
 //!
+//! Plain opens stay fail-closed on schema-version mismatches; the explicit
+//! `quaid migrate` command drives `migrate_database`, which walks the
+//! versioned migration ladder (`MIGRATIONS`) with a pre-migration backup,
+//! per-step transactions, and post-migration integrity checks.
+//!
 //! See also: `inference` for the `ModelConfig` values persisted here, `types`
 //! for `DbError`, and `migrate` for export/import round-trips.
 
@@ -282,16 +287,320 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     conn.busy_timeout(Duration::from_secs(5))?;
     ensure_namespace_schema(&conn)?;
     conn.execute_batch(include_str!("../schema.sql"))?;
-    ensure_pages_update_trigger_handles_quarantine(&conn)?;
-    ensure_namespace_schema(&conn)?;
-    ensure_collection_owner_columns(&conn)?;
-    ensure_serve_session_columns(&conn)?;
-    ensure_collection_name_guards(&conn)?;
-    ensure_raw_import_hash_schema(&conn)?;
+    apply_current_version_maintenance(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+/// One rung of the versioned migration ladder: upgrades a database whose
+/// stored schema version is `target - 1` to `target`. Step functions run
+/// inside a transaction opened by [`migrate_database`] (with foreign keys
+/// disabled for table rebuilds) and must not begin or commit transactions
+/// themselves; the runner bumps the stored schema version after each step.
+type MigrationStep = fn(&Connection) -> Result<(), DbError>;
+
+/// Versioned migration ladder, keyed by target schema version. Plain `open`
+/// stays fail-closed on any schema-version mismatch; only the explicit
+/// `quaid migrate` command ([`migrate_database`]) walks these rungs. New DDL
+/// changes must be added here as a new rung with a `SCHEMA_VERSION` bump,
+/// not as silent open-time patches.
+const MIGRATIONS: &[(i64, MigrationStep)] = &[(10, migrate_v9_to_v10_links_graph)];
+
+/// Idempotent same-version maintenance: the registry's current-version step,
+/// applied on every open and at the end of every `migrate_database` run.
+///
+/// This folds the formerly scattered unversioned `ensure_*` patches —
+/// `ensure_pages_update_trigger_handles_quarantine`, `ensure_namespace_schema`,
+/// `ensure_collection_owner_columns`, `ensure_serve_session_columns`,
+/// `ensure_collection_name_guards`, and `ensure_raw_import_hash_schema` —
+/// into one place so current-version databases converge on one shape and
+/// future DDL changes land as new [`MIGRATIONS`] rungs instead of silent
+/// per-release drift.
+fn apply_current_version_maintenance(conn: &Connection) -> Result<(), DbError> {
+    ensure_pages_update_trigger_handles_quarantine(conn)?;
+    ensure_namespace_schema(conn)?;
+    ensure_collection_owner_columns(conn)?;
+    ensure_serve_session_columns(conn)?;
+    ensure_collection_name_guards(conn)?;
+    ensure_raw_import_hash_schema(conn)?;
+    Ok(())
+}
+
+/// v9 → v10: the knowledge-graph layer on `links`.
+///
+/// Implements exactly the `src/schema.sql` delta between v0.21.x (schema v9)
+/// and v0.22.x (schema v10):
+/// - extends the `source_kind` CHECK with `'frontmatter'` and
+///   `'entity_pattern'` and adds `edge_weight REAL NOT NULL DEFAULT 1.0` via
+///   the documented 12-step table rebuild (CHECK constraints cannot be
+///   altered in place);
+/// - dedupes derived edges (keeping the oldest row per
+///   `(from, to, relationship, source_kind)`; the next sync refreshes its
+///   temporal fields anyway), then creates the partial unique index
+///   `idx_links_unique_derived_edge`;
+/// - seeds the v10 graph config defaults.
+fn migrate_v9_to_v10_links_graph(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "DELETE FROM links
+          WHERE source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern')
+            AND id NOT IN (
+                SELECT MIN(id)
+                  FROM links
+                 WHERE source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern')
+                 GROUP BY from_page_id, to_page_id, relationship, source_kind
+            );
+
+         CREATE TABLE links_new (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             from_page_id    INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+             to_page_id      INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+             relationship    TEXT    NOT NULL DEFAULT 'related',
+             context         TEXT    NOT NULL DEFAULT '',
+             source_kind     TEXT    NOT NULL DEFAULT 'programmatic' CHECK(source_kind IN ('wiki_link', 'programmatic', 'frontmatter', 'entity_pattern')),
+             edge_weight     REAL    NOT NULL DEFAULT 1.0,
+             valid_from      TEXT    DEFAULT NULL,
+             valid_until     TEXT    DEFAULT NULL,
+             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             CHECK (valid_from IS NULL OR valid_until IS NULL OR valid_until >= valid_from)
+         );
+         INSERT INTO links_new
+             (id, from_page_id, to_page_id, relationship, context, source_kind,
+              edge_weight, valid_from, valid_until, created_at)
+         SELECT id, from_page_id, to_page_id, relationship, context, source_kind,
+                1.0, valid_from, valid_until, created_at
+           FROM links;
+         DROP TABLE links;
+         ALTER TABLE links_new RENAME TO links;
+
+         CREATE INDEX IF NOT EXISTS idx_links_from    ON links(from_page_id);
+         CREATE INDEX IF NOT EXISTS idx_links_to      ON links(to_page_id);
+         CREATE INDEX IF NOT EXISTS idx_links_current ON links(valid_until);
+         CREATE INDEX IF NOT EXISTS idx_links_source  ON links(source_kind);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_links_unique_derived_edge
+             ON links(from_page_id, to_page_id, relationship, source_kind)
+             WHERE source_kind IN ('wiki_link', 'frontmatter', 'entity_pattern');
+
+         INSERT OR IGNORE INTO config (key, value) VALUES
+             ('graph_depth',                  '0'),
+             ('graph_distance_decay',         '0.5'),
+             ('graph_expansion_max',          '50'),
+             ('edge_weight_frontmatter',      '1.0'),
+             ('edge_weight_entity_pattern',   '0.7'),
+             ('edge_weight_wikilink',         '0.5');",
+    )?;
+    Ok(())
+}
+
+/// Result of a [`migrate_database`] run: versions, applied ladder rungs,
+/// backup location, and row-count sanity figures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationReport {
+    /// Schema version stored in the database before the run.
+    pub from_version: i64,
+    /// Schema version after the run (the binary's current schema version).
+    pub to_version: i64,
+    /// Target versions of the ladder rungs that were applied, in order.
+    /// Empty when the database was already current.
+    pub steps_applied: Vec<i64>,
+    /// Path of the pre-migration `.bak` copy, written before the first rung.
+    /// `None` when no rungs were applied.
+    pub backup_path: Option<String>,
+    /// `pages` row count before the ladder ran.
+    pub pages_before: i64,
+    /// `pages` row count after the ladder ran (must equal `pages_before`).
+    pub pages_after: i64,
+    /// `links` row count before the ladder ran.
+    pub links_before: i64,
+    /// `links` row count after the ladder ran (may shrink: duplicate derived
+    /// edges are collapsed by the v9 → v10 rung).
+    pub links_after: i64,
+}
+
+/// Upgrades the database at `path` to the current schema version by walking
+/// the versioned `MIGRATIONS` ladder. Backs the CLI's explicit
+/// `quaid migrate` command; plain opens stay fail-closed on mismatches.
+///
+/// Order of operations:
+/// 1. refuse databases newer than this binary or with no registered path;
+/// 2. write a `<path>.bak` copy (after a WAL checkpoint) before the first
+///    rung;
+/// 3. run each rung in its own transaction, bumping
+///    `quaid_config.schema_version` and the legacy `config.version` mirror
+///    per step, with a `foreign_key_check` after each commit;
+/// 4. apply current-version maintenance, then verify
+///    `PRAGMA integrity_check` and row-count sanity.
+///
+/// An already-current database is a no-op (maintenance still runs and no
+/// backup is written).
+pub fn migrate_database(path: &str) -> Result<MigrationReport, DbError> {
+    if path == ":memory:" {
+        return Err(DbError::Schema {
+            message: "in-memory databases cannot be migrated".to_owned(),
+        });
+    }
+    if !Path::new(path).exists() {
+        return Err(DbError::PathNotFound {
+            path: path.to_owned(),
+        });
+    }
+
+    ensure_sqlite_vec();
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+
+    let Some(from_version) = read_existing_schema_version(&conn)? else {
+        return Err(DbError::Schema {
+            message: format_schema_reinit_message(0, path),
+        });
+    };
+    if from_version > SCHEMA_VERSION {
+        return Err(DbError::Schema {
+            message: format_schema_reinit_message(from_version, path),
+        });
+    }
+
+    // Verify a complete ladder exists before touching anything.
+    let pending: Vec<(i64, MigrationStep)> = ((from_version + 1)..=SCHEMA_VERSION)
+        .map(|target| {
+            MIGRATIONS
+                .iter()
+                .find(|(version, _)| *version == target)
+                .copied()
+                .ok_or_else(|| DbError::Schema {
+                    message: format!(
+                        "no migration step is registered for schema version {target}; this database cannot be migrated in place.\n{}",
+                        format_schema_reinit_message(from_version, path)
+                    ),
+                })
+        })
+        .collect::<Result<_, _>>()?;
+
+    let pages_before = count_table_rows(&conn, "pages")?;
+    let links_before = count_table_rows(&conn, "links")?;
+
+    let mut backup_path = None;
+    let mut steps_applied = Vec::with_capacity(pending.len());
+    if !pending.is_empty() {
+        backup_path = Some(write_pre_migration_backup(&conn, path)?);
+        for (target, step) in pending {
+            apply_migration_step(&conn, target, step)?;
+            steps_applied.push(target);
+        }
+    }
+
+    apply_current_version_maintenance(&conn)?;
+    set_version(&conn)?;
+
+    let backup_note = backup_path
+        .as_deref()
+        .unwrap_or("none (no migration steps were applied)");
+
+    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(DbError::Schema {
+            message: format!(
+                "integrity_check failed after migration: {integrity}\n  Pre-migration backup: {backup_note}"
+            ),
+        });
+    }
+
+    let pages_after = count_table_rows(&conn, "pages")?;
+    let links_after = count_table_rows(&conn, "links")?;
+    if pages_after != pages_before || links_after > links_before {
+        return Err(DbError::Schema {
+            message: format!(
+                "row-count sanity check failed after migration (pages {pages_before} -> {pages_after}, links {links_before} -> {links_after})\n  Pre-migration backup: {backup_note}"
+            ),
+        });
+    }
+
+    Ok(MigrationReport {
+        from_version,
+        to_version: SCHEMA_VERSION,
+        steps_applied,
+        backup_path,
+        pages_before,
+        pages_after,
+        links_before,
+        links_after,
+    })
+}
+
+fn count_table_rows(conn: &Connection, table: &str) -> Result<i64, DbError> {
+    if !table_exists(conn, table)? {
+        return Ok(0);
+    }
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .map_err(DbError::from)
+}
+
+fn write_pre_migration_backup(conn: &Connection, path: &str) -> Result<String, DbError> {
+    // Fold the WAL into the main file so the copy is a complete snapshot.
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    let backup = format!("{path}.bak");
+    std::fs::copy(path, &backup).map_err(|error| DbError::Schema {
+        message: format!("failed to write pre-migration backup at {backup}: {error}"),
+    })?;
+    Ok(backup)
+}
+
+fn apply_migration_step(
+    conn: &Connection,
+    target: i64,
+    step: MigrationStep,
+) -> Result<(), DbError> {
+    let foreign_keys_enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+
+    let applied: Result<(), DbError> = (|| {
+        let tx = conn.unchecked_transaction()?;
+        step(&tx)?;
+        bump_stored_schema_version(&tx, target)?;
+        tx.commit()?;
+        Ok(())
+    })();
+
+    if foreign_keys_enabled != 0 {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    }
+    applied?;
+
+    let violation: Option<String> = conn
+        .query_row("PRAGMA foreign_key_check", [], |row| row.get(0))
+        .optional()?;
+    if let Some(table) = violation {
+        return Err(DbError::Schema {
+            message: format!(
+                "foreign_key_check failed after migrating to schema version {target} (first violation in table {table})"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Bumps the stored schema version in both places it is written today:
+/// `quaid_config.schema_version` (upsert, mirroring `write_quaid_config`)
+/// and the legacy `config.version` mirror (`INSERT OR REPLACE`, mirroring
+/// `sync_legacy_config`).
+fn bump_stored_schema_version(conn: &Connection, version: i64) -> Result<(), DbError> {
+    if table_exists(conn, "quaid_config")? {
+        conn.execute(
+            "INSERT INTO quaid_config (key, value) VALUES ('schema_version', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [version.to_string()],
+        )?;
+    }
+    if table_exists(conn, "config")? {
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('version', ?1)",
+            [version.to_string()],
+        )?;
+    }
+    Ok(())
 }
 
 fn ensure_namespace_schema(conn: &Connection) -> Result<(), DbError> {

@@ -15,6 +15,7 @@ pub mod ingest;
 pub mod init;
 pub mod link;
 pub mod list;
+pub mod migrate_db;
 pub mod model;
 pub mod namespace;
 pub mod pipe;

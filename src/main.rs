@@ -312,6 +312,11 @@ enum Commands {
     },
     /// JSONL pipe mode (one JSON object per line)
     Pipe,
+    /// Upgrade an existing database to the current schema version (writes a .bak backup first)
+    Migrate {
+        /// Path to the database to migrate [default: --db / QUAID_DB / ~/.quaid/memory.db]
+        path: Option<String>,
+    },
     /// Print version information
     Version,
 }
@@ -320,6 +325,7 @@ enum Commands {
 enum EarlyCommand {
     None,
     Init(String),
+    Migrate(String),
     Model(commands::model::ModelAction),
     Version,
 }
@@ -331,6 +337,11 @@ fn early_command(cli: &Cli) -> EarlyCommand {
             let default_path = core::db::default_db_path_string();
             let db_path = cli.db.as_deref().unwrap_or(default_path.as_str());
             EarlyCommand::Init(path.clone().unwrap_or_else(|| db_path.to_owned()))
+        }
+        Commands::Migrate { path } => {
+            let default_path = core::db::default_db_path_string();
+            let db_path = cli.db.as_deref().unwrap_or(default_path.as_str());
+            EarlyCommand::Migrate(path.clone().unwrap_or_else(|| db_path.to_owned()))
         }
         Commands::Model { action } => EarlyCommand::Model(action.clone()),
         _ => EarlyCommand::None,
@@ -364,6 +375,7 @@ async fn main() -> Result<()> {
     match early_command(&cli) {
         EarlyCommand::Version => return commands::version::run(),
         EarlyCommand::Init(path) => return commands::init::run(&path, &requested_model),
+        EarlyCommand::Migrate(path) => return commands::migrate_db::run(&path, cli.json),
         EarlyCommand::Model(action) => return commands::model::run(action),
         EarlyCommand::None => {}
     }
@@ -374,7 +386,10 @@ async fn main() -> Result<()> {
     let db = opened.conn;
 
     match cli.command {
-        Commands::Init { .. } | Commands::Model { .. } | Commands::Version => unreachable!(),
+        Commands::Init { .. }
+        | Commands::Migrate { .. }
+        | Commands::Model { .. }
+        | Commands::Version => unreachable!(),
         Commands::Get { slug, namespace } => {
             commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)
         }

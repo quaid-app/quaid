@@ -26,9 +26,19 @@ use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
 const SCHEMA_VERSION: i64 = 10;
-const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
-const PAGES_AU_TRIGGER_SQL: &str =
-    "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+// Marker substring proving the trigger carries BOTH the quarantine-aware FTS
+// body *and* the metadata-only WHEN guard. Older DBs created before either
+// change lack this exact clause, so its absence drives the open-time repair in
+// [`ensure_pages_update_trigger_handles_quarantine`].
+const PAGES_AU_TRIGGER_GUARD_MARKER: &str =
+    "(old.quarantined_at IS NULL) <> (new.quarantined_at IS NULL)";
+const PAGES_AU_TRIGGER_SQL: &str = "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages
+WHEN old.title IS NOT new.title
+    OR old.slug IS NOT new.slug
+    OR old.compiled_truth IS NOT new.compiled_truth
+    OR old.timeline IS NOT new.timeline
+    OR (old.quarantined_at IS NULL) <> (new.quarantined_at IS NULL)
+BEGIN
     INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
     SELECT 'delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline
     WHERE old.quarantined_at IS NULL;
@@ -155,7 +165,10 @@ pub fn open_runtime<P: AsRef<Path>>(path: P) -> Result<Connection, DbError> {
     ensure_sqlite_vec();
     let conn = Connection::open(db_path)?;
     conn.busy_timeout(Duration::from_secs(5))?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    // `synchronous` is a per-connection setting, so runtime connections (which
+    // skip the schema.sql batch that sets it for `open`) must opt into NORMAL
+    // explicitly to match the bulk-write path. WAL keeps this crash-safe.
+    conn.execute_batch("PRAGMA synchronous = NORMAL;\nPRAGMA foreign_keys = ON;")?;
 
     let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if user_version != SCHEMA_VERSION {
@@ -492,6 +505,14 @@ fn rebuild_pages_with_namespace_unique(conn: &Connection) -> Result<(), DbError>
     Ok(())
 }
 
+/// Repairs the `pages_au` FTS trigger on open for databases created before the
+/// current definition. The live trigger is rewritten whenever its stored SQL
+/// lacks [`PAGES_AU_TRIGGER_GUARD_MARKER`], which covers two generations of
+/// upgrade: pre-quarantine triggers that re-indexed quarantined rows, and
+/// pre-WHEN-guard triggers that re-tokenized the page on every metadata-only
+/// UPDATE (`superseded_by` stamps, version bumps, namespace re-stamping). The
+/// rebuild is a pure DDL swap — no `page_fts` rows are touched — so it is safe
+/// to run unconditionally on every open without bumping `SCHEMA_VERSION`.
 fn ensure_pages_update_trigger_handles_quarantine(conn: &Connection) -> Result<(), DbError> {
     let trigger_sql: Option<String> = conn
         .query_row(
@@ -505,7 +526,7 @@ fn ensure_pages_update_trigger_handles_quarantine(conn: &Connection) -> Result<(
 
     if trigger_sql
         .as_deref()
-        .is_some_and(|sql| sql.contains(PAGES_AU_QUARANTINE_GUARD))
+        .is_some_and(|sql| sql.contains(PAGES_AU_TRIGGER_GUARD_MARKER))
     {
         return Ok(());
     }

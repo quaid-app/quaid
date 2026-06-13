@@ -346,6 +346,13 @@ fn model_runtime() -> &'static Mutex<ModelRuntime> {
     MODEL_RUNTIME.get_or_init(|| Mutex::new(ModelRuntime::default()))
 }
 
+/// Serializes the expensive model build in [`ensure_model`] so concurrent
+/// first-callers don't each construct (download/mmap) their own copy only to
+/// discard all but one. Distinct from `MODEL_RUNTIME`'s mutex: that one is held
+/// briefly to read/swap the loaded slot, while this one is held across the full
+/// load so the second caller blocks, then observes the first caller's model.
+static MODEL_LOAD_LOCK: Mutex<()> = Mutex::new(());
+
 /// Sets the process-wide embedding model. Subsequent calls to [`embed`] and
 /// [`search_vec`] will load the new model on first use; the previously loaded
 /// model is dropped if the configuration changes.
@@ -486,6 +493,21 @@ impl EmbeddingModel {
                 max_len,
             } => embed_candle_xlm_roberta(text, model, tokenizer, device, *max_len),
             EmbeddingBackend::HashShim => embed_hash_shim(text, self.config.embedding_dim),
+        }
+    }
+
+    /// Embeds a slice of texts, returning one vector per input in order. The
+    /// real BERT backend tokenizes the whole batch once and runs a single
+    /// padded forward pass; other backends fall back to per-text embedding
+    /// (still under the single caller-held model lock).
+    fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, InferenceError> {
+        match &self.backend {
+            EmbeddingBackend::CandleBert {
+                model,
+                tokenizer,
+                device,
+            } => embed_candle_batch(texts, model, tokenizer, device),
+            _ => texts.iter().map(|text| self.embed(text)).collect(),
         }
     }
 
@@ -639,6 +661,84 @@ fn embed_candle(
     mean_pool_and_normalize(output, attention_mask)
 }
 
+/// Batched BERT embedding: tokenizes every text once, pads to the longest
+/// sequence in the batch, and runs a single forward pass over a `[batch, seq]`
+/// tensor. Returns one normalized vector per input in order. This is the hot
+/// path for page reingest and `quaid embed`, where amortizing the forward pass
+/// and tokenizer setup across chunks matters.
+fn embed_candle_batch(
+    texts: &[&str],
+    model: &BertModel,
+    tokenizer: &Tokenizer,
+    device: &Device,
+) -> Result<Vec<Vec<f32>>, InferenceError> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let max_len = 512;
+    let encodings =
+        tokenizer
+            .encode_batch(texts.to_vec(), true)
+            .map_err(|e| InferenceError::Internal {
+                message: format!("tokenizer batch: {e}"),
+            })?;
+
+    // Truncate each sequence to the model max, then pad all rows to the longest
+    // (post-truncation) sequence so they stack into one rectangular tensor.
+    let truncated: Vec<(Vec<u32>, Vec<u32>)> = encodings
+        .iter()
+        .map(|encoding| {
+            let len = encoding.get_ids().len().min(max_len);
+            (
+                encoding.get_ids()[..len].to_vec(),
+                encoding.get_attention_mask()[..len].to_vec(),
+            )
+        })
+        .collect();
+    let batch_seq_len = truncated
+        .iter()
+        .map(|(ids, _)| ids.len())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+
+    let batch = texts.len();
+    let mut id_rows: Vec<u32> = Vec::with_capacity(batch * batch_seq_len);
+    let mut mask_rows: Vec<u32> = Vec::with_capacity(batch * batch_seq_len);
+    for (ids, mask) in &truncated {
+        id_rows.extend_from_slice(ids);
+        id_rows.extend(std::iter::repeat_n(0, batch_seq_len - ids.len()));
+        mask_rows.extend_from_slice(mask);
+        mask_rows.extend(std::iter::repeat_n(0, batch_seq_len - mask.len()));
+    }
+
+    let input_ids = Tensor::from_vec(id_rows, (batch, batch_seq_len), device).map_err(|e| {
+        InferenceError::Internal {
+            message: format!("batch input_ids tensor: {e}"),
+        }
+    })?;
+    let attention_mask =
+        Tensor::from_vec(mask_rows, (batch, batch_seq_len), device).map_err(|e| {
+            InferenceError::Internal {
+                message: format!("batch attention_mask tensor: {e}"),
+            }
+        })?;
+    let token_type_ids = input_ids
+        .zeros_like()
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch token_type_ids: {e}"),
+        })?;
+
+    let output = model
+        .forward(&input_ids, &token_type_ids, Some(&attention_mask))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("BERT batch forward: {e}"),
+        })?;
+
+    mean_pool_and_normalize_batch(output, attention_mask)
+}
+
 #[cfg(feature = "online-model")]
 fn embed_candle_xlm_roberta(
     text: &str,
@@ -761,6 +861,88 @@ fn mean_pool_and_normalize(
         .and_then(|t| t.to_vec1::<f32>())
         .map_err(|e| InferenceError::Internal {
             message: format!("to_vec: {e}"),
+        })
+}
+
+/// Mean-pools and L2-normalizes a `[batch, seq, hidden]` hidden-state tensor,
+/// returning one vector per batch row. Shares the masking/pooling math with
+/// [`mean_pool_and_normalize`] but keeps the batch dimension instead of
+/// squeezing it away.
+fn mean_pool_and_normalize_batch(
+    output: Tensor,
+    attention_mask: Tensor,
+) -> Result<Vec<Vec<f32>>, InferenceError> {
+    let mask_f32 = attention_mask
+        .unsqueeze(2)
+        .and_then(|t| t.to_dtype(DType::F32))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch mask expand: {e}"),
+        })?;
+
+    let mask_broadcast =
+        mask_f32
+            .broadcast_as(output.shape())
+            .map_err(|e| InferenceError::Internal {
+                message: format!("batch mask broadcast: {e}"),
+            })?;
+
+    let masked = output
+        .mul(&mask_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch mask mul: {e}"),
+        })?;
+
+    let sum = masked.sum(1).map_err(|e| InferenceError::Internal {
+        message: format!("batch sum: {e}"),
+    })?;
+
+    // Clamp the per-row token count to >= 1 so an all-zero mask (a fully padded
+    // row) divides by 1 rather than 0; that row's masked sum is already 0.
+    let count = mask_f32
+        .sum(1)
+        .and_then(|t| t.clamp(1.0_f32, f32::INFINITY))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch count: {e}"),
+        })?;
+
+    let count_broadcast =
+        count
+            .broadcast_as(sum.shape())
+            .map_err(|e| InferenceError::Internal {
+                message: format!("batch count broadcast: {e}"),
+            })?;
+
+    let mean = sum
+        .div(&count_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch mean: {e}"),
+        })?;
+
+    let norm = mean
+        .sqr()
+        .and_then(|t| t.sum_keepdim(1))
+        .and_then(|t| t.sqrt())
+        .and_then(|t| t.clamp(f32::EPSILON, f32::INFINITY))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch norm: {e}"),
+        })?;
+
+    let norm_broadcast = norm
+        .broadcast_as(mean.shape())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch norm broadcast: {e}"),
+        })?;
+
+    let normalized = mean
+        .div(&norm_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch normalize: {e}"),
+        })?;
+
+    normalized
+        .to_vec2::<f32>()
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch to_vec: {e}"),
         })
 }
 
@@ -1222,17 +1404,28 @@ pub fn ensure_model() {
     };
 
     if needs_reload {
-        let new_model = EmbeddingModel::new(configured.clone());
-        let mut runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
-        // Re-check in case another thread loaded the same model while we were
-        // building it — avoid an unnecessary double-install.
-        let still_needs_reload = runtime
-            .loaded
-            .as_ref()
-            .map(|loaded| loaded.config != configured)
-            .unwrap_or(true);
+        // Serialize the build so concurrent first-callers don't each load a
+        // full model. The first caller to grab the load lock builds it; later
+        // callers block here, then re-check under the load lock and skip the
+        // build entirely when the model they need is already installed.
+        let _load_guard = MODEL_LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let still_needs_reload = {
+            let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
+            runtime
+                .loaded
+                .as_ref()
+                .map(|loaded| loaded.config != configured)
+                .unwrap_or(true)
+        };
         if still_needs_reload {
-            runtime.loaded = Some(new_model);
+            let new_model = EmbeddingModel::new(configured.clone());
+            let mut runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
+            // Re-check in case `configure_runtime_model` changed the target
+            // while we built — avoid installing a model nobody asked for.
+            let target_unchanged = runtime.configured == configured;
+            if target_unchanged {
+                runtime.loaded = Some(new_model);
+            }
         }
     }
 }
@@ -1257,6 +1450,32 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
             message: "embedding model is not loaded; call configure_runtime_model first".to_owned(),
         })?
         .embed(trimmed)
+}
+
+/// Embeds a batch of texts in one model-mutex acquisition, returning one
+/// normalized vector per input in order. Blank inputs are rejected with
+/// [`InferenceError::EmptyInput`]. Callers that compute many chunk embeddings
+/// (page reingest, `quaid embed`) should prefer this so the model lock and
+/// per-call setup are amortized across the batch and the embeddings can be
+/// computed *before* opening the SQLite write transaction.
+pub fn embed_batch(texts: &[&str]) -> Result<Vec<Vec<f32>>, InferenceError> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let trimmed: Vec<&str> = texts.iter().map(|text| text.trim()).collect();
+    if trimmed.iter().any(|text| text.is_empty()) {
+        return Err(InferenceError::EmptyInput);
+    }
+
+    ensure_model();
+    let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
+    runtime
+        .loaded
+        .as_ref()
+        .ok_or_else(|| InferenceError::Internal {
+            message: "embedding model is not loaded; call configure_runtime_model first".to_owned(),
+        })?
+        .embed_batch(&trimmed)
 }
 
 /// Reports whether the currently loaded model is the real semantic backend or
@@ -1557,6 +1776,18 @@ fn replace_page_embeddings(
     vec_table: &str,
     chunks: &[crate::core::types::Chunk],
 ) -> Result<(), SearchError> {
+    // Compute every chunk embedding BEFORE opening the write transaction so the
+    // model forward passes (and the global model lock) never overlap the SQLite
+    // write lock. The batched encode amortizes tokenizer/forward setup.
+    let chunk_texts: Vec<&str> = chunks.iter().map(|chunk| chunk.content.as_str()).collect();
+    let embedding_blobs: Vec<Vec<u8>> = embed_batch(&chunk_texts)
+        .map_err(|err| SearchError::Internal {
+            message: err.to_string(),
+        })?
+        .iter()
+        .map(|embedding| embedding_to_blob(embedding))
+        .collect();
+
     let tx = conn.unchecked_transaction()?;
 
     let existing_rowids = existing_vec_rowids(&tx, page_id, model_name)?;
@@ -1571,11 +1802,9 @@ fn replace_page_embeddings(
     )?;
 
     let insert_vec_sql = format!("INSERT INTO {vec_table}(embedding) VALUES (?1)");
-    for (chunk_index, chunk) in chunks.iter().enumerate() {
-        let embedding = embed(&chunk.content).map_err(|err| SearchError::Internal {
-            message: err.to_string(),
-        })?;
-        let embedding_blob = embedding_to_blob(&embedding);
+    for (chunk_index, (chunk, embedding_blob)) in
+        chunks.iter().zip(embedding_blobs.iter()).enumerate()
+    {
         tx.execute(&insert_vec_sql, rusqlite::params![embedding_blob])?;
         let vec_rowid = tx.last_insert_rowid();
         tx.execute(

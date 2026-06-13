@@ -19,7 +19,12 @@ use fixtures::{insert_collection, open_test_db};
 
 use rusqlite::params;
 
-use quaid::core::vault_sync::{ensure_no_live_serve_owner, live_collection_owner, VaultSyncError};
+use quaid::core::vault_sync::{
+    acquire_owner_lease, ensure_no_live_serve_owner, live_collection_owner, VaultSyncError,
+};
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 fn insert_owner_row(
     conn: &rusqlite::Connection,
@@ -124,6 +129,51 @@ fn ensure_no_live_serve_owner_returns_runtime_owns_collection_error_for_daemon()
         }
         other => panic!("expected RuntimeOwnsCollectionError, got: {other:?}"),
     }
+}
+
+#[test]
+fn acquire_owner_lease_is_a_no_op_write_when_ownership_is_unchanged() {
+    let conn = open_test_db();
+    let temp = tempfile::TempDir::new().unwrap();
+    let collection_id = insert_collection(&conn, "work", temp.path());
+
+    // A live daemon session that will hold the lease.
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, session_type, heartbeat_at)
+         VALUES ('d-1', 100, 'h1', 'daemon', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        [],
+    )
+    .unwrap();
+
+    // First acquisition writes the lease (collection_owners row + mirrored
+    // collections.active_lease_session_id).
+    acquire_owner_lease(&conn, collection_id, "d-1").unwrap();
+
+    // Count COMMITs on subsequent acquisitions: with the no-op fast path, an
+    // unchanged-ownership refresh opens no write transaction at all.
+    let commits = Arc::new(AtomicU64::new(0));
+    let commits_for_hook = Arc::clone(&commits);
+    conn.commit_hook(Some(move || {
+        commits_for_hook.fetch_add(1, Ordering::SeqCst);
+        false
+    }));
+
+    for _ in 0..10 {
+        acquire_owner_lease(&conn, collection_id, "d-1").unwrap();
+    }
+    conn.commit_hook::<fn() -> bool>(None);
+
+    assert_eq!(
+        commits.load(Ordering::SeqCst),
+        0,
+        "re-acquiring an unchanged lease must not commit any write transaction"
+    );
+
+    // Sanity: the lease is still held by the same session.
+    let owner = live_collection_owner(&conn, collection_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner.session_id, "d-1");
 }
 
 #[test]

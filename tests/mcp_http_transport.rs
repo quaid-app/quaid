@@ -11,9 +11,10 @@ use std::sync::{
     Arc,
 };
 
+use quaid::core::conversation::slm::LazySlmRunner;
 use quaid::mcp::http::{
-    bind_with_token_guard, run_http, HttpConfig, HttpConfigError, DEFAULT_HTTP_BIND,
-    DEFAULT_HTTP_PORT,
+    bind_with_token_guard, build_connection_service, run_http, HttpConfig, HttpConfigError,
+    DEFAULT_HTTP_BIND, DEFAULT_HTTP_PORT,
 };
 
 #[test]
@@ -67,6 +68,32 @@ fn non_loopback_bind_fails_closed_before_token_policy() {
         HttpConfigError::NonLoopbackBindUnsupported { bind }
             if bind == IpAddr::V4(Ipv4Addr::UNSPECIFIED)
     ));
+}
+
+#[test]
+fn sse_connections_share_one_slm_runner() {
+    // The HTTP transport hoists one process-wide LazySlmRunner and clones the
+    // Arc into every per-connection QuaidServer. Two connections built from the
+    // same shared runner must observe the same runner instance, while a server
+    // built from an independent runner must not.
+    let shared = Arc::new(LazySlmRunner::new());
+    let factory = || rusqlite::Connection::open_in_memory().map_err(anyhow::Error::from);
+
+    let server_a = build_connection_service(&factory, &shared);
+    let server_b = build_connection_service(&factory, &shared);
+    assert_eq!(
+        server_a.slm_identity(),
+        server_b.slm_identity(),
+        "two SSE connections must share one SLM runner instance"
+    );
+
+    let other = Arc::new(LazySlmRunner::new());
+    let server_c = build_connection_service(&factory, &other);
+    assert_ne!(
+        server_a.slm_identity(),
+        server_c.slm_identity(),
+        "a server built from a different runner must not alias the shared one"
+    );
 }
 
 #[tokio::test]

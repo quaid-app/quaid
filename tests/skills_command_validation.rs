@@ -232,8 +232,16 @@ fn every_fenced_skill_command_parses_with_clap() {
             };
             checked += 1;
             let output = run_quaid_isolated(&argv[1..], home.path());
-            if output.status.code() == Some(CLAP_USAGE_ERROR) {
-                let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Exit code 2 is clap's usage-error code, but some subcommands also
+            // use exit 2 as an intentional runtime state signal (e.g. `quaid
+            // status` returns 2 for "daemon not installed"). A genuine clap
+            // parse failure writes a usage banner to stderr, so require that
+            // signature before flagging — otherwise a parse-valid command that
+            // merely exits non-zero at runtime is a false positive.
+            let looks_like_clap_error = stderr.contains("error:")
+                && (stderr.contains("Usage:") || stderr.contains("unexpected argument"));
+            if output.status.code() == Some(CLAP_USAGE_ERROR) && looks_like_clap_error {
                 let first = stderr.lines().next().unwrap_or("");
                 failures.push(format!(
                     "{}:{line_no}: `{raw}`\n  argv={:?}\n  {first}",

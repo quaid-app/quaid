@@ -2594,6 +2594,7 @@ mod tests {
     }
 
     #[cfg(all(unix, target_os = "linux"))]
+    #[serial_test::serial]
     #[test]
     fn cli_put_proxies_through_live_serve_socket() {
         let _env_lock = env_mutation_lock()
@@ -2659,6 +2660,7 @@ mod tests {
     }
 
     #[cfg(all(unix, target_os = "linux"))]
+    #[serial_test::serial]
     #[test]
     fn cli_put_refuses_same_uid_socket_spoof_with_pid_mismatch() {
         let _env_lock = env_mutation_lock()

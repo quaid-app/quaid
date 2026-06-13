@@ -2739,6 +2739,7 @@ mod tests {
         assert_eq!(sanitize_cache_key("phi-3.5-mini"), "phi-3.5-mini");
     }
 
+    #[serial_test::serial]
     #[test]
     fn inspect_model_caches_reports_missing_alias_and_temporary_entries() {
         let cache_root = tempfile::TempDir::new().expect("cache root");
@@ -2760,6 +2761,7 @@ mod tests {
         }));
     }
 
+    #[serial_test::serial]
     #[test]
     fn trusted_source_pin_cache_loads_status_and_root_inspection() {
         let cache_root = tempfile::TempDir::new().expect("cache root");
@@ -2875,6 +2877,7 @@ mod tests {
         );
     }
 
+    #[serial_test::serial]
     #[test]
     fn utility_helpers_cover_edge_paths() {
         assert!(resolve_model_alias("   ").is_err());
@@ -2931,6 +2934,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[test]
     fn lifecycle_edge_paths_cover_validation_and_cleanup_branches() {
         let alias = resolve_model_alias("org/model").expect("resolve raw alias");
@@ -3045,6 +3049,7 @@ mod tests {
         assert!(pin_error.to_string().contains("git blob"));
     }
 
+    #[serial_test::serial]
     #[test]
     fn remove_model_cache_entries_removes_only_allowed_paths() {
         let cache_root = tempfile::TempDir::new().expect("cache root");

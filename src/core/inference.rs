@@ -1800,6 +1800,7 @@ mod tests {
         ));
     }
 
+    #[serial_test::serial]
     #[test]
     fn embed_returns_normalized_vector_of_expected_length() {
         // Force hash shim so this test never triggers a real HuggingFace
@@ -1828,6 +1829,7 @@ mod tests {
         assert_eq!(embedding.len(), 1024);
     }
 
+    #[serial_test::serial]
     #[test]
     fn embed_recovers_from_poisoned_model_runtime_mutex() {
         // Locks env_mutation_lock so we can safely toggle the hash-shim env
@@ -2265,6 +2267,7 @@ mod tests {
     }
 
     #[cfg(feature = "online-model")]
+    #[serial_test::serial]
     #[test]
     fn hydrate_model_config_can_use_mock_huggingface_downloads() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");

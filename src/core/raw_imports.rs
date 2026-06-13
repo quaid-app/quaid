@@ -371,6 +371,7 @@ mod tests {
         assert_eq!(inactive_count, 1);
     }
 
+    #[serial_test::serial]
     #[test]
     fn inline_gc_keeps_only_ten_inactive_rows_by_default() {
         let _env_guard = env_mutation_lock().lock().unwrap();
@@ -404,6 +405,7 @@ mod tests {
         assert_eq!(active_raw_import_count(&conn, page_id).unwrap(), 1);
     }
 
+    #[serial_test::serial]
     #[test]
     fn inline_gc_prunes_ttl_expired_inactive_rows() {
         let _env_guard = env_mutation_lock().lock().unwrap();
@@ -438,6 +440,7 @@ mod tests {
         assert_eq!(inactive_count, 1);
     }
 
+    #[serial_test::serial]
     #[test]
     fn keep_all_disables_inline_gc() {
         let _env_guard = env_mutation_lock().lock().unwrap();
@@ -493,6 +496,7 @@ mod tests {
         assert!(error.contains("0 active raw_imports rows"));
     }
 
+    #[serial_test::serial]
     #[test]
     fn expired_inactive_rows_are_swept_even_when_page_is_idle() {
         let conn = open_test_db();
@@ -552,6 +556,7 @@ mod tests {
         assert_eq!(active_raw_import_count(&conn, page_id).unwrap(), 1);
     }
 
+    #[serial_test::serial]
     #[test]
     fn ttl_sweep_respects_keep_all_override() {
         let conn = open_test_db();

@@ -3518,6 +3518,7 @@ mod tests {
     }
 
     #[cfg(all(unix, target_os = "linux"))]
+    #[serial_test::serial]
     #[test]
     fn publish_ipc_socket_unlinks_stale_socket_before_bind() {
         let _env_lock = env_mutation_lock().lock().unwrap();
@@ -3545,6 +3546,7 @@ mod tests {
     }
 
     #[cfg(all(unix, target_os = "linux"))]
+    #[serial_test::serial]
     #[test]
     fn audit_bound_ipc_socket_rejects_mode_regression() {
         let _env_lock = env_mutation_lock().lock().unwrap();
@@ -3611,6 +3613,7 @@ mod tests {
         assert!(error.to_string().contains("IpcPeerAuthFailedError"));
     }
 
+    #[serial_test::serial]
     #[test]
     fn configured_embedding_concurrency_uses_positive_env_override_when_present() {
         let _lock = env_mutation_lock().lock().unwrap();
@@ -3620,6 +3623,7 @@ mod tests {
         assert_eq!(configured_embedding_concurrency(), 3);
     }
 
+    #[serial_test::serial]
     #[test]
     fn configured_embedding_concurrency_falls_back_for_zero_or_invalid_values() {
         let _lock = env_mutation_lock().lock().unwrap();
@@ -5965,6 +5969,7 @@ mod tests {
         drop(runtime);
     }
 
+    #[serial_test::serial]
     #[test]
     fn full_hash_audit_helpers_respect_env_override_and_floor_at_zero() {
         let _guard = env_mutation_lock().lock().unwrap();
@@ -6007,6 +6012,7 @@ mod tests {
         }
     }
 
+    #[serial_test::serial]
     #[test]
     fn scheduled_full_hash_audit_budget_spreads_work_across_audit_days() {
         let _guard = env_mutation_lock().lock().unwrap();

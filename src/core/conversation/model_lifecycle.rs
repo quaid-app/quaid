@@ -633,6 +633,18 @@ pub enum ModelLifecycleError {
         /// Human-readable explanation of the metadata problem.
         message: String,
     },
+
+    /// A curated alias resolves to a model architecture the extraction
+    /// runner cannot load, so downloading its (multi-GB) weights would
+    /// be wasted: the runner only wires `phi3`. Rejected before any
+    /// network I/O at `quaid model pull` time.
+    #[error("model `{alias}` is not supported by the extraction runner: {message}")]
+    UnsupportedByRunner {
+        /// Curated alias the caller requested.
+        alias: String,
+        /// Human-readable explanation and remediation.
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -775,6 +787,33 @@ pub fn resolve_model_alias(alias: &str) -> Result<ResolvedModelAlias, ModelLifec
         repo_id,
         revision,
     })
+}
+
+/// Curated aliases whose architecture the extraction runner
+/// (`crate::core::conversation::slm`) cannot load. The runner only
+/// wires Phi-3, so pulling these would download gigabytes the runner
+/// then refuses at load time, permanently disabling extraction. Kept
+/// here, next to the curated alias table, so the two stay in sync.
+const RUNNER_UNSUPPORTED_CURATED_ALIASES: &[&str] = &["gemma-3-1b", "gemma-3-4b"];
+
+/// Reject a curated alias the extraction runner cannot load before any
+/// download work begins. Raw `<org>/<model>` repo ids are intentionally
+/// left alone: callers may point Quaid at any compatible Phi-3 repo,
+/// and the runner's own `model_type` gate still fails closed at load
+/// time for anything it cannot build.
+fn ensure_alias_supported_by_runner(
+    resolved: &ResolvedModelAlias,
+) -> Result<(), ModelLifecycleError> {
+    let normalized = resolved.requested_alias.to_ascii_lowercase();
+    if RUNNER_UNSUPPORTED_CURATED_ALIASES.contains(&normalized.as_str()) {
+        return Err(ModelLifecycleError::UnsupportedByRunner {
+            alias: resolved.requested_alias.clone(),
+            message:
+                "the local extraction runner only loads Phi-3 models; use `phi-3.5-mini` instead"
+                    .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Compute the cache directory path for an alias without touching the
@@ -1468,6 +1507,12 @@ pub fn download_model(
     alias: &str,
     progress: &mut impl ProgressReporter,
 ) -> Result<PathBuf, ModelLifecycleError> {
+    // Reject curated aliases the runner cannot load before any network
+    // I/O so `quaid model pull gemma-3-1b` fails fast with a clear
+    // error instead of downloading gigabytes the runner then refuses.
+    let resolved = resolve_model_alias(alias)?;
+    ensure_alias_supported_by_runner(&resolved)?;
+
     #[cfg(feature = "online-model")]
     {
         download_model_online(alias, progress)
@@ -1475,7 +1520,6 @@ pub fn download_model(
 
     #[cfg(not(feature = "online-model"))]
     {
-        let _ = alias;
         let _ = progress;
         Err(ModelLifecycleError::DownloadsUnsupported)
     }

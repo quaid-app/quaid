@@ -577,3 +577,43 @@ fn model_pull_caches_model_without_flipping_extraction_flag() {
         .unwrap();
     assert_eq!(enabled, "false");
 }
+
+/// `quaid model pull gemma-3-1b` must fail fast with a clear
+/// "not supported by the extraction runner" message before any
+/// download work, because the runner only loads Phi-3. This holds on
+/// every build (the gate runs ahead of the online-model download path),
+/// so the test is not feature-gated.
+#[test]
+fn model_pull_rejects_unsupported_curated_gemma_alias() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    open_test_db(&db_path);
+
+    let cache_root = dir.path().join("model-cache");
+    let envs = vec![(
+        "QUAID_MODEL_CACHE_DIR".to_string(),
+        cache_root.display().to_string(),
+    )];
+    let output = run_quaid_with_env(&db_path, &["model", "pull", "gemma-3-1b"], &envs);
+
+    assert!(
+        !output.status.success(),
+        "pull of an unsupported curated alias must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not supported by the extraction runner"),
+        "expected runner-unsupported message, got stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("phi-3.5-mini"),
+        "error should point at the supported alias, got stderr={stderr}"
+    );
+    let cache_empty = std::fs::read_dir(&cache_root)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true);
+    assert!(
+        cache_empty,
+        "rejection must not create any download cache entries"
+    );
+}

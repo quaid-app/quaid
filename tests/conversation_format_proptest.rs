@@ -197,7 +197,7 @@ proptest! {
 /// holds. Keeping it as an explicit `!=` assertion documents the limitation
 /// instead of silently excluding it.
 #[test]
-fn round_trip_breaks_on_unescaped_turn_boundary() {
+fn round_trip_preserves_embedded_turn_boundary() {
     let file = ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_owned(),
@@ -222,20 +222,18 @@ fn round_trip_breaks_on_unescaped_turn_boundary() {
 
     let rendered = render(&file);
     let original_content = file.turns[0].content.clone();
-    // On this branch the embedded boundary is NOT escaped, so the round-trip
-    // is lossy: parse either errors (the post-boundary text has no `## Turn`
-    // heading) or yields a turn whose content lost the boundary segment.
+    // format-v2 escaping (#226) escapes the embedded boundary marker on render
+    // and decodes it on parse, so an adversarial mid-content boundary now
+    // round-trips faithfully instead of forging a turn break.
     let faithfully_round_tripped = matches!(
         parse_str(&rendered),
         Ok(ref parsed)
             if parsed.turns.len() == 1 && parsed.turns[0].content == original_content
     );
-    // TODO(#226): when format-v2 escaping lands, invert this to
-    // `assert!(faithfully_round_tripped)` and drop the generator cap above.
     assert!(
-        !faithfully_round_tripped,
-        "unexpected: embedded turn-boundary round-tripped faithfully — \
-         format-v2 escaping (#226) may have landed; invert this test and lift \
-         the generator cap in this file"
+        faithfully_round_tripped,
+        "embedded turn-boundary must round-trip faithfully under format-v2 \
+         escaping (#226); got {:?}",
+        parse_str(&rendered)
     );
 }

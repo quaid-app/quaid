@@ -138,8 +138,11 @@ fn concurrent_cli_put_yields_exactly_one_winner_via_conflict_error() {
 
         if output.status.success() {
             winners += 1;
-        } else if combined.contains("ConflictError") && combined.contains("StaleExpectedVersion") {
+        } else if combined.contains("ConflictError") {
             // The production conflict surface: another writer won the CAS.
+            // `ConflictError` is the single canonical -32009 prefix (the
+            // conflict-error unification); the message body ("page updated
+            // elsewhere" / "StaleExpectedVersion") varies by write path.
             conflicts += 1;
         } else if combined.contains("database is locked")
             || combined.contains("SQLITE_BUSY")

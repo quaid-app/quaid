@@ -16,6 +16,17 @@ pub enum SkillsAction {
     List,
     /// Verify skill resolution order, format, and content hashes
     Doctor,
+    /// Materialize embedded skills to disk so they can be edited as overrides
+    Extract {
+        /// Extract only this skill (defaults to all embedded skills)
+        name: Option<String>,
+        /// Target directory (defaults to ~/.quaid/skills/)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Overwrite local files even if they differ from the embedded copy
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 struct EmbeddedSkill {
@@ -76,6 +87,7 @@ pub fn run(action: SkillsAction, json: bool) -> Result<()> {
     match action {
         SkillsAction::List => run_list(json),
         SkillsAction::Doctor => run_doctor(json),
+        SkillsAction::Extract { name, dir, force } => run_extract(name, dir, force, json),
     }
 }
 
@@ -279,6 +291,125 @@ fn check_frontmatter(content: &str, issues: &mut Vec<String>) -> (bool, bool, bo
     }
 
     (true, has_name, has_desc)
+}
+
+/// Outcome of attempting to materialize one embedded skill to disk.
+#[derive(Debug, PartialEq, Eq)]
+enum ExtractOutcome {
+    /// File did not exist; bytes were written.
+    Written,
+    /// File already existed with byte-identical content; left untouched.
+    Unchanged,
+    /// File existed and was overwritten because `--force` was set.
+    Overwritten,
+    /// File existed with different content and `--force` was not set.
+    Skipped,
+}
+
+#[derive(Debug, Serialize)]
+struct ExtractReport {
+    name: String,
+    path: String,
+    #[serde(rename = "outcome")]
+    outcome_label: &'static str,
+}
+
+fn outcome_label(outcome: &ExtractOutcome) -> &'static str {
+    match outcome {
+        ExtractOutcome::Written => "written",
+        ExtractOutcome::Unchanged => "unchanged",
+        ExtractOutcome::Overwritten => "overwritten",
+        ExtractOutcome::Skipped => "skipped (modified; use --force)",
+    }
+}
+
+fn default_extract_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".quaid").join("skills"))
+}
+
+fn run_extract(name: Option<String>, dir: Option<PathBuf>, force: bool, json: bool) -> Result<()> {
+    let target = match dir.or_else(default_extract_dir) {
+        Some(dir) => dir,
+        None => anyhow::bail!("could not determine home directory; pass --dir explicitly"),
+    };
+
+    let selected: Vec<&EmbeddedSkill> = match name.as_deref() {
+        Some(requested) => {
+            let skill = EMBEDDED_SKILLS
+                .iter()
+                .find(|skill| skill.name == requested)
+                .ok_or_else(|| anyhow::anyhow!("no embedded skill named '{requested}'"))?;
+            vec![skill]
+        }
+        None => EMBEDDED_SKILLS.iter().collect(),
+    };
+
+    let reports = extract_skills_to_dir(&selected, &target, force)?;
+    let any_skipped = reports
+        .iter()
+        .any(|report| report.outcome_label == outcome_label(&ExtractOutcome::Skipped));
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+    } else {
+        for report in &reports {
+            println!(
+                "{:<12} {} — {}",
+                report.name, report.path, report.outcome_label
+            );
+        }
+        if any_skipped {
+            println!(
+                "Some skills were left untouched because local copies differ. \
+                 Re-run with --force to overwrite, or run `quaid skills doctor` to inspect shadowing."
+            );
+        } else {
+            println!(
+                "Extracted {} skill(s) to {}. They now shadow the embedded defaults; \
+                 run `quaid skills doctor` to confirm resolution.",
+                reports.len(),
+                target.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn extract_skills_to_dir(
+    skills: &[&EmbeddedSkill],
+    target: &Path,
+    force: bool,
+) -> Result<Vec<ExtractReport>> {
+    let mut reports = Vec::with_capacity(skills.len());
+    for skill in skills {
+        let skill_dir = target.join(skill.name);
+        let skill_file = skill_dir.join("SKILL.md");
+
+        let outcome = if skill_file.exists() {
+            let existing = std::fs::read_to_string(&skill_file)?;
+            if existing == skill.content {
+                ExtractOutcome::Unchanged
+            } else if force {
+                std::fs::create_dir_all(&skill_dir)?;
+                std::fs::write(&skill_file, skill.content)?;
+                ExtractOutcome::Overwritten
+            } else {
+                ExtractOutcome::Skipped
+            }
+        } else {
+            std::fs::create_dir_all(&skill_dir)?;
+            std::fs::write(&skill_file, skill.content)?;
+            ExtractOutcome::Written
+        };
+
+        reports.push(ExtractReport {
+            name: skill.name.to_string(),
+            path: skill_file.display().to_string(),
+            outcome_label: outcome_label(&outcome),
+        });
+    }
+    Ok(reports)
 }
 
 fn sha256_hex(data: &str) -> String {

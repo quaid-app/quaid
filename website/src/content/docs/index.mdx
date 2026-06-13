@@ -99,7 +99,7 @@ QUAID_DB=~/memory.db quaid serve`} lang="bash" />
 ## Skills, in the binary
 
 <Card title="Workflows ship inside the binary, not in a prompt" icon="puzzle">
-  Most agent tooling ships workflow logic in the cloud or stuffed into a prompt. Quaid ships eight skills as Markdown files inside the static binary - ingest, query, maintain, enrich, briefing, alerts, research, upgrade. They extract to <code>~/.quaid/skills/</code> on first run, and any <code>SKILL.md</code> dropped in your working directory overrides the default. The agent reads what's on disk; you read what the agent reads.
+  Most agent tooling ships workflow logic in the cloud or stuffed into a prompt. Quaid ships eight skills as Markdown files inside the static binary - ingest, query, maintain, enrich, briefing, alerts, research, upgrade. They resolve straight from the binary; run <code>quaid skills extract</code> to materialize editable copies under <code>~/.quaid/skills/</code>, and any <code>SKILL.md</code> dropped there or in your working directory overrides the default. The agent reads what it resolves; you read what the agent reads.
 </Card>
 
 ---

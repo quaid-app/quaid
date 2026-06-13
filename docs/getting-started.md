@@ -250,9 +250,7 @@ quaid status --json      # machine-readable
 
 ## Skills
 
-Skills are markdown files that tell agents _how_ to use Quaid. The binary embeds default skills and extracts them to `~/.quaid/skills/` on first run. Drop a custom `SKILL.md` in your working directory to override any default.
-
-All 8 skills are production-ready as of Phase 3.
+Skills are markdown files that tell agents _how_ to use Quaid. The binary embeds the default skills and never writes them to disk automatically. Override any default by dropping a `SKILL.md` in `~/.quaid/skills/<name>/` (user-global) or `./skills/<name>/` (working directory). To edit the embedded copies, materialize them on demand with `quaid skills extract` (use `--force` to overwrite local edits).
 
 ```bash
 quaid skills list     # show all active skills with source paths

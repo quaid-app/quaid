@@ -191,7 +191,7 @@ One `cargo build --release --target x86_64-unknown-linux-musl`. One truly static
 
 ### Core Philosophy
 
-**Thin harness, fat skills.** The binary is plumbing. The intelligence lives in SKILL.md files. Claude Code, OpenClaw, or any agent reads SKILL.md at session start and knows every workflow, heuristic, and edge case without that logic being compiled into the binary. Default skills are embedded in the binary via `include_str!()` and extracted to `~/.quaid/skills/` on first run. External skill files in the working directory override embedded defaults. `quaid skills doctor` shows active resolution order and content hashes.
+**Thin harness, fat skills (mostly).** The binary is plumbing for agent-facing workflows. The intelligence for those lives in SKILL.md files: Claude Code, OpenClaw, or any agent reads SKILL.md at session start and knows every workflow, heuristic, and edge case without that logic being compiled into the binary. The exception is unattended background intelligence — the conversation extraction prompt and the supersede/correction policy live in `src/core/conversation/`, not skills, because they run in the daemon without an agent in the loop. Default skills are embedded in the binary via `include_str!()` and are never written to disk automatically. External skill files override embedded defaults when placed in `~/.quaid/skills/<name>/` (user-global) or the working directory's `./skills/<name>/`. Materialize the embedded copies on demand with `quaid skills extract`. `quaid skills doctor` shows active resolution order and content hashes.
 
 **Above the line / Below the line.** Every knowledge page has two zones:
 - **compiled_truth** - Always current. Rewritten when new info arrives. The intelligence assessment. The "what we know now."

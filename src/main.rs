@@ -385,6 +385,9 @@ enum EarlyCommand {
         dry_run: bool,
         db_path: String,
     },
+    /// `quaid skills …` resolves embedded skills (and overrides on disk) without
+    /// opening or requiring an initialized memory database.
+    Skills,
     Version,
 }
 
@@ -414,6 +417,7 @@ fn early_command(cli: &Cli) -> EarlyCommand {
                 db_path,
             }
         }
+        Commands::Skills { .. } => EarlyCommand::Skills,
         _ => EarlyCommand::None,
     }
 }
@@ -474,6 +478,14 @@ async fn main() -> Result<()> {
             dry_run,
             db_path,
         } => return commands::setup::run(register_mcp, dry_run, &db_path),
+        EarlyCommand::Skills => {
+            // Skill resolution reads embedded bytes plus on-disk overrides; it
+            // never touches the database, so dispatch before opening one.
+            let Commands::Skills { action } = cli.command else {
+                unreachable!("early_command mapped a non-Skills command to Skills")
+            };
+            return commands::skills::run(action, cli.json);
+        }
         EarlyCommand::None => {}
     }
 
@@ -487,6 +499,7 @@ async fn main() -> Result<()> {
         | Commands::Migrate { .. }
         | Commands::Model { .. }
         | Commands::Setup { .. }
+        | Commands::Skills { .. }
         | Commands::Version => unreachable!(),
         Commands::Get { slug, namespace } => {
             commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)
@@ -691,7 +704,6 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Stats => commands::stats::run(&db, cli.json),
-        Commands::Skills { action } => commands::skills::run(action, cli.json),
         Commands::Call { tool, params } => commands::call::run(db, &tool, params),
         Commands::Pipe => commands::pipe::run(db),
     }

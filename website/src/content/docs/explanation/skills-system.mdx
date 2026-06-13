@@ -59,11 +59,11 @@ When the binary needs a skill, it looks in three places, in order:
 
 `quaid skills doctor` shows what is shadowing what, with SHA-256 hashes so you can tell whether a "custom" skill is actually different from the default.
 
-## On first run
+## Materializing editable copies
 
-The first time you run any subcommand, the binary extracts every embedded skill into `~/.quaid/skills/`. From that moment on, the resolution order is meaningful — you can edit the user-scoped copy in place and the next agent that loads the skill picks up your edits.
+The embedded skills are never written to disk automatically — they resolve straight out of the binary unless an override shadows them. When you want editable copies, run `quaid skills extract` to materialize every embedded skill into `~/.quaid/skills/` (or `quaid skills extract <name>` for one, `--dir` to target a different directory). `extract` refuses to overwrite a local file whose contents differ from the embedded copy unless you pass `--force`. From that moment on, the resolution order is meaningful — you can edit the user-scoped copy in place and the next agent that loads the skill picks up your edits.
 
-This is also why the binary is bigger than you'd expect for a Rust CLI: skills are bundled as bytes via `include_bytes!`. If you build the airgapped channel, the BGE-small model is in there too.
+This is also why the binary is bigger than you'd expect for a Rust CLI: skills are bundled as bytes via `include_str!`. If you build the airgapped channel, the BGE-small model is in there too.
 
 ## Why not RAG over skills?
 

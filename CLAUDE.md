@@ -18,7 +18,7 @@ src/core/                  — library: DB, search, embeddings, parsing
 memory.db                  — SQLite: pages + FTS5 + vec0 + links + assertions
 ```
 
-**Thin harness, fat skills.** The binary is plumbing. All agent workflows live in `skills/*/SKILL.md`.
+**Thin harness, fat skills (mostly).** The binary is plumbing for *agent-facing* workflows: discovery, query, ingestion, and maintenance loops live in `skills/*/SKILL.md`. The exception is automated background intelligence — the conversation extraction prompt and the supersede/correction policy are hard-coded Rust in `src/core/conversation/` (e.g. `EXTRACTION_SYSTEM_PROMPT`, `supersede.rs`), not skills, because they run unattended in the daemon without an agent in the loop.
 
 ## Key files
 
@@ -99,9 +99,12 @@ Model metadata is persisted in the `quaid_config` table at `quaid init` and vali
 
 ## Skills
 
-Read `skills/` before doing brain operations. All workflow intelligence lives there.
-Skills are embedded in the binary and extracted to `~/.quaid/skills/` on first run.
-Drop a custom `SKILL.md` in your working directory to override any default.
+Read `skills/` before doing brain operations. Agent-facing workflow intelligence lives there.
+Skills are embedded in the binary by default. Override them by dropping a `SKILL.md` in
+`~/.quaid/skills/<name>/` (user-global) or `./skills/<name>/` (working directory); the
+embedded copy is never written to disk automatically. Materialize the embedded copies on
+demand with `quaid skills extract` (`--force` overwrites local edits), then edit them in
+place. Verify resolution and shadowing with `quaid skills doctor`.
 
 ## Database schema
 

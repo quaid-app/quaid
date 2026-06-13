@@ -80,6 +80,8 @@ fn memory_get_resolves_requested_namespace_with_global_fallback() {
             .memory_get(MemoryGetInput {
                 slug: SLUG.to_string(),
                 namespace: namespace.map(str::to_string),
+
+                redact: None,
             })
             .unwrap();
         let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();

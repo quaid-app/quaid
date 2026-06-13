@@ -232,7 +232,7 @@ fn knn_matches_brute_force_under_every_filter() {
         [],
     )
     .unwrap();
-    run_with_batch(&conn, None, true, false, Some(8)).unwrap();
+    run_with_batch(&conn, None, true, false, Some(8), false).unwrap();
     // Supersede after embedding so the chunk still exists in the vec table.
     conn.execute(
         "UPDATE pages SET superseded_by = (SELECT id FROM pages WHERE slug='notes/topic-00')
@@ -283,7 +283,7 @@ fn knn_heap_path_matches_brute_force_above_overfetch_threshold() {
             &body,
         );
     }
-    run_with_batch(&conn, None, true, false, Some(64)).unwrap();
+    run_with_batch(&conn, None, true, false, Some(64), false).unwrap();
     assert!(
         vec_row_count(&conn) > 256,
         "corpus must exceed the over-fetch floor to hit the KNN heap path"
@@ -309,7 +309,7 @@ fn destroy_namespace_drops_backing_vec_rows() {
         1,
         "page in doomed ns",
     );
-    run_with_batch(&conn, None, true, false, Some(8)).unwrap();
+    run_with_batch(&conn, None, true, false, Some(8), false).unwrap();
     let before = vec_row_count(&conn);
     assert!(before >= 2);
 
@@ -355,7 +355,7 @@ fn collection_purge_zeroes_the_vec_table() {
         1,
         "page in default collection",
     );
-    run_with_batch(&conn, None, true, false, Some(8)).unwrap();
+    run_with_batch(&conn, None, true, false, Some(8), false).unwrap();
     let before = vec_row_count(&conn);
     assert!(before >= 3);
 
@@ -400,7 +400,7 @@ fn destroy_namespace_purging_all_pages_zeroes_the_vec_table() {
     let conn = open_test_db();
     insert_page(&conn, "notes/a", "notes", "q0001", 1, "first doomed page");
     insert_page(&conn, "notes/b", "notes", "q0001", 1, "second doomed page");
-    run_with_batch(&conn, None, true, false, Some(8)).unwrap();
+    run_with_batch(&conn, None, true, false, Some(8), false).unwrap();
     assert!(vec_row_count(&conn) >= 2);
 
     namespace::destroy_namespace(&conn, "q0001").unwrap();

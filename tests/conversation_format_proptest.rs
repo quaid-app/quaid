@@ -139,6 +139,7 @@ fn conversation_file() -> impl Strategy<Value = ConversationFile> {
                 closed_at,
                 last_extracted_at: None,
                 last_extracted_turn: last_turn,
+                format_version: quaid::core::types::CONVERSATION_FORMAT_VERSION,
             }
         });
 
@@ -207,6 +208,7 @@ fn round_trip_breaks_on_unescaped_turn_boundary() {
             closed_at: None,
             last_extracted_at: None,
             last_extracted_turn: 0,
+            format_version: quaid::core::types::CONVERSATION_FORMAT_VERSION,
         },
         turns: vec![Turn {
             ordinal: 1,

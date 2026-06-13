@@ -301,6 +301,10 @@ fn read_responses_surface_pending_embedding_jobs_hint() {
             wing: None,
             limit: None,
             include_superseded: None,
+
+            relevance_floor: None,
+            max_chunks_per_doc: None,
+            redact: None,
         })
         .unwrap();
     let envelope: serde_json::Value = serde_json::from_str(&extract_text(&search)).unwrap();
@@ -319,6 +323,11 @@ fn read_responses_surface_pending_embedding_jobs_hint() {
             limit: None,
             depth: None,
             include_superseded: None,
+
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
+            redact: None,
         })
         .unwrap();
     let query_envelope: serde_json::Value = serde_json::from_str(&extract_text(&query)).unwrap();
@@ -343,6 +352,10 @@ fn read_responses_surface_pending_embedding_jobs_hint() {
             wing: None,
             limit: None,
             include_superseded: None,
+
+            relevance_floor: None,
+            max_chunks_per_doc: None,
+            redact: None,
         })
         .unwrap();
     let empty_envelope: serde_json::Value = serde_json::from_str(&extract_text(&empty)).unwrap();

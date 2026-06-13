@@ -49,7 +49,7 @@ fn embeddings_only_flags() -> CheckFlags {
 fn validate_detects_orphaned_vec_rows() {
     let conn = open_test_db();
     insert_page(&conn, "notes/orphan-source");
-    run_with_batch(&conn, None, true, false, Some(8)).unwrap();
+    run_with_batch(&conn, None, true, false, Some(8), false).unwrap();
 
     // A clean store has no orphans.
     let clean = execute_validate(&conn, &embeddings_only_flags()).unwrap();

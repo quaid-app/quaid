@@ -414,6 +414,8 @@ fn resolve_stamps_resolved_at_and_removes_row_from_check_and_stats() {
             slug: None,
             resolve: None,
             keep: None,
+
+            namespace: None,
         })
         .unwrap();
     let listed: serde_json::Value = serde_json::from_str(&extract_text(&check_result)).unwrap();
@@ -583,6 +585,8 @@ fn memory_check_resolve_param_resolves_contradiction() {
             slug: None,
             resolve: Some(contradiction_id),
             keep: Some("extracted/facts/timezone-keep".to_string()),
+
+            namespace: None,
         })
         .unwrap();
     let report: serde_json::Value = serde_json::from_str(&extract_text(&resolve_result)).unwrap();
@@ -601,6 +605,8 @@ fn memory_check_resolve_param_resolves_contradiction() {
             slug: None,
             resolve: None,
             keep: None,
+
+            namespace: None,
         })
         .unwrap();
     let listed: serde_json::Value = serde_json::from_str(&extract_text(&check_result)).unwrap();

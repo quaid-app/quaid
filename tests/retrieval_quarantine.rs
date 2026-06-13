@@ -73,6 +73,9 @@ fn make_result(slug: &str) -> SearchResult {
         summary: slug.to_owned(),
         score: 1.0,
         wing: "notes".to_owned(),
+        mmr_score: None,
+        cross_ref_boost: 0.0,
+        dedup_collapsed_count: 0,
     }
 }
 

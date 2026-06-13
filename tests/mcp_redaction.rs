@@ -53,6 +53,8 @@ fn memory_get_masks_secrets_when_redaction_enabled() {
         .memory_get(MemoryGetInput {
             slug: "people/alice".to_string(),
             redact: None, // falls back to config default = patterns
+
+            namespace: None,
         })
         .unwrap();
     let text = extract_text(&result);
@@ -82,6 +84,8 @@ fn memory_get_off_is_byte_identical_to_unredacted() {
             .memory_get(MemoryGetInput {
                 slug: "people/alice".to_string(),
                 redact: None,
+
+                namespace: None,
             })
             .unwrap(),
     );
@@ -90,6 +94,8 @@ fn memory_get_off_is_byte_identical_to_unredacted() {
             .memory_get(MemoryGetInput {
                 slug: "people/alice".to_string(),
                 redact: Some(false),
+
+                namespace: None,
             })
             .unwrap(),
     );
@@ -120,6 +126,8 @@ fn per_call_redact_true_overrides_config_off() {
             .memory_get(MemoryGetInput {
                 slug: "people/alice".to_string(),
                 redact: Some(true),
+
+                namespace: None,
             })
             .unwrap(),
     );
@@ -146,6 +154,9 @@ fn memory_search_masks_summary_but_fts_indexes_originals() {
             limit: Some(10),
             include_superseded: None,
             redact: None,
+
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
     let text = extract_text(&result);
@@ -181,6 +192,10 @@ fn memory_query_masks_summary_when_enabled() {
             depth: None,
             include_superseded: None,
             redact: None,
+
+            hops: None,
+            relevance_floor: None,
+            max_chunks_per_doc: None,
         })
         .unwrap();
     let text = extract_text(&result);
@@ -212,6 +227,8 @@ fn rehydrate_reverses_session_tokens() {
             .memory_get(MemoryGetInput {
                 slug: "people/alice".to_string(),
                 redact: None,
+
+                namespace: None,
             })
             .unwrap(),
     );
@@ -244,6 +261,8 @@ fn rehydrate_partial_token_string_round_trips() {
         .memory_get(MemoryGetInput {
             slug: "people/alice".to_string(),
             redact: None,
+
+            namespace: None,
         })
         .unwrap();
 

@@ -33,6 +33,7 @@ fn memory_query_input(query: &str, hops: Option<u32>) -> MemoryQueryInput {
         hops,
         relevance_floor: None,
         max_chunks_per_doc: None,
+        redact: None,
     }
 }
 
@@ -54,6 +55,7 @@ fn seed_linked_corpus(server: &QuaidServer) {
             relationship: "related".to_string(),
             valid_from: None,
             valid_until: None,
+            namespace: None,
         })
         .unwrap();
 }

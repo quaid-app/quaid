@@ -822,7 +822,45 @@ fn embed_candle_batch(
             message: format!("BERT batch forward: {e}"),
         })?;
 
-    mean_pool_and_normalize_batch(output, attention_mask)
+    cls_pool_and_normalize_batch(output)
+}
+
+/// CLS-pools and L2-normalizes a `[batch, seq, hidden]` hidden-state tensor,
+/// returning one vector per batch row. The batch counterpart of
+/// [`cls_pool_and_normalize`] — BGE-en-v1.5 (and bge-m3 dense) are CLS-pooled,
+/// so the batch path MUST match the single-text path or page embeddings
+/// (computed via [`embed_batch`]) would be incomparable to query embeddings.
+fn cls_pool_and_normalize_batch(output: Tensor) -> Result<Vec<Vec<f32>>, InferenceError> {
+    let cls = output
+        .narrow(1, 0, 1)
+        .and_then(|t| t.squeeze(1))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch cls pool: {e}"),
+        })?;
+
+    let norm = cls
+        .sqr()
+        .and_then(|t| t.sum_keepdim(1))
+        .and_then(|t| t.sqrt())
+        .and_then(|t| t.clamp(f32::EPSILON, f32::INFINITY))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch cls norm: {e}"),
+        })?;
+
+    let norm_broadcast = norm
+        .broadcast_as(cls.shape())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch cls norm broadcast: {e}"),
+        })?;
+
+    cls.div(&norm_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch cls normalize: {e}"),
+        })?
+        .to_vec2::<f32>()
+        .map_err(|e| InferenceError::Internal {
+            message: format!("batch cls to_vec: {e}"),
+        })
 }
 
 #[cfg(feature = "online-model")]
@@ -915,88 +953,6 @@ fn cls_pool_and_normalize(output: Tensor) -> Result<Vec<f32>, InferenceError> {
         .and_then(|t| t.to_vec1::<f32>())
         .map_err(|e| InferenceError::Internal {
             message: format!("to_vec: {e}"),
-        })
-}
-
-/// Mean-pools and L2-normalizes a `[batch, seq, hidden]` hidden-state tensor,
-/// returning one vector per batch row. Shares the masking/pooling math with
-/// [`mean_pool_and_normalize`] but keeps the batch dimension instead of
-/// squeezing it away.
-fn mean_pool_and_normalize_batch(
-    output: Tensor,
-    attention_mask: Tensor,
-) -> Result<Vec<Vec<f32>>, InferenceError> {
-    let mask_f32 = attention_mask
-        .unsqueeze(2)
-        .and_then(|t| t.to_dtype(DType::F32))
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch mask expand: {e}"),
-        })?;
-
-    let mask_broadcast =
-        mask_f32
-            .broadcast_as(output.shape())
-            .map_err(|e| InferenceError::Internal {
-                message: format!("batch mask broadcast: {e}"),
-            })?;
-
-    let masked = output
-        .mul(&mask_broadcast)
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch mask mul: {e}"),
-        })?;
-
-    let sum = masked.sum(1).map_err(|e| InferenceError::Internal {
-        message: format!("batch sum: {e}"),
-    })?;
-
-    // Clamp the per-row token count to >= 1 so an all-zero mask (a fully padded
-    // row) divides by 1 rather than 0; that row's masked sum is already 0.
-    let count = mask_f32
-        .sum(1)
-        .and_then(|t| t.clamp(1.0_f32, f32::INFINITY))
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch count: {e}"),
-        })?;
-
-    let count_broadcast =
-        count
-            .broadcast_as(sum.shape())
-            .map_err(|e| InferenceError::Internal {
-                message: format!("batch count broadcast: {e}"),
-            })?;
-
-    let mean = sum
-        .div(&count_broadcast)
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch mean: {e}"),
-        })?;
-
-    let norm = mean
-        .sqr()
-        .and_then(|t| t.sum_keepdim(1))
-        .and_then(|t| t.sqrt())
-        .and_then(|t| t.clamp(f32::EPSILON, f32::INFINITY))
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch norm: {e}"),
-        })?;
-
-    let norm_broadcast = norm
-        .broadcast_as(mean.shape())
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch norm broadcast: {e}"),
-        })?;
-
-    let normalized = mean
-        .div(&norm_broadcast)
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch normalize: {e}"),
-        })?;
-
-    normalized
-        .to_vec2::<f32>()
-        .map_err(|e| InferenceError::Internal {
-            message: format!("batch to_vec: {e}"),
         })
 }
 

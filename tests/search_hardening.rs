@@ -732,7 +732,9 @@ fn memory_search_abbreviated_numeric_query_matches_full_and_grouped_content() {
         );
 
         let parsed = parse_stdout_json(&output);
-        let results = parsed["results"].as_array().expect("output must be a JSON array");
+        let results = parsed["results"]
+            .as_array()
+            .expect("output must be a JSON array");
         let slugs = result_slugs(results);
         assert!(
             slugs.contains("default::journal/grouped") && slugs.contains("default::journal/plain"),
@@ -860,7 +862,9 @@ fn memory_search_two_term_query_falls_back_to_or_when_and_misses() {
     );
 
     let parsed = parse_stdout_json(&output);
-    let results = parsed["results"].as_array().expect("output must be a JSON array");
+    let results = parsed["results"]
+        .as_array()
+        .expect("output must be a JSON array");
     assert_eq!(
         result_slugs(results),
         BTreeSet::from(["default::concepts/quantum".to_owned()]),

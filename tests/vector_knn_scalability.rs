@@ -89,8 +89,9 @@ fn brute_force(
     namespace_filter: Option<&str>,
     include_superseded: bool,
 ) -> Vec<(String, f64)> {
-    let query_blob =
-        quaid::core::inference::embedding_to_blob(&quaid::core::inference::embed(query).unwrap());
+    let query_blob = quaid::core::inference::embedding_to_blob(
+        &quaid::core::inference::embed_query(query).unwrap(),
+    );
     let model_name: String = conn
         .query_row(
             "SELECT name FROM embedding_models WHERE active = 1 LIMIT 1",

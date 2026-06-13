@@ -179,6 +179,7 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
             .memory_get(MemoryGetInput {
                 namespace: None,
                 slug: "facts/a".to_string(),
+                redact: None,
             })
             .unwrap(),
     ))
@@ -188,6 +189,7 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
             .memory_get(MemoryGetInput {
                 namespace: None,
                 slug: "facts/c".to_string(),
+                redact: None,
             })
             .unwrap(),
     ))
@@ -241,6 +243,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                redact: None,
             })
             .unwrap(),
     );
@@ -255,6 +258,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: Some(true),
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                redact: None,
             })
             .unwrap(),
     );
@@ -281,6 +285,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 hops: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                redact: None,
             })
             .unwrap(),
     );
@@ -297,6 +302,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 hops: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                redact: None,
             })
             .unwrap(),
     );

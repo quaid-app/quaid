@@ -41,6 +41,7 @@ use crate::mcp::validation::{
 
 pub(crate) type DbRef = Arc<Mutex<Connection>>;
 pub(crate) type SlmRef = Arc<dyn SlmClient + Send + Sync>;
+pub(crate) type RedactionRef = Arc<Mutex<crate::core::redaction::RedactionSession>>;
 
 pub(crate) fn canonical_slug(collection_name: &str, slug: &str) -> String {
     format!("{collection_name}::{slug}")
@@ -197,6 +198,11 @@ pub(crate) fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error
 pub struct QuaidServer {
     pub(crate) db: DbRef,
     pub(crate) slm: SlmRef,
+    /// Per-connection outbound-redaction state. The token map is lazily
+    /// initialised from `mcp.redact_*` config on first scrub and lives for
+    /// the life of the connection, so tokens are stable per session and
+    /// never leak across clients. See [`crate::core::redaction`].
+    pub(crate) redaction: RedactionRef,
 }
 
 impl QuaidServer {
@@ -216,9 +222,21 @@ impl QuaidServer {
     where
         S: SlmClient + Send + Sync + 'static,
     {
+        // Seed the per-connection redaction session with the user-defined
+        // blocklist now; the mode itself is re-read per call so a live
+        // `config.set mcp.redact_outbound patterns` takes effect immediately.
+        let blocklist = crate::core::redaction::parse_blocklist(
+            db::read_config_value(&conn, "mcp.redact_blocklist")
+                .ok()
+                .flatten()
+                .as_deref(),
+        );
         Self {
             db: Arc::new(Mutex::new(conn)),
             slm,
+            redaction: Arc::new(Mutex::new(crate::core::redaction::RedactionSession::new(
+                blocklist,
+            ))),
         }
     }
 
@@ -245,6 +263,51 @@ impl QuaidServer {
     pub fn slm_identity(&self) -> *const () {
         Arc::as_ptr(&self.slm) as *const ()
     }
+
+    /// Borrow the per-connection redaction session. Used by the
+    /// `memory_rehydrate` tool to reverse the session token map.
+    pub(crate) fn redaction(&self) -> &RedactionRef {
+        &self.redaction
+    }
+
+    /// Resolve the effective outbound-redaction mode for a read tool call.
+    ///
+    /// Precedence: an explicit per-call `redact` flag wins over the
+    /// `mcp.redact_outbound` config default. A `redact: false` override can
+    /// force plaintext even when the config defaults to scrubbing.
+    pub(crate) fn resolve_redact_mode(
+        &self,
+        db: &Connection,
+        per_call: Option<bool>,
+    ) -> crate::core::redaction::RedactMode {
+        use crate::core::redaction::RedactMode;
+        match per_call {
+            Some(true) => RedactMode::Patterns,
+            Some(false) => RedactMode::Off,
+            None => crate::core::redaction::redact_mode_from_config(
+                db::read_config_value(db, "mcp.redact_outbound")
+                    .ok()
+                    .flatten()
+                    .as_deref(),
+            ),
+        }
+    }
+
+    /// Scrub an already-serialized outbound payload according to `mode`,
+    /// recording the token map on the per-connection session. When `mode`
+    /// is [`crate::core::redaction::RedactMode::Off`] the input is returned
+    /// unchanged (byte-identical), so non-redacting callers pay nothing.
+    pub(crate) fn apply_redaction(
+        &self,
+        mode: crate::core::redaction::RedactMode,
+        payload: String,
+    ) -> String {
+        if !mode.is_active() {
+            return payload;
+        }
+        let mut session = self.redaction.lock().unwrap_or_else(|e| e.into_inner());
+        session.scrub(&payload)
+    }
 }
 
 /// Input schema for the `memory_get` MCP tool.
@@ -255,6 +318,9 @@ pub struct MemoryGetInput {
     /// Optional namespace to resolve in (named namespace falls back to
     /// global memory); omitted resolves deterministically across namespaces
     pub namespace: Option<String>,
+    /// Scrub machine-shaped secrets from the outbound payload. Omitted
+    /// falls back to the `mcp.redact_outbound` config default.
+    pub redact: Option<bool>,
 }
 
 /// Input schema for the `memory_put` MCP tool.
@@ -350,6 +416,9 @@ pub struct MemoryQueryInput {
     pub relevance_floor: Option<f64>,
     /// Maximum results retained per page (`0` = unlimited); absent reads `config.search.max_chunks_per_doc_default`
     pub max_chunks_per_doc: Option<u32>,
+    /// Scrub machine-shaped secrets from the outbound payload. Omitted
+    /// falls back to the `mcp.redact_outbound` config default.
+    pub redact: Option<bool>,
 }
 
 /// Input schema for the `memory_search` MCP tool.
@@ -371,6 +440,9 @@ pub struct MemorySearchInput {
     pub relevance_floor: Option<f64>,
     /// Maximum results retained per page (`0` = unlimited); absent reads `config.search.max_chunks_per_doc_default`
     pub max_chunks_per_doc: Option<u32>,
+    /// Scrub machine-shaped secrets from the outbound payload. Omitted
+    /// falls back to the `mcp.redact_outbound` config default.
+    pub redact: Option<bool>,
 }
 
 /// Input schema for the `memory_list` MCP tool.
@@ -549,6 +621,14 @@ pub struct MemoryRawInput {
     pub overwrite: Option<bool>,
 }
 
+/// Input schema for the `memory_rehydrate` MCP tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryRehydrateInput {
+    /// Text containing redaction tokens (e.g. `<EMAIL_1>`) to reverse back
+    /// to their original values using this connection's session map.
+    pub text: String,
+}
+
 // Central registry: every `#[tool]` method exposed by `QuaidServer`,
 // regardless of which file in `crate::mcp::tools::*` defines it, must be
 // listed here. The `rmcp::tool_box!` macro generates the static `ToolBox`
@@ -565,6 +645,8 @@ impl QuaidServer {
         // search
         memory_query,
         memory_search,
+        // redaction
+        memory_rehydrate,
         // links
         memory_link,
         memory_link_close,
@@ -664,7 +746,7 @@ mod tests {
     /// test catches it before the post-split MCP wire surface diverges from
     /// the pre-split baseline.
     #[test]
-    fn tool_registry_lists_all_25_tools() {
+    fn tool_registry_lists_all_26_tools() {
         let names: std::collections::BTreeSet<String> = QuaidServer::tool_box()
             .list()
             .into_iter()
@@ -677,6 +759,7 @@ mod tests {
             "memory_raw",
             "memory_query",
             "memory_search",
+            "memory_rehydrate",
             "memory_link",
             "memory_link_close",
             "memory_backlinks",
@@ -701,7 +784,7 @@ mod tests {
         .map(|s| (*s).to_string())
         .collect();
         assert_eq!(names, expected, "tool registry drift");
-        assert_eq!(names.len(), 25, "expected 25 tools, got {}", names.len());
+        assert_eq!(names.len(), 26, "expected 26 tools, got {}", names.len());
     }
 
     #[test]
@@ -1323,6 +1406,7 @@ mod tests {
                 hops: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                redact: None,
             })
             .unwrap();
 

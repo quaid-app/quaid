@@ -89,6 +89,7 @@ impl Harness {
             .memory_get(MemoryGetInput {
                 namespace: None,
                 slug: slug.to_string(),
+                redact: None,
             })
             .unwrap();
         serde_json::from_str(&extract_text(&result)).unwrap()

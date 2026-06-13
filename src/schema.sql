@@ -504,7 +504,15 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('search.rerank_extractive_budget_ms', '10'),
     -- knowledge-gap loop: persist caller-provided memory_gap context only
     -- when 'true' (auto-logged query-free diagnostics are always stored)
-    ('gaps.store_context',                 'false');
+    ('gaps.store_context',                 'false'),
+    -- Outbound secret scrubbing for the MCP read surface (issue #159 phase 1).
+    -- 'off' (default) => read payloads cross the wire byte-identical to today;
+    -- 'patterns' => deterministic regex/blocklist scrub at the serialization
+    -- chokepoint. FTS5/embeddings always index originals (outbound-only).
+    ('mcp.redact_outbound',          'off'),
+    -- Comma/newline-separated literal secrets to always scrub (e.g. an
+    -- internal codename). Empty by default.
+    ('mcp.redact_blocklist',         '');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

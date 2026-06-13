@@ -65,6 +65,61 @@ pub fn export_dir(db: &Connection, output_path: &Path) -> Result<usize> {
     Ok(entries.len())
 }
 
+/// Export byte-exact raw source payloads from the `raw_imports` table.
+///
+/// With `import_id = None`, writes the **active** raw payload of every page
+/// that has one to `<output>/<slug>.md`; pages without a captured raw source
+/// are skipped (use the normalized [`export_dir`] for those). With
+/// `import_id = Some(_)`, restores exactly the one historical payload whose
+/// `raw_imports.import_id` matches, erroring when no such row exists.
+/// Returns the number of files written.
+pub fn export_raw_dir(
+    db: &Connection,
+    output_path: &Path,
+    import_id: Option<&str>,
+) -> Result<usize> {
+    let mut stmt = match import_id {
+        Some(_) => db.prepare(
+            "SELECT p.slug, r.raw_bytes \
+             FROM raw_imports r \
+             JOIN pages p ON p.id = r.page_id \
+             WHERE r.import_id = ?1 \
+             ORDER BY p.slug",
+        )?,
+        None => db.prepare(
+            "SELECT p.slug, r.raw_bytes \
+             FROM raw_imports r \
+             JOIN pages p ON p.id = r.page_id \
+             WHERE r.is_active = 1 \
+             ORDER BY p.slug",
+        )?,
+    };
+    let params: Vec<&dyn rusqlite::types::ToSql> = match &import_id {
+        Some(id) => vec![id],
+        None => Vec::new(),
+    };
+    let rows = stmt.query_map(params.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+    })?;
+
+    let mut written = 0_usize;
+    for row in rows {
+        let (slug, raw_bytes) = row?;
+        let file_path = output_path.join(format!("{slug}.md"));
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&file_path, &raw_bytes)?;
+        written += 1;
+    }
+
+    if let Some(id) = import_id {
+        anyhow::ensure!(written > 0, "raw import not found: {id}");
+    }
+
+    Ok(written)
+}
+
 /// Validate round-trip fidelity: export then re-parse and compare.
 /// Used only in tests.
 #[cfg(test)]

@@ -53,6 +53,7 @@ pub fn run(
     relationship: &str,
     valid_from: Option<String>,
     valid_until: Option<String>,
+    json: bool,
 ) -> Result<()> {
     let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
     let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
@@ -66,7 +67,18 @@ pub fn run(
     )?;
     let from_slug = from_page.resolved.canonical_slug();
     let to_slug = to_page.resolved.canonical_slug();
-    if closed {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "action": if closed { "closed" } else { "linked" },
+                "from": from_slug,
+                "to": to_slug,
+                "relationship": relationship,
+                "valid_until": valid_until,
+            })
+        );
+    } else if closed {
         println!(
             "Closed link {from} → {to} ({relationship}) valid_until={valid_until}",
             from = from_slug,
@@ -148,9 +160,20 @@ fn run_resolved(
 // ── quaid link-close ────────────────────────────────────────
 
 /// Close a temporal link interval by its database ID.
-pub fn close(db: &Connection, link_id: u64, valid_until: &str) -> Result<()> {
+pub fn close(db: &Connection, link_id: u64, valid_until: &str, json: bool) -> Result<()> {
     close_silent(db, link_id, valid_until)?;
-    println!("Closed link {link_id} valid_until={valid_until}");
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "action": "closed",
+                "link_id": link_id,
+                "valid_until": valid_until,
+            })
+        );
+    } else {
+        println!("Closed link {link_id} valid_until={valid_until}");
+    }
     Ok(())
 }
 
@@ -251,7 +274,13 @@ pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool)
 // ── quaid unlink ────────────────────────────────────────────
 
 /// Remove a cross-reference entirely.
-pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String>) -> Result<()> {
+pub fn unlink(
+    db: &Connection,
+    from: &str,
+    to: &str,
+    relationship: Option<String>,
+    json: bool,
+) -> Result<()> {
     let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
     let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
     vault_sync::ensure_collection_write_allowed(db, from_page.resolved.collection_id)
@@ -279,11 +308,23 @@ pub fn unlink(db: &Connection, from: &str, to: &str, relationship: Option<String
         );
     }
 
-    println!(
-        "Removed {rows} link(s) {} → {}",
-        from_page.resolved.canonical_slug(),
-        to_page.resolved.canonical_slug()
-    );
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "action": "unlinked",
+                "removed": rows,
+                "from": from_page.resolved.canonical_slug(),
+                "to": to_page.resolved.canonical_slug(),
+            })
+        );
+    } else {
+        println!(
+            "Removed {rows} link(s) {} → {}",
+            from_page.resolved.canonical_slug(),
+            to_page.resolved.canonical_slug()
+        );
+    }
     Ok(())
 }
 
@@ -411,6 +452,7 @@ mod tests {
             "works_at",
             Some("2024-01".to_string()),
             None,
+            false,
         )
         .unwrap();
 
@@ -440,6 +482,7 @@ mod tests {
             "works_at",
             None,
             None,
+            false,
         )
         .unwrap();
 
@@ -468,6 +511,7 @@ mod tests {
             "works_at",
             Some("2024-01".to_string()),
             None,
+            false,
         )
         .unwrap();
 
@@ -479,6 +523,7 @@ mod tests {
             "works_at",
             None,
             Some("2025-06".to_string()),
+            false,
         )
         .unwrap();
 
@@ -500,9 +545,18 @@ mod tests {
         insert_page(&conn, "people/bob", "person");
         insert_page(&conn, "companies/beta", "company");
 
-        run(&conn, "people/bob", "companies/beta", "advises", None, None).unwrap();
+        run(
+            &conn,
+            "people/bob",
+            "companies/beta",
+            "advises",
+            None,
+            None,
+            false,
+        )
+        .unwrap();
 
-        close(&conn, 1, "2025-12").unwrap();
+        close(&conn, 1, "2025-12", false).unwrap();
 
         let link = get_link(&conn, 1).unwrap();
         assert_eq!(link.valid_until.as_deref(), Some("2025-12"));
@@ -511,7 +565,7 @@ mod tests {
     #[test]
     fn link_close_returns_error_for_nonexistent_id() {
         let conn = open_test_db();
-        let result = close(&conn, 999, "2025-01");
+        let result = close(&conn, 999, "2025-01", false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("link not found"));
     }
@@ -530,6 +584,7 @@ mod tests {
             "works_at",
             None,
             None,
+            false,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("page not found"));
@@ -547,6 +602,7 @@ mod tests {
             "works_at",
             None,
             None,
+            false,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("page not found"));
@@ -570,6 +626,7 @@ mod tests {
             "works_at",
             None,
             None,
+            false,
         )
         .unwrap_err();
 
@@ -591,6 +648,7 @@ mod tests {
             "works_at",
             None,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -604,6 +662,7 @@ mod tests {
             "people/alice",
             "companies/acme",
             Some("works_at".to_string()),
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -628,6 +687,7 @@ mod tests {
             "works_at",
             None,
             None,
+            false,
         )
         .unwrap();
 

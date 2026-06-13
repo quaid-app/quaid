@@ -1,7 +1,7 @@
 //! Knowledge-gap log: records queries the brain couldn't answer (keyed by
 //! SHA-256 for idempotent inserts), lists unresolved entries, and links them
-//! to pages that later answered them. Provides the data behind `quaid gap`,
-//! `quaid gaps`, and the matching MCP tools.
+//! to pages that later answered them. Provides the data behind `quaid gaps`
+//! and the `memory_gap` / `memory_gaps` MCP tools.
 //!
 //! See also: `types::KnowledgeGap` for the row shape, and `search` for the
 //! query path that detects low-confidence retrievals.

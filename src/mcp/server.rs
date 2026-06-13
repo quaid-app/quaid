@@ -526,6 +526,20 @@ impl QuaidServer {
         memory_namespace_create,
         memory_namespace_destroy,
     } tool_box);
+
+    /// Names of every tool exposed by the MCP `tool_box!` registry above.
+    ///
+    /// The macro-generated `tool_box()` accessor is private, so this is the
+    /// public introspection point for consumers that must stay in lockstep
+    /// with the wire surface (e.g. the `quaid call`/`quaid pipe` dispatcher
+    /// parity check in `tests/cli_call_dispatch_parity.rs`).
+    pub fn registered_tool_names() -> Vec<String> {
+        Self::tool_box()
+            .list()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect()
+    }
 }
 
 #[tool(tool_box)]

@@ -1352,10 +1352,34 @@ fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbErro
 }
 
 fn format_schema_reinit_message(schema_version: i64, path: &str) -> String {
-    let default_path = default_db_path_string();
+    let header = format!(
+        "Error: database schema version mismatch.\n  Found version {schema_version}, expected {SCHEMA_VERSION}.\n  Database: {path}"
+    );
+
+    if schema_version > SCHEMA_VERSION {
+        // Newer-than-current: the data is fine, this binary is just too old.
+        return format!(
+            "{header}\n  This database was created by a NEWER quaid release than this binary supports.\n  Upgrade the quaid binary to a release that supports schema version {schema_version}.\n  Do NOT run `quaid init` against this database, and back up the file before any downgrade attempt."
+        );
+    }
+
+    let provenance = if schema_version == 0 {
+        // True legacy era: no readable schema version in either the
+        // `quaid_config` or the legacy `config` table.
+        "This file has no readable schema version: it was created by a legacy release predating versioned Quaid configs, or it is not a Quaid database.".to_owned()
+    } else {
+        let release_hint = if schema_version == 9 {
+            " (schema version 9 shipped with quaid v0.20.x-v0.21.x)"
+        } else {
+            ""
+        };
+        format!(
+            "This database was created by an older quaid release{release_hint}. This binary does not migrate older schemas automatically."
+        )
+    };
+
     format!(
-        "Error: database schema version mismatch.\n  Found version {}, expected {}.\n  Existing databases created before the Quaid rename are not supported.\n  To migrate: export your data with the pre-rename binary, then re-ingest the exported markdown with the current workflow.\n    quaid init {}\n    quaid collection add migrated <export-directory>\n    # or ingest files individually with `quaid ingest`\n  Original database: {}",
-        schema_version, SCHEMA_VERSION, default_path, path
+        "{header}\n  {provenance}\n  To migrate without losing data:\n    1. BACK UP / move the old database out of the way first:\n         mv {path} {path}.bak\n       (`quaid init` refuses to run while the old file sits at this path)\n    2. Re-create the store:        quaid init {path}\n    3. If you still have a matching older quaid release, `quaid export` your data\n       with it, then re-ingest the exported markdown:\n         quaid collection add migrated <export-directory>\n         # or ingest files individually with `quaid ingest`"
     )
 }
 

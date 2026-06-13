@@ -9,9 +9,13 @@ use rusqlite::Connection;
 use crate::core::db;
 
 /// Checkpoint the WAL and compact the database to a single file.
-pub fn run(conn: &Connection) -> Result<()> {
+pub fn run(conn: &Connection, json: bool) -> Result<()> {
     db::compact(conn)?;
-    println!("Compacted database (WAL checkpoint complete)");
+    if json {
+        println!("{}", serde_json::json!({ "status": "compacted" }));
+    } else {
+        println!("Compacted database (WAL checkpoint complete)");
+    }
     Ok(())
 }
 
@@ -41,14 +45,14 @@ mod tests {
         )
         .unwrap();
 
-        let result = run(&conn);
+        let result = run(&conn, false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn compact_succeeds_on_empty_database() {
         let conn = open_test_db();
-        let result = run(&conn);
+        let result = run(&conn, false);
         assert!(result.is_ok());
     }
 }

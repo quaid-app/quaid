@@ -43,6 +43,20 @@ pub fn dispatch_tool(server: &QuaidServer, tool: &str, params: Value) -> Result<
                 .memory_close_action(input)
                 .map_err(|e| e.message.to_string())
         }
+        "memory_correct" => {
+            let input: MemoryCorrectInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_correct(input)
+                .map_err(|e| e.message.to_string())
+        }
+        "memory_correct_continue" => {
+            let input: MemoryCorrectContinueInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_correct_continue(input)
+                .map_err(|e| e.message.to_string())
+        }
         "memory_query" => {
             let input: MemoryQueryInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;

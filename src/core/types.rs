@@ -722,10 +722,13 @@ impl FromStr for ExtractionJobStatus {
 // ── Errors ────────────────────────────────────────────────────
 
 /// Optimistic concurrency control error.
+///
+/// The `ConflictError: ` prefix is the canonical spelling for every
+/// conflict surfaced over JSON-RPC (`-32009`); see `src/mcp/errors.rs`.
 #[derive(Debug, Error)]
 pub enum OccError {
     /// The page was updated by another writer since the caller last read it.
-    #[error("conflict: page updated elsewhere (current version: {current_version})")]
+    #[error("ConflictError: page updated elsewhere (current version: {current_version})")]
     Conflict {
         /// Version currently persisted in the database.
         current_version: i64,

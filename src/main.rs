@@ -119,9 +119,13 @@ enum Commands {
     /// Export memory to markdown directory
     Export {
         path: String,
+        /// Export byte-exact raw source payloads (from `raw_imports`)
+        /// instead of normalized rendered markdown
         #[arg(long)]
         raw: bool,
-        #[arg(long)]
+        /// Restore a single raw payload by its `raw_imports` import id
+        /// (requires --raw)
+        #[arg(long, requires = "raw")]
         import_id: Option<String>,
     },
     /// Control conversation extraction runtime state
@@ -140,8 +144,10 @@ enum Commands {
     Embed {
         /// Embed a single page by slug
         slug: Option<String>,
+        /// Force re-embed every page, even when chunk hashes are unchanged
         #[arg(long)]
         all: bool,
+        /// Re-embed only pages whose chunk hashes drifted from the index
         #[arg(long)]
         stale: bool,
         /// Maximum number of pages to scan per batch for bulk embedding
@@ -277,8 +283,9 @@ enum Commands {
         /// Non-loopback binds are refused in v1; requires `--http`.
         #[arg(long, requires = "http")]
         bind: Option<std::net::IpAddr>,
-        /// Path to a bearer-token file. Parsed and validated but not
-        /// enforced in v1 (see HTTP transport docs); requires `--http`.
+        /// Path to a bearer-token file. Bearer auth is not yet enforced,
+        /// so supplying this flag is refused (fail-closed) rather than
+        /// silently ignored; requires `--http`.
         #[arg(long, requires = "http")]
         token_file: Option<std::path::PathBuf>,
         /// Treat the loopback interface as trusted and allow unauthenticated
@@ -397,7 +404,7 @@ async fn main() -> Result<()> {
             slug,
             namespace,
             expected_version,
-        } => commands::put::run(&db, &slug, namespace.as_deref(), expected_version),
+        } => commands::put::run(&db, &slug, namespace.as_deref(), expected_version, cli.json),
         Commands::List {
             wing,
             r#type,
@@ -454,41 +461,53 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Commands::Ingest { path, force } => commands::ingest::run(&db, &path, force),
+        Commands::Ingest { path, force } => {
+            commands::ingest::run_with_output(&db, &path, force, cli.json)
+        }
         Commands::Export {
             path,
             raw,
             import_id,
-        } => commands::export::run(&db, &path, raw, import_id),
+        } => commands::export::run(&db, &path, raw, import_id, cli.json),
         Commands::Extraction { action } => commands::extraction::run(&db, action),
-        Commands::Extract(args) => commands::extract::run(&db, args),
+        Commands::Extract(args) => commands::extract::run(&db, args, cli.json),
         Commands::Embed {
             slug,
             all,
             stale,
             batch_size,
-        } => commands::embed::run_with_batch(&db, slug, all, stale, batch_size),
+        } => commands::embed::run_with_batch(&db, slug, all, stale, batch_size, cli.json),
         Commands::Link {
             from,
             to,
             relationship,
             valid_from,
             valid_until,
-        } => commands::link::run(&db, &from, &to, &relationship, valid_from, valid_until),
+        } => commands::link::run(
+            &db,
+            &from,
+            &to,
+            &relationship,
+            valid_from,
+            valid_until,
+            cli.json,
+        ),
         Commands::LinkClose {
             link_id,
             valid_until,
-        } => commands::link::close(&db, link_id, &valid_until),
+        } => commands::link::close(&db, link_id, &valid_until, cli.json),
         Commands::Links { slug, temporal } => commands::link::links(&db, &slug, temporal, cli.json),
         Commands::Unlink {
             from,
             to,
             relationship,
-        } => commands::link::unlink(&db, &from, &to, relationship),
+        } => commands::link::unlink(&db, &from, &to, relationship, cli.json),
         Commands::Backlinks { slug, temporal } => {
             commands::link::backlinks(&db, &slug, temporal, cli.json)
         }
-        Commands::Tags { slug, add, remove } => commands::tags::run(&db, &slug, &add, &remove),
+        Commands::Tags { slug, add, remove } => {
+            commands::tags::run(&db, &slug, &add, &remove, cli.json)
+        }
         Commands::Timeline { slug, limit } => commands::timeline::run(&db, &slug, limit, cli.json),
         Commands::TimelineAdd {
             slug,
@@ -496,16 +515,16 @@ async fn main() -> Result<()> {
             summary,
             source,
             detail,
-        } => commands::timeline::add(&db, &slug, &date, &summary, source, detail),
+        } => commands::timeline::add(&db, &slug, &date, &summary, source, detail, cli.json),
         Commands::Graph(args) => commands::graph::run_cli(&db, args, cli.json),
         Commands::Check { slug, all, r#type } => {
             commands::check::run(&db, slug, all, r#type, cli.json)
         }
         Commands::Gaps { limit, resolved } => commands::gaps::run(&db, limit, resolved, cli.json),
-        Commands::Compact => commands::compact::run(&db),
+        Commands::Compact => commands::compact::run(&db, cli.json),
         Commands::Collection { action } => commands::collection::run(&db, action, cli.json),
         Commands::Namespace { action } => commands::namespace::run(&db, action, cli.json),
-        Commands::Config { action } => commands::config::run(&db, action),
+        Commands::Config { action } => commands::config::run(&db, action, cli.json),
         Commands::Validate {
             all,
             links,
@@ -542,7 +561,8 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Status { json } => {
-            let code = commands::status::run(&db, json)?;
+            // Honour both spellings: `quaid --json status` and `quaid status --json`.
+            let code = commands::status::run(&db, json || cli.json)?;
             if code != 0 {
                 std::process::exit(i32::from(code));
             }

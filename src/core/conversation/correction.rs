@@ -24,6 +24,9 @@ use serde_json::{json, Value as JsonValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+// `ingest` still lives in the CLI layer; relocating its upsert body into core is
+// the deferred `core::pages::write_page` unification (review §16, steps 2/3) and
+// overlaps with the unmerged write-path stack.
 use crate::commands::ingest;
 use crate::core::conversation::{
     extractor::SlmClient,

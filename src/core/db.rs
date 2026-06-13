@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time::Duration;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use super::inference::{
     coerce_model_for_build, configure_runtime_model, default_model, hydrate_model_config,
@@ -233,6 +233,25 @@ pub fn default_db_path() -> std::path::PathBuf {
 /// String form of [`default_db_path`] for use in error messages.
 pub fn default_db_path_string() -> String {
     default_db_path().display().to_string()
+}
+
+/// Begin a write transaction with `BEGIN IMMEDIATE` on a shared `&Connection`.
+///
+/// Unlike [`Connection::unchecked_transaction`] (which always emits
+/// `BEGIN DEFERRED` and only acquires the write lock on the first write
+/// statement), this takes the reserved write lock at `BEGIN` time. The 5s
+/// `busy_timeout` configured when the connection is opened then covers the
+/// lock-acquisition wait, so a losing writer retries rather than surfacing a
+/// transient `SQLITE_BUSY` from inside an already-open transaction.
+///
+/// The returned [`Transaction`] rolls back on drop and commits via
+/// [`Transaction::commit`], matching `unchecked_transaction` semantics exactly.
+///
+/// NOTE: this should converge with the shared `with_immediate_transaction`
+/// helper (PR #230) once that lands; until then this is the single
+/// IMMEDIATE-begin entry point for `&Connection` write paths.
+pub fn begin_immediate(conn: &Connection) -> rusqlite::Result<Transaction<'_>> {
+    Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
 }
 
 /// Returns the conventional first-run collection root at `~/.quaid/vault`.

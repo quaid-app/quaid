@@ -722,8 +722,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::commands::get::get_page;
     use crate::core::db;
+    use crate::core::pages::get_page;
 
     fn open_test_db() -> Connection {
         db::open(":memory:").unwrap()

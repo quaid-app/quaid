@@ -32,6 +32,9 @@ use std::time::Duration;
 
 use super::socket::{authorize_server_peer, peer_credentials_for_stream};
 use super::{IpcRequest, IpcResponse};
+// `put` still lives in the CLI layer; relocating the write path into core is the
+// deferred `core::pages::write_page` unification (review §16, steps 2/3) and
+// overlaps with the unmerged write-path stack.
 use crate::commands::put;
 use crate::core::vault_sync::VaultSyncError;
 

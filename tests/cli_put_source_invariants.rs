@@ -138,7 +138,7 @@ fn rename_before_commit_source_keeps_fd_relative_ordering() {
         "fs_safety::open_root_fd(Path::new(&collection.root_path))",
         "fs_safety::walk_to_parent_create_dirs(&root_fd, &relative_path_buf)",
         "vault_sync::check_fs_precondition_with_parent_fd(",
-        "let tx = match db.unchecked_transaction()",
+        "let tx = match crate::core::db::begin_immediate(db)",
         "let staged = match stage_page_record(&tx, prepared, expected_version)",
         "create_recovery_sentinel(",
         "create_tempfile(&parent_fd, &temp_name, raw_bytes)",

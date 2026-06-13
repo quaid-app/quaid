@@ -769,7 +769,11 @@ fn persist_page_record(
     file_stat: Option<&file_state::FileStat>,
     expected_version: Option<i64>,
 ) -> Result<PutOutcome, vault_sync::VaultSyncError> {
-    let tx = db.unchecked_transaction()?;
+    // BEGIN IMMEDIATE so the reserved write lock is taken at txn start and the
+    // 5s busy_timeout covers cross-process contention, rather than risking a
+    // transient SQLITE_BUSY from inside an already-open deferred transaction.
+    // (VaultSyncError: From<rusqlite::Error> converts the begin error via `?`.)
+    let tx = crate::core::db::begin_immediate(db)?;
     let staged = stage_page_record(&tx, prepared, expected_version)?;
     commit_staged_page_record(tx, prepared, staged, raw_bytes, relative_path, file_stat)
         .map_err(Into::into)
@@ -854,7 +858,11 @@ fn persist_with_vault_write(
         &relative_path_buf,
         &parent_fd,
     )?;
-    let tx = match db.unchecked_transaction() {
+    // BEGIN IMMEDIATE so the reserved write lock is taken at txn start and the
+    // 5s busy_timeout covers cross-process contention, rather than risking a
+    // transient SQLITE_BUSY from inside an already-open deferred transaction.
+    // Converge with db::with_immediate_transaction once PR #230 lands.
+    let tx = match crate::core::db::begin_immediate(db) {
         Ok(tx) => tx,
         Err(error) => return Err(error.into()),
     };

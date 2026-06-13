@@ -5,9 +5,10 @@
 //! binding to an arbitrary row whenever the same slug existed in more than one
 //! namespace (issue #212). This module is the single place where namespace
 //! resolution semantics are decided; every production lookup that turns a
-//! `(collection, slug)` pair into a page row id MUST go through [`resolve`] or
-//! [`resolve_optional`]. A source-audit test (`tests/namespace_source_audit.rs`)
-//! enforces this.
+//! `(collection, slug)` pair into a page row id MUST go through
+//! [`resolve`](crate::core::pages::resolve) or
+//! [`resolve_optional`](crate::core::pages::resolve_optional).
+//! A source-audit test (`tests/namespace_source_audit.rs`) enforces this.
 //!
 //! Resolution semantics, ported from the documented global-fallback behaviour
 //! of `commands::get::get_page_by_key_with_namespace`:

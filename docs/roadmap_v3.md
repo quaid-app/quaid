@@ -241,6 +241,36 @@ This table is now only for **remaining work** after the shipped phases above.
 
 ---
 
+## Roadmap feasibility verdicts (#73, #76, #136, #167, #173)
+
+Five open issues previously had no review coverage and no feasibility signal, so
+the team could not tell cheap extensions from architecture changes. The verdicts
+below record where each one actually sits and — critically — the **blocking
+primitive** for each, so that a future change touching that primitive re-triggers
+this review. Evidence file:line references are accurate as of commit `92b9018`
+and will drift; treat them as starting points, not a permanent index.
+
+| Issue | Verdict | Blocking primitive (re-trigger review when this changes) |
+|-------|---------|----------------------------------------------------------|
+| **#73** Minion queue / async jobs | **Mostly already built.** Two SQLite-backed queues already exist with lease-expiry recovery, retry caps, and status polling: `extraction_queue` (`src/core/conversation/queue.rs`) and `embedding_jobs` (`src/schema.sql:374-392`), both drained by the daemon. Generalize them into **one `jobs` table** rather than building a third queue. | No generic `jobs` table. Today payload columns are hardcoded and `trigger_kind` is `CHECK`-constrained (`src/schema.sql:401`); there is no `quaid jobs` CLI or MCP job surface (`src/mcp/server.rs` exposes none). |
+| **#76** REFRAG-style context compression | **Infeasible as written.** Quaid returns *text* over MCP to closed-decoder clients, so REFRAG's chunk→dense-embedding splicing has nowhere to land — the decoder is not ours. Fold into the rerank change as **extractive compression** (already specced and #76 explicitly deferred in `openspec/changes/retrieval-quality-rerank/proposal.md`). | Closed-decoder MCP boundary (no hidden-state handoff). The viable form is the `extractive-rerank` capability in the rerank proposal. |
+| **#167** Image-to-memory | **Blocked.** Today the vault watcher ignores non-markdown files (`src/core/vault_sync/watcher.rs`); companion markdown indexes, images do not. The proposed "skill intercepts via vault watcher event" hook **does not exist** — skills are prose, not daemon plugins. Needs **#73 first** (generalized queue) or explicit agent-driven triggering. | No watcher→jobs ingest hook for non-md files. Depends on #73's generalized `jobs` queue. |
+| **#136** Active memory enrichment | **Heaviest lift.** Entity extraction is regex-only, 5 ms-budgeted, and deliberately writes **no `links` rows** (`src/core/entities.rs`); cosine-gated supersede exists only inside the conversation path (`src/core/conversation/supersede.rs`). The "new content about X updates existing memories about X" loop has nothing to stand on. | No entity→pages index and no ingest fan-out. Also depends on durable entity edges (#107/#72) and on #73 for background propagation. |
+| **#173** git-sync | **Mostly feasible, but spec the gaps first.** `.git/**` is builtin-ignored (`src/core/ignore_patterns.rs:30`), the reconciler absorbs external bulk diffs with sha256/inode rename detection, and page identity travels in `quaid_id` frontmatter (`src/core/page_uuid.rs`). **Two real gaps:** (1) DB-only state — programmatic links, `raw_data`, contradictions, and gaps — never travels via git; (2) `raw_imports` byte-exact restore (`src/core/raw_imports.rs`) is **per-machine**, so `collection restore` over a checkout diverges from git HEAD. `collection sync` also refuses while a daemon owns the collection. Spec the DB-only-state and restore-vs-checkout semantics **before** building any `quaid sync`. | DB-only state has no git-travelling representation; `raw_imports` restore is per-machine. Daemon-owns-collection refusal (`src/commands/collection.rs`). Duplicate-uuid halt (Area 6) must be fixed first. |
+
+**Sequencing implication.** Do **#73 first** — it unlocks #167's ingest trigger and #136's background propagation. **Fold #76 into the rerank change** (close it as "extractive compression"). **Spec #173's DB-only-state and restore-vs-checkout semantics** before any `quaid sync` command lands.
+
+Next concrete steps (not yet done):
+1. Propose a `jobs` table generalizing `queue.rs` lease semantics (`job_type` + JSON payload) with a `quaid jobs` / MCP status surface. The `jobs` proposal inherits `queue.rs` lease/retry tests as its acceptance template.
+2. Close #76 as "extractive compression," referencing the rerank spec.
+3. Draft #173 design covering daemon-running vs stopped pull paths and conflict-marker quarantine.
+
+> Verdict bias caveat: these verdicts can bias toward the current architecture.
+> The per-issue *blocking primitive* column is the mitigation — when a listed
+> primitive changes, the corresponding verdict must be re-reviewed.
+
+---
+
 ## Related Resources
 
 - Roadmap page on docs site: quaid.app/contributing/roadmap/

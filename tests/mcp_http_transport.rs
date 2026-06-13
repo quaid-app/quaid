@@ -12,8 +12,8 @@ use std::sync::{
 };
 
 use quaid::mcp::http::{
-    bind_with_token_guard, run_http, HttpConfig, HttpConfigError, DEFAULT_HTTP_BIND,
-    DEFAULT_HTTP_PORT,
+    bind_with_token_guard, is_loopback_host, run_http, validate_loopback_request_head, HttpConfig,
+    HttpConfigError, DEFAULT_HTTP_BIND, DEFAULT_HTTP_PORT,
 };
 
 #[test]
@@ -89,4 +89,95 @@ async fn run_http_rejects_invalid_config_before_opening_database() {
         Some(HttpConfigError::LoopbackUntrustedNoToken)
     ));
     assert!(!opened.load(Ordering::SeqCst));
+}
+
+// ── Security hardening: Origin/Host validation (DNS-rebinding) ─────
+
+fn head_with(headers: &[&str]) -> String {
+    let mut head = String::from("GET /sse HTTP/1.1\r\n");
+    for header in headers {
+        head.push_str(header);
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
+    head
+}
+
+#[test]
+fn request_with_loopback_host_and_no_origin_is_accepted() {
+    let head = head_with(&["Host: 127.0.0.1:3112"]);
+    assert!(validate_loopback_request_head(&head).is_ok());
+}
+
+#[test]
+fn request_with_localhost_host_is_accepted() {
+    assert!(validate_loopback_request_head(&head_with(&["Host: localhost:3112"])).is_ok());
+    assert!(validate_loopback_request_head(&head_with(&["Host: [::1]:3112"])).is_ok());
+}
+
+#[test]
+fn request_with_loopback_origin_is_accepted() {
+    let head = head_with(&[
+        "Host: 127.0.0.1:3112",
+        "Origin: http://127.0.0.1:3112",
+        "Referer: http://localhost:3112/app",
+    ]);
+    assert!(validate_loopback_request_head(&head).is_ok());
+}
+
+#[test]
+fn request_with_non_loopback_host_is_rejected() {
+    // The hallmark of DNS-rebinding: a rebound hostname still arrives in Host.
+    let head = head_with(&["Host: attacker.example.com"]);
+    let error = validate_loopback_request_head(&head).unwrap_err();
+    assert!(error.contains("Host"), "error={error}");
+}
+
+#[test]
+fn request_with_non_loopback_origin_is_rejected() {
+    let head = head_with(&["Host: 127.0.0.1:3112", "Origin: http://evil.example.com"]);
+    let error = validate_loopback_request_head(&head).unwrap_err();
+    assert!(error.contains("Origin"), "error={error}");
+}
+
+#[test]
+fn request_with_non_loopback_referer_is_rejected() {
+    let head = head_with(&[
+        "Host: 127.0.0.1:3112",
+        "Referer: https://evil.example.com/page",
+    ]);
+    let error = validate_loopback_request_head(&head).unwrap_err();
+    assert!(error.contains("Referer"), "error={error}");
+}
+
+#[test]
+fn request_missing_host_header_is_rejected() {
+    let head = head_with(&["Origin: http://127.0.0.1:3112"]);
+    assert!(validate_loopback_request_head(&head).is_err());
+}
+
+#[test]
+fn origin_with_userinfo_smuggling_a_loopback_label_is_rejected() {
+    let head = head_with(&[
+        "Host: 127.0.0.1:3112",
+        "Origin: http://127.0.0.1@evil.example.com",
+    ]);
+    assert!(validate_loopback_request_head(&head).is_err());
+}
+
+#[test]
+fn is_loopback_host_classifies_common_values() {
+    assert!(is_loopback_host("127.0.0.1"));
+    assert!(is_loopback_host("127.0.0.1:3112"));
+    assert!(is_loopback_host("127.0.0.5"));
+    assert!(is_loopback_host("localhost"));
+    assert!(is_loopback_host("localhost:8080"));
+    assert!(is_loopback_host("[::1]"));
+    assert!(is_loopback_host("[::1]:3112"));
+    assert!(is_loopback_host("::1"));
+
+    assert!(!is_loopback_host("0.0.0.0"));
+    assert!(!is_loopback_host("10.0.0.5"));
+    assert!(!is_loopback_host("attacker.example.com"));
+    assert!(!is_loopback_host("evil.localhost.attacker.com"));
 }

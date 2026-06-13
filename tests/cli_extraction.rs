@@ -17,7 +17,10 @@ use std::process::{Command, Output};
 use quaid::core::{
     conversation::format,
     db,
-    types::{ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole},
+    types::{
+        ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole,
+        CONVERSATION_FORMAT_VERSION,
+    },
 };
 use rusqlite::{params, Connection};
 
@@ -91,6 +94,7 @@ fn write_conversation_file(
     let file = ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_string(),
+            format_version: CONVERSATION_FORMAT_VERSION,
             session_id: session_id.to_string(),
             date: relative_path
                 .split('/')
@@ -311,8 +315,13 @@ impl MockModelServer {
                     continue;
                 }
 
-                let prefix = format!("/{repo_id}/resolve/main/");
-                if let Some(file_name) = path.strip_prefix(&prefix) {
+                // Accept any revision segment: the hardened download policy
+                // pins custom models to an explicit revision instead of main.
+                let prefix = format!("/{repo_id}/resolve/");
+                if let Some(file_name) = path
+                    .strip_prefix(&prefix)
+                    .and_then(|rest| rest.split_once('/').map(|(_, file)| file))
+                {
                     if let Some(file) = files.get(file_name) {
                         write_response(
                             &mut stream,
@@ -461,7 +470,17 @@ fn extraction_enable_downloads_model_and_flips_flag_only_on_success() {
         ),
         ("QUAID_HF_BASE_URL".to_string(), server.base_url.clone()),
     ];
-    let output = run_quaid_with_env(&db_path, &["extraction", "enable"], &envs);
+    let output = run_quaid_with_env(
+        &db_path,
+        &[
+            "--allow-unverified-model",
+            "--model-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "extraction",
+            "enable",
+        ],
+        &envs,
+    );
     assert!(
         output.status.success(),
         "enable failed: stdout={}\nstderr={}",
@@ -510,7 +529,17 @@ fn extraction_enable_leaves_flag_false_when_integrity_check_fails() {
         ),
         ("QUAID_HF_BASE_URL".to_string(), server.base_url.clone()),
     ];
-    let output = run_quaid_with_env(&db_path, &["extraction", "enable"], &envs);
+    let output = run_quaid_with_env(
+        &db_path,
+        &[
+            "--allow-unverified-model",
+            "--model-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "extraction",
+            "enable",
+        ],
+        &envs,
+    );
     assert!(!output.status.success(), "enable should fail on bad ETag");
 
     let _env = EnvGuard::set_all(&[("QUAID_MODEL_CACHE_DIR", cache_root.display().to_string())]);
@@ -555,7 +584,18 @@ fn model_pull_caches_model_without_flipping_extraction_flag() {
         ),
         ("QUAID_HF_BASE_URL".to_string(), server.base_url.clone()),
     ];
-    let output = run_quaid_with_env(&db_path, &["model", "pull", alias], &envs);
+    let output = run_quaid_with_env(
+        &db_path,
+        &[
+            "--allow-unverified-model",
+            "--model-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "model",
+            "pull",
+            alias,
+        ],
+        &envs,
+    );
     assert!(
         output.status.success(),
         "model pull failed: stdout={}\nstderr={}",

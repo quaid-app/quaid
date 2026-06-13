@@ -256,12 +256,33 @@ impl SearchMergeStrategy {
 
 // ── Conversation ────────────────────────────────────────────────
 
+/// Current on-disk conversation format version. Version 1 (legacy)
+/// wrote turn content verbatim, so pasted turn-boundary markers or
+/// metadata fences could forge structure on re-parse. Version 2
+/// escapes those markers inside turn content at render time and
+/// decodes them at parse time; files without a `format_version`
+/// frontmatter key are read as legacy version 1.
+pub const CONVERSATION_FORMAT_VERSION: i64 = 2;
+
+/// Legacy conversation format version assumed for files (and
+/// serialized snapshots) that predate the `format_version` marker.
+pub const LEGACY_CONVERSATION_FORMAT_VERSION: i64 = 1;
+
+fn legacy_conversation_format_version() -> i64 {
+    LEGACY_CONVERSATION_FORMAT_VERSION
+}
+
 /// Frontmatter block at the top of an on-disk conversation file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationFrontmatter {
     /// File-kind marker, always `conversation` for these files.
     #[serde(rename = "type")]
     pub file_type: String,
+    /// On-disk format version this file was written at. Governs
+    /// whether turn content uses version-2 marker escaping; absent in
+    /// legacy files and legacy serialized snapshots (treated as 1).
+    #[serde(default = "legacy_conversation_format_version")]
+    pub format_version: i64,
     /// Stable session identifier shared by every turn in the file.
     pub session_id: String,
     /// Calendar date the session was filed under, in `YYYY-MM-DD` form.
@@ -820,6 +841,7 @@ mod tests {
         string_frontmatter, ActionItemState, ConversationFile, ConversationFrontmatter,
         ConversationStatus, ExtractionJob, ExtractionJobStatus, ExtractionResponse,
         ExtractionTriggerKind, Page, PreferenceStrength, RawFact, Turn, TurnRole,
+        CONVERSATION_FORMAT_VERSION,
     };
     use serde_json::json;
 
@@ -940,6 +962,7 @@ mod tests {
         let file = ConversationFile {
             frontmatter: ConversationFrontmatter {
                 file_type: "conversation".to_string(),
+                format_version: CONVERSATION_FORMAT_VERSION,
                 session_id: "s1".to_string(),
                 date: "2026-05-03".to_string(),
                 started_at: "2026-05-03T09:14:22Z".to_string(),

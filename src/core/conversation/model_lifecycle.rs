@@ -605,6 +605,33 @@ pub enum ModelLifecycleError {
     #[error("could not resolve a model cache directory")]
     CacheRootUnavailable,
 
+    /// A custom (non-curated) model download was requested without an
+    /// explicit revision pin and unverified-download opt-in. Quaid never
+    /// silently fetches the mutable `main` revision of an unpinned repo.
+    #[error(
+        "refusing to download unpinned model `{alias}`: custom models have no curated \
+         SHA/revision pin, and Quaid will not silently fetch the mutable `main` revision. \
+         Re-run with --allow-unverified-model and --model-revision <commit-sha> to pin the \
+         download explicitly."
+    )]
+    UnpinnedModelRefused {
+        /// Alias or repo id of the unpinned model.
+        alias: String,
+    },
+
+    /// A revision override was supplied for a curated alias that already
+    /// carries a pinned revision; the pin cannot be overridden.
+    #[error(
+        "model `{alias}` is a curated alias already pinned to revision {pinned}; \
+         --model-revision/--allow-unverified-model only apply to custom model ids"
+    )]
+    CuratedRevisionOverride {
+        /// Curated alias the caller tried to re-pin.
+        alias: String,
+        /// The existing curated revision pin.
+        pinned: String,
+    },
+
     /// A network or filesystem step of the download pipeline failed.
     #[error("download failed for `{alias}`: {message}")]
     Download {
@@ -1468,14 +1495,30 @@ pub fn download_model(
     alias: &str,
     progress: &mut impl ProgressReporter,
 ) -> Result<PathBuf, ModelLifecycleError> {
+    download_model_pinned(alias, None, progress)
+}
+
+/// Variant of [`download_model`] that lets an operator pin a custom
+/// (non-curated) model to an explicit HuggingFace revision. Curated
+/// aliases refuse the override (their pin is authoritative); custom
+/// models *require* it — an unpinned custom download is refused with
+/// [`ModelLifecycleError::UnpinnedModelRefused`] before any network
+/// I/O rather than silently falling back to the mutable `main`
+/// revision.
+pub fn download_model_pinned(
+    alias: &str,
+    revision_override: Option<&str>,
+    progress: &mut impl ProgressReporter,
+) -> Result<PathBuf, ModelLifecycleError> {
     #[cfg(feature = "online-model")]
     {
-        download_model_online(alias, progress)
+        download_model_online(alias, revision_override, progress)
     }
 
     #[cfg(not(feature = "online-model"))]
     {
         let _ = alias;
+        let _ = revision_override;
         let _ = progress;
         Err(ModelLifecycleError::DownloadsUnsupported)
     }
@@ -1484,9 +1527,19 @@ pub fn download_model(
 #[cfg(feature = "online-model")]
 fn download_model_online(
     alias: &str,
+    revision_override: Option<&str>,
     progress: &mut impl ProgressReporter,
 ) -> Result<PathBuf, ModelLifecycleError> {
-    let alias = resolve_model_alias(alias)?;
+    let mut alias = resolve_model_alias(alias)?;
+    if let Some(revision_override) = revision_override {
+        if let Some(pinned) = alias.revision.as_deref() {
+            return Err(ModelLifecycleError::CuratedRevisionOverride {
+                alias: alias.requested_alias,
+                pinned: pinned.to_owned(),
+            });
+        }
+        alias.revision = Some(revision_override.to_owned());
+    }
     let cache_dir = cache_dir_for_resolved_alias(&alias)?;
 
     if cache_dir.is_dir() {
@@ -1498,6 +1551,15 @@ fn download_model_online(
             cache_dir: cache_dir.display().to_string(),
             message: format!("failed to remove stale cache before reinstall: {error}"),
         })?;
+    }
+
+    // Refuse unpinned custom downloads before any network I/O: with no
+    // curated pin and no operator-supplied --model-revision, the only
+    // fetchable revision would be the mutable `main`.
+    if alias.revision.is_none() {
+        return Err(ModelLifecycleError::UnpinnedModelRefused {
+            alias: alias.requested_alias,
+        });
     }
 
     let cache_root = cache_dir
@@ -1707,7 +1769,12 @@ fn download_artifact(
         "{}/{}/resolve/{}/{}",
         huggingface_base_url().trim_end_matches('/'),
         alias.repo_id,
-        alias.revision.as_deref().unwrap_or("main"),
+        alias
+            .revision
+            .as_deref()
+            .ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
+                alias: alias.requested_alias.clone(),
+            })?,
         relative_path
     );
     let mut response = client
@@ -1809,7 +1876,12 @@ fn download_source_pinned_artifact(
         "{}/{}/resolve/{}/{}",
         huggingface_base_url().trim_end_matches('/'),
         alias.repo_id,
-        alias.revision.as_deref().unwrap_or("main"),
+        alias
+            .revision
+            .as_deref()
+            .ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
+                alias: alias.requested_alias.clone(),
+            })?,
         relative_path
     );
     let mut response = client
@@ -2344,7 +2416,11 @@ fn validate_manifest_contents(
             ),
         });
     }
-    if manifest.revision != alias.revision {
+    // Curated aliases carry an authoritative revision pin that the cache
+    // must match exactly. Custom models resolve with no pin (`None`), and
+    // their manifest records whatever revision the operator explicitly
+    // pinned at pull time — accept it rather than flagging the cache.
+    if alias.revision.is_some() && manifest.revision != alias.revision {
         return Err(ModelLifecycleError::CacheInvalid {
             cache_dir: cache_dir.display().to_string(),
             message: format!(

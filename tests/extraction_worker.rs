@@ -23,6 +23,7 @@ use quaid::core::db;
 use quaid::core::types::{
     ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
     ExtractionJobStatus, ExtractionResponse, ExtractionTriggerKind, Turn, TurnRole, WindowedTurns,
+    CONVERSATION_FORMAT_VERSION,
 };
 use rusqlite::Connection;
 
@@ -595,6 +596,7 @@ fn conversation_with_cursor(session_id: &str, cursor: i64, last: i64) -> Convers
     ConversationFile {
         frontmatter: ConversationFrontmatter {
             file_type: "conversation".to_string(),
+            format_version: CONVERSATION_FORMAT_VERSION,
             session_id: session_id.to_string(),
             date: "2026-05-03".to_string(),
             started_at: "2026-05-03T10:00:00Z".to_string(),

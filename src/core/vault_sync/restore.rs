@@ -34,6 +34,8 @@ use uuid::Uuid;
 
 use crate::core::collections::{self, Collection, CollectionState};
 #[cfg(unix)]
+use crate::core::fs_safety;
+#[cfg(unix)]
 use crate::core::reconciler::{
     run_restore_remap_safety_pipeline_without_mount_check, FullHashReconcileAuthorization,
     RestoreRemapOperation, RestoreRemapSafetyRequest,
@@ -803,8 +805,24 @@ fn remove_empty_target_then_rename(
     if target_path.exists() {
         fs::remove_dir(target_path)?;
     }
+    // Durable-rename discipline (mirrors quarantine restore): the staged
+    // tree's directories and file bytes were fsynced as they were
+    // materialized, so the remaining ordering requirement is that the
+    // rename itself reaches stable storage before restore is reported
+    // complete — fsync the shared parent directory after the rename.
     fs::rename(staging_path, target_path)?;
+    #[cfg(unix)]
+    if let Some(parent) = target_path.parent() {
+        fsync_dir(parent)?;
+    }
     Ok(())
+}
+
+/// Open a directory and fsync it so directory-entry mutations (create,
+/// rename, unlink) inside it are durable before the caller proceeds.
+#[cfg(unix)]
+fn fsync_dir(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
 }
 
 fn staging_path_for_target(target_path: &Path) -> PathBuf {
@@ -856,17 +874,154 @@ pub(super) fn materialize_collection_to_path(
                 collection.name, slug, page_id
             ),
         })?;
-        let relative_path = infer_restore_relative_path(
-            collection,
+        let relative_path = validated_restore_relative_path(
+            &collection.name,
             &slug,
-            raw_path.as_deref(),
-            relative_path.as_deref(),
-        );
-        let output_path = path.join(&relative_path);
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent)?;
+            infer_restore_relative_path(
+                collection,
+                &slug,
+                raw_path.as_deref(),
+                relative_path.as_deref(),
+            ),
+        )?;
+        write_restored_file(path, &relative_path, &collection.name, &slug, &raw_bytes)?;
+    }
+    #[cfg(unix)]
+    fsync_dir_tree(path)?;
+    Ok(())
+}
+
+/// Validate a restore output path inferred from DB-sourced values
+/// (`file_state.relative_path`, `raw_imports.file_path`, or the page
+/// slug) before any filesystem write. A tampered or corrupt row must
+/// never be able to direct restore bytes outside the staging tree, so
+/// absolute paths, `..` traversal, empty segments, and NUL bytes are
+/// all refused.
+pub fn validated_restore_relative_path(
+    collection_name: &str,
+    slug: &str,
+    relative_path: PathBuf,
+) -> Result<PathBuf, VaultSyncError> {
+    let refuse = |reason: String| VaultSyncError::InvariantViolation {
+        message: format!(
+            "collection={collection_name} slug={slug} refusing restore path {}: {reason}",
+            relative_path.display()
+        ),
+    };
+    let as_str = relative_path
+        .to_str()
+        .ok_or_else(|| refuse("path is not valid UTF-8".to_owned()))?;
+    collections::validate_relative_path(as_str).map_err(|error| refuse(error.to_string()))?;
+    // validate_relative_path inspects '/'-separated segments; also walk
+    // platform-native components so Windows-style separators or prefixes
+    // cannot smuggle traversal past the string-level check.
+    if relative_path
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(refuse(
+            "path contains non-normal components (absolute, `..`, or `.`)".to_owned(),
+        ));
+    }
+    Ok(relative_path)
+}
+
+/// Write one restored file under `root` using the fd-pinned
+/// `fs_safety` discipline: the parent directory is reached via
+/// `openat(O_DIRECTORY | O_NOFOLLOW)` walks (no symlink ancestors),
+/// the file is created with `O_CREAT | O_EXCL | O_NOFOLLOW`, and both
+/// the file bytes and the parent directory entry are fsynced before
+/// returning — mirroring the quarantine-restore durability chain.
+#[cfg(unix)]
+fn write_restored_file(
+    root: &Path,
+    relative_path: &Path,
+    collection_name: &str,
+    slug: &str,
+    raw_bytes: &[u8],
+) -> Result<(), VaultSyncError> {
+    use std::io::Write;
+
+    use rustix::fd::AsFd;
+    use rustix::fs::fsync;
+
+    let root_fd = fs_safety::open_root_fd(root)?;
+    let parent_fd = fs_safety::walk_to_parent_create_dirs(&root_fd, relative_path)?;
+    let file_name = relative_path
+        .file_name()
+        .ok_or_else(|| VaultSyncError::InvariantViolation {
+            message: format!(
+                "collection={collection_name} slug={slug} restore path {} has no terminal component",
+                relative_path.display()
+            ),
+        })?;
+    let created = fs_safety::openat_create_excl(&parent_fd, Path::new(file_name)).map_err(
+        |error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => VaultSyncError::InvariantViolation {
+                message: format!(
+                    "collection={collection_name} slug={slug} restore path {} already materialized by another page",
+                    relative_path.display()
+                ),
+            },
+            _ => VaultSyncError::from(error),
+        },
+    )?;
+    let mut file = std::fs::File::from(created);
+    file.write_all(raw_bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fsync(parent_fd.as_fd())
+        .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
+    Ok(())
+}
+
+/// Non-Unix fallback: the path has already been validated against
+/// traversal, so create the parent directories and refuse to replace
+/// an existing entry via `create_new`. The fd-pinned symlink defenses
+/// require `openat` semantics that Quaid only implements on Unix.
+#[cfg(not(unix))]
+fn write_restored_file(
+    root: &Path,
+    relative_path: &Path,
+    collection_name: &str,
+    slug: &str,
+    raw_bytes: &[u8],
+) -> Result<(), VaultSyncError> {
+    use std::io::Write;
+
+    let output_path = root.join(relative_path);
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output_path)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => VaultSyncError::InvariantViolation {
+                message: format!(
+                    "collection={collection_name} slug={slug} restore path {} already materialized by another page",
+                    relative_path.display()
+                ),
+            },
+            _ => VaultSyncError::from(error),
+        })?;
+    file.write_all(raw_bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Recursively fsync `root` and every directory below it so all the
+/// directory entries created during materialization are durable before
+/// the staging tree is renamed onto the restore target.
+#[cfg(unix)]
+fn fsync_dir_tree(root: &Path) -> Result<(), VaultSyncError> {
+    fsync_dir(root)?;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            fsync_dir_tree(&entry.path())?;
         }
-        fs::write(output_path, raw_bytes)?;
     }
     Ok(())
 }

@@ -29,10 +29,19 @@ use crate::core::types::{
 };
 use crate::core::{collections, namespace};
 
+pub use crate::core::types::{CONVERSATION_FORMAT_VERSION, LEGACY_CONVERSATION_FORMAT_VERSION};
+
 const HEADING_SEPARATOR: &str = " · ";
 const METADATA_FENCE_OPEN: &str = "```json turn-metadata";
 pub(crate) const TURN_BOUNDARY: &str = "<!-- quaid-turn-boundary -->";
 const LEGACY_TURN_BOUNDARY: &str = "---";
+/// Line prefix used by format version 2 to escape content lines that
+/// would otherwise be read as structural markers (the turn boundary or
+/// the metadata fence opener), plus lines that already start with the
+/// prefix itself so decoding strips exactly one layer. This keeps
+/// `render(parse(x)) == x` and prevents pasted markers from forging
+/// turn boundaries or metadata on re-parse.
+const ESCAPE_PREFIX: &str = "<!-- quaid-escaped -->";
 
 /// Errors surfaced by conversation parse/render and path helpers.
 #[derive(Debug, Error)]
@@ -139,6 +148,7 @@ pub fn parse(path: &Path) -> Result<ConversationFile, ConversationFormatError> {
 pub fn parse_str(raw: &str) -> Result<ConversationFile, ConversationFormatError> {
     let lines = normalize_lines(raw);
     let (frontmatter, mut index) = parse_frontmatter(&lines)?;
+    let format_version = frontmatter.format_version;
     let mut turns = Vec::new();
 
     while index < lines.len() {
@@ -148,7 +158,7 @@ pub fn parse_str(raw: &str) -> Result<ConversationFile, ConversationFormatError>
         if index >= lines.len() {
             break;
         }
-        let (turn, next_index) = parse_turn_block(&lines, index)?;
+        let (turn, next_index) = parse_turn_block(&lines, index, format_version)?;
         turns.push(turn);
         index = next_index;
     }
@@ -163,6 +173,11 @@ pub fn render(file: &ConversationFile) -> String {
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str("type: conversation\n");
+    if file.frontmatter.format_version >= CONVERSATION_FORMAT_VERSION {
+        out.push_str("format_version: ");
+        out.push_str(&file.frontmatter.format_version.to_string());
+        out.push('\n');
+    }
     out.push_str("session_id: ");
     out.push_str(&file.frontmatter.session_id);
     out.push('\n');
@@ -201,7 +216,7 @@ pub fn render(file: &ConversationFile) -> String {
             out.push_str(TURN_BOUNDARY);
             out.push_str("\n\n");
         }
-        out.push_str(&render_turn_block(turn));
+        out.push_str(&render_turn_block(turn, file.frontmatter.format_version));
     }
 
     out
@@ -209,7 +224,10 @@ pub fn render(file: &ConversationFile) -> String {
 
 /// Render a single [`Turn`] as the heading + body + optional
 /// metadata fence used by both new-file writes and in-place appends.
-pub fn render_turn_block(turn: &Turn) -> String {
+/// `format_version` must match the day-file's frontmatter version:
+/// version 2 escapes structural markers inside content, legacy
+/// version 1 writes content verbatim.
+pub fn render_turn_block(turn: &Turn, format_version: i64) -> String {
     let mut out = String::new();
     out.push_str("## Turn ");
     out.push_str(&turn.ordinal.to_string());
@@ -218,7 +236,11 @@ pub fn render_turn_block(turn: &Turn) -> String {
     out.push_str(HEADING_SEPARATOR);
     out.push_str(&turn.timestamp);
     out.push_str("\n\n");
-    out.push_str(&turn.content);
+    if format_version >= CONVERSATION_FORMAT_VERSION {
+        out.push_str(&escape_turn_content(&turn.content));
+    } else {
+        out.push_str(&turn.content);
+    }
     if !turn.content.ends_with('\n') {
         out.push('\n');
     }
@@ -230,6 +252,35 @@ pub fn render_turn_block(turn: &Turn) -> String {
         out.push_str("\n```\n");
     }
     out
+}
+
+/// Returns `true` when a content line would be (mis)read as a
+/// structural marker by the parser and therefore must be escaped at
+/// render time: a turn-boundary line, a metadata fence opener, or a
+/// line already carrying the escape prefix (escaped again so decoding
+/// strips exactly one layer).
+fn line_needs_escape(line: &str) -> bool {
+    line.trim_end() == TURN_BOUNDARY
+        || line.trim() == METADATA_FENCE_OPEN
+        || line.starts_with(ESCAPE_PREFIX)
+}
+
+fn escape_turn_content(content: &str) -> String {
+    content
+        .split('\n')
+        .map(|line| {
+            if line_needs_escape(line) {
+                format!("{ESCAPE_PREFIX}{line}")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn unescape_turn_content_line(line: &str) -> &str {
+    line.strip_prefix(ESCAPE_PREFIX).unwrap_or(line)
 }
 
 /// Build the vault-relative day-file path
@@ -357,6 +408,7 @@ fn parse_frontmatter(
 
     let mut index = 1;
     let mut file_type = None;
+    let mut format_version = None;
     let mut session_id = None;
     let mut date = None;
     let mut started_at = None;
@@ -379,6 +431,23 @@ fn parse_frontmatter(
         let value = value.trim().to_owned();
         match key.trim() {
             "type" => file_type = Some(value),
+            "format_version" => {
+                let parsed = value.parse::<i64>().map_err(|_| {
+                    ConversationFormatError::InvalidFrontmatter {
+                        message: format!("format_version must be an integer, found `{value}`"),
+                    }
+                })?;
+                if !(LEGACY_CONVERSATION_FORMAT_VERSION..=CONVERSATION_FORMAT_VERSION)
+                    .contains(&parsed)
+                {
+                    return Err(ConversationFormatError::InvalidFrontmatter {
+                        message: format!(
+                            "unsupported conversation format_version {parsed}; this build reads versions {LEGACY_CONVERSATION_FORMAT_VERSION} through {CONVERSATION_FORMAT_VERSION}"
+                        ),
+                    });
+                }
+                format_version = Some(parsed);
+            }
             "session_id" => session_id = Some(value),
             "date" => date = Some(value),
             "started_at" => started_at = Some(value),
@@ -429,6 +498,9 @@ fn parse_frontmatter(
     Ok((
         ConversationFrontmatter {
             file_type,
+            // Files without a `format_version` key are legacy version-1
+            // day-files and keep the verbatim-content read path.
+            format_version: format_version.unwrap_or(LEGACY_CONVERSATION_FORMAT_VERSION),
             session_id: session_id.ok_or_else(|| ConversationFormatError::InvalidFrontmatter {
                 message: "missing session_id".to_owned(),
             })?,
@@ -454,6 +526,7 @@ fn parse_frontmatter(
 fn parse_turn_block(
     lines: &[String],
     start: usize,
+    format_version: i64,
 ) -> Result<(Turn, usize), ConversationFormatError> {
     let header = lines[start].trim_end();
     let Some(header) = header.strip_prefix("## Turn ") else {
@@ -500,20 +573,34 @@ fn parse_turn_block(
     }
 
     let mut end = start + 1;
-    let mut code_fence: Option<CodeFence> = None;
-    while end < lines.len() {
-        let line = lines[end].trim_end();
-        if let Some(open_fence) = code_fence {
-            if code_fence_marker(line).is_some_and(|closing_fence| closing_fence.closes(open_fence))
-            {
-                code_fence = None;
+    if format_version >= CONVERSATION_FORMAT_VERSION {
+        // Version 2: content lines matching structural markers are
+        // escaped at render time, so every unescaped TURN_BOUNDARY line
+        // is a genuine boundary — no fence tracking or legacy `---`
+        // heuristics, which pasted content could otherwise forge.
+        while end < lines.len() {
+            if lines[end].trim_end() == TURN_BOUNDARY {
+                break;
             }
-        } else if let Some(open_fence) = code_fence_marker(line) {
-            code_fence = Some(open_fence);
-        } else if is_turn_boundary(lines, end) {
-            break;
+            end += 1;
         }
-        end += 1;
+    } else {
+        let mut code_fence: Option<CodeFence> = None;
+        while end < lines.len() {
+            let line = lines[end].trim_end();
+            if let Some(open_fence) = code_fence {
+                if code_fence_marker(line)
+                    .is_some_and(|closing_fence| closing_fence.closes(open_fence))
+                {
+                    code_fence = None;
+                }
+            } else if let Some(open_fence) = code_fence_marker(line) {
+                code_fence = Some(open_fence);
+            } else if is_turn_boundary(lines, end) {
+                break;
+            }
+            end += 1;
+        }
     }
 
     fn is_turn_boundary(lines: &[String], index: usize) -> bool {
@@ -541,7 +628,7 @@ fn parse_turn_block(
         block_lines.remove(0);
     }
 
-    let (content, metadata) = split_content_and_metadata(&block_lines, start + 2)?;
+    let (content, metadata) = split_content_and_metadata(&block_lines, start + 2, format_version)?;
     let next_index = if end < lines.len() { end + 1 } else { end };
 
     Ok((
@@ -585,6 +672,7 @@ fn code_fence_marker(line: &str) -> Option<CodeFence> {
 fn split_content_and_metadata(
     lines: &[String],
     base_line: usize,
+    format_version: i64,
 ) -> Result<(String, Option<JsonValue>), ConversationFormatError> {
     let metadata_end = lines.iter().rposition(|line| !line.trim().is_empty());
     let metadata_start = metadata_end
@@ -620,7 +708,17 @@ fn split_content_and_metadata(
         content_lines.pop();
     }
 
-    Ok((content_lines.join("\n"), metadata))
+    let content = if format_version >= CONVERSATION_FORMAT_VERSION {
+        content_lines
+            .iter()
+            .map(|line| unescape_turn_content_line(line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        content_lines.join("\n")
+    };
+
+    Ok((content, metadata))
 }
 
 fn normalize_lines(raw: &str) -> Vec<String> {
@@ -639,6 +737,7 @@ mod tests {
         ConversationFile {
             frontmatter: ConversationFrontmatter {
                 file_type: "conversation".to_owned(),
+                format_version: CONVERSATION_FORMAT_VERSION,
                 session_id: "session-1".to_owned(),
                 date: "2026-05-03".to_owned(),
                 started_at: "2026-05-03T09:14:22Z".to_owned(),

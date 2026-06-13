@@ -137,8 +137,13 @@ impl MockModelServer {
                     continue;
                 }
 
-                let prefix = format!("/{repo_id}/resolve/main/");
-                if let Some(file_name) = path.strip_prefix(&prefix) {
+                // Accept any revision segment: the hardened download policy
+                // pins custom models to an explicit revision instead of main.
+                let prefix = format!("/{repo_id}/resolve/");
+                if let Some(file_name) = path
+                    .strip_prefix(&prefix)
+                    .and_then(|rest| rest.split_once('/').map(|(_, file)| file))
+                {
                     if let Some(file) = files.get(file_name) {
                         write_response(
                             &mut stream,
@@ -354,7 +359,19 @@ fn extraction_enable_followed_by_turn_capture_and_local_cache_extraction_stays_o
         ),
     ]);
 
-    let enable = run_quaid_with_env(&db_path, &["extraction", "enable"], &[]);
+    // Custom (non-curated) model downloads now require an explicit pin plus
+    // the unverified-download opt-in (security hardening, review area 8).
+    let enable = run_quaid_with_env(
+        &db_path,
+        &[
+            "--allow-unverified-model",
+            "--model-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "extraction",
+            "enable",
+        ],
+        &[],
+    );
     assert!(
         enable.status.success(),
         "extraction enable failed: {}",

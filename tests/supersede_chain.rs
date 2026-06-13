@@ -169,6 +169,7 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
         &server
             .memory_get(MemoryGetInput {
                 slug: "facts/a".to_string(),
+                redact: None,
             })
             .unwrap(),
     ))
@@ -177,6 +178,7 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
         &server
             .memory_get(MemoryGetInput {
                 slug: "facts/c".to_string(),
+                redact: None,
             })
             .unwrap(),
     ))
@@ -228,6 +230,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 wing: None,
                 limit: None,
                 include_superseded: None,
+                redact: None,
             })
             .unwrap(),
     ))
@@ -241,6 +244,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 wing: None,
                 limit: None,
                 include_superseded: Some(true),
+                redact: None,
             })
             .unwrap(),
     ))
@@ -265,6 +269,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 limit: Some(10),
                 depth: None,
                 include_superseded: None,
+                redact: None,
             })
             .unwrap(),
     ))
@@ -279,6 +284,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 limit: Some(10),
                 depth: None,
                 include_superseded: Some(true),
+                redact: None,
             })
             .unwrap(),
     ))

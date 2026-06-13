@@ -462,7 +462,15 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('graph_expansion_max',          '50'),
     ('edge_weight_frontmatter',      '1.0'),
     ('edge_weight_entity_pattern',   '0.7'),
-    ('edge_weight_wikilink',         '0.5');
+    ('edge_weight_wikilink',         '0.5'),
+    -- Outbound secret scrubbing for the MCP read surface (issue #159 phase 1).
+    -- 'off' (default) => read payloads cross the wire byte-identical to today;
+    -- 'patterns' => deterministic regex/blocklist scrub at the serialization
+    -- chokepoint. FTS5/embeddings always index originals (outbound-only).
+    ('mcp.redact_outbound',          'off'),
+    -- Comma/newline-separated literal secrets to always scrub (e.g. an
+    -- internal codename). Empty by default.
+    ('mcp.redact_blocklist',         '');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

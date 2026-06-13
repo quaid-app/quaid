@@ -200,6 +200,7 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
                 wing: None,
                 limit: None,
                 include_superseded: None,
+                redact: None,
             })
             .unwrap(),
     ))
@@ -218,6 +219,7 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
                 wing: None,
                 limit: None,
                 include_superseded: Some(true),
+                redact: None,
             })
             .unwrap(),
     ))

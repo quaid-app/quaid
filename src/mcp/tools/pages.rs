@@ -22,7 +22,7 @@ use crate::mcp::errors::{
 use crate::mcp::server::{
     canonical_slug, canonicalize_page_for_mcp, page_id_for_resolved,
     resolve_memory_collection_filter_for_mcp, resolve_slug_for_mcp, MemoryGetInput,
-    MemoryListInput, MemoryPutInput, MemoryRawInput, QuaidServer,
+    MemoryListInput, MemoryPutInput, MemoryRawInput, MemoryRehydrateInput, QuaidServer,
 };
 use crate::mcp::validation::{validate_content, validate_slug, MAX_LIMIT, MAX_RAW_DATA_LEN};
 
@@ -40,6 +40,7 @@ impl QuaidServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
+        let redact_mode = self.resolve_redact_mode(&db, input.redact);
         let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
         let page = vault_sync::get_page_by_input(&db, &input.slug).map_err(map_vault_sync_error)?;
         let canonical_page = canonicalize_page_for_mcp(&page, &resolved);
@@ -71,6 +72,10 @@ impl QuaidServer {
             "superseded_by": successor_slug,
         }))
         .map_err(map_serialize_error)?;
+        // Outbound-only scrub: FTS5 and embeddings still index the originals;
+        // only this serialized payload (the bytes crossing the MCP wire) is
+        // masked. When the mode is Off the payload is returned byte-identical.
+        let json = self.apply_redaction(redact_mode, json);
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -313,6 +318,29 @@ impl QuaidServer {
 
         let row_id = db.last_insert_rowid();
         let result = serde_json::json!({ "id": row_id });
+        Ok(CallToolResult::success(vec![Content::text(
+            serialize_response(&result)?,
+        )]))
+    }
+
+    /// `memory_rehydrate` MCP tool: reverse this connection's outbound
+    /// redaction map, replacing `<EMAIL_1>`-style tokens with the original
+    /// values that were scrubbed earlier in the same session. The reversal
+    /// happens entirely locally — originals never leave the machine until
+    /// the agent chooses to act on the rehydrated text — so an agent can
+    /// round-trip a redacted read without losing the underlying secret.
+    /// Unknown tokens are passed through untouched.
+    #[tool(description = "Reverse outbound redaction tokens back to originals for this session")]
+    /// `memory_rehydrate` MCP tool: reverse this connection's outbound
+    /// redaction map, replacing `<EMAIL_1>`-style tokens with the original
+    /// values that were scrubbed earlier in the same session.
+    pub fn memory_rehydrate(
+        &self,
+        #[tool(aggr)] input: MemoryRehydrateInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let session = self.redaction().lock().unwrap_or_else(|e| e.into_inner());
+        let restored = session.rehydrate(&input.text);
+        let result = serde_json::json!({ "text": restored });
         Ok(CallToolResult::success(vec![Content::text(
             serialize_response(&result)?,
         )]))

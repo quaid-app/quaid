@@ -60,6 +60,9 @@ pub mod quarantine;
 pub mod raw_imports;
 /// Reconciliation of competing pages and revisions.
 pub mod reconciler;
+/// Outbound secret scrubbing for the MCP read surface (deterministic,
+/// pattern-based, opt-in via `mcp.redact_outbound`).
+pub mod redaction;
 /// Hybrid search composition that fuses FTS5, vector, and palace filters.
 pub mod search;
 /// Superseding-page semantics: redirect chains and freshness ordering.

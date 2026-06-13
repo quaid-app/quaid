@@ -150,6 +150,13 @@ pub fn dispatch_tool(server: &QuaidServer, tool: &str, params: Value) -> Result<
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
             server.memory_raw(input).map_err(|e| e.message.to_string())
         }
+        "memory_rehydrate" => {
+            let input: MemoryRehydrateInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_rehydrate(input)
+                .map_err(|e| e.message.to_string())
+        }
         _ => return Err(format!("unknown tool: {tool}")),
     };
 

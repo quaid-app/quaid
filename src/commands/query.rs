@@ -100,29 +100,36 @@ pub async fn run(
     Ok(())
 }
 
+/// Trim `results` to at most `limit` entries fitting `token_budget`.
+///
+/// Token accounting mirrors `core::progressive`: one token ≈ four characters
+/// of rendered output (`<slug>: <summary>` per line). Costs and the final
+/// truncation are both measured in characters (not bytes), so multibyte
+/// summaries are budgeted consistently and never split mid-character.
 fn budget_results(
     results: Vec<SearchResult>,
     limit: usize,
     token_budget: usize,
 ) -> Vec<SearchResult> {
-    let mut remaining = token_budget;
+    let mut remaining_chars = token_budget.saturating_mul(4);
     let mut budgeted = Vec::new();
 
     for result in results.into_iter().take(limit) {
-        let line_prefix = format!("{}: ", result.slug);
-        let full_line_len = line_prefix.len() + result.summary.len();
+        // "<slug>: " prefix
+        let prefix_chars = result.slug.chars().count() + 2;
+        let full_line_chars = prefix_chars + result.summary.chars().count();
 
-        if full_line_len <= remaining {
-            remaining = remaining.saturating_sub(full_line_len);
+        if full_line_chars <= remaining_chars {
+            remaining_chars -= full_line_chars;
             budgeted.push(result);
             continue;
         }
 
-        if remaining <= line_prefix.len() {
+        if remaining_chars <= prefix_chars {
             break;
         }
 
-        let summary_budget = remaining - line_prefix.len();
+        let summary_budget = remaining_chars - prefix_chars;
         let mut truncated = result;
         truncated.summary = truncated.summary.chars().take(summary_budget).collect();
         budgeted.push(truncated);
@@ -164,18 +171,32 @@ mod tests {
     #[test]
     fn budget_results_truncates_summary_to_fit_remaining_budget() {
         let results = vec![result("people/alice", "abcdefghijklmnopqrstuvwxyz")];
-        let prefix_len = "people/alice: ".len();
 
-        let budgeted = budget_results(results, 10, prefix_len + 5);
+        // 5 tokens = 20 chars; prefix "people/alice: " = 14 chars → 6 summary chars.
+        let budgeted = budget_results(results, 10, 5);
 
         assert_eq!(budgeted.len(), 1);
-        assert_eq!(budgeted[0].summary, "abcde");
+        assert_eq!(budgeted[0].summary, "abcdef");
+    }
+
+    #[test]
+    fn budget_results_counts_multibyte_summaries_in_chars_not_bytes() {
+        // 100 three-byte chars: a byte-based budget would overcount this
+        // summary threefold and a byte-based truncation could split a char.
+        let results = vec![result("people/alice", &"あ".repeat(100))];
+
+        // 10 tokens = 40 chars; prefix = 14 chars → 26 summary chars.
+        let budgeted = budget_results(results, 10, 10);
+
+        assert_eq!(budgeted.len(), 1);
+        assert_eq!(budgeted[0].summary.chars().count(), 26);
+        assert!(budgeted[0].summary.chars().all(|ch| ch == 'あ'));
     }
 
     #[test]
     fn budget_results_zero_budget_breaks_immediately() {
         let results = vec![result("people/alice", "anything")];
-        // prefix len ("people/alice: ") = 14, budget = 0 → 0 <= 14 → break
+        // prefix chars ("people/alice: ") = 14, budget = 0 → 0 <= 14 → break
         let budgeted = budget_results(results, 10, 0);
         assert!(budgeted.is_empty());
     }

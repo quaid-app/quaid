@@ -350,24 +350,22 @@ pub fn write_fact_in_context(
             })
         }
         Resolution::Supersede { prior_slug, .. } => {
-            let (slug, relative_path) = allocate_output_path(raw_fact, conn, context)?;
-            let markdown =
-                render_fact_markdown(raw_fact, context, &slug, Some(prior_slug.as_str()), None)?;
-            write_markdown(&context.root_path, &relative_path, &markdown)?;
+            let output =
+                allocate_output_path(raw_fact, conn, context, Some(prior_slug.as_str()), None)?;
+            persist_allocated_fact(&context.root_path, &output)?;
             Ok(FactWriteResult {
                 resolution: resolution.clone(),
-                slug: Some(slug),
-                relative_path: Some(path_to_slash(&relative_path)),
+                slug: Some(output.slug),
+                relative_path: Some(path_to_slash(&output.relative_path)),
             })
         }
         Resolution::Coexist => {
-            let (slug, relative_path) = allocate_output_path(raw_fact, conn, context)?;
-            let markdown = render_fact_markdown(raw_fact, context, &slug, None, None)?;
-            write_markdown(&context.root_path, &relative_path, &markdown)?;
+            let output = allocate_output_path(raw_fact, conn, context, None, None)?;
+            persist_allocated_fact(&context.root_path, &output)?;
             Ok(FactWriteResult {
                 resolution: resolution.clone(),
-                slug: Some(slug),
-                relative_path: Some(path_to_slash(&relative_path)),
+                slug: Some(output.slug),
+                relative_path: Some(path_to_slash(&output.relative_path)),
             })
         }
     }
@@ -409,22 +407,21 @@ pub fn force_supersede_fact_in_context(
     corrected_via: &str,
 ) -> Result<FactWriteResult, FactResolutionError> {
     with_immediate_transaction(conn, |conn| {
-        let (slug, relative_path) = allocate_output_path(raw_fact, conn, context)?;
-        let markdown = render_fact_markdown(
+        let output = allocate_output_path(
             raw_fact,
+            conn,
             context,
-            &slug,
             Some(prior_slug),
             Some(corrected_via),
         )?;
-        write_markdown(&context.root_path, &relative_path, &markdown)?;
+        persist_allocated_fact(&context.root_path, &output)?;
         Ok(FactWriteResult {
             resolution: Resolution::Supersede {
                 prior_slug: prior_slug.to_string(),
                 cosine: 1.0,
             },
-            slug: Some(slug),
-            relative_path: Some(path_to_slash(&relative_path)),
+            slug: Some(output.slug),
+            relative_path: Some(path_to_slash(&output.relative_path)),
         })
     })
 }
@@ -627,11 +624,30 @@ fn ensure_trustworthy_embedding_evidence(raw_fact: &RawFact) -> Result<(), FactR
     }
 }
 
+/// Output of [`allocate_output_path`]: the chosen slug, vault-relative
+/// path, and rendered markdown, plus whether the file still needs to be
+/// written (`false` when an identical fact file is already on disk).
+#[derive(Debug, Clone)]
+struct AllocatedFactFile {
+    slug: String,
+    relative_path: PathBuf,
+    markdown: String,
+    write_needed: bool,
+}
+
+/// Allocate the output slug + path for a fact, rendering each candidate so
+/// allocation is content-aware: when the file already on disk matches the
+/// rendered fact (ignoring the volatile `extracted_at` stamp), the existing
+/// slug is reused as a no-op instead of suffixing a duplicate `-N` head.
+/// This makes retried windows / lease-expiry reruns idempotent even before
+/// the async vault watcher has ingested the first attempt's file.
 fn allocate_output_path(
     raw_fact: &RawFact,
     conn: &Connection,
     context: &FactWriteContext,
-) -> Result<(String, PathBuf), FactResolutionError> {
+    supersedes: Option<&str>,
+    corrected_via: Option<&str>,
+) -> Result<AllocatedFactFile, FactResolutionError> {
     let base_slug = fact_slug_base(raw_fact);
     for attempt in 0..MAX_SLUG_COLLISION_ATTEMPTS {
         let slug = if attempt == 0 {
@@ -641,10 +657,30 @@ fn allocate_output_path(
         };
         let relative_path = relative_fact_path(raw_fact.type_plural(), &context.namespace, &slug);
         let full_path = context.root_path.join(&relative_path);
-        if !full_path.exists()
-            && !page_slug_exists(conn, context.collection_id, &context.namespace, &slug)?
-        {
-            return Ok((slug, relative_path));
+        let markdown = render_fact_markdown(raw_fact, context, &slug, supersedes, corrected_via)?;
+
+        if full_path.exists() {
+            if let Ok(existing) = fs::read_to_string(&full_path) {
+                if fact_markdown_matches(&existing, &markdown) {
+                    // Keep the existing bytes untouched so the watcher's
+                    // sha256 dedup treats the rerun as a clean no-op.
+                    return Ok(AllocatedFactFile {
+                        slug,
+                        relative_path,
+                        markdown,
+                        write_needed: false,
+                    });
+                }
+            }
+            continue;
+        }
+        if !page_slug_exists(conn, context.collection_id, &context.namespace, &slug)? {
+            return Ok(AllocatedFactFile {
+                slug,
+                relative_path,
+                markdown,
+                write_needed: true,
+            });
         }
     }
 
@@ -652,6 +688,38 @@ fn allocate_output_path(
         base_slug,
         attempts: MAX_SLUG_COLLISION_ATTEMPTS,
     })
+}
+
+fn persist_allocated_fact(
+    root_path: &Path,
+    output: &AllocatedFactFile,
+) -> Result<(), FactResolutionError> {
+    if output.write_needed {
+        write_markdown(root_path, &output.relative_path, &output.markdown)?;
+    }
+    Ok(())
+}
+
+/// Compare two rendered fact files for identity, ignoring the volatile
+/// `extracted_at:` frontmatter line so a retried extraction of the same
+/// fact compares equal across runs that differ only in wall-clock time.
+fn fact_markdown_matches(existing: &str, rendered: &str) -> bool {
+    normalize_fact_markdown(existing) == normalize_fact_markdown(rendered)
+}
+
+fn normalize_fact_markdown(content: &str) -> String {
+    let mut normalized = String::with_capacity(content.len());
+    let mut boundaries_seen = 0_u8;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if boundaries_seen < 2 && trimmed == "---" {
+            boundaries_seen += 1;
+        } else if boundaries_seen == 1 && trimmed.starts_with("extracted_at:") {
+            continue;
+        }
+        normalized.push_str(line);
+    }
+    normalized
 }
 
 fn page_slug_exists(

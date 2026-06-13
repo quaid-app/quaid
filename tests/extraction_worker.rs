@@ -664,13 +664,15 @@ fn slash_to_platform(path: &str) -> String {
     path.replace('/', std::path::MAIN_SEPARATOR_STR)
 }
 
-// ── spec item 9.3 — no partial cursor advance when a later window fails ────
+// ── per-window cursor advance: completed windows survive a later failure ───
 
 #[test]
-fn process_job_should_not_partially_advance_cursor_when_later_window_fails() {
+fn process_job_persists_completed_window_cursor_when_later_window_fails() {
     // 10 turns with window_turns=5 → 2 windows: [1..5] then [6..10].
-    // Window 1 gets valid JSON; window 2 gets garbage. persist_cursor_update is
-    // only called after all windows succeed, so the cursor must stay at 0.
+    // Window 1 gets valid JSON; window 2 gets garbage. The cursor is now
+    // persisted per window (facts are written per window, so a rerun must
+    // not re-emit window 1's facts): after the window-2 failure the cursor
+    // must sit at 5, and the retry must resume from turn 6.
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
     let conn = open_worker_db_at(&db_path);
@@ -686,10 +688,13 @@ fn process_job_should_not_partially_advance_cursor_when_later_window_fails() {
     )
     .unwrap();
 
-    let worker = worker_with_stub(
-        &conn,
-        StubSlm::with_results([Ok("{\"facts\":[]}"), Ok("not json — window 2 explodes")]),
-    );
+    let slm = StubSlm::with_results([
+        Ok("{\"facts\":[]}"),
+        Ok("not json — window 2 explodes"),
+        Ok("{\"facts\":[]}"),
+    ]);
+    let probe = slm.clone();
+    let worker = worker_with_stub(&conn, slm);
     let result = worker.process_next_job();
     assert!(
         result.is_err(),
@@ -698,13 +703,30 @@ fn process_job_should_not_partially_advance_cursor_when_later_window_fails() {
 
     let parsed = format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
     assert_eq!(
-        parsed.frontmatter.last_extracted_turn, 0,
-        "cursor must not partially advance — window-1 success does not count when window-2 fails"
+        parsed.frontmatter.last_extracted_turn, 5,
+        "window-1 success must persist its cursor so a rerun skips it"
     );
-    assert_eq!(
-        parsed.frontmatter.last_extracted_at, None,
-        "last_extracted_at must remain unset when any window fails"
+    assert!(
+        parsed.frontmatter.last_extracted_at.is_some(),
+        "last_extracted_at must record the completed window"
     );
+
+    // The retry must resume from the persisted cursor: only turns 6..10.
+    let retried = worker.process_next_job().unwrap().unwrap();
+    assert_eq!(retried.session_id, "s1");
+
+    let calls = probe.recorded_calls();
+    assert_eq!(calls.len(), 3);
+    assert!(
+        calls[2]
+            .prompt
+            .contains("New turns to extract from (turns 6..10):"),
+        "retry must skip the already-completed window [1..5]; prompt: {}",
+        calls[2].prompt
+    );
+    let parsed_after_retry =
+        format::parse(&dir.path().join(slash_to_platform(&conversation_path))).unwrap();
+    assert_eq!(parsed_after_retry.frontmatter.last_extracted_turn, 10);
 }
 
 // ── spec item 5.2 gap — acceptance bar (currently unimplemented) ───────────

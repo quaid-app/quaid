@@ -3,8 +3,12 @@
 //! hands the validated facts to a pluggable `FactWriter` (either the
 //! resolving writer that performs full supersede semantics or a no-op
 //! writer for tests). Cursor state in the conversation frontmatter is
-//! advanced only after every window of a job succeeds so partial failures
-//! re-extract from the same boundary.
+//! advanced after each window's facts are written, so a mid-job failure or
+//! lease-expiry rerun resumes from the first incomplete window instead of
+//! re-emitting facts for windows that already succeeded. The cursor write
+//! holds the same per-session mutex + flock as `turn_writer::append_turn`
+//! and rewrites only the cursor frontmatter lines, so concurrently appended
+//! turns survive.
 //!
 //! See also: `super::queue` for the SQLite-backed job table this worker
 //! consumes, `super::slm` for the SLM runtime, `super::supersede` for the
@@ -13,6 +17,7 @@
 //! windows.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -181,6 +186,11 @@ pub enum WorkerError {
     /// The fact-write seam refused or failed on a produced fact.
     #[error("fact resolution error: {0}")]
     FactResolution(#[from] FactResolutionError),
+
+    /// Acquiring the per-session locks (or resolving the memory root) failed
+    /// while persisting the extraction cursor.
+    #[error("turn writer error: {0}")]
+    TurnWrite(#[from] turn_writer::TurnWriteError),
 }
 
 impl<'db, S, W> Worker<'db, S, W>
@@ -335,12 +345,13 @@ where
     }
 
     /// Run every window of a leased job through the SLM and the fact
-    /// writer, advance the conversation's extraction cursor on success,
+    /// writer, advancing the conversation's extraction cursor after each
+    /// window so a rerun skips windows whose facts were already written,
     /// and mark the queue row done; records `last_error` and surfaces the
     /// failure when any step fails.
     pub fn process_job(&self, job: &ExtractionJob) -> Result<(), WorkerError> {
         let conversation_path = self.resolve_conversation_path(&job.conversation_path)?;
-        let mut conversation = format::parse(&conversation_path)?;
+        let conversation = format::parse(&conversation_path)?;
         let windows = self.compute_windows(&conversation, job.trigger_kind);
 
         for window in &windows {
@@ -360,20 +371,61 @@ where
                 self.record_job_failure(job, &error)?;
                 return Err(error);
             }
-        }
 
-        if !windows.is_empty() {
-            let extracted_at = queue::current_timestamp(self.db)?;
-            persist_cursor_update(
-                &conversation_path,
-                &mut conversation,
-                &windows,
-                &extracted_at,
-            )?;
+            // Per-window cursor advance: the facts for this window are on
+            // disk, so persist the cursor now. Partial progress surviving a
+            // later-window failure is deliberate — facts are already written
+            // per window, and a rerun must not re-emit them.
+            if let Err(error) = self.persist_window_cursor(job, &conversation_path, window) {
+                self.record_job_failure(job, &error)?;
+                return Err(error);
+            }
         }
 
         self._vault_writer.before_mark_done(self.db, job)?;
         queue::mark_done(self.db, job.id, job.attempts).map_err(WorkerError::from)
+    }
+
+    /// Persist the extraction cursor for one completed window by rewriting
+    /// only the cursor frontmatter lines of the day-file, under the same
+    /// per-session mutex + flock that `turn_writer::append_turn` holds, so
+    /// a turn appended while the SLM was running survives the rewrite.
+    fn persist_window_cursor(
+        &self,
+        job: &ExtractionJob,
+        conversation_path: &Path,
+        window: &WindowedTurns,
+    ) -> Result<(), WorkerError> {
+        let extracted_at = queue::current_timestamp(self.db)?;
+        let last_new_ordinal = window.last_new_ordinal();
+        match self.session_lock_scope(&job.conversation_path)? {
+            Some((root, namespace, session_id)) => {
+                turn_writer::with_session_locks(&root, namespace.as_deref(), &session_id, || {
+                    rewrite_cursor_frontmatter(conversation_path, last_new_ordinal, &extracted_at)
+                })
+            }
+            // Absolute job paths cannot be mapped back to a session lock
+            // scope; fall back to an unlocked (but still frontmatter-only)
+            // rewrite.
+            None => rewrite_cursor_frontmatter(conversation_path, last_new_ordinal, &extracted_at),
+        }
+    }
+
+    /// Derive the `(memory root, namespace, session id)` lock scope for a
+    /// job's vault-relative conversation path, or `None` when the path does
+    /// not follow the canonical relative scheme (e.g. absolute test paths).
+    fn session_lock_scope(
+        &self,
+        job_conversation_path: &str,
+    ) -> Result<Option<(turn_writer::MemoryRoot, Option<String>, String)>, WorkerError> {
+        let Ok(parsed) = format::parse_relative_conversation_path(job_conversation_path) else {
+            return Ok(None);
+        };
+        let root =
+            turn_writer::resolve_memory_root(self.db).map_err(|error| WorkerError::Config {
+                message: error.to_string(),
+            })?;
+        Ok(Some((root, parsed.namespace, parsed.session_id)))
     }
 
     /// Persist a truncated copy of the offending raw SLM output to the
@@ -558,22 +610,82 @@ fn is_parse_failure(error: &WorkerError) -> bool {
     matches!(error, WorkerError::Slm(SlmError::Parse { .. }))
 }
 
-fn persist_cursor_update(
+/// Rewrite only the `last_extracted_at` / `last_extracted_turn` frontmatter
+/// lines of the day-file at `path`, re-reading the file fresh so turns
+/// appended after the worker's pre-inference snapshot are preserved
+/// byte-for-byte instead of being clobbered by a stale full-file render.
+fn rewrite_cursor_frontmatter(
     path: &Path,
-    conversation: &mut ConversationFile,
-    windows: &[WindowedTurns],
+    last_new_ordinal: Option<i64>,
     extracted_at: &str,
 ) -> Result<(), WorkerError> {
-    if let Some(last_new_ordinal) = windows
-        .iter()
-        .filter_map(WindowedTurns::last_new_ordinal)
-        .max()
-    {
-        conversation.frontmatter.last_extracted_turn = last_new_ordinal;
-    }
-    conversation.frontmatter.last_extracted_at = Some(extracted_at.to_owned());
-    fs::write(path, format::render(conversation))?;
+    let raw = fs::read_to_string(path)?;
+    let updated = update_cursor_frontmatter(&raw, last_new_ordinal, extracted_at)?;
+    let mut file = fs::File::create(path)?;
+    file.write_all(updated.as_bytes())?;
+    file.sync_all()?;
     Ok(())
+}
+
+fn update_cursor_frontmatter(
+    raw: &str,
+    last_new_ordinal: Option<i64>,
+    extracted_at: &str,
+) -> Result<String, WorkerError> {
+    let mut out = String::with_capacity(raw.len() + 64);
+    let mut in_frontmatter = false;
+    let mut frontmatter_done = false;
+    let mut wrote_extracted_at = false;
+    // No ordinal to persist means the existing cursor line is kept as-is.
+    let mut wrote_extracted_turn = last_new_ordinal.is_none();
+
+    for line in raw.split_inclusive('\n') {
+        if !frontmatter_done {
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if !in_frontmatter {
+                if out.is_empty() && trimmed == "---" {
+                    in_frontmatter = true;
+                }
+            } else if trimmed == "---" {
+                // Closing boundary: insert any cursor lines the file did not
+                // already carry (legacy files may lack `last_extracted_at`).
+                if !wrote_extracted_at {
+                    out.push_str("last_extracted_at: ");
+                    out.push_str(extracted_at);
+                    out.push('\n');
+                }
+                if !wrote_extracted_turn {
+                    if let Some(ordinal) = last_new_ordinal {
+                        out.push_str(&format!("last_extracted_turn: {ordinal}\n"));
+                    }
+                }
+                in_frontmatter = false;
+                frontmatter_done = true;
+            } else if trimmed.starts_with("last_extracted_at:") {
+                out.push_str("last_extracted_at: ");
+                out.push_str(extracted_at);
+                out.push('\n');
+                wrote_extracted_at = true;
+                continue;
+            } else if trimmed.starts_with("last_extracted_turn:") {
+                if let Some(ordinal) = last_new_ordinal {
+                    out.push_str(&format!("last_extracted_turn: {ordinal}\n"));
+                    wrote_extracted_turn = true;
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+    }
+
+    if !frontmatter_done {
+        return Err(WorkerError::Format(
+            format::ConversationFormatError::InvalidFrontmatter {
+                message: "cursor update requires a closed frontmatter block".to_owned(),
+            },
+        ));
+    }
+    Ok(out)
 }
 
 fn parse_usize_config(db: &Connection, key: &str, default: usize) -> Result<usize, WorkerError> {

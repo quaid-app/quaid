@@ -23,6 +23,12 @@ sources:
 
 # Quaid - Personal AI Memory
 
+> **Historical document.** This spec was frozen at spec-complete-v4 (2026-04-13) and no
+> longer reflects the shipped system. The authoritative design record is
+> [`openspec/specs/`](../openspec/specs/) (capability specs) plus
+> [`src/schema.sql`](../src/schema.sql) (current DDL). It is kept for the project's
+> design history only.
+
 > Open-source personal AI memory. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
 Inspired by Garry Tan's compiled-knowledge model work, with this spec adapting similar goals to a local-first Rust + SQLite architecture intended for portable, offline use.

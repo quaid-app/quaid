@@ -41,6 +41,11 @@ memory.db                  — SQLite: pages + FTS5 + vec0 + links + assertions
 | `src/core/entities.rs`    | regex entity-pattern extraction (assertions only, no `links` writes); 5 ms per-page deadline, no inference/network |
 | `src/core/migrate.rs`     | `export_dir()` plus round-trip export helpers                                  |
 | `src/core/raw_imports.rs` | Active-source rotation, retention, and byte-exact restore support              |
+| `src/core/collections.rs` | Collection metadata, slug resolution (`<collection>::<slug>`), lifecycle state |
+| `src/core/reconciler.rs`  | Vault-tree vs DB diff/plan/apply: renames, quarantines, restore/remap safety pipeline |
+| `src/core/vault_sync/`    | Live vault watcher + sync runtime: IPC, leases, write locks, restore/recovery flows |
+| `src/core/conversation/`  | Conversation pipeline: turn capture, session close, SLM fact extraction, supersede/correction |
+| `src/core/quarantine.rs`  | Quarantine workflow for pages whose vault file vanished or became unparseable  |
 | `src/mcp/server.rs`       | MCP stdio server with all tools                                                |
 | `src/schema.sql`          | Current DDL — embedded via `include_str!()`                                    |
 
@@ -113,10 +118,17 @@ See `src/schema.sql` for the current DDL. Key tables:
 
 ## MCP tools
 
-Core (Phase 1): `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
+24 tools, registered in `src/mcp/server.rs` (`rmcp::tool_box!`):
 
-Full surface (Phase 2+): `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`,
-`memory_timeline`, `memory_tags`, `memory_check`, `memory_gap`, `memory_gaps`, `memory_gap_resolve`, `memory_stats`, `memory_raw`
+- Pages: `memory_get`, `memory_put`, `memory_list`, `memory_raw`
+- Search: `memory_query`, `memory_search`, `memory_rehydrate`
+- Links: `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`
+- Assertions: `memory_check`
+- Tags/timeline: `memory_timeline`, `memory_tags`
+- Gaps: `memory_gap`, `memory_gaps`, `memory_gap_resolve`
+- Conversation: `memory_add_turn`, `memory_close_session`, `memory_close_action`,
+  `memory_correct`, `memory_correct_continue`
+- Admin: `memory_stats`, `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`
 
 ## Optimistic concurrency
 

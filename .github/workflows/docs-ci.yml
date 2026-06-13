@@ -10,11 +10,23 @@ on:
     paths:
       - "website/**"
       - "openspec/**"
+      - "docs/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "CHANGELOG.md"
+      - ".github/workflows/docs-ci.yml"
   pull_request:
     branches: ["main"]
     paths:
       - "website/**"
       - "openspec/**"
+      - "docs/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "CHANGELOG.md"
+      - ".github/workflows/docs-ci.yml"
 
 jobs:
   check:
@@ -43,3 +55,82 @@ jobs:
     steps:
       - name: Docs-only change
         run: echo "No Rust tests required for docs-only changes."
+
+  docs-truth:
+    name: Docs truth gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: memory_gap_approve must not be documented as an MCP tool
+        run: |
+          # memory_gap_approve is a documented-workflow-only concept (see
+          # skills/research/SKILL.md). It is NOT an MCP tool — the canonical
+          # tool surfaces must never name it. The agents-facing
+          # sensitivity-contract page is allowed to state explicitly that the
+          # tool does not exist.
+          hits=$(grep -rn "memory_gap_approve" \
+            README.md AGENTS.md CLAUDE.md \
+            website/src/content/docs/reference \
+            website/src/content/docs/agents \
+            | grep -v "sensitivity-contract.mdx" || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::memory_gap_approve is not an MCP tool. Reference the research skill's approval workflow (skills/research/SKILL.md) instead."
+            exit 1
+          fi
+          echo "OK: no tool-surface doc presents memory_gap_approve as an MCP tool."
+
+      - name: Current-release version pins must match Cargo.toml
+        run: |
+          # Any doc line that pins "the current/latest ... release" to a
+          # concrete version must agree with Cargo.toml. Historical mentions
+          # ("first shipped in vX.Y.Z") are fine because they don't claim to
+          # be the current release.
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "Cargo.toml version: ${version}"
+          violations=0
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            for v in $(printf '%s\n' "$line" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u); do
+              if [ "$v" != "$version" ]; then
+                echo "Stale current-release pin (expected ${version}): $line"
+                violations=1
+              fi
+            done
+          done <<EOF
+          $(grep -rniE '(current|latest)[^.]*release' --include='*.md' --include='*.mdx' README.md docs website/src/content/docs 2>/dev/null | grep -E '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          EOF
+          if [ "$violations" -ne 0 ]; then
+            echo "::error::Docs pin a 'current/latest release' version that does not match Cargo.toml (${version}). Update the pin or link to the latest release instead."
+            exit 1
+          fi
+          echo "OK: all current-release pins match ${version}."
+
+      - name: Schema-version claims must match src/core/db.rs
+        run: |
+          # Docs that state a schema version must agree with the
+          # SCHEMA_VERSION constant the binary enforces on open.
+          schema=$(sed -n 's/.*SCHEMA_VERSION: i64 = \([0-9][0-9]*\).*/\1/p' src/core/db.rs | head -1)
+          if [ -z "$schema" ]; then
+            echo "::error::Could not parse SCHEMA_VERSION from src/core/db.rs"
+            exit 1
+          fi
+          echo "SCHEMA_VERSION: ${schema}"
+          violations=0
+          while IFS= read -r hit; do
+            [ -n "$hit" ] || continue
+            for n in $(printf '%s\n' "$hit" | sed 's/^[^:]*:[0-9]*://' | grep -oE '[0-9]+' | sort -u); do
+              if [ "$n" != "$schema" ]; then
+                echo "Stale schema-version claim (expected ${schema}): $hit"
+                violations=1
+              fi
+            done
+          done <<EOF
+          $(grep -rnoiE '(the v[0-9]+ schema|current schema version is [^0-9]*[0-9]+|v[0-9]+ DDL \(embedded|v[0-9]+ baseline|SCHEMA_VERSION[^.]{0,60}|schema_version. \| .[0-9]+.|schema_version. in .quaid_config., currently .[0-9]+)' --include='*.md' --include='*.mdx' README.md AGENTS.md CLAUDE.md docs website/src/content/docs 2>/dev/null | grep -v '^docs/spec.md:' | grep -v '^docs/roadmap_v1.md:' || true)
+          EOF
+          if [ "$violations" -ne 0 ]; then
+            echo "::error::Docs claim a schema version that does not match SCHEMA_VERSION=${schema} in src/core/db.rs."
+            exit 1
+          fi
+          echo "OK: all schema-version claims match ${schema}."

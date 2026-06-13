@@ -7,10 +7,12 @@ TBD - created by archiving change vault-sync-engine. Update Purpose after archiv
 
 The system SHALL store every page within a named collection. Each collection SHALL have a unique name, a root path on the local filesystem (`collections.root_path TEXT NOT NULL` — storage always retains the last-known absolute path even when the collection is `detached`, so that `sync --remap-root` can be attempted without first re-attaching and operators can see where the collection was last bound), an ignore-pattern list, and a boolean flag indicating whether it is the default target for agent-initiated writes. The MCP surface (`memory_collections`) presents `root_path` as `null` when `state != 'active'` because a detached/restoring root is not safe to walk or open, even though the underlying column is non-null — the API shapes the view, storage retains history.
 
+For first-run usability, `quaid init` SHALL provision the default collection with a writable write-target root at `~/.quaid/vault` (resolved to an absolute path for the current user and created if missing). Existing databases that already have a writable configured write-target root SHALL remain unchanged.
+
 #### Scenario: Fresh init creates default collection
 
 - **WHEN** a user runs `quaid init` in a directory with no existing `memory.db`
-- **THEN** the system creates `memory.db`, creates a `collections` row named `default` with `root_path = ~/.quaid/default-vault/` (creating the directory if missing), and sets `is_write_target = 1`
+- **THEN** the system creates `memory.db`, creates a `collections` row named `default` with `root_path = ~/.quaid/vault` (creating the directory if missing), and sets `is_write_target = 1`
 
 #### Scenario: Adding a new collection — atomic `.quaidignore` parse gates creation
 

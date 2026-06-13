@@ -64,7 +64,9 @@ fn query_slugs(server: &QuaidServer, query: &str, hops: Option<u32>) -> Vec<Stri
     let result = server
         .memory_query(memory_query_input(query, hops))
         .unwrap();
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    // memory_query returns a {results, pending_embedding_jobs?} envelope.
+    let envelope: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = envelope["results"].as_array().cloned().unwrap_or_default();
     rows.into_iter()
         .map(|row| row["slug"].as_str().unwrap().to_owned())
         .collect()

@@ -12,9 +12,7 @@ use clap::Subcommand;
 use rusqlite::{params, Connection};
 
 use crate::core::{
-    conversation::model_lifecycle::{
-        cached_model_status, download_model, load_model_from_local_cache, ConsoleProgressReporter,
-    },
+    conversation::model_lifecycle::{cached_model_status, load_model_from_local_cache},
     conversation::{format, turn_writer},
     db,
     types::ConversationStatus,
@@ -30,18 +28,26 @@ pub enum ExtractionAction {
     Status,
 }
 
-pub fn run(db: &Connection, action: ExtractionAction) -> Result<()> {
+pub fn run(
+    db: &Connection,
+    action: ExtractionAction,
+    allow_unverified_model: bool,
+    model_revision: Option<&str>,
+) -> Result<()> {
     match action {
-        ExtractionAction::Enable => enable(db),
+        ExtractionAction::Enable => enable(db, allow_unverified_model, model_revision),
         ExtractionAction::Disable => disable(db),
         ExtractionAction::Status => status(db),
     }
 }
 
-fn enable(db: &Connection) -> Result<()> {
+fn enable(
+    db: &Connection,
+    allow_unverified_model: bool,
+    model_revision: Option<&str>,
+) -> Result<()> {
     let alias = db::read_config_value_or(db, "extraction.model_alias", "phi-3.5-mini")?;
-    let mut progress = ConsoleProgressReporter::default();
-    let cache_dir = tokio::task::block_in_place(|| download_model(&alias, &mut progress))?;
+    let cache_dir = crate::commands::model::pull(&alias, allow_unverified_model, model_revision)?;
     set_extraction_enabled(db, true)?;
     println!("Extraction enabled: yes");
     println!("Model alias: {alias}");
@@ -593,8 +599,8 @@ mod tests {
     fn status_and_disable_commands_run_without_model_downloads() {
         let (_dir, conn, _root) = configured_db();
 
-        run(&conn, ExtractionAction::Status).expect("status");
-        run(&conn, ExtractionAction::Disable).expect("disable");
+        run(&conn, ExtractionAction::Status, false, None).expect("status");
+        run(&conn, ExtractionAction::Disable, false, None).expect("disable");
 
         assert!(!extraction_enabled(&conn).expect("disabled"));
     }
@@ -621,7 +627,7 @@ mod tests {
         )
         .expect("seed failed job");
 
-        run(&conn, ExtractionAction::Status).expect("enabled status");
+        run(&conn, ExtractionAction::Status, false, None).expect("enabled status");
 
         let sessions = session_summaries(&conn).expect("sessions");
         assert!(runtime_state(true, "org/missing-model", &sessions).contains("blocked"));

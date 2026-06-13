@@ -468,7 +468,12 @@ async fn main() -> Result<()> {
             raw,
             import_id,
         } => commands::export::run(&db, &path, raw, import_id),
-        Commands::Extraction { action } => commands::extraction::run(&db, action),
+        Commands::Extraction { action } => commands::extraction::run(
+            &db,
+            action,
+            cli.allow_unverified_model,
+            cli.model_revision.as_deref(),
+        ),
         Commands::Extract(args) => commands::extract::run(&db, args),
         Commands::Embed {
             slug,

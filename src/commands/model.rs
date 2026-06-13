@@ -87,7 +87,7 @@ pub fn run(
 /// aliases keep their authoritative pins (and refuse overrides), while
 /// custom model ids require both `--allow-unverified-model` and an
 /// explicit `--model-revision <commit-sha>`.
-fn pull(
+pub(crate) fn pull(
     alias: &str,
     allow_unverified_model: bool,
     model_revision: Option<&str>,

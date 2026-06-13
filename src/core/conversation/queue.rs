@@ -55,8 +55,12 @@ pub enum ExtractionQueueError {
 }
 
 /// Enqueue a debounce / session_close / non-force manual job, collapsing
-/// pending rows per `session_id`. Force-reset enqueues use
-/// [`enqueue_force_path`] instead so each day-file gets its own pending row.
+/// pending rows per `(session_id, conversation_path)`. A different
+/// `conversation_path` for the same session (a midnight rollover onto a new
+/// day-file) gets its own pending row instead of overwriting the existing
+/// row's path, so the prior day's unextracted tail still gets parsed.
+/// Force-reset enqueues use [`enqueue_force_path`] instead so each day-file
+/// gets its own `manual` pending row.
 pub fn enqueue(
     conn: &Connection,
     session_id: &str,
@@ -69,10 +73,10 @@ pub fn enqueue(
             .query_row(
                 "SELECT id, trigger_kind, scheduled_for
                  FROM extraction_queue
-                 WHERE session_id = ?1 AND status = 'pending'
+                 WHERE session_id = ?1 AND conversation_path = ?2 AND status = 'pending'
                  ORDER BY id
                  LIMIT 1",
-                [session_id],
+                params![session_id, conversation_path],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -95,19 +99,13 @@ pub fn enqueue(
             );
             conn.execute(
                 "UPDATE extraction_queue
-                 SET conversation_path = ?2,
-                     trigger_kind = ?3,
-                     scheduled_for = ?4,
+                 SET trigger_kind = ?2,
+                     scheduled_for = ?3,
                      attempts = 0,
                      last_error = NULL,
                      enqueued_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
                  WHERE id = ?1",
-                params![
-                    job_id,
-                    conversation_path,
-                    trigger_kind.as_str(),
-                    scheduled_for
-                ],
+                params![job_id, trigger_kind.as_str(), scheduled_for],
             )?;
         } else {
             conn.execute(
@@ -526,7 +524,7 @@ mod tests {
         enqueue(
             &conn,
             "s1",
-            "conversations/2026-05-03/updated.md",
+            "conversations/2026-05-03/original.md",
             ExtractionTriggerKind::Manual,
             "2026-05-03T10:00:02Z",
         )
@@ -542,7 +540,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(row.0, "conversations/2026-05-03/updated.md");
+        assert_eq!(row.0, "conversations/2026-05-03/original.md");
         assert_eq!(row.1, "manual");
         assert_eq!(row.2, 0);
         assert_eq!(row.3, None);

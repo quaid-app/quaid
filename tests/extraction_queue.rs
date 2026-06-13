@@ -75,6 +75,56 @@ fn enqueue_collapses_burst_and_session_close_takes_precedence() {
 }
 
 #[test]
+fn enqueue_keeps_separate_pending_rows_per_day_file_on_rollover() {
+    // Midnight rollover regression: a session whose turns span two day-files
+    // must keep one pending row per `conversation_path` so the prior day's
+    // unextracted tail is still parsed instead of being overwritten by the
+    // newest day-file's path.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_queue_db(&db_path);
+
+    enqueue(
+        &conn,
+        "s1",
+        "conversations/2026-05-03/s1.md",
+        ExtractionTriggerKind::Debounce,
+        "2026-05-03T23:59:50Z",
+    )
+    .unwrap();
+    enqueue(
+        &conn,
+        "s1",
+        "conversations/2026-05-04/s1.md",
+        ExtractionTriggerKind::Debounce,
+        "2026-05-04T00:00:10Z",
+    )
+    .unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT conversation_path FROM extraction_queue
+             WHERE session_id = 's1' AND status = 'pending'
+             ORDER BY conversation_path",
+        )
+        .unwrap();
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![
+            "conversations/2026-05-03/s1.md".to_string(),
+            "conversations/2026-05-04/s1.md".to_string(),
+        ],
+        "rollover must not collapse the prior day's pending row"
+    );
+}
+
+#[test]
 fn dequeue_returns_jobs_in_scheduled_order() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");

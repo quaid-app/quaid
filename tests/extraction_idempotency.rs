@@ -201,6 +201,120 @@ fn hash_shim_forced() -> bool {
 }
 
 #[test]
+fn force_reextract_without_manual_ingest_emits_no_duplicate_suffix_files() {
+    // Regression for the production sequencing: the vault watcher (not a
+    // manual `ingest::run`) is responsible for page rows, so a re-extraction
+    // typically runs while the first attempt's fact files are on disk but
+    // not yet ingested. The rerun must reuse the existing files instead of
+    // suffixing `-2` duplicates (which, once ingested, produce two heads in
+    // the same partition and park later jobs on AmbiguousMatchingHeads).
+    let harness = Harness::new();
+
+    for (ordinal, role, content) in [
+        (1, "user", "I prefer Rust for systems work."),
+        (2, "assistant", "Noted: Rust is the current preference."),
+        (3, "user", "We chose SQLite for the local cache."),
+        (4, "assistant", "Decision captured."),
+    ] {
+        harness
+            .server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "idem-no-ingest".to_string(),
+                role: role.to_string(),
+                content: content.to_string(),
+                timestamp: Some(format!("2026-05-05T09:0{ordinal}:00Z")),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap();
+    }
+    harness
+        .server
+        .memory_close_session(MemoryCloseSessionInput {
+            session_id: "idem-no-ingest".to_string(),
+            namespace: None,
+        })
+        .unwrap();
+
+    let slm_output = r#"{"facts":[
+        {"kind":"preference","about":"systems-language","strength":"high","summary":"The team prefers Rust for systems work."},
+        {"kind":"decision","chose":"sqlite-local-cache","summary":"The team chose SQLite for the local cache."}
+    ]}"#;
+    let initial_worker = Worker::new(
+        &harness.inspect,
+        StubSlm::with_results([Ok(slm_output)]),
+        ResolvingFactWriter,
+    )
+    .unwrap()
+    .with_limits(Duration::from_millis(1), 128);
+    initial_worker
+        .process_next_job()
+        .unwrap()
+        .expect("initial extraction job");
+
+    let extracted_root = harness.vault_root.join("extracted");
+    let initial_files = markdown_files(&extracted_root);
+    assert_eq!(
+        initial_files.len(),
+        2,
+        "initial extraction should write two fact files"
+    );
+    let initial_contents = initial_files
+        .iter()
+        .map(|path| fs::read(path).unwrap())
+        .collect::<Vec<_>>();
+
+    // Crucially: NO ingest::run between passes — the pages table has no fact
+    // rows, so the rerun resolves Coexist and must hit the content-aware
+    // allocation no-op (this path never consults embeddings, so it holds
+    // under the hash shim too).
+    let output = run_quaid(&harness.db_path, &["extract", "idem-no-ingest", "--force"]);
+    assert!(
+        output.status.success(),
+        "extract --force failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let replay_worker = Worker::new(
+        &harness.inspect,
+        StubSlm::with_results([Ok(slm_output)]),
+        ResolvingFactWriter,
+    )
+    .unwrap()
+    .with_limits(Duration::from_millis(1), 128);
+    // An Err here (e.g. AmbiguousMatchingHeads) would mean the rerun saw
+    // duplicate heads; success is part of the assertion.
+    replay_worker
+        .process_next_job()
+        .unwrap()
+        .expect("forced replay job");
+
+    let replay_files = markdown_files(&extracted_root);
+    assert_eq!(
+        replay_files, initial_files,
+        "rerun without ingest must not grow the extracted fact set"
+    );
+    assert!(
+        replay_files.iter().all(|path| {
+            !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .ends_with("-2.md")
+        }),
+        "no -2 suffix duplicates may appear: {replay_files:?}"
+    );
+    let replay_contents = replay_files
+        .iter()
+        .map(|path| fs::read(path).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        replay_contents, initial_contents,
+        "idempotent rerun must leave the original fact bytes untouched"
+    );
+}
+
+#[test]
 fn force_reextract_keeps_structurally_equivalent_head_set_and_chain_shape() {
     let harness = Harness::new();
 

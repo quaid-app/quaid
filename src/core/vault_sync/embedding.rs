@@ -34,10 +34,10 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::commands::get::get_page_by_key;
 use crate::core::conversation::extractor::Worker;
 use crate::core::conversation::slm::LazySlmRunner;
 use crate::core::conversation::supersede::ResolvingFactWriter;
-use crate::commands::get::get_page_by_key;
 
 use super::{database_path, VaultSyncError};
 

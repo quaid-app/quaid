@@ -723,7 +723,7 @@ mod tests {
 
     use super::*;
     use crate::core::db;
-    use crate::core::pages::get_page;
+    use crate::commands::get::get_page;
 
     fn open_test_db() -> Connection {
         db::open(":memory:").unwrap()

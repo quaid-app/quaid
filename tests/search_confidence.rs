@@ -296,13 +296,15 @@ fn memory_query_relevance_floor_overrides_config() {
     let unfloored = server
         .memory_query(memory_query_input("widget assembly", None))
         .unwrap();
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&unfloored)).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&extract_text(&unfloored)).unwrap();
+    let rows = envelope["results"].as_array().cloned().unwrap_or_default();
     assert_eq!(rows.len(), 1, "identity default returns the weak hit");
 
     let floored = server
         .memory_query(memory_query_input("widget assembly", Some(0.5)))
         .unwrap();
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&floored)).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&extract_text(&floored)).unwrap();
+    let rows = envelope["results"].as_array().cloned().unwrap_or_default();
     assert!(
         rows.is_empty(),
         "per-call floor must drop the 0.4 fused hit (success, no padding)"

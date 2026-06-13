@@ -86,6 +86,13 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        // Configure a real root so write-target resolution never falls back
+        // to provisioning the default `~/.quaid/vault` from a unit test.
+        conn.execute(
+            "UPDATE collections SET root_path = ?1 WHERE id = 1",
+            [dir.path().display().to_string()],
+        )
+        .unwrap();
         std::mem::forget(dir);
         conn
     }

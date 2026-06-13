@@ -30,8 +30,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use rusqlite::Connection;
-
 use super::socket::{authorize_server_peer, peer_credentials_for_stream};
 use super::{IpcRequest, IpcResponse};
 use crate::commands::put;
@@ -157,7 +155,7 @@ fn handle_ipc_client(
                 content,
                 expected_version,
             } => {
-                let conn = Connection::open(db_path)?;
+                let conn = crate::core::db::open_runtime(db_path)?;
                 match put::put_from_string_status(&conn, &slug, &content, expected_version) {
                     Ok(status) => {
                         write_ipc_response(&mut writer, &IpcResponse::PutOk { status })?;

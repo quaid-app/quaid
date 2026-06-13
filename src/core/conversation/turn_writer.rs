@@ -271,6 +271,12 @@ pub fn resolve_memory_root(conn: &Connection) -> Result<MemoryRoot, TurnWriteErr
             }
         })?,
     )?;
+    // Opening a database no longer provisions the default `~/.quaid/vault`
+    // root on disk; heal the empty-root placeholder here, at the moment a
+    // write actually needs a usable write-target root.
+    db::provision_default_collection_root(conn).map_err(|error| TurnWriteError::Config {
+        message: error.to_string(),
+    })?;
     let write_target = collections::get_write_target(conn)
         .map_err(|error| TurnWriteError::Config {
             message: error.to_string(),

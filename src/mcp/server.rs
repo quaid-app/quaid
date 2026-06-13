@@ -51,6 +51,12 @@ pub(crate) fn resolve_slug_for_mcp(
     input: &str,
     op_kind: OpKind,
 ) -> Result<vault_sync::ResolvedSlug, rmcp::Error> {
+    // Write resolution may fall back to the write-target collection, whose
+    // default root is no longer provisioned at open; heal the empty-root
+    // placeholder on demand before resolving.
+    if !matches!(op_kind, OpKind::Read) {
+        db::provision_default_collection_root(db).map_err(map_config_error)?;
+    }
     match collections::parse_slug(db, input, op_kind).map_err(map_collection_error)? {
         SlugResolution::Resolved {
             collection_id,

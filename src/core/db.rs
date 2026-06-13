@@ -134,6 +134,81 @@ pub fn open(path: &str) -> Result<Connection, DbError> {
     open_with_model(path, &default_model()).map(|opened| opened.conn)
 }
 
+/// Opens an **already-initialized** database at `path` for runtime use:
+/// background workers, watcher callbacks, supervisor ticks, IPC handlers,
+/// and other short-lived "fresh connection" sites.
+///
+/// Unlike [`open`], this performs no DDL, no bootstrap, and no filesystem
+/// side effects — the database file must already exist and have been
+/// initialized via [`init`]/[`open`] (e.g. `quaid init`). It registers
+/// `sqlite-vec`, applies the standard 5s busy timeout, and enables
+/// `foreign_keys`, so runtime connections behave identically to [`open`]ed
+/// ones under write contention instead of failing instantly with
+/// `SQLITE_BUSY`.
+///
+/// A cheap `PRAGMA user_version` guard rejects files that were never
+/// bootstrapped (including `:memory:`, which is always a fresh empty
+/// database on a new connection and therefore never valid here).
+pub fn open_runtime<P: AsRef<Path>>(path: P) -> Result<Connection, DbError> {
+    let db_path = path.as_ref();
+    if db_path.as_os_str() != ":memory:" && !db_path.exists() {
+        return Err(DbError::PathNotFound {
+            path: db_path.display().to_string(),
+        });
+    }
+
+    ensure_sqlite_vec();
+    let conn = Connection::open(db_path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
+    let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if user_version != SCHEMA_VERSION {
+        return Err(DbError::Schema {
+            message: format!(
+                "open_runtime requires an initialized database (found user_version {user_version}, expected {SCHEMA_VERSION}) at {}; run `quaid init` or open it via db::open first",
+                db_path.display()
+            ),
+        });
+    }
+
+    Ok(conn)
+}
+
+/// Runs `action` inside a `BEGIN IMMEDIATE` transaction on `conn`,
+/// committing on success and rolling back on failure.
+///
+/// `SQLITE_BUSY` on COMMIT does **not** auto-rollback, so a failed commit
+/// would otherwise leave the transaction open and wedge every subsequent
+/// `BEGIN IMMEDIATE` on a shared connection with "cannot start a
+/// transaction within a transaction". The explicit ROLLBACK on the
+/// commit-error path restores the connection to autocommit; the rollback
+/// result is intentionally ignored because the commit error is the one the
+/// caller must see (and ROLLBACK after a failed COMMIT can itself report
+/// that no transaction is active).
+pub fn with_immediate_transaction<T, E>(
+    conn: &Connection,
+    action: impl FnOnce(&Connection) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<rusqlite::Error>,
+{
+    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+    match action(conn) {
+        Ok(value) => match conn.execute_batch("COMMIT TRANSACTION") {
+            Ok(()) => Ok(value),
+            Err(commit_error) => {
+                let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+                Err(E::from(commit_error))
+            }
+        },
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+            Err(error)
+        }
+    }
+}
+
 /// Returns the conventional `~/.quaid/memory.db` path, falling back to
 /// `memory.db` in the current directory when no home directory is available.
 pub fn default_db_path() -> std::path::PathBuf {
@@ -935,12 +1010,35 @@ fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
 /// All legacy INSERT INTO pages statements that omit collection_id rely on
 /// `DEFAULT 1` routing them to this collection.  Called at every
 /// `open_connection()` so test-only in-memory databases are also covered.
+///
+/// Deliberately performs **no filesystem side effects**: the row is seeded
+/// with `root_path = ''` and the on-disk default root (`~/.quaid/vault`) is
+/// only provisioned by [`provision_default_collection_root`] — called from
+/// `quaid init` and from write-target resolution — whose ON CONFLICT branch
+/// heals the empty `root_path` placeholder.
 fn ensure_default_collection(conn: &Connection) -> Result<(), DbError> {
     if has_configured_write_target(conn)? {
         return Ok(());
     }
 
+    upsert_default_collection(conn, "")
+}
+
+/// Provisions the default collection root (`~/.quaid/vault`) on disk and
+/// heals the default collection row when its `root_path` is still the
+/// empty-string placeholder seeded at open. Called by `quaid init` and by
+/// write-target resolution points just before a write needs a usable root;
+/// a no-op when a write target with a non-empty root is already configured.
+pub fn provision_default_collection_root(conn: &Connection) -> Result<(), DbError> {
+    if has_configured_write_target(conn)? {
+        return Ok(());
+    }
+
     let default_root = prepare_default_collection_root()?;
+    upsert_default_collection(conn, &default_root)
+}
+
+fn upsert_default_collection(conn: &Connection, default_root: &str) -> Result<(), DbError> {
     let tx = conn.unchecked_transaction()?;
     tx.execute(
         "UPDATE collections SET is_write_target = 0 WHERE is_write_target != 0",
@@ -975,6 +1073,10 @@ fn ensure_default_collection(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Returns whether a write-target collection with a usable (non-empty)
+/// root is configured — the guard both [`ensure_default_collection`] and
+/// [`provision_default_collection_root`] use to stay no-ops once a real
+/// write target exists.
 fn has_configured_write_target(conn: &Connection) -> Result<bool, DbError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*)
@@ -1109,11 +1211,14 @@ fn is_bootstrap_fresh_db(conn: &Connection) -> Result<bool, DbError> {
         "assertions",
         "collection_owners",
         "contradictions",
+        "correction_sessions",
         "embedding_jobs",
+        "extraction_queue",
         "file_state",
         "import_manifest",
         "knowledge_gaps",
         "links",
+        "namespaces",
         "page_embeddings",
         "pages",
         "quarantine_exports",

@@ -19,12 +19,14 @@ pub fn run(path: &str, requested_model: &inference::ModelConfig) -> Result<()> {
     }
 
     if db_path.exists() {
-        db::init(path, &inference::resolve_model("small"))?;
+        let conn = db::init(path, &inference::resolve_model("small"))?;
+        db::provision_default_collection_root(&conn)?;
         println!("Database already exists at {path}");
         return Ok(());
     }
 
-    db::init(path, requested_model)?;
+    let conn = db::init(path, requested_model)?;
+    db::provision_default_collection_root(&conn)?;
     println!("Memory initialized at {path}");
     Ok(())
 }

@@ -492,7 +492,19 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('graph_expansion_max',          '50'),
     ('edge_weight_frontmatter',      '1.0'),
     ('edge_weight_entity_pattern',   '0.7'),
-    ('edge_weight_wikilink',         '0.5');
+    ('edge_weight_wikilink',         '0.5'),
+    -- retrieval-quality-rerank knobs (identity defaults; flipped only after
+    -- the documented DAB benchmark gate passes)
+    ('search.mmr_lambda',                  '1.0'),
+    ('search.max_chunks_per_doc_default',  '0'),
+    ('search.cross_ref_boost_weight',      '0.0'),
+    ('search.cross_ref_boost_cap',         '0.15'),
+    ('search.rerank_extractive',           'false'),
+    ('search.rerank_extractive_top_n',     '3'),
+    ('search.rerank_extractive_budget_ms', '10'),
+    -- knowledge-gap loop: persist caller-provided memory_gap context only
+    -- when 'true' (auto-logged query-free diagnostics are always stored)
+    ('gaps.store_context',                 'false');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

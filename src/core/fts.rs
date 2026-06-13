@@ -566,6 +566,7 @@ fn search_fts_internal(
             summary: row.get(2)?,
             score: row.get(3)?,
             wing: row.get(4)?,
+            ..Default::default()
         })
     })?;
 

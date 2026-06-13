@@ -4,6 +4,10 @@ use rusqlite::Connection;
 
 use super::collections::{self, OpKind, SlugResolution};
 use super::pages::{self, PageKey};
+use super::search::{
+    configured_max_chunks_per_doc, configured_relevance_floor, dedup_chunks_per_page,
+    filter_below_floor,
+};
 use super::types::{SearchError, SearchResult};
 
 /// Hard safety cap on expansion depth regardless of caller-supplied value.
@@ -14,7 +18,10 @@ const MAX_DEPTH: u32 = 3;
 ///
 /// Token count is approximated as `(len(compiled_truth) + len(timeline)) / 4`.
 /// Results are deduplicated by slug. Initial results appear first, followed
-/// by expansion results ordered by link distance.
+/// by expansion results ordered by link distance. The post-fusion quality
+/// passes from `core::search` (per-page dedup, relevance floor) are applied
+/// to the initial set and re-applied on every expansion step; both are
+/// identity no-ops at their seeded config defaults.
 ///
 /// `collection_filter` restricts expansion to pages belonging to the given
 /// collection ID. Pass `None` to allow cross-collection expansion (CLI path).
@@ -55,6 +62,17 @@ pub fn progressive_retrieve_with_namespace(
             .filter(|result| page_is_head(&result.slug, namespace_filter, conn))
             .collect()
     };
+
+    // Apply the same post-fusion quality passes as `hybrid_search` (dedup →
+    // floor) so token-budget expansion sees the same filtered candidate set
+    // as the top-k API. Both passes are identity no-ops at their seeded
+    // defaults. Below-floor candidates are never expanded.
+    let max_chunks_per_doc = configured_max_chunks_per_doc(conn)?;
+    let relevance_floor = configured_relevance_floor(conn)?;
+    let initial = filter_below_floor(
+        dedup_chunks_per_page(initial, max_chunks_per_doc),
+        relevance_floor,
+    );
     if initial.is_empty() || depth == 0 {
         return Ok(initial);
     }
@@ -89,32 +107,40 @@ pub fn progressive_retrieve_with_namespace(
             break;
         }
 
-        let mut next_frontier: Vec<String> = Vec::new();
-
+        let mut hop_candidates: Vec<SearchResult> = Vec::new();
         for slug in &frontier {
-            let neighbours = outbound_neighbours(
+            hop_candidates.extend(outbound_neighbours(
                 slug,
                 collection_filter,
                 namespace_filter,
                 include_superseded,
                 conn,
-            )?;
-            for neighbour in neighbours {
-                if !seen.insert(neighbour.slug.clone()) {
-                    continue;
-                }
+            )?);
+        }
+        // Re-apply dedup + floor on every expansion step (identity at the
+        // seeded defaults) so each hop honours the same quality bar as the
+        // initial candidate set.
+        let hop_candidates = filter_below_floor(
+            dedup_chunks_per_page(hop_candidates, max_chunks_per_doc),
+            relevance_floor,
+        );
 
-                let Some(cost) = token_cost(&neighbour.slug, namespace_filter, conn) else {
-                    continue;
-                };
-                if tokens_used + cost > budget {
-                    continue;
-                }
-
-                tokens_used += cost;
-                next_frontier.push(neighbour.slug.clone());
-                results.push(neighbour);
+        let mut next_frontier: Vec<String> = Vec::new();
+        for neighbour in hop_candidates {
+            if !seen.insert(neighbour.slug.clone()) {
+                continue;
             }
+
+            let Some(cost) = token_cost(&neighbour.slug, namespace_filter, conn) else {
+                continue;
+            };
+            if tokens_used + cost > budget {
+                continue;
+            }
+
+            tokens_used += cost;
+            next_frontier.push(neighbour.slug.clone());
+            results.push(neighbour);
         }
 
         frontier = next_frontier;
@@ -241,6 +267,7 @@ fn outbound_neighbours(
                     summary: row.get(2)?,
                     score: 0.0,
                     wing: row.get(3)?,
+                    ..Default::default()
                 })
             },
         )
@@ -326,6 +353,7 @@ mod tests {
             summary: slug.to_owned(),
             score: 1.0,
             wing: "".to_owned(),
+            ..Default::default()
         }
     }
 

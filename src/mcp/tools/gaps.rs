@@ -1,22 +1,25 @@
 //! Knowledge-gap tool bodies: `memory_gap` (record an unanswered query as
-//! a SHA-256 hash with optional page binding) and `memory_gaps` (paginated
-//! list, optionally including resolved gaps). Errors from the
-//! `crate::core::gaps` layer route through `mcp::errors::map_gaps_error`;
-//! none of the bodies in this file construct `rmcp::Error` directly, in
-//! line with the §2.4 audit convention.
+//! a SHA-256 hash with optional page binding), `memory_gaps` (paginated
+//! list, optionally including resolved gaps), and `memory_gap_resolve`
+//! (mark a gap answered by a page). Errors from the `crate::core::gaps`
+//! layer route through `mcp::errors::map_gaps_error`; none of the bodies
+//! in this file construct `rmcp::Error` directly, in line with the §2.4
+//! audit convention.
 
 use rmcp::model::{CallToolResult, Content};
 use rmcp::tool;
 
 use crate::core::collections::OpKind;
+use crate::core::db;
 use crate::core::gaps;
 use crate::core::vault_sync;
 use crate::mcp::errors::{
-    invalid_params, map_db_error, map_gaps_error, map_serialize_error, map_vault_sync_error,
-    serialize_response,
+    invalid_params, map_config_error, map_db_error, map_gaps_error, map_serialize_error,
+    map_vault_sync_error, serialize_response,
 };
 use crate::mcp::server::{
-    page_id_for_resolved, resolve_slug_for_mcp, MemoryGapInput, MemoryGapsInput, QuaidServer,
+    page_id_for_resolved, resolve_slug_for_mcp, MemoryGapInput, MemoryGapResolveInput,
+    MemoryGapsInput, QuaidServer,
 };
 use crate::mcp::validation::{validate_slug, MAX_GAP_CONTEXT_LEN, MAX_LIMIT};
 
@@ -41,11 +44,17 @@ impl QuaidServer {
                 "context exceeds maximum length of {MAX_GAP_CONTEXT_LEN} characters"
             )));
         }
-        if !context.is_empty() {
-            // Do not persist caller-provided context to avoid leaking sensitive query text.
-            context.clear();
-        }
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
+        if !context.is_empty() {
+            // Caller-provided context is discarded by default to avoid
+            // leaking sensitive query text; persisted (already length-capped
+            // above) only when `gaps.store_context` is opted in.
+            let store_context = db::read_config_value_or(&db, "gaps.store_context", "false")
+                .map_err(map_config_error)?;
+            if store_context != "true" {
+                context.clear();
+            }
+        }
         let page_id = if let Some(slug) = input.slug.as_deref() {
             validate_slug(slug)?;
             let resolved = resolve_slug_for_mcp(&db, slug, OpKind::WriteUpdate)?;
@@ -107,5 +116,33 @@ impl QuaidServer {
 
         let json = serde_json::to_string_pretty(&gap_list).map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// `memory_gap_resolve` MCP tool: mark a knowledge gap resolved by the
+    /// page that answered it, after validating that the slug resolves to an
+    /// existing page. Unknown gap ids map to a not-found error.
+    #[tool(description = "Resolve a knowledge gap with the page that answers it")]
+    /// `memory_gap_resolve` MCP tool: mark a knowledge gap resolved by the
+    /// page that answered it, after validating that the slug resolves to an
+    /// existing page. Unknown gap ids map to a not-found error.
+    pub fn memory_gap_resolve(
+        &self,
+        #[tool(aggr)] input: MemoryGapResolveInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_slug(&input.slug)?;
+        let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
+        // Ensure the resolving page actually exists before flipping the gap.
+        page_id_for_resolved(&db, &resolved, None)?;
+
+        gaps::resolve_gap(input.id, &resolved.slug, &db).map_err(map_gaps_error)?;
+
+        let result = serde_json::json!({
+            "id": input.id,
+            "resolved_by_slug": resolved.slug,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serialize_response(&result)?,
+        )]))
     }
 }

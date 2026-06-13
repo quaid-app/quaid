@@ -131,6 +131,13 @@ pub fn dispatch_tool(server: &QuaidServer, tool: &str, params: Value) -> Result<
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
             server.memory_gaps(input).map_err(|e| e.message.to_string())
         }
+        "memory_gap_resolve" => {
+            let input: MemoryGapResolveInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_gap_resolve(input)
+                .map_err(|e| e.message.to_string())
+        }
         "memory_stats" => {
             let input: MemoryStatsInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;

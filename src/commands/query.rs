@@ -38,6 +38,8 @@ pub async fn run(
     include_superseded: bool,
     json: bool,
     hops: Option<u32>,
+    relevance_floor: Option<f64>,
+    max_chunks_per_doc: Option<usize>,
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -52,13 +54,16 @@ pub async fn run(
             canonical: true,
             limit: limit as usize,
             hops,
+            relevance_floor,
+            max_chunks_per_doc,
             ..Default::default()
         },
     )?;
 
     // Auto-log knowledge gap on weak results
-    if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
-        if let Err(e) = gaps::log_gap(None, query, "", results.first().map(|r| r.score), db) {
+    if gaps::should_log_gap(&results) {
+        let context = gaps::auto_gap_context("hybrid_search", &results);
+        if let Err(e) = gaps::log_gap(None, query, &context, results.first().map(|r| r.score), db) {
             eprintln!("Warning: failed to log knowledge gap: {e}");
         } else {
             eprintln!("Knowledge gap logged.");
@@ -150,6 +155,7 @@ mod tests {
             summary: summary.to_owned(),
             score: 1.0,
             wing: "people".to_owned(),
+            ..Default::default()
         }
     }
 
@@ -239,6 +245,8 @@ mod tests {
             false,
             true,
             None,
+            None,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -259,6 +267,8 @@ mod tests {
             false,
             false,
             None,
+            None,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -270,7 +280,7 @@ mod tests {
         let conn = db::open(":memory:").unwrap();
         // depth="auto" triggers read_token_budget + progressive_retrieve path
         let result = run(
-            &conn, "anything", "auto", 5, 0, None, None, false, false, None,
+            &conn, "anything", "auto", 5, 0, None, None, false, false, None, None, None,
         )
         .await;
         assert!(result.is_ok());
@@ -281,7 +291,7 @@ mod tests {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
         let result = run(
-            &conn, "query", "auto", 5, 2000, None, None, false, true, None,
+            &conn, "query", "auto", 5, 2000, None, None, false, true, None, None, None,
         )
         .await;
         assert!(result.is_ok());
@@ -312,6 +322,8 @@ mod tests {
             false,
             false,
             None,
+            None,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -338,6 +350,8 @@ mod tests {
             None,
             false,
             true,
+            None,
+            None,
             None,
         )
         .await;

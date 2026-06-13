@@ -22,6 +22,8 @@ pub fn run(
     json: bool,
     raw: bool,
     hops: Option<u32>,
+    relevance_floor: Option<f64>,
+    max_chunks_per_doc: Option<usize>,
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -58,6 +60,20 @@ pub fn run(
         }
     };
 
+    // Post-retrieval quality passes (dedup → floor); identity no-ops at the
+    // seeded config defaults. The flag values, when given, override the
+    // `search.max_chunks_per_doc_default` / `search.relevance_floor` keys.
+    let results = match apply_quality_passes(db, results, relevance_floor, max_chunks_per_doc) {
+        Ok(filtered) => filtered,
+        Err(e) => {
+            if json {
+                println!("{}", serde_json::json!({"error": e.to_string()}));
+                return Ok(());
+            }
+            return Err(e.into());
+        }
+    };
+
     let results: Vec<_> = results.into_iter().take(limit as usize).collect();
 
     // Apply graph expansion when the effective depth is non-zero. The CLI
@@ -87,6 +103,31 @@ pub fn run(
     }
 
     Ok(())
+}
+
+fn apply_quality_passes(
+    db: &Connection,
+    results: Vec<crate::core::types::SearchResult>,
+    relevance_floor: Option<f64>,
+    max_chunks_per_doc: Option<usize>,
+) -> std::result::Result<Vec<crate::core::types::SearchResult>, crate::core::types::SearchError> {
+    use crate::core::search::{
+        configured_max_chunks_per_doc, configured_relevance_floor, dedup_chunks_per_page,
+        filter_below_floor,
+    };
+
+    let max_per_page = match max_chunks_per_doc {
+        Some(value) => value,
+        None => configured_max_chunks_per_doc(db)?,
+    };
+    let floor = match relevance_floor {
+        Some(value) => value.clamp(0.0, 1.0),
+        None => configured_relevance_floor(db)?,
+    };
+    Ok(filter_below_floor(
+        dedup_chunks_per_page(results, max_per_page),
+        floor,
+    ))
 }
 
 fn expand_with_hops(
@@ -142,6 +183,8 @@ mod tests {
             false,
             false,
             None,
+            None,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -163,6 +206,8 @@ mod tests {
             false,
             false,
             None,
+            None,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -183,6 +228,8 @@ mod tests {
             false,
             false,
             false,
+            None,
+            None,
             None,
         );
         assert!(
@@ -206,6 +253,8 @@ mod tests {
             true,
             false,
             None,
+            None,
+            None,
         );
         assert!(
             result.is_ok(),
@@ -218,7 +267,9 @@ mod tests {
     fn run_raw_json_mode_with_invalid_fts5_returns_ok_not_panic() {
         let (_dir, conn) = open_test_db();
         // '?invalid' is invalid FTS5 with --raw; the error is printed as JSON, not propagated.
-        let result = run(&conn, "?invalid", None, None, 10, false, true, true, None);
+        let result = run(
+            &conn, "?invalid", None, None, 10, false, true, true, None, None, None,
+        );
         assert!(
             result.is_ok(),
             "--raw --json with bad FTS5 must return Ok (error JSON on stdout): {result:?}"

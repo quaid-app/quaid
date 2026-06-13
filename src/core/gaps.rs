@@ -1,7 +1,8 @@
 //! Knowledge-gap log: records queries the brain couldn't answer (keyed by
 //! SHA-256 for idempotent inserts), lists unresolved entries, and links them
 //! to pages that later answered them. Provides the data behind `quaid gaps`
-//! and the `memory_gap` / `memory_gaps` MCP tools.
+//! (including `quaid gaps resolve`) and the matching MCP tools
+//! (`memory_gap`, `memory_gaps`, `memory_gap_resolve`).
 //!
 //! See also: `types::KnowledgeGap` for the row shape, and `search` for the
 //! query path that detects low-confidence retrievals.
@@ -10,7 +11,7 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use super::types::KnowledgeGap;
+use super::types::{KnowledgeGap, SearchResult};
 
 /// Failure mode raised by gap logging, listing, or resolution.
 #[derive(Debug, Error)]
@@ -25,6 +26,37 @@ pub enum GapsError {
         /// The requested gap id.
         id: i64,
     },
+}
+
+/// Decide whether a retrieval outcome should be auto-logged as a knowledge
+/// gap.
+///
+/// A top result scoring `>= 0.99` is a perfect hit (the exact-slug
+/// short-circuit returns `1.0`, and a top-normalized strong hybrid hit
+/// approaches `1.0` under both merge strategies) and is never a gap.
+/// Otherwise a gap is logged when the result set is empty or every result
+/// scores below `0.3`. Both hybrid merge strategies emit scores on a
+/// `[0, 1]` scale, so the single threshold applies to either.
+pub fn should_log_gap(results: &[SearchResult]) -> bool {
+    if results.first().is_some_and(|result| result.score >= 0.99) {
+        return false;
+    }
+    results.is_empty() || results.iter().all(|result| result.score < 0.3)
+}
+
+/// Build the machine-generated, query-free diagnostics string recorded as
+/// the `context` of an auto-logged gap (e.g. `auto: hybrid_search results=3
+/// top=0.02`). Never includes query text, preserving the privacy-by-default
+/// posture of the gap log.
+pub fn auto_gap_context(source: &str, results: &[SearchResult]) -> String {
+    match results.first() {
+        Some(top) => format!(
+            "auto: {source} results={} top={:.2}",
+            results.len(),
+            top.score
+        ),
+        None => format!("auto: {source} results=0"),
+    }
 }
 
 /// Log a knowledge gap using the SHA-256 of the query for idempotency.

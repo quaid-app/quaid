@@ -2,6 +2,24 @@ use sha2::{Digest, Sha256};
 
 use super::types::{Chunk, Page};
 
+/// Approximate bytes per token used by the `len / 4` token estimate.
+const APPROX_BYTES_PER_TOKEN: usize = 4;
+
+/// Chunks whose estimated token count exceeds this cap are sub-split so the
+/// whole chunk fits the encoder's 512-token window, with margin for special
+/// tokens and tokenizer variance. Without the cap, a heading-less page becomes
+/// one whole-page chunk silently truncated at 512 tokens — everything past
+/// roughly the first ~2,000 characters never reaches the vector index.
+const MAX_CHUNK_TOKENS: usize = 480;
+
+/// Target window size (estimated tokens) for sub-split chunk parts.
+const SPLIT_WINDOW_TOKENS: usize = 440;
+
+/// Approximate context overlap (estimated tokens) carried between consecutive
+/// sub-split parts so facts near a window boundary stay intact in at least
+/// one window.
+const SPLIT_OVERLAP_TOKENS: usize = 60;
+
 /// Split a page into truth-section and timeline-entry chunks.
 pub fn chunk_page(page: &Page) -> Vec<Chunk> {
     let mut chunks = truth_chunks(page);
@@ -24,12 +42,13 @@ fn truth_chunks(page: &Page) -> Vec<Chunk> {
         if let Some(heading) = line.strip_prefix("## ") {
             saw_heading = true;
             if !current_lines.is_empty() {
-                chunks.push(build_chunk(
+                push_capped_chunks(
+                    &mut chunks,
                     &page.slug,
                     &current_heading,
                     &current_lines.join("\n"),
                     "truth_section",
-                ));
+                );
                 current_lines.clear();
             }
             current_heading = heading.trim().to_owned();
@@ -44,12 +63,13 @@ fn truth_chunks(page: &Page) -> Vec<Chunk> {
         } else {
             ""
         };
-        chunks.push(build_chunk(
+        push_capped_chunks(
+            &mut chunks,
             &page.slug,
             heading,
             &current_lines.join("\n"),
             "truth_section",
-        ));
+        );
     }
 
     chunks
@@ -61,24 +81,29 @@ fn timeline_chunks(page: &Page) -> Vec<Chunk> {
         return Vec::new();
     }
 
-    split_timeline_entries(&page.timeline)
-        .into_iter()
-        .map(|entry| {
-            let heading_path = entry
-                .lines()
-                .find_map(|line| {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_owned())
-                    }
-                })
-                .unwrap_or_default();
+    let mut chunks = Vec::new();
+    for entry in split_timeline_entries(&page.timeline) {
+        let heading_path = entry
+            .lines()
+            .find_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
+            })
+            .unwrap_or_default();
 
-            build_chunk(&page.slug, &heading_path, &entry, "timeline_entry")
-        })
-        .collect()
+        push_capped_chunks(
+            &mut chunks,
+            &page.slug,
+            &heading_path,
+            &entry,
+            "timeline_entry",
+        );
+    }
+    chunks
 }
 
 fn split_timeline_entries(timeline: &str) -> Vec<String> {
@@ -105,6 +130,174 @@ fn split_timeline_entries(timeline: &str) -> Vec<String> {
         .into_iter()
         .filter(|entry| !entry.trim().is_empty())
         .collect()
+}
+
+/// Push `content` as one chunk when it fits [`MAX_CHUNK_TOKENS`], otherwise
+/// sub-split it into overlapping windows of roughly [`SPLIT_WINDOW_TOKENS`],
+/// suffixing each part's heading path with its part index (e.g. `" [2/3]"`).
+fn push_capped_chunks(
+    chunks: &mut Vec<Chunk>,
+    page_slug: &str,
+    heading_path: &str,
+    content: &str,
+    chunk_type: &str,
+) {
+    let windows = split_oversized(content);
+    if windows.len() <= 1 {
+        chunks.push(build_chunk(page_slug, heading_path, content, chunk_type));
+        return;
+    }
+
+    let total = windows.len();
+    for (index, window) in windows.iter().enumerate() {
+        let part_heading = part_heading_path(heading_path, index + 1, total);
+        chunks.push(build_chunk(page_slug, &part_heading, window, chunk_type));
+    }
+}
+
+fn part_heading_path(heading_path: &str, part: usize, total: usize) -> String {
+    if heading_path.is_empty() {
+        format!("[{part}/{total}]")
+    } else {
+        format!("{heading_path} [{part}/{total}]")
+    }
+}
+
+/// Split `content` into overlapping windows whose `len / 4` token estimate
+/// stays under [`MAX_CHUNK_TOKENS`], breaking at paragraph boundaries first,
+/// then line boundaries, then (as a last resort) character boundaries.
+/// Content already under the cap is returned as a single window.
+fn split_oversized(content: &str) -> Vec<&str> {
+    if content.len() <= MAX_CHUNK_TOKENS * APPROX_BYTES_PER_TOKEN {
+        return vec![content];
+    }
+
+    let window_bytes = SPLIT_WINDOW_TOKENS * APPROX_BYTES_PER_TOKEN;
+    let overlap_bytes = SPLIT_OVERLAP_TOKENS * APPROX_BYTES_PER_TOKEN;
+    let atoms = split_atoms(content, window_bytes);
+    if atoms.is_empty() {
+        return vec![content];
+    }
+
+    let mut windows = Vec::new();
+    let mut window_start_atom = 0;
+    loop {
+        let window_byte_start = atoms[window_start_atom].0;
+        let mut end_atom = window_start_atom;
+        while end_atom + 1 < atoms.len()
+            && atoms[end_atom + 1].1 - window_byte_start <= window_bytes
+        {
+            end_atom += 1;
+        }
+        let window_byte_end = atoms[end_atom].1;
+        windows.push(&content[window_byte_start..window_byte_end]);
+        if end_atom + 1 >= atoms.len() {
+            return windows;
+        }
+
+        // Start the next window inside this one's tail so consecutive parts
+        // share roughly SPLIT_OVERLAP_TOKENS of context: walk back over atoms
+        // that begin inside the overlap region, falling back to carrying the
+        // final atom when it is small enough.
+        let desired_overlap_start = window_byte_end.saturating_sub(overlap_bytes);
+        let mut next_start = end_atom + 1;
+        while next_start > window_start_atom + 1 && atoms[next_start - 1].0 >= desired_overlap_start
+        {
+            next_start -= 1;
+        }
+        if next_start > end_atom
+            && end_atom > window_start_atom
+            && window_byte_end - atoms[end_atom].0 <= 2 * overlap_bytes
+        {
+            next_start = end_atom;
+        }
+        window_start_atom = next_start;
+    }
+}
+
+/// Split `content` into byte ranges of at most `max_atom_bytes`, preferring
+/// whole paragraphs, then single lines, then hard character splits. Blank
+/// lines and trailing whitespace are excluded from the ranges.
+fn split_atoms(content: &str, max_atom_bytes: usize) -> Vec<(usize, usize)> {
+    let mut atoms = Vec::new();
+    for (start, end) in paragraph_ranges(content) {
+        if end - start <= max_atom_bytes {
+            atoms.push((start, end));
+            continue;
+        }
+        for (line_start, line_end) in line_ranges(&content[start..end], start) {
+            if line_end - line_start <= max_atom_bytes {
+                atoms.push((line_start, line_end));
+            } else {
+                hard_split(content, line_start, line_end, max_atom_bytes, &mut atoms);
+            }
+        }
+    }
+    atoms
+}
+
+/// Byte ranges of paragraphs (runs of non-blank lines), with trailing
+/// whitespace trimmed from each range.
+fn paragraph_ranges(content: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut end = 0;
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
+        if line.trim().is_empty() {
+            if let Some(paragraph_start) = start.take() {
+                ranges.push((paragraph_start, end));
+            }
+        } else {
+            if start.is_none() {
+                start = Some(line_start);
+            }
+            end = line_start + line.trim_end().len();
+        }
+    }
+    if let Some(paragraph_start) = start {
+        ranges.push((paragraph_start, end));
+    }
+    ranges
+}
+
+/// Byte ranges (relative to the whole content via `base`) of the non-blank
+/// lines of `paragraph`, with trailing whitespace trimmed.
+fn line_ranges(paragraph: &str, base: usize) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut offset = 0;
+    for line in paragraph.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
+        let trimmed = line.trim_end();
+        if !trimmed.is_empty() {
+            ranges.push((base + line_start, base + line_start + trimmed.len()));
+        }
+    }
+    ranges
+}
+
+/// Last-resort split of an unbreakable span into ranges of at most
+/// `max_atom_bytes`, cutting only at UTF-8 character boundaries.
+fn hard_split(
+    content: &str,
+    start: usize,
+    end: usize,
+    max_atom_bytes: usize,
+    atoms: &mut Vec<(usize, usize)>,
+) {
+    let mut piece_start = start;
+    while end - piece_start > max_atom_bytes {
+        let mut cut = piece_start + max_atom_bytes;
+        while !content.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        atoms.push((piece_start, cut));
+        piece_start = cut;
+    }
+    atoms.push((piece_start, end));
 }
 
 fn build_chunk(page_slug: &str, heading_path: &str, content: &str, chunk_type: &str) -> Chunk {

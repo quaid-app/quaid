@@ -74,6 +74,23 @@ impl Drop for TempFileCleanupGuard {
 const DEFAULT_MODEL_ALIAS: &str = "small";
 const DEFAULT_EMBEDDING_DIMENSIONS: usize = 384;
 
+/// Version of the embedding pipeline: pooling strategy, query instruction,
+/// and chunk shaping. Bump whenever embeddings produced by older binaries are
+/// no longer comparable with freshly computed ones, so `quaid embed --all` /
+/// `--stale` re-embeds existing pages exactly once.
+///
+/// History:
+/// - 1: masked mean pooling, no query instruction, unbounded chunk size.
+/// - 2: CLS pooling, "Represent this sentence for searching relevant
+///   passages: " prefix on BGE en-v1.5 retrieval queries, ~480-token chunk
+///   cap with overlapping sub-splits.
+pub const EMBEDDER_VERSION: i64 = 2;
+
+/// Instruction prefix the BGE en-v1.5 family was trained to expect on
+/// retrieval *queries*. Passages — and symmetric comparisons such as novelty
+/// and supersede checks — are embedded without it.
+const BGE_QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
+
 /// Pinned SHA-256 fingerprints for the three files that make up a downloadable
 /// embedding model, used for integrity verification after download.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +164,13 @@ impl ModelConfig {
     /// of the model's `config.json` (only possible for custom models).
     pub fn needs_dimension_hydration(&self) -> bool {
         self.embedding_dim == 0
+    }
+
+    /// Returns `true` for the BGE en-v1.5 family (`small`/`base`/`large`),
+    /// which is trained with [`BGE_QUERY_INSTRUCTION`] prepended to retrieval
+    /// queries. BGE-m3 and unknown custom models take no query prefix.
+    fn uses_query_instruction(&self) -> bool {
+        matches!(self.alias.as_str(), "small" | "base" | "large")
     }
 }
 
@@ -489,6 +513,18 @@ impl EmbeddingModel {
         }
     }
 
+    /// Embeds a retrieval query, prepending [`BGE_QUERY_INSTRUCTION`] for the
+    /// BGE en-v1.5 family on a real semantic backend. The hash shim stays
+    /// prefix-free so its query and passage embeddings remain comparable.
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, InferenceError> {
+        let semantic = !matches!(self.backend, EmbeddingBackend::HashShim);
+        if semantic && self.config.uses_query_instruction() {
+            self.embed(&format!("{BGE_QUERY_INSTRUCTION}{text}"))
+        } else {
+            self.embed(text)
+        }
+    }
+
     fn evidence_kind(&self) -> EmbeddingEvidenceKind {
         match self.backend {
             EmbeddingBackend::HashShim => EmbeddingEvidenceKind::HashShim,
@@ -608,6 +644,7 @@ fn embed_candle(
         })?;
 
     let max_len = 512;
+    warn_on_truncation(encoding.get_ids().len(), max_len);
     let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(max_len)];
     let mask: &[u32] =
         &encoding.get_attention_mask()[..encoding.get_attention_mask().len().min(max_len)];
@@ -636,7 +673,18 @@ fn embed_candle(
             message: format!("BERT forward: {e}"),
         })?;
 
-    mean_pool_and_normalize(output, attention_mask)
+    cls_pool_and_normalize(output)
+}
+
+/// Warns when tokenized input exceeds the encoder window and must be sliced.
+/// Chunking caps chunk sizes well below the window, so this firing usually
+/// means a pathological chunk (e.g. a single enormous unbreakable line).
+fn warn_on_truncation(token_len: usize, max_len: usize) {
+    if token_len > max_len {
+        eprintln!(
+            "Warning: embedding input is {token_len} tokens but the model window is {max_len}; truncating. Text beyond the window will not contribute to this vector."
+        );
+    }
 }
 
 #[cfg(feature = "online-model")]
@@ -653,6 +701,7 @@ fn embed_candle_xlm_roberta(
             message: format!("tokenizer: {e}"),
         })?;
 
+    warn_on_truncation(encoding.get_ids().len(), max_len);
     let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(max_len)];
     let mask: &[u32] =
         &encoding.get_attention_mask()[..encoding.get_attention_mask().len().min(max_len)];
@@ -688,55 +737,22 @@ fn embed_candle_xlm_roberta(
             message: format!("XLM-R forward: {e}"),
         })?;
 
-    mean_pool_and_normalize(output, attention_mask)
+    cls_pool_and_normalize(output)
 }
 
-fn mean_pool_and_normalize(
-    output: Tensor,
-    attention_mask: Tensor,
-) -> Result<Vec<f32>, InferenceError> {
-    let mask_f32 = attention_mask
-        .unsqueeze(2)
-        .and_then(|t| t.to_dtype(DType::F32))
+/// Pools a transformer forward pass to the hidden state of the first token
+/// ([CLS] for BERT, `<s>` for XLM-R) and L2-normalizes it. The BGE en-v1.5
+/// family and bge-m3 dense retrieval are trained for CLS pooling; mean
+/// pooling produces embeddings off the models' calibrated similarity scale.
+fn cls_pool_and_normalize(output: Tensor) -> Result<Vec<f32>, InferenceError> {
+    let cls = output
+        .narrow(1, 0, 1)
+        .and_then(|t| t.squeeze(1))
         .map_err(|e| InferenceError::Internal {
-            message: format!("mask expand: {e}"),
+            message: format!("cls pool: {e}"),
         })?;
 
-    let mask_broadcast =
-        mask_f32
-            .broadcast_as(output.shape())
-            .map_err(|e| InferenceError::Internal {
-                message: format!("mask broadcast: {e}"),
-            })?;
-
-    let masked = output
-        .mul(&mask_broadcast)
-        .map_err(|e| InferenceError::Internal {
-            message: format!("mask mul: {e}"),
-        })?;
-
-    let sum = masked.sum(1).map_err(|e| InferenceError::Internal {
-        message: format!("sum: {e}"),
-    })?;
-
-    let count = mask_f32.sum(1).map_err(|e| InferenceError::Internal {
-        message: format!("count: {e}"),
-    })?;
-
-    let count_broadcast =
-        count
-            .broadcast_as(sum.shape())
-            .map_err(|e| InferenceError::Internal {
-                message: format!("count broadcast: {e}"),
-            })?;
-
-    let mean = sum
-        .div(&count_broadcast)
-        .map_err(|e| InferenceError::Internal {
-            message: format!("mean: {e}"),
-        })?;
-
-    let norm = mean
+    let norm = cls
         .sqr()
         .and_then(|t| t.sum_keepdim(1))
         .and_then(|t| t.sqrt())
@@ -745,12 +761,12 @@ fn mean_pool_and_normalize(
         })?;
 
     let norm_broadcast = norm
-        .broadcast_as(mean.shape())
+        .broadcast_as(cls.shape())
         .map_err(|e| InferenceError::Internal {
             message: format!("norm broadcast: {e}"),
         })?;
 
-    let normalized = mean
+    let normalized = cls
         .div(&norm_broadcast)
         .map_err(|e| InferenceError::Internal {
             message: format!("normalize: {e}"),
@@ -1259,6 +1275,30 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
         .embed(trimmed)
 }
 
+/// Embeds a retrieval *query* with the currently configured model. The BGE
+/// en-v1.5 family is trained for asymmetric retrieval: queries carry an
+/// instruction prefix while passages do not, so this must only be used for
+/// query-to-passage search (e.g. [`search_vec`]). Symmetric comparisons
+/// (novelty, supersede, doc-doc similarity) should call [`embed`] instead.
+/// BGE-m3, custom models, and the hash-shim fallback embed queries exactly
+/// like passages.
+pub fn embed_query(text: &str) -> Result<Vec<f32>, InferenceError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(InferenceError::EmptyInput);
+    }
+
+    ensure_model();
+    let runtime = model_runtime().lock().unwrap_or_else(|e| e.into_inner());
+    runtime
+        .loaded
+        .as_ref()
+        .ok_or_else(|| InferenceError::Internal {
+            message: "embedding model is not loaded; call configure_runtime_model first".to_owned(),
+        })?
+        .embed_query(trimmed)
+}
+
 /// Reports whether the currently loaded model is the real semantic backend or
 /// the deterministic hash-based shim. Used by callers that want to label or
 /// downrank evidence produced by the fallback.
@@ -1419,7 +1459,7 @@ fn search_vec_internal(
         });
     }
 
-    let query_embedding = embed(query).map_err(|err| SearchError::Internal {
+    let query_embedding = embed_query(query).map_err(|err| SearchError::Internal {
         message: err.to_string(),
     })?;
     let query_blob = embedding_to_blob(&query_embedding);
@@ -1985,8 +2025,11 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
+        // Retrieval is asymmetric since EMBEDDER_VERSION 2: the query carries
+        // the BGE instruction prefix while the stored passage does not, so an
+        // identical-text match scores high (~0.92 measured) but no longer 1.0.
         assert!(
-            results[0].score > 0.99,
+            results[0].score > 0.85,
             "unexpected score: {}",
             results[0].score
         );

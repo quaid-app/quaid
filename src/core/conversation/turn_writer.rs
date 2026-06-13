@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 
@@ -132,7 +132,10 @@ pub fn append_turn(
 
     let path_info = format::conversation_path_for(namespace, session_id, timestamp)?;
     let full_path = root.root_path.join(&path_info.relative_path);
-    let snapshot = session_snapshot(&root.root_path, namespace, session_id)?;
+    // Prefer the cached per-session cursor (max_ordinal + latest status) so we
+    // avoid the O(session) day-file scan on every turn. The cache is rebuilt
+    // from disk (the source of truth) when no row exists yet.
+    let snapshot = cached_or_scanned_snapshot(conn, &root.root_path, namespace, session_id)?;
     if !full_path.exists() && snapshot.latest_status == Some(ConversationStatus::Closed) {
         return Err(TurnWriteError::SessionClosed {
             session_id: session_id.to_owned(),
@@ -161,6 +164,20 @@ pub fn append_turn(
     } else {
         write_new_file(&full_path, &path_info, session_id, timestamp, &turn)?;
     }
+
+    // Refresh the cursor cache to reflect the turn we just wrote. The new turn's
+    // day-file is the latest by construction (its date is >= every prior file),
+    // so its status is the session's latest status.
+    upsert_cached_snapshot(
+        conn,
+        namespace,
+        session_id,
+        &SessionSnapshot {
+            max_ordinal: ordinal,
+            latest_status: Some(ConversationStatus::Open),
+            latest_date: Some(path_info.date.clone()),
+        },
+    )?;
 
     idle_close::record_turn(&database_path(conn)?, namespace, session_id);
 
@@ -251,6 +268,16 @@ fn close_session_internal(
     conversation.frontmatter.closed_at = Some(closed_at.clone());
     write_conversation_file(&full_path, &conversation)?;
     idle_close::clear_session(&db_path, namespace, session_id);
+
+    // Keep the append-cursor cache coherent: a future `append_turn` that opens
+    // a new day-file must see the session as Closed without rescanning disk.
+    // Preserve the cached ordinal/date when present, else rebuild from disk.
+    let mut snapshot = read_cached_snapshot(conn, namespace, session_id)?.map_or_else(
+        || session_snapshot(&root.root_path, namespace, session_id),
+        Ok,
+    )?;
+    snapshot.latest_status = Some(ConversationStatus::Closed);
+    upsert_cached_snapshot(conn, namespace, session_id, &snapshot)?;
 
     Ok(Some(CloseSessionResult {
         closed_at,
@@ -412,6 +439,89 @@ fn write_conversation_file(
 struct SessionSnapshot {
     max_ordinal: i64,
     latest_status: Option<ConversationStatus>,
+    latest_date: Option<String>,
+}
+
+/// Returns the session cursor (max ordinal + latest status), preferring the
+/// `conversation_sessions` cache and falling back to a full day-file scan when
+/// no cached row exists yet. A cache miss seeds the cache so the next turn
+/// reads it instead of rescanning. This is what makes `append_turn` O(1) in the
+/// number of prior day-files rather than O(session-length).
+fn cached_or_scanned_snapshot(
+    conn: &Connection,
+    root_path: &Path,
+    namespace: Option<&str>,
+    session_id: &str,
+) -> Result<SessionSnapshot, TurnWriteError> {
+    if let Some(cached) = read_cached_snapshot(conn, namespace, session_id)? {
+        return Ok(cached);
+    }
+    let scanned = session_snapshot(root_path, namespace, session_id)?;
+    upsert_cached_snapshot(conn, namespace, session_id, &scanned)?;
+    Ok(scanned)
+}
+
+fn read_cached_snapshot(
+    conn: &Connection,
+    namespace: Option<&str>,
+    session_id: &str,
+) -> Result<Option<SessionSnapshot>, TurnWriteError> {
+    let namespace = namespace.unwrap_or("");
+    conn.query_row(
+        "SELECT max_ordinal, latest_status, latest_date
+         FROM conversation_sessions
+         WHERE namespace = ?1 AND session_id = ?2",
+        rusqlite::params![namespace, session_id],
+        |row| {
+            let max_ordinal: i64 = row.get(0)?;
+            let status_text: Option<String> = row.get(1)?;
+            let latest_date: Option<String> = row.get(2)?;
+            Ok((max_ordinal, status_text, latest_date))
+        },
+    )
+    .optional()?
+    .map(|(max_ordinal, status_text, latest_date)| {
+        let latest_status = status_text
+            .map(|text| text.parse::<ConversationStatus>())
+            .transpose()
+            .map_err(|message| TurnWriteError::Config { message })?;
+        Ok(SessionSnapshot {
+            max_ordinal,
+            latest_status,
+            latest_date,
+        })
+    })
+    .transpose()
+}
+
+fn upsert_cached_snapshot(
+    conn: &Connection,
+    namespace: Option<&str>,
+    session_id: &str,
+    snapshot: &SessionSnapshot,
+) -> Result<(), TurnWriteError> {
+    let namespace = namespace.unwrap_or("");
+    conn.execute(
+        "INSERT INTO conversation_sessions
+             (namespace, session_id, max_ordinal, latest_status, latest_date, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+         ON CONFLICT(namespace, session_id) DO UPDATE SET
+             max_ordinal = excluded.max_ordinal,
+             latest_status = excluded.latest_status,
+             latest_date = excluded.latest_date,
+             updated_at = excluded.updated_at",
+        rusqlite::params![
+            namespace,
+            session_id,
+            snapshot.max_ordinal,
+            snapshot
+                .latest_status
+                .as_ref()
+                .map(|status| status.as_str()),
+            snapshot.latest_date,
+        ],
+    )?;
+    Ok(())
 }
 
 fn session_snapshot(
@@ -429,6 +539,7 @@ fn session_snapshot(
         return Ok(SessionSnapshot {
             max_ordinal: 0,
             latest_status: None,
+            latest_date: None,
         });
     }
 
@@ -461,6 +572,7 @@ fn session_snapshot(
     Ok(SessionSnapshot {
         max_ordinal,
         latest_status,
+        latest_date,
     })
 }
 

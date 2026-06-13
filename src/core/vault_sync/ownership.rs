@@ -178,6 +178,12 @@ pub fn owner_session_id(
 /// mirrors the assignment onto `collections.active_lease_session_id`;
 /// errors if a different live runtime-host session already holds the
 /// lease.
+///
+/// When the recorded owner and `collections.active_lease_session_id` already
+/// match `session_id`, the write transaction is skipped entirely. The
+/// supervisor calls this every heartbeat tick, so the no-op fast path keeps an
+/// idle, single-owner collection from committing a fsync-backed write per tick
+/// just to re-stamp `updated_at` to the same owner.
 pub fn acquire_owner_lease(
     conn: &Connection,
     collection_id: i64,
@@ -194,6 +200,10 @@ pub fn acquire_owner_lease(
                 owner_session_type: owner.session_type,
             });
         }
+    }
+
+    if owner_lease_already_held(conn, collection_id, session_id)? {
+        return Ok(());
     }
 
     let tx = conn.unchecked_transaction()?;
@@ -214,6 +224,32 @@ pub fn acquire_owner_lease(
     )?;
     tx.commit()?;
     Ok(())
+}
+
+/// Reports whether both the `collection_owners` row and the mirrored
+/// `collections.active_lease_session_id` already name `session_id`. A single
+/// read-only query gates the lease write so the common "unchanged ownership"
+/// case in [`acquire_owner_lease`] touches no rows. Returns `false` (forcing a
+/// write) if either side is absent or disagrees, so a half-applied lease from a
+/// prior crash is always repaired.
+fn owner_lease_already_held(
+    conn: &Connection,
+    collection_id: i64,
+    session_id: &str,
+) -> Result<bool, VaultSyncError> {
+    conn.query_row(
+        "SELECT 1
+         FROM collection_owners o
+         JOIN collections c ON c.id = o.collection_id
+         WHERE o.collection_id = ?1
+           AND o.session_id = ?2
+           AND c.active_lease_session_id = ?2",
+        params![collection_id, session_id],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(Into::into)
 }
 
 /// Clears the owner lease and `active_lease_session_id` when the

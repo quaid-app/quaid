@@ -2928,9 +2928,23 @@ fn run_supervisor_loop(
         Instant::now() - Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS);
     let mut last_embedding_drain =
         Instant::now() - Duration::from_secs(embedding::drain_interval_secs());
+    // Refresh owner leases on the heartbeat cadence rather than every 200ms
+    // tick. Combined with `acquire_owner_lease`'s no-op fast path for unchanged
+    // ownership, an idle single-owner collection issues zero owner-lease write
+    // transactions per second instead of ~5. Seeded in the past so the first
+    // tick claims leases immediately.
+    let mut last_owner_lease_refresh =
+        Instant::now() - Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
+    // One persistent runtime connection reused across ticks instead of a fresh
+    // open (and its PRAGMA/extension setup) every 200ms. Re-opened lazily if a
+    // tick is skipped because the open failed.
+    let mut persistent_conn: Option<Connection> = None;
     while !stop_signal.load(Ordering::SeqCst) {
         maybe_hold_supervisor_tick_for_tests(&stop_signal);
-        if let Ok(conn) = db::open_runtime(&db_path) {
+        if persistent_conn.is_none() {
+            persistent_conn = db::open_runtime(&db_path).ok();
+        }
+        if let Some(conn) = persistent_conn.take() {
             if last_idle_close_sweep.elapsed()
                 >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
             {
@@ -2984,13 +2998,21 @@ fn run_supervisor_loop(
                     last_dedup_sweep = Instant::now();
                 }
             }
+            let refresh_owner_lease =
+                last_owner_lease_refresh.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
+            if refresh_owner_lease {
+                last_owner_lease_refresh = Instant::now();
+            }
             if let Ok(mut stmt) = conn.prepare("SELECT id, reload_generation FROM collections") {
                 if let Ok(rows) = stmt
                     .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
                     .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
                 {
                     for (collection_id, generation) in rows {
-                        let _ = acquire_owner_lease(&conn, collection_id, &session_id_for_thread);
+                        if refresh_owner_lease {
+                            let _ =
+                                acquire_owner_lease(&conn, collection_id, &session_id_for_thread);
+                        }
                         let supervisor_generation = with_supervisor_handles(|handles| {
                             handles.get(&collection_id).and_then(|handle| {
                                 (handle.session_id == session_id_for_thread)
@@ -3058,6 +3080,9 @@ fn run_supervisor_loop(
                     last_overflow_recovery = Instant::now();
                 }
             }
+            // Return the connection to the persistent slot for reuse on the
+            // next tick; only a failed open (handled above) leaves it empty.
+            persistent_conn = Some(conn);
         }
         thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
     }

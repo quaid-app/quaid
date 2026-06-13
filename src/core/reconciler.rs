@@ -2765,6 +2765,76 @@ fn classify_missing_paths(
     Ok((quarantined, hard_deleted))
 }
 
+/// Maximum number of per-file actions folded into a single SQLite transaction
+/// during [`apply_reconciliation`]. Bulk attach/reconcile previously paid one
+/// WAL commit (and, under `synchronous=FULL`, one fsync) per file; batching
+/// amortizes the commit cost across up to this many files while keeping any
+/// single transaction small enough that a mid-batch failure rolls back a
+/// bounded amount of work.
+const RECONCILE_BATCH_SIZE: usize = 256;
+
+/// Runs `action` inside a transaction *only* when `conn` is currently in
+/// autocommit mode. When a batch transaction is already open (the
+/// [`apply_reconciliation`] fast path), the action runs directly on the
+/// connection and the outer batch owns the single commit. This lets the
+/// per-file `apply_*` helpers keep their original standalone-transaction
+/// behavior for callers that invoke them one-off (tests, single-file paths)
+/// while collapsing to zero nested commits inside a batch.
+fn run_in_local_or_batch_tx<T>(
+    conn: &Connection,
+    action: impl FnOnce(&Connection) -> Result<T, ReconcileError>,
+) -> Result<T, ReconcileError> {
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        let value = action(&tx)?;
+        tx.commit()?;
+        Ok(value)
+    } else {
+        action(conn)
+    }
+}
+
+/// A transaction handle that either owns a fresh standalone transaction (when
+/// the caller passed an autocommit connection) or borrows an already-open
+/// batch transaction. Dereferences to [`Connection`] so existing
+/// `tx.execute(...)` / `&tx` call sites are untouched, and `commit()` is a
+/// no-op in the borrowed case so the outer batch keeps ownership of the single
+/// commit. This keeps `apply_reingest`'s body byte-for-byte stable for a clean
+/// merge with the parallel Area 5 edits while still folding into a batch.
+enum MaybeBatchTx<'conn> {
+    Owned(rusqlite::Transaction<'conn>),
+    Borrowed(&'conn Connection),
+}
+
+impl<'conn> MaybeBatchTx<'conn> {
+    fn begin(conn: &'conn Connection) -> Result<Self, ReconcileError> {
+        if conn.is_autocommit() {
+            Ok(Self::Owned(conn.unchecked_transaction()?))
+        } else {
+            Ok(Self::Borrowed(conn))
+        }
+    }
+
+    fn commit(self) -> Result<(), ReconcileError> {
+        match self {
+            Self::Owned(tx) => tx.commit()?,
+            Self::Borrowed(_) => {}
+        }
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for MaybeBatchTx<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(tx) => tx,
+            Self::Borrowed(conn) => conn,
+        }
+    }
+}
+
 fn apply_reconciliation(
     conn: &Connection,
     collection: &Collection,
@@ -2775,8 +2845,18 @@ fn apply_reconciliation(
     let actions = build_apply_actions(conn, collection.id, diff, rename_resolution)?;
     let mut summary = ApplySummary::default();
 
-    for action in &actions {
-        apply_action(conn, collection.id, root_path, action, &mut summary)?;
+    // Fold each chunk of actions into one transaction so a 1K-file attach pays
+    // ~4 commits instead of 1K. The inner `apply_*` helpers detect the open
+    // batch transaction (via `run_in_local_or_batch_tx`) and skip their own
+    // BEGIN/COMMIT. On any error the batch transaction is dropped, rolling back
+    // the whole chunk; already-committed earlier chunks stay applied, matching
+    // the previous per-file partial-progress semantics at a coarser grain.
+    for chunk in actions.chunks(RECONCILE_BATCH_SIZE) {
+        let tx = conn.unchecked_transaction()?;
+        for action in chunk {
+            apply_action(&tx, collection.id, root_path, action, &mut summary)?;
+        }
+        tx.commit()?;
     }
 
     Ok(summary)
@@ -2903,17 +2983,23 @@ fn apply_delete_or_quarantine(
     relative_path: &Path,
     summary: &mut ApplySummary,
 ) -> Result<(), ReconcileError> {
-    let tx = conn.unchecked_transaction()?;
-    let branches = db_only_state_branches(&tx, page_id)?;
+    let branches = run_in_local_or_batch_tx(conn, |tx| {
+        let branches = db_only_state_branches(tx, page_id)?;
+        if branches.any() {
+            tx.execute(
+                "UPDATE pages
+                 SET quarantined_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                 WHERE id = ?1",
+                [page_id],
+            )?;
+            file_state::delete_file_state(tx, collection_id, &path_to_string(relative_path))?;
+        } else {
+            tx.execute("DELETE FROM pages WHERE id = ?1", [page_id])?;
+        }
+        Ok(branches)
+    })?;
+
     if branches.any() {
-        tx.execute(
-            "UPDATE pages
-             SET quarantined_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-             WHERE id = ?1",
-            [page_id],
-        )?;
-        file_state::delete_file_state(&tx, collection_id, &path_to_string(relative_path))?;
-        tx.commit()?;
         summary.quarantined_db_state += 1;
         eprintln!(
             "INFO: reconcile_quarantined page_id={} path={} programmatic_links={} non_import_assertions={} raw_data={} contradictions={} knowledge_gaps={}",
@@ -2925,12 +3011,9 @@ fn apply_delete_or_quarantine(
             i32::from(branches.contradictions),
             i32::from(branches.knowledge_gaps)
         );
-        return Ok(());
+    } else {
+        summary.hard_deleted += 1;
     }
-
-    tx.execute("DELETE FROM pages WHERE id = ?1", [page_id])?;
-    tx.commit()?;
-    summary.hard_deleted += 1;
     Ok(())
 }
 
@@ -2949,15 +3032,26 @@ fn apply_quarantine_unresolved_page(
     relative_path: &Path,
     summary: &mut ApplySummary,
 ) -> Result<(), ReconcileError> {
-    let tx = conn.unchecked_transaction()?;
-    file_state::delete_file_state(&tx, collection_id, &path_to_string(relative_path))?;
-    let still_bound: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM file_state WHERE page_id = ?1",
-        [page_id],
-        |row| row.get(0),
-    )?;
-    if still_bound > 0 {
-        tx.commit()?;
+    let reclaimed = run_in_local_or_batch_tx(conn, |tx| {
+        file_state::delete_file_state(tx, collection_id, &path_to_string(relative_path))?;
+        let still_bound: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM file_state WHERE page_id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )?;
+        if still_bound > 0 {
+            return Ok(true);
+        }
+        tx.execute(
+            "UPDATE pages
+             SET quarantined_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?1",
+            [page_id],
+        )?;
+        Ok(false)
+    })?;
+
+    if reclaimed {
         eprintln!(
             "INFO: reconcile_unresolved_page_reclaimed page_id={} stale_path={}",
             page_id,
@@ -2965,13 +3059,6 @@ fn apply_quarantine_unresolved_page(
         );
         return Ok(());
     }
-    tx.execute(
-        "UPDATE pages
-         SET quarantined_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE id = ?1",
-        [page_id],
-    )?;
-    tx.commit()?;
     summary.quarantined_ambiguous += 1;
     eprintln!(
         "WARN: reconcile_quarantined_unresolved page_id={} path={}",
@@ -3090,7 +3177,7 @@ fn apply_reingest(
         ReconcileError::Other(format!("apply_reingest: serialize frontmatter: {err}"))
     })?;
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = MaybeBatchTx::begin(conn)?;
     let now: String = tx.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
         row.get(0)
     })?;

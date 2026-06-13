@@ -12,6 +12,8 @@ pub mod tools;
 pub mod validation;
 
 pub use errors::*;
-pub use http::{bind_with_token_guard, run_http, HttpConfig, HttpConfigError};
+pub use http::{
+    bind_with_token_guard, build_connection_service, run_http, HttpConfig, HttpConfigError,
+};
 pub use server::QuaidServer;
 pub use validation::{validate_slug, validate_temporal_value, validate_token};

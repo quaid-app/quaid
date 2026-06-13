@@ -91,6 +91,18 @@ fn start_serve_runtime_watcher_reconciles_external_edit_after_debounce() {
     drop(runtime);
 }
 
+// PIN JUSTIFICATION (the four source-introspection tests below):
+// `start_serve_runtime` spins up background threads (scheduled full-hash
+// audit, janitor sweep, raw-import TTL sweep, extraction worker) and stores
+// their join handles on `ServeRuntime` for an orderly shutdown. The guarded
+// properties are: (1) every maintenance tick logs its failure instead of
+// silently discarding it, (2) the extraction worker is spawned and its handle
+// retained, (3) the worker honours the stop signal and logs init/run
+// failures, and (4) `Drop` joins the worker handle. Triggering a maintenance
+// *failure* on demand, or asserting a thread was joined, has no public
+// injection seam — and the worker's queue-drain semantics are already covered
+// behaviourally in `tests/extraction_worker.rs`. These pins guard the
+// thread-lifecycle and fail-loud wiring that the behavioural tests cannot see.
 #[test]
 fn start_serve_runtime_logs_scheduled_maintenance_failures() {
     let source = production_vault_sync_source();

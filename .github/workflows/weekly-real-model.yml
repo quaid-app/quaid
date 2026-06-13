@@ -1,0 +1,125 @@
+# Weekly, non-PR-gating smoke that exercises the REAL embedding models (no
+# QUAID_FORCE_HASH_SHIM) so the 768d/1024d vec-table code paths actually run,
+# plus a Windows `cargo check` so the non-Unix `#[cfg(not(unix))]` branches keep
+# compiling. Both jobs are intentionally scheduled-only (never block a PR);
+# see docs/fable-review.md §23.
+name: Weekly real-model + Windows check
+
+on:
+  schedule:
+    # 07:00 UTC every Monday.
+    - cron: "0 7 * * 1"
+  # Allow maintainers to trigger it on demand without waiting for the cron.
+  workflow_dispatch:
+
+# Never let two scheduled runs overlap; the latest wins.
+concurrency:
+  group: weekly-real-model
+  cancel-in-progress: true
+
+jobs:
+  real-model-smoke:
+    name: Real-model embed+search (${{ matrix.alias }} / ${{ matrix.dim }}d)
+    runs-on: ubuntu-latest
+    # Non-blocking: a HuggingFace outage must not page anyone.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - alias: small
+            dim: 384
+          - alias: base
+            dim: 768
+          - alias: large
+            dim: 1024
+          - alias: m3
+            dim: 1024
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + model artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/huggingface
+            ~/.quaid/models
+            target
+          key: ${{ runner.os }}-weekly-real-model-${{ matrix.alias }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-weekly-real-model-${{ matrix.alias }}-
+
+      - name: Build online-model binary (no hash shim)
+        run: cargo build --locked --no-default-features --features bundled,online-model
+
+      - name: Real-model embed + search round-trip
+        # NOTE: QUAID_FORCE_HASH_SHIM is deliberately NOT set — this is the
+        # whole point of the weekly job: download and run the real BGE model so
+        # the per-dimension page_embeddings_vec_<dim> table is created and
+        # populated, which the PR-gating online-channel test lane (which forces
+        # the hash shim) never exercises.
+        env:
+          QUAID_MODEL: ${{ matrix.alias }}
+        run: |
+          set -euo pipefail
+          BIN="target/debug/quaid"
+          WORK="$(mktemp -d)"
+          DB="$WORK/memory.db"
+          VAULT="$WORK/vault"
+          mkdir -p "$VAULT"
+
+          "$BIN" --db "$DB" --model "${{ matrix.alias }}" init
+
+          # Route the default write-target at our scratch vault.
+          sqlite3 "$DB" "UPDATE collections SET root_path='$VAULT', writable=1, is_write_target=1, state='active' WHERE id=1;"
+
+          printf '%s\n' '---' 'title: Rust Engineer' 'type: person' '---' \
+            'Alice is a Rust engineer who builds SQLite-backed vector search with FTS5.' \
+            | "$BIN" --db "$DB" --model "${{ matrix.alias }}" put people/alice
+
+          "$BIN" --db "$DB" --model "${{ matrix.alias }}" embed --all
+
+          # The per-dimension vec table must exist AND hold at least one row.
+          VEC_ROWS="$(sqlite3 "$DB" "SELECT COUNT(*) FROM page_embeddings_vec_${{ matrix.dim }};")"
+          echo "page_embeddings_vec_${{ matrix.dim }} rows: $VEC_ROWS"
+          if [ "$VEC_ROWS" -lt 1 ]; then
+            echo "::error::expected at least one row in page_embeddings_vec_${{ matrix.dim }} for alias ${{ matrix.alias }}"
+            exit 1
+          fi
+
+          # Semantic search must return the seeded page via the real model.
+          OUT="$("$BIN" --db "$DB" --model "${{ matrix.alias }}" search 'who writes vector search in rust' --json)"
+          echo "$OUT"
+          echo "$OUT" | grep -q 'people/alice' \
+            || { echo "::error::real-model search did not return the seeded page for ${{ matrix.alias }}"; exit 1; }
+
+  windows-check:
+    name: Windows cargo check (x86_64-pc-windows-msvc)
+    # Cross-compile from Linux so the non-Unix branches keep compiling. This is
+    # `cargo check` only — no Windows runtime behaviour is asserted.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + Windows target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-windows-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-windows-check-
+
+      - name: cargo check (windows target)
+        run: cargo check --locked --target x86_64-pc-windows-msvc --no-default-features --features bundled,online-model

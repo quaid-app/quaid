@@ -26,6 +26,17 @@
 //! * Duplicate `insert_write_dedup` failures are fail-closed and do
 //!   not erase the pre-existing dedup entry or unrelated self-write
 //!   tracking state.
+//!
+//! PIN JUSTIFICATION: every invariant here is a kernel-level
+//! syscall-ordering or peer-credential seam — `renameat`-before-commit
+//! fd ordering, `NOFOLLOW`/fd-relative parent creation, and SO_PEERCRED
+//! socket-mode/uid/pid verification before `WhoAmI`. The *outcomes*
+//! (durable atomic writes, rejected spoofed peers, fail-closed dedup) are
+//! covered by the behavioural put/IPC tests, but the relative ordering of
+//! the syscalls and the choice of `NOFOLLOW` cannot be observed from any
+//! public API without winning a TOCTOU race against the live writer. These
+//! stay source pins by design — they are the canonical "behaviour is
+//! impractical to drive" case the test-effectiveness review carves out.
 
 use std::fs as stdfs;
 use std::path::Path;

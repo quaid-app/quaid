@@ -43,6 +43,20 @@ use quaid::core::markdown;
 use quaid::core::raw_imports;
 use quaid::core::vault_sync::*;
 
+// PIN JUSTIFICATION (the four source-introspection tests below):
+// `sync_collection_watchers`, `run_overflow_recovery_pass`,
+// `start_collection_watcher`, and `mark_watcher_crashed` are all private
+// supervisor internals whose triggers — a `notify` backend init failure
+// (poll-mode fallback), a channel-overflow recovery pass, and a watcher crash
+// with exponential backoff — cannot be injected through the public vault-sync
+// API without a live OS file-watcher and a forced backend failure. The
+// behavioural `plain_sync_*` tests below prove the reconcile *outcomes*; these
+// four pins guard the active-only gating, lease authorization, poll fallback,
+// and crash-state transitions that have no public injection seam. The
+// crash → `needs_full_sync` recovery property is additionally pinned in
+// `tests/vault_sync_robustness.rs`
+// (`sync_collection_watchers_flags_full_sync_when_rearming_after_crash`).
+
 #[test]
 fn sync_collection_watchers_production_logic_stays_active_only_and_generation_aware() {
     let source = production_vault_sync_source();

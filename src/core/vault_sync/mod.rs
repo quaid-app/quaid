@@ -310,8 +310,8 @@ use restore::{
 };
 pub use session::{
     find_active_daemon_session, find_active_runtime_host, heartbeat_session, register_cli_session,
-    register_session, sweep_stale_sessions, try_promote_to_serve_host, unregister_session,
-    ActiveSessionInfo, SessionType,
+    register_session, sweep_stale_sessions, try_claim_daemon_session, try_promote_to_serve_host,
+    unregister_session, ActiveSessionInfo, DaemonSessionClaim, SessionType,
 };
 #[cfg(unix)]
 pub use watcher::WatcherError;
@@ -374,6 +374,21 @@ pub struct ServeRuntime {
     /// the session itself). Drop opens a fresh connection and removes the
     /// row to keep `serve_sessions` bounded.
     transport_only_db_path: Option<String>,
+}
+
+impl ServeRuntime {
+    /// Returns `true` when this handle owns a supervisor thread and
+    /// that thread has exited. The daemon foreground loop polls this to
+    /// detect a dead supervisor (a zombie daemon whose watchers,
+    /// heartbeats, and extraction have silently stopped) and exit
+    /// non-zero so launchd `KeepAlive` / systemd `Restart=on-failure`
+    /// restarts the unit. Always `false` for transport-only handles,
+    /// which own no supervisor thread.
+    pub fn supervisor_finished(&self) -> bool {
+        self.handle
+            .as_ref()
+            .is_some_and(thread::JoinHandle::is_finished)
+    }
 }
 
 impl Drop for ServeRuntime {
@@ -2768,32 +2783,36 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     start_full_runtime(conn, db_path, session_id)
 }
 
-/// Boots the long-running daemon runtime: registers a `daemon`
-/// session (refusing if another live `daemon` already exists),
-/// publishes the IPC socket, runs the startup recovery sequence, and
-/// spawns watcher and extraction threads. The daemon is the canonical
-/// runtime owner; subsequent `quaid serve` invocations against the
-/// same database will see this `daemon` row and stay transport-only
-/// per [`start_serve_runtime`].
+/// Boots the long-running daemon runtime: claims the unique `daemon`
+/// session slot via [`try_claim_daemon_session`] (a single
+/// `BEGIN IMMEDIATE` transaction that sweeps stale rows, reaps a
+/// same-host `daemon` row whose pid is provably dead — the
+/// fresh-heartbeat leftover of a SIGKILLed daemon — and refuses when a
+/// live `daemon` remains), publishes the IPC socket, runs the startup
+/// recovery sequence, and spawns watcher and extraction threads. The
+/// daemon is the canonical runtime owner; subsequent `quaid serve`
+/// invocations against the same database will see this `daemon` row
+/// and stay transport-only per [`start_serve_runtime`].
 pub fn start_daemon_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
     let conn = db::open_runtime(&db_path)?;
-    sweep_stale_sessions(&conn)?;
 
-    if let Some(existing) = find_active_daemon_session(&conn)? {
-        return Err(VaultSyncError::InvariantViolation {
-            message: format!(
-                "DaemonAlreadyRunningError: another daemon is already running for this database \
-                 (pid={pid} host={host} session_id={sid}). Stop it first via `quaid daemon stop` \
-                 (or `kill {pid}` if it isn't installed as a service) and retry.",
-                pid = existing.pid,
-                host = existing.host,
-                sid = existing.session_id
-            ),
-        });
-    }
+    let session_id = match try_claim_daemon_session(&conn)? {
+        DaemonSessionClaim::Claimed(session_id) => session_id,
+        DaemonSessionClaim::AlreadyRunning(existing) => {
+            return Err(VaultSyncError::InvariantViolation {
+                message: format!(
+                    "DaemonAlreadyRunningError: another daemon is already running for this database \
+                     (pid={pid} host={host} session_id={sid}). Stop it first via `quaid daemon stop` \
+                     (or `kill {pid}` if it isn't installed as a service) and retry.",
+                    pid = existing.pid,
+                    host = existing.host,
+                    sid = existing.session_id
+                ),
+            });
+        }
+    };
 
-    let session_id = register_session(&conn, SessionType::Daemon)?;
     start_full_runtime(conn, db_path, session_id)
 }
 
@@ -2939,7 +2958,12 @@ fn run_supervisor_loop(
     // open (and its PRAGMA/extension setup) every 200ms. Re-opened lazily if a
     // tick is skipped because the open failed.
     let mut persistent_conn: Option<Connection> = None;
+    let test_exit_deadline = supervisor_test_exit_deadline();
     while !stop_signal.load(Ordering::SeqCst) {
+        if test_exit_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            eprintln!("WARN: supervisor_test_exit session_id={session_id_for_thread}");
+            return;
+        }
         maybe_hold_supervisor_tick_for_tests(&stop_signal);
         if persistent_conn.is_none() {
             persistent_conn = db::open_runtime(&db_path).ok();
@@ -3148,6 +3172,20 @@ fn maybe_hold_supervisor_tick_for_tests(stop: &AtomicBool) {
     while Instant::now() < deadline && !stop.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+/// Test-only injection point (companion to
+/// [`maybe_hold_supervisor_tick_for_tests`]): when
+/// `QUAID_TEST_SUPERVISOR_EXIT_AFTER_MS` is set, the supervisor thread
+/// returns abruptly that many milliseconds after starting — without
+/// joining the heartbeat thread or unregistering the session, exactly
+/// the shape of a crashed supervisor — so integration tests can prove
+/// the daemon foreground notices the dead supervisor and exits
+/// non-zero for the service manager to restart.
+fn supervisor_test_exit_deadline() -> Option<Instant> {
+    let raw_ms = std::env::var_os("QUAID_TEST_SUPERVISOR_EXIT_AFTER_MS")?;
+    let exit_ms = raw_ms.to_string_lossy().parse::<u64>().ok()?;
+    Some(Instant::now() + Duration::from_millis(exit_ms))
 }
 
 /// CLI entry point that attaches a fresh, empty vault directory to a

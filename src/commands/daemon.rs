@@ -162,63 +162,94 @@ async fn run_foreground(db: Connection, http_config: Option<HttpConfig>) -> Resu
         runtime.session_id
     );
 
-    if let Some(config) = http_config {
+    let exit_code = if let Some(config) = http_config {
         let db_path_for_factory = db_path.clone();
         let factory =
             move || crate::core::db::open(&db_path_for_factory).map_err(anyhow::Error::from);
         // Block on the SSE listener; the supervisor + worker run in
-        // their own threads owned by `runtime`.
+        // their own threads owned by `runtime`. A supervisor that dies
+        // without a shutdown request is a zombie daemon — exit non-zero
+        // so the service manager restarts the unit.
         #[cfg(unix)]
-        {
-            tokio::select! {
-                result = crate::mcp::http::run_http(factory, config) => {
-                    if let Err(err) = result {
+        let exit_code = tokio::select! {
+            result = crate::mcp::http::run_http(factory, config) => {
+                match result {
+                    Ok(()) => 0u8,
+                    Err(err) => {
                         eprintln!("daemon_http_transport_failed error={err}");
-                        return Ok(1);
+                        1u8
                     }
                 }
-                () = shutdown_signal.recv() => {}
             }
-        }
+            () = shutdown_signal.recv() => 0u8,
+            exit_code = supervisor_death_watch(&runtime) => exit_code,
+        };
         #[cfg(not(unix))]
-        {
-            tokio::select! {
-                result = crate::mcp::http::run_http(factory, config) => {
-                    if let Err(err) = result {
+        let exit_code = tokio::select! {
+            result = crate::mcp::http::run_http(factory, config) => {
+                match result {
+                    Ok(()) => 0u8,
+                    Err(err) => {
                         eprintln!("daemon_http_transport_failed error={err}");
-                        return Ok(1);
+                        1u8
                     }
                 }
-                () = wait_for_runtime(&runtime) => {}
             }
-        }
+            exit_code = supervisor_death_watch(&runtime) => exit_code,
+        };
+        exit_code
     } else {
-        // No transport: block until the supervisor thread joins (SIGTERM).
+        // No transport: block until a shutdown signal arrives (exit 0)
+        // or the supervisor thread dies without one (exit 1).
         #[cfg(unix)]
-        wait_for_runtime(&runtime, &mut shutdown_signal).await;
+        let exit_code = wait_for_runtime(&runtime, &mut shutdown_signal).await;
         #[cfg(not(unix))]
-        wait_for_runtime(&runtime).await;
-    }
+        let exit_code = wait_for_runtime(&runtime).await;
+        exit_code
+    };
 
     drop(runtime);
-    Ok(0)
+    Ok(exit_code)
 }
 
-/// Block until the supervisor thread exits. Used when no MCP transport
-/// is open and we still need the foreground task to wait for shutdown.
+/// Block until either a shutdown signal arrives (normal stop → exit 0)
+/// or the supervisor thread exits without one (zombie daemon → exit 1
+/// so launchd `KeepAlive` / systemd `Restart=on-failure` restarts the
+/// unit instead of leaving a process whose watchers, heartbeats, and
+/// extraction have silently stopped).
 #[cfg(unix)]
 async fn wait_for_runtime(
-    _runtime: &vault_sync::ServeRuntime,
+    runtime: &vault_sync::ServeRuntime,
     shutdown_signal: &mut ShutdownSignal,
-) {
-    shutdown_signal.recv().await;
+) -> u8 {
+    tokio::select! {
+        () = shutdown_signal.recv() => 0,
+        exit_code = supervisor_death_watch(runtime) => exit_code,
+    }
 }
 
+/// Non-Unix fallback: no signal plumbing, so only the supervisor-death
+/// watch ends the foreground task (Ctrl-C tears the binary down).
 #[cfg(not(unix))]
-async fn wait_for_runtime(_runtime: &vault_sync::ServeRuntime) {
-    // Fallback: block forever on a stalled future (the supervisor
-    // thread keeps the process alive; Ctrl-C tears the binary down).
-    std::future::pending::<()>().await;
+async fn wait_for_runtime(runtime: &vault_sync::ServeRuntime) -> u8 {
+    supervisor_death_watch(runtime).await
+}
+
+/// Polls [`vault_sync::ServeRuntime::supervisor_finished`] every 500 ms
+/// and resolves with exit code 1 once the supervisor thread has exited
+/// without a shutdown request. Never resolves while the supervisor is
+/// healthy (or for transport-only runtimes, which own no supervisor).
+async fn supervisor_death_watch(runtime: &vault_sync::ServeRuntime) -> u8 {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if runtime.supervisor_finished() {
+            eprintln!(
+                "daemon_supervisor_exited_unexpectedly session_id={} exit_code=1",
+                runtime.session_id
+            );
+            return 1;
+        }
+    }
 }
 
 fn install_action(

@@ -3,6 +3,14 @@
 React/Vite playground for testing Quaid memory, conversations, extraction,
 models, files, and graph views.
 
+> **Dev-only — do not expose beyond loopback.** The `/api` middleware executes
+> the `quaid` binary (including state-changing subcommands) and reads memory and
+> files. It only exists in the Vite dev server (`configureServer`), never in
+> `vite build`/`preview`. The API rejects cross-origin requests and non-loopback
+> `Host` headers (CSRF / DNS-rebinding defense), but it performs no
+> authentication. Bind it to `127.0.0.1`/`localhost` only; never put it behind a
+> public address, tunnel, or reverse proxy.
+
 ## WSL Startup
 
 Run from WSL because Quaid itself is Linux-only in this setup.

@@ -16,7 +16,8 @@
 //!   4. Duplicate ingest       — no duplicate pages after re-import
 //!   5. Conflicting ingest     — contradiction detected in check
 //!   6. Idempotent round-trip  — export → reimport → export → semantic diff = 0
-//!   7. Latency gate           — p95 < 250ms over 100 queries (release build, #[ignore])
+//!   7. Latency gate           — p95 < budget over 100 queries (release build, #[ignore];
+//!      budget defaults to 250ms, override via QUAID_LATENCY_P95_MS)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -413,11 +414,27 @@ fn collect_recursive(root: &Path, dir: &Path, pages: &mut Vec<(String, String)>)
     }
 }
 
-// ── 7. Latency gate — p95 < 250ms (release build only) ───────────────────────
+// ── 7. Latency gate — p95 < budget (release build only) ──────────────────────
+//
+// The p95 budget defaults to 250ms (representative local hardware) and can be
+// relaxed for slower/noisier environments via QUAID_LATENCY_P95_MS (CI uses
+// 500ms on hosted runners).
+
+const DEFAULT_LATENCY_P95_BUDGET_MS: f64 = 250.0;
+
+fn latency_p95_budget_ms() -> f64 {
+    match std::env::var("QUAID_LATENCY_P95_MS") {
+        Ok(raw) => raw.trim().parse().unwrap_or_else(|_| {
+            panic!("QUAID_LATENCY_P95_MS must be a number of milliseconds, got {raw:?}")
+        }),
+        Err(_) => DEFAULT_LATENCY_P95_BUDGET_MS,
+    }
+}
 
 #[test]
 #[ignore = "latency gate requires release build — run: cargo test --release --test corpus_reality latency -- --ignored"]
-fn latency_100_queries_p95_under_250ms() {
+fn latency_100_queries_p95_under_budget() {
+    let budget_ms = latency_p95_budget_ms();
     let conn = open_test_db();
     ingest_markdown_tree(&conn, &fixtures_dir());
     embed::run(&conn, None, true, false).expect("embed pages");
@@ -464,8 +481,8 @@ fn latency_100_queries_p95_under_250ms() {
     eprintln!("  p99: {p99:.1}ms");
 
     assert!(
-        p95 < 250.0,
-        "p95 latency {p95:.1}ms exceeds 250ms gate — run on release build for accurate measurement"
+        p95 < budget_ms,
+        "p95 latency {p95:.1}ms exceeds {budget_ms:.0}ms gate — run on release build for accurate measurement"
     );
 }
 

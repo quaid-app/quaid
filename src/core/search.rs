@@ -127,10 +127,14 @@ pub fn hybrid_search(
             limit: q.limit,
         },
     )?;
-    let vec_results = if q.canonical {
+    // The vector arm receives the caller's depth like FTS does, floored at
+    // the historical k=10 and capped at 200 to bound the brute-force cosine
+    // scan at high limits.
+    let vec_k = q.limit.clamp(10, 200);
+    let mut vec_results = if q.canonical {
         search_vec_canonical_with_namespace_filtered(
             trimmed,
-            10,
+            vec_k,
             q.wing,
             q.collection,
             q.namespace,
@@ -140,7 +144,7 @@ pub fn hybrid_search(
     } else {
         search_vec_with_namespace_filtered(
             trimmed,
-            10,
+            vec_k,
             q.wing,
             q.collection,
             q.namespace,
@@ -148,6 +152,14 @@ pub fn hybrid_search(
             conn,
         )?
     };
+
+    // Absolute cosine floor on the vector arm, applied to the raw cosine
+    // scores before the per-arm normalization in the merge step. The seeded
+    // default `0.0` is identity behaviour: no hit is dropped.
+    let relevance_floor = read_config_f64(conn, "search.relevance_floor", 0.0)?;
+    if relevance_floor > 0.0 {
+        vec_results.retain(|result| result.score >= relevance_floor);
+    }
 
     let mut merged = match read_merge_strategy(conn)? {
         SearchMergeStrategy::SetUnion => merge_set_union(&fts_results, &vec_results),

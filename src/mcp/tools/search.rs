@@ -1,6 +1,7 @@
 //! Read-side query tool bodies: `memory_query` (the hybrid semantic +
 //! FTS5 retrieval that drives most agent reads, with optional progressive
-//! depth expansion) and `memory_search` (raw FTS5 search). Both honour
+//! depth expansion) and `memory_search` (tiered FTS5 search — the same
+//! sanitize + AND→OR-blended path as CLI `quaid search`). Both honour
 //! collection, namespace, wing, and superseded filters. The call sites
 //! into `crate::core::search::*` and `crate::core::fts::*` are kept
 //! minimal to make a future API rename in the search layer (see the
@@ -9,7 +10,7 @@
 use rmcp::model::{CallToolResult, Content};
 use rmcp::tool;
 
-use crate::core::fts::{expand_numeric_fts_query, sanitize_fts_query, search_fts, FtsQuery};
+use crate::core::fts::{sanitize_fts_query, search_fts_tiered, FtsQuery};
 use crate::core::gaps;
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
@@ -98,12 +99,16 @@ impl QuaidServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    /// `memory_search` MCP tool: run an FTS5 full-text search over the
-    /// sanitised query, honouring collection, namespace, wing, and
+    /// `memory_search` MCP tool: run a tiered FTS5 full-text search over the
+    /// sanitised query — a precision-first implicit-AND pass with OR-recall
+    /// hits blended in below the AND hits, the same path as CLI
+    /// `quaid search` — honouring collection, namespace, wing, and
     /// superseded filters and clamping the result count to `MAX_LIMIT`.
     #[tool(description = "FTS5 full-text search")]
-    /// `memory_search` MCP tool: run an FTS5 full-text search over the
-    /// sanitised query, honouring collection, namespace, wing, and
+    /// `memory_search` MCP tool: run a tiered FTS5 full-text search over the
+    /// sanitised query — a precision-first implicit-AND pass with OR-recall
+    /// hits blended in below the AND hits, the same path as CLI
+    /// `quaid search` — honouring collection, namespace, wing, and
     /// superseded filters and clamping the result count to `MAX_LIMIT`.
     pub fn memory_search(
         &self,
@@ -118,8 +123,10 @@ impl QuaidServer {
         let include_superseded = input.include_superseded.unwrap_or(false);
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        let safe_query = expand_numeric_fts_query(&sanitize_fts_query(&input.query));
-        let results = search_fts(
+        // `search_fts_tiered` applies numeric-alias expansion in its AND
+        // pass, so sanitization is the only preprocessing needed here.
+        let safe_query = sanitize_fts_query(&input.query);
+        let results = search_fts_tiered(
             &db,
             FtsQuery {
                 query: &safe_query,

@@ -470,6 +470,7 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),
     ('search_merge_strategy', 'set-union'),
+    ('search.relevance_floor', '0.0'),
     ('default_token_budget',  '4000'),
     ('memory.location',       'vault-subdir'),
     ('corrections.history_on_disk', 'false'),

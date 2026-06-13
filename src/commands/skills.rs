@@ -56,6 +56,10 @@ const EMBEDDED_SKILLS: &[EmbeddedSkill] = &[
         name: "enrich",
         content: include_str!("../../skills/enrich/SKILL.md"),
     },
+    EmbeddedSkill {
+        name: "setup",
+        content: include_str!("../../skills/setup/SKILL.md"),
+    },
 ];
 
 #[derive(Debug, Serialize)]

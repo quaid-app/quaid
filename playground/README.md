@@ -3,31 +3,38 @@
 React/Vite playground for testing Quaid memory, conversations, extraction,
 models, files, and graph views.
 
-> **Dev-only — do not expose beyond loopback.** The `/api` middleware executes
-> the `quaid` binary (including state-changing subcommands) and reads memory and
-> files. It only exists in the Vite dev server (`configureServer`), never in
-> `vite build`/`preview`. The API rejects cross-origin requests and non-loopback
-> `Host` headers (CSRF / DNS-rebinding defense), but it performs no
-> authentication. Bind it to `127.0.0.1`/`localhost` only; never put it behind a
-> public address, tunnel, or reverse proxy.
+## Quick start (macOS / Linux)
 
-## WSL Startup
-
-Run from WSL because Quaid itself is Linux-only in this setup.
+The playground runs natively on macOS and Linux against a locally built Quaid
+binary. By default it uses a **throwaway in-repo database** at
+`playground/.data/memory.db` so it never touches your real `~/.quaid/memory.db`.
 
 ```bash
-cd /mnt/d/repos/quaid
+# From the repository root: build the binary the playground will drive.
 cargo build
 
-cd /mnt/d/repos/quaid/playground
+# Then start the playground.
+cd playground
 pnpm install
-
-QUAID_BIN=/mnt/d/repos/quaid/target/debug/quaid \
-QUAID_DB="$HOME/.quaid/memory.db" \
-pnpm dev --host 127.0.0.1
+pnpm serve
 ```
 
-Managed mode auto-starts:
+`pnpm serve` points `QUAID_BIN` at `../target/release/quaid` and `QUAID_DB` at
+the in-repo `.data/memory.db`. If you built a debug binary instead, run Vite
+directly and override `QUAID_BIN`:
+
+```bash
+QUAID_BIN=../target/debug/quaid pnpm dev --host 127.0.0.1
+```
+
+To point at your real memory instead of the throwaway DB, set `QUAID_DB`
+explicitly:
+
+```bash
+QUAID_DB="$HOME/.quaid/memory.db" pnpm dev --host 127.0.0.1
+```
+
+Managed mode auto-starts the HTTP transport:
 
 ```bash
 quaid --db "$QUAID_DB" --model small serve --http --port 3112 --trust-loopback
@@ -46,8 +53,8 @@ Runtime logs appear in two places:
 
 ## Useful Environment Variables
 
-- `QUAID_BIN`: path to the Linux Quaid binary.
-- `QUAID_DB`: DB path, defaults to `~/.quaid/memory.db`.
+- `QUAID_BIN`: path to the Quaid binary (defaults to `quaid` on `PATH`).
+- `QUAID_DB`: DB path, defaults to the in-repo `playground/.data/memory.db`.
 - `QUAID_MODEL`: embedding model alias, defaults to `small`.
 - `QUAID_MCP_URL`: external MCP URL; when set, the playground does not manage `quaid serve`.
 - `QUAID_PLAYGROUND_AUTO_INIT`: auto-init missing DBs, defaults to `true`.

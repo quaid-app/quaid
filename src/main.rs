@@ -328,6 +328,17 @@ enum Commands {
         #[arg(long, requires = "http")]
         trust_loopback: bool,
     },
+    /// Onboarding helpers: wire Quaid into MCP clients, etc.
+    Setup {
+        /// Merge a `quaid` server entry into known MCP client configs
+        /// (~/.claude/mcp.json and ~/.cursor/mcp.json), preserving any
+        /// existing servers.
+        #[arg(long)]
+        register_mcp: bool,
+        /// Print the planned changes without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Background-daemon lifecycle: install, run, status, logs, etc.
     Daemon {
         #[command(subcommand)]
@@ -369,6 +380,11 @@ enum EarlyCommand {
     Init(String),
     Migrate(String),
     Model(commands::model::ModelAction),
+    Setup {
+        register_mcp: bool,
+        dry_run: bool,
+        db_path: String,
+    },
     Version,
 }
 
@@ -386,6 +402,18 @@ fn early_command(cli: &Cli) -> EarlyCommand {
             EarlyCommand::Migrate(path.clone().unwrap_or_else(|| db_path.to_owned()))
         }
         Commands::Model { action } => EarlyCommand::Model(action.clone()),
+        Commands::Setup {
+            register_mcp,
+            dry_run,
+        } => {
+            let default_path = core::db::default_db_path_string();
+            let db_path = cli.db.clone().unwrap_or(default_path);
+            EarlyCommand::Setup {
+                register_mcp: *register_mcp,
+                dry_run: *dry_run,
+                db_path,
+            }
+        }
         _ => EarlyCommand::None,
     }
 }
@@ -441,6 +469,11 @@ async fn main() -> Result<()> {
                 cli.model_revision.as_deref(),
             )
         }
+        EarlyCommand::Setup {
+            register_mcp,
+            dry_run,
+            db_path,
+        } => return commands::setup::run(register_mcp, dry_run, &db_path),
         EarlyCommand::None => {}
     }
 
@@ -453,6 +486,7 @@ async fn main() -> Result<()> {
         Commands::Init { .. }
         | Commands::Migrate { .. }
         | Commands::Model { .. }
+        | Commands::Setup { .. }
         | Commands::Version => unreachable!(),
         Commands::Get { slug, namespace } => {
             commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)

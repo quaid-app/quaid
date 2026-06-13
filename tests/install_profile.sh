@@ -321,6 +321,11 @@ need_cmd()         { return 0; }
 SAVED_PATH_STUBS="$PATH"
 PATH="$TEST_STUBS:$PATH"
 
+# These main()-integration tests focus on profile-write behavior; skip the
+# post-install init/MCP-registration step so the stubbed binary's behavior does
+# not bleed into the assertions.
+NO_REGISTER=1
+
 # T15: main() --no-profile parses the flag and skips profile write
 T15_PROFILE="$TEST_HOME/.t15_profile"
 printf '' > "$T15_PROFILE"
@@ -383,6 +388,8 @@ resolve_channel()  { CHANNEL="airgapped"; }
 verify_checksum()  { return 0; }
 need_cmd()         { return 0; }
 PATH="$TEST_STUBS:$PATH"
+# Re-sourcing reset NO_REGISTER to its env default; skip registration again.
+NO_REGISTER=1
 T18_PROFILE="$TEST_HOME/.t18_profile"
 printf '' > "$T18_PROFILE"
 detect_profile() { PROFILE_FILE="$T18_PROFILE"; }
@@ -399,8 +406,9 @@ QUAID_NO_PROFILE=0
 tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
 
-# T19: main() warns loudly but exits 0 when profile persistence fails — the
-# binary is already installed and smoke-tested, so curl|sh must report success.
+# T19: main() warns but exits 0 when profile persistence fails (the binary is
+# installed and smoke-tested, so a missing profile line is not an install
+# failure — curl|sh automation must report success).
 . "$INSTALL_SH"
 resolve_version()  { VERSION="v0.0.0-test"; }
 resolve_platform() { PLATFORM="linux-x86_64"; }
@@ -410,6 +418,7 @@ need_cmd()         { return 0; }
 PATH="$TEST_STUBS:$PATH"
 NO_PROFILE=0
 QUAID_NO_PROFILE=0
+NO_REGISTER=1
 T19_HOME="$TEST_HOME/unwritable_home_t19"
 mkdir -p "$T19_HOME"
 chmod 500 "$T19_HOME"
@@ -427,17 +436,17 @@ if main >"$TEST_HOME/t19_main.out" 2>"$TEST_HOME/t19_main.err"; then
      grep -Fq 'export PATH="' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'export QUAID_DB="$HOME/.quaid/memory.db"' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'download first, then run:' "$TEST_HOME/t19_main.err"; then
-    ok "T19: main() exits 0 on profile failure and prints recovery guidance"
+    ok "T19: main() exits 0 on profile-write failure and prints recovery guidance"
   else
-    not_ok "T19: main() did not print the expected warning and recovery output"
+    not_ok "T19: main() did not print the expected real failure and recovery output"
   fi
 else
-  not_ok "T19: main() must exit 0 when the binary installed but the profile write failed"
+  not_ok "T19: main() should exit 0 (success) when only profile persistence fails"
 fi
 if grep -Fq "Installed quaid to" "$TEST_HOME/t19_main.out"; then
-  ok "T19b: main() still reports where the binary was installed before failing"
+  ok "T19b: main() still reports where the binary was installed"
 else
-  not_ok "T19b: main() should report the installed binary path on profile failure"
+  not_ok "T19b: main() should report the installed binary path"
 fi
 if [ ! -e "$T19_HOME/.zshrc" ]; then
   ok "T19c: main() leaves the failed profile path untouched"
@@ -452,20 +461,60 @@ tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
 
 # ---------------------------------------------------------------
-# Rename-notice content — T20
+# T20: rename notice references only real subcommands (no 'quaid import')
 # ---------------------------------------------------------------
-
-# T20: the rename notice must reference real subcommands only — no 'quaid import'
-# (the Commands enum has no Import variant; migration uses init + collection add).
-if grep -q 'quaid import' "$INSTALL_SH"; then
-  not_ok "T20: install.sh references nonexistent 'quaid import' command"
+. "$INSTALL_SH"
+resolve_version()  { VERSION="v0.0.0-test"; }
+resolve_platform() { PLATFORM="linux-x86_64"; }
+resolve_channel()  { CHANNEL="airgapped"; }
+verify_checksum()  { return 0; }
+need_cmd()         { return 0; }
+PATH="$TEST_STUBS:$PATH"
+NO_PROFILE=1
+NO_REGISTER=1
+T20_HOME="$TEST_HOME/home_t20"
+mkdir -p "$T20_HOME"
+OLD_HOME_T20="$HOME"
+HOME="$T20_HOME"
+main >"$TEST_HOME/t20_main.out" 2>"$TEST_HOME/t20_main.err" || true
+HOME="$OLD_HOME_T20"
+if grep -Fq "quaid import" "$TEST_HOME/t20_main.out"; then
+  not_ok "T20: rename notice still references the non-existent 'quaid import' subcommand"
 else
-  ok "T20: install.sh does not reference nonexistent 'quaid import' command"
+  ok "T20: rename notice no longer references 'quaid import'"
 fi
-if grep -q 'quaid collection add' "$INSTALL_SH"; then
-  ok "T20b: rename notice points at 'quaid collection add' for migration"
+if grep -Fq "quaid collection add backup" "$TEST_HOME/t20_main.out"; then
+  ok "T20b: rename notice points migrating users at 'quaid collection add'"
 else
-  not_ok "T20b: rename notice is missing the 'quaid collection add' migration step"
+  not_ok "T20b: rename notice should reference 'quaid collection add'"
+fi
+tmp_dir=""
+PATH="$SAVED_PATH_STUBS"
+
+# ---------------------------------------------------------------
+# T21: QUAID_NO_REGISTER=1 captured at source time → NO_REGISTER=1
+# ---------------------------------------------------------------
+t21_result=$(QUAID_TEST_MODE=1 \
+  QUAID_NO_REGISTER=1 \
+  QUAID_INSTALL_DIR="$TEST_HOME/bin" \
+  HOME="$TEST_HOME" \
+  sh -c ". \"$INSTALL_SH\" && printf '%s' \"\$NO_REGISTER\"" 2>/dev/null)
+if [ "$t21_result" = "1" ]; then
+  ok "T21: QUAID_NO_REGISTER=1 env var sets NO_REGISTER=1 at script startup"
+else
+  not_ok "T21: QUAID_NO_REGISTER=1 did not set NO_REGISTER=1 (got: '$t21_result')"
+fi
+
+# ---------------------------------------------------------------
+# T22: register_runtime honors QUAID_NO_REGISTER and skips init/setup
+# ---------------------------------------------------------------
+. "$INSTALL_SH"
+NO_REGISTER=1
+t22_out=$(register_runtime "$TEST_STUBS/quaid-fake" 2>&1)
+if printf '%s' "$t22_out" | grep -Fq "Skipping quaid init"; then
+  ok "T22: register_runtime skips init/registration when NO_REGISTER=1"
+else
+  not_ok "T22: register_runtime should skip when NO_REGISTER=1 (got: '$t22_out')"
 fi
 
 # ---------------------------------------------------------------

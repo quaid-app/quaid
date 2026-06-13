@@ -97,6 +97,11 @@ const DEFAULT_MANIFEST_INCOMPLETE_ESCALATION_SECS: i64 = 1800;
 const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
+/// Cadence for the orphaned-vector janitor sweep. vec0 rows are deleted inline
+/// on every page-delete path, so this is a slow backstop reclaiming vectors
+/// orphaned before the vec-aware paths existed or by a crash mid-delete
+/// (review item #10).
+const VEC_ORPHAN_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const DEFAULT_FULL_HASH_AUDIT_DAYS: i64 = 7;
 #[cfg(unix)]
 const SELF_WRITE_DEDUP_TTL_SECS: u64 = 5;
@@ -2891,6 +2896,8 @@ fn run_supervisor_loop(
         Instant::now() - Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS);
     let mut last_raw_import_ttl_sweep =
         Instant::now() - Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS);
+    let mut last_vec_orphan_sweep =
+        Instant::now() - Duration::from_secs(VEC_ORPHAN_SWEEP_INTERVAL_SECS);
     let mut last_embedding_drain =
         Instant::now() - Duration::from_secs(embedding::drain_interval_secs());
     while !stop_signal.load(Ordering::SeqCst) {
@@ -3010,6 +3017,26 @@ fn run_supervisor_loop(
                     );
                 }
                 last_raw_import_ttl_sweep = Instant::now();
+            }
+            if last_vec_orphan_sweep.elapsed()
+                >= Duration::from_secs(VEC_ORPHAN_SWEEP_INTERVAL_SECS)
+            {
+                match crate::core::inference::sweep_orphaned_vec_rows(&conn) {
+                    Ok(removed) if removed > 0 => {
+                        eprintln!(
+                            "INFO: vec_orphan_sweep session_id_for_thread={} removed={}",
+                            session_id_for_thread, removed
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        eprintln!(
+                            "WARN: vec_orphan_sweep_failed session_id_for_thread={} error={}",
+                            session_id_for_thread, error
+                        );
+                    }
+                }
+                last_vec_orphan_sweep = Instant::now();
             }
             let _ = run_rcrt_pass(&conn, &session_id_for_thread);
             let _ = sync_supervisor_handles(&conn, &session_id_for_thread);

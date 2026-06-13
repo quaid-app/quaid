@@ -56,6 +56,7 @@ fn sync_refuses_windows_platform() {
             remap_root: None,
             finalize_pending: false,
             online: false,
+            no_embed: false,
         }),
         true,
     )

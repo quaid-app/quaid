@@ -488,6 +488,11 @@ pub fn discard_quarantined_page(
             counts,
         });
     }
+    // Drop backing vec0 rows before the page delete (they do not cascade with
+    // the FK delete, so otherwise they orphan — review item #10).
+    crate::core::inference::delete_page_vec_rows(conn, &[page.page_id]).map_err(|err| {
+        QuarantineError::Sqlite(rusqlite::Error::InvalidParameterName(err.to_string()))
+    })?;
     conn.execute("DELETE FROM pages WHERE id = ?1", [page.page_id])?;
     eprintln!(
         "INFO: quarantine_discarded collection={} slug={} forced={} exported_before_discard={}",
@@ -706,6 +711,10 @@ pub fn sweep_expired_quarantined_pages(
             );
             continue;
         }
+        // Drop backing vec0 rows before the page delete (item #10).
+        crate::core::inference::delete_page_vec_rows(conn, &[page_id]).map_err(|err| {
+            QuarantineError::Sqlite(rusqlite::Error::InvalidParameterName(err.to_string()))
+        })?;
         conn.execute("DELETE FROM pages WHERE id = ?1", [page_id])?;
         summary.discarded += 1;
         eprintln!(

@@ -118,6 +118,12 @@ pub fn list_namespaces(conn: &Connection) -> Result<Vec<Namespace>, NamespaceErr
 pub fn destroy_namespace(conn: &Connection, id: &str) -> Result<usize, NamespaceError> {
     validate_namespace_id(id)?;
     let tx = conn.unchecked_transaction()?;
+    // Drop the backing vec0 rows first: they do not cascade with the page
+    // delete, so without this they orphan permanently (review item #10).
+    let page_ids = page_ids_in_namespace(&tx, id)?;
+    crate::core::inference::delete_page_vec_rows(&tx, &page_ids).map_err(|err| {
+        NamespaceError::Sqlite(rusqlite::Error::InvalidParameterName(err.to_string()))
+    })?;
     let deleted_pages = tx.execute("DELETE FROM pages WHERE namespace = ?1", [id])?;
     let deleted_namespaces = tx.execute("DELETE FROM namespaces WHERE id = ?1", [id])?;
     tx.commit()?;
@@ -126,6 +132,16 @@ pub fn destroy_namespace(conn: &Connection, id: &str) -> Result<usize, Namespace
         return Err(NamespaceError::NotFound { id: id.to_owned() });
     }
     Ok(deleted_pages)
+}
+
+fn page_ids_in_namespace(conn: &Connection, id: &str) -> Result<Vec<i64>, NamespaceError> {
+    let mut stmt = conn.prepare("SELECT id FROM pages WHERE namespace = ?1")?;
+    let rows = stmt.query_map([id], |row| row.get::<_, i64>(0))?;
+    let mut page_ids = Vec::new();
+    for row in rows {
+        page_ids.push(row?);
+    }
+    Ok(page_ids)
 }
 
 fn get_namespace(conn: &Connection, id: &str) -> Result<Option<Namespace>, NamespaceError> {

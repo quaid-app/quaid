@@ -53,6 +53,7 @@ export function normalizeError(error: unknown): ApiError {
 }
 
 export async function readJsonBody<T = unknown>(req: IncomingMessage): Promise<T> {
+  assertJsonContentType(req);
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -76,4 +77,87 @@ export function requireMethod(req: IncomingMessage, method: string): void {
 
 export function parseUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? "/", "http://127.0.0.1");
+}
+
+const BODIED_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+/**
+ * Require `application/json` for any request method that carries a body. This
+ * forces a cross-origin POST out of the CORS "simple request" lane (which
+ * allows `text/plain` without a preflight) and into a preflighted request that
+ * the playground answers with no CORS headers — so the browser blocks it.
+ */
+export function assertJsonContentType(req: IncomingMessage): void {
+  const method = (req.method ?? "GET").toUpperCase();
+  if (!BODIED_METHODS.has(method)) {
+    return;
+  }
+  const contentType = req.headers["content-type"] ?? "";
+  const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
+  if (mediaType !== "application/json") {
+    throw new ApiError(
+      415,
+      `Expected content-type application/json, got ${mediaType || "(none)"}`
+    );
+  }
+}
+
+/**
+ * A host header (with optional port) is allowed only when its hostname is a
+ * loopback name. This blocks DNS-rebinding origins that resolve a public name
+ * to 127.0.0.1 — the browser still sends the rebound `Host`, which we reject.
+ */
+export function isAllowedHost(hostHeader: string | undefined): boolean {
+  if (!hostHeader) {
+    // Same-origin loopback requests always carry a Host header; its absence is
+    // anomalous, so reject.
+    return false;
+  }
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${hostHeader}`).hostname;
+  } catch {
+    return false;
+  }
+  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+/**
+ * An Origin/Referer is allowed only when its hostname is a loopback name. Same-
+ * origin browser fetches to `/api` send no cross-origin Origin (and a loopback
+ * Referer at most), and server-to-server callers omit Origin entirely — both
+ * pass. A foreign site's `fetch` carries its own Origin, which we reject.
+ */
+export function isAllowedOrigin(originHeader: string | undefined): boolean {
+  if (!originHeader || originHeader === "null") {
+    return false;
+  }
+  let hostname: string;
+  try {
+    hostname = new URL(originHeader).hostname;
+  } catch {
+    return false;
+  }
+  return LOOPBACK_HOSTNAMES.has(hostname.toLowerCase());
+}
+
+/**
+ * Reject cross-origin and DNS-rebinding callers. Only enforce the Origin/
+ * Referer check when one is present, so legitimate same-origin browser calls
+ * (no cross-origin Origin) and server-to-server callers (no Origin) still pass.
+ * The Host check always runs to defeat DNS rebinding on GET reads.
+ */
+export function assertSameOrigin(req: IncomingMessage): void {
+  if (!isAllowedHost(req.headers.host)) {
+    throw new ApiError(403, `Forbidden host: ${req.headers.host ?? "(none)"}`);
+  }
+  const origin = req.headers.origin;
+  if (origin != null && !isAllowedOrigin(origin)) {
+    throw new ApiError(403, `Forbidden origin: ${origin}`);
+  }
+  const referer = req.headers.referer;
+  if (origin == null && referer != null && !isAllowedOrigin(referer)) {
+    throw new ApiError(403, `Forbidden referer: ${referer}`);
+  }
 }

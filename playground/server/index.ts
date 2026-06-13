@@ -3,7 +3,7 @@ import { CLI_COMMANDS, runCliCommand } from "./cli";
 import { publicConfig } from "./config";
 import { getCollections, getDbStatus, getDbTree, getGraph, getPageBySlug, getRawImport } from "./db";
 import { listLiveFiles, readLiveFile } from "./files";
-import { ApiError, parseUrl, readJsonBody, requireMethod, sendError, sendJson, type Middleware } from "./http";
+import { ApiError, assertSameOrigin, parseUrl, readJsonBody, requireMethod, sendError, sendJson, type Middleware } from "./http";
 import { callMcpTool, listMcpTools } from "./mcp";
 import { createProfile, embedProfile, listProfiles, queryProfile } from "./profiles";
 import { ensureManagedRuntimeStarted, restartRuntime, runtimeStatus, startRuntime, stopRuntime } from "./runtime";
@@ -16,6 +16,10 @@ function route(pathname: string, method: string, expectedPath: string, expectedM
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // Origin/Host defense runs before any routing or body parsing: this is a
+  // dev-only loopback API, so reject cross-origin and DNS-rebinding callers.
+  assertSameOrigin(req);
+
   const url = parseUrl(req);
   const method = req.method ?? "GET";
 

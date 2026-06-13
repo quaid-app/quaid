@@ -296,7 +296,7 @@ CREATE TABLE IF NOT EXISTS assertions (
     evidence_text   TEXT    NOT NULL DEFAULT '',
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     CHECK (valid_from IS NULL OR valid_until IS NULL OR valid_until >= valid_from),
-    CHECK (asserted_by IN ('agent', 'manual', 'import', 'enrichment'))
+    CHECK (asserted_by IN ('agent', 'manual', 'import', 'enrichment', 'extraction'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_assertions_subj ON assertions(subject);
@@ -512,7 +512,10 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('mcp.redact_outbound',          'off'),
     -- Comma/newline-separated literal secrets to always scrub (e.g. an
     -- internal codename). Empty by default.
-    ('mcp.redact_blocklist',         '');
+    ('mcp.redact_blocklist',         ''),
+    -- Minimum embed(type_key) cosine for fuzzy head matching when no exact
+    -- type-key match exists during fact resolution.
+    ('fact_resolution.key_match_cosine_min', '0.85');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

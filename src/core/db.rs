@@ -415,6 +415,7 @@ fn apply_current_version_maintenance(conn: &Connection) -> Result<(), DbError> {
     ensure_raw_import_hash_schema(conn)?;
     ensure_file_state_uuid_cache_schema(conn)?;
     ensure_pages_namespace_backfill(conn)?;
+    ensure_assertions_extraction_provenance(conn)?;
     Ok(())
 }
 
@@ -1121,6 +1122,75 @@ fn ensure_pages_namespace_backfill(conn: &Connection) -> Result<(), DbError> {
             "INFO: namespace_backfill pages_backfilled={backfilled} conflicts_skipped={conflicts_skipped}"
         );
     }
+
+    Ok(())
+}
+
+/// Rebuild the `assertions` table when its `asserted_by` CHECK constraint
+/// predates the `'extraction'` provenance value used to mirror SLM-extracted
+/// facts into the assertions table.
+fn ensure_assertions_extraction_provenance(conn: &Connection) -> Result<(), DbError> {
+    if !table_exists(conn, "assertions")? {
+        return Ok(());
+    }
+
+    let table_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'assertions'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if table_sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains("'extraction'"))
+    {
+        return Ok(());
+    }
+
+    let foreign_keys_enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN;
+         CREATE TABLE assertions_new (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+             subject         TEXT    NOT NULL,
+             predicate       TEXT    NOT NULL,
+             object          TEXT    NOT NULL,
+             valid_from      TEXT    DEFAULT NULL,
+             valid_until     TEXT    DEFAULT NULL,
+             supersedes_id   INTEGER DEFAULT NULL REFERENCES assertions(id),
+             confidence      REAL    DEFAULT 1.0,
+             asserted_by     TEXT    NOT NULL DEFAULT 'agent',
+             source_ref      TEXT    NOT NULL DEFAULT '',
+             evidence_text   TEXT    NOT NULL DEFAULT '',
+             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             CHECK (valid_from IS NULL OR valid_until IS NULL OR valid_until >= valid_from),
+             CHECK (asserted_by IN ('agent', 'manual', 'import', 'enrichment', 'extraction'))
+         );
+         INSERT INTO assertions_new (
+             id, page_id, subject, predicate, object, valid_from, valid_until,
+             supersedes_id, confidence, asserted_by, source_ref, evidence_text,
+             created_at
+         )
+         SELECT
+             id, page_id, subject, predicate, object, valid_from, valid_until,
+             supersedes_id, confidence, asserted_by, source_ref, evidence_text,
+             created_at
+         FROM assertions;
+         DROP TABLE assertions;
+         ALTER TABLE assertions_new RENAME TO assertions;
+         CREATE INDEX IF NOT EXISTS idx_assertions_subj ON assertions(subject);
+         CREATE INDEX IF NOT EXISTS idx_assertions_pred ON assertions(predicate);
+         COMMIT;",
+    )?;
+
+    if foreign_keys_enabled != 0 {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    }
+    conn.execute_batch("PRAGMA foreign_key_check;")?;
 
     Ok(())
 }

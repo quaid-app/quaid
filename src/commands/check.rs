@@ -4,18 +4,32 @@
 )]
 
 use anyhow::{anyhow, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
+use serde::Serialize;
 
 use crate::commands::get::get_page_by_key;
 use crate::core::assertions::{self, Contradiction};
 use crate::core::collections::OpKind;
 use crate::core::pages;
+use crate::core::supersede;
 use crate::core::vault_sync;
 
 #[derive(Debug)]
 pub struct CheckReport {
     contradictions: Vec<Contradiction>,
     processed_pages: usize,
+}
+
+/// Outcome of resolving one contradiction via `quaid check --resolve` or the
+/// MCP `memory_check` resolve parameter.
+#[derive(Debug, Serialize)]
+pub struct ResolveReport {
+    /// Id of the contradiction that was resolved.
+    pub contradiction_id: i64,
+    /// Canonical slug of the page kept as truth, when `--keep` was supplied.
+    pub kept_slug: Option<String>,
+    /// Canonical slug of the page superseded by the kept page, if any.
+    pub superseded_slug: Option<String>,
 }
 
 struct CheckTarget {
@@ -78,6 +92,126 @@ pub fn execute_check(
     })
 }
 
+/// CLI entry for `quaid check --resolve <id> [--keep <slug>]`.
+pub fn run_resolve(
+    db: &Connection,
+    contradiction_id: i64,
+    keep: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let report = execute_resolve(db, contradiction_id, keep)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    match (&report.kept_slug, &report.superseded_slug) {
+        (Some(kept), Some(superseded)) => println!(
+            "Resolved contradiction {} — kept [{kept}], superseded [{superseded}].",
+            report.contradiction_id
+        ),
+        _ => println!("Resolved contradiction {}.", report.contradiction_id),
+    }
+
+    Ok(())
+}
+
+/// Resolve one contradiction without printing. With `keep`, the named page
+/// must be one side of the contradiction; the other side is superseded by it
+/// before the contradiction is stamped resolved. Safe to call from MCP.
+pub fn execute_resolve(
+    db: &Connection,
+    contradiction_id: i64,
+    keep: Option<&str>,
+) -> Result<ResolveReport> {
+    let row: Option<(i64, Option<i64>, Option<String>)> = db
+        .query_row(
+            "SELECT page_id, other_page_id, resolved_at FROM contradictions WHERE id = ?1",
+            [contradiction_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((page_id, other_page_id, resolved_at)) = row else {
+        return Err(anyhow!("contradiction not found: {contradiction_id}"));
+    };
+    if resolved_at.is_some() {
+        return Err(anyhow!(
+            "contradiction {contradiction_id} is already resolved"
+        ));
+    }
+
+    let mut kept_slug = None;
+    let mut superseded_slug = None;
+    if let Some(keep) = keep {
+        let resolved = vault_sync::resolve_slug_for_op(db, keep, OpKind::WriteUpdate)
+            .map_err(|err| anyhow!(err.to_string()))?;
+        vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
+            .map_err(|err| anyhow!(err.to_string()))?;
+        let keeper_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+                rusqlite::params![resolved.collection_id, &resolved.slug],
+                |row| row.get(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => anyhow!("page not found: {keep}"),
+                other => anyhow!(other),
+            })?;
+
+        let loser_id = if keeper_id == page_id {
+            other_page_id
+        } else if Some(keeper_id) == other_page_id {
+            Some(page_id)
+        } else {
+            return Err(anyhow!(
+                "page {keep} is not part of contradiction {contradiction_id}"
+            ));
+        };
+        let Some(loser_id) = loser_id.filter(|loser| *loser != keeper_id) else {
+            return Err(anyhow!(
+                "contradiction {contradiction_id} involves a single page; resolve without --keep"
+            ));
+        };
+
+        supersede::mark_page_superseded(db, keeper_id, loser_id)
+            .map_err(|err| anyhow!(err.to_string()))?;
+
+        // Re-extract the superseded page so its mirrored extraction triples
+        // drop out of future detection runs.
+        let (loser_collection_id, loser_page_slug): (i64, String) = db.query_row(
+            "SELECT collection_id, slug FROM pages WHERE id = ?1",
+            [loser_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let loser_page = get_page_by_key(db, loser_collection_id, &loser_page_slug)?;
+        assertions::extract_assertions(&loser_page, db)?;
+
+        kept_slug = Some(canonical_slug(db, keeper_id)?);
+        superseded_slug = Some(canonical_slug(db, loser_id)?);
+    }
+
+    assertions::resolve_contradiction(contradiction_id, db)
+        .map_err(|err| anyhow!(err.to_string()))?;
+
+    Ok(ResolveReport {
+        contradiction_id,
+        kept_slug,
+        superseded_slug,
+    })
+}
+
+fn canonical_slug(db: &Connection, page_id: i64) -> Result<String> {
+    Ok(db.query_row(
+        "SELECT c.name || '::' || p.slug
+         FROM pages p
+         JOIN collections c ON c.id = p.collection_id
+         WHERE p.id = ?1",
+        [page_id],
+        |row| row.get(0),
+    )?)
+}
+
 fn resolve_target(db: &Connection, slug: &str) -> Result<CheckTarget> {
     let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
         .map_err(|err| anyhow!(err.to_string()))?;
@@ -135,7 +269,8 @@ fn fetch_unresolved_contradictions(
     all: bool,
     check_type: Option<&str>,
 ) -> Result<Vec<Contradiction>> {
-    let base_sql = "SELECT cp.name || '::' || p.slug,
+    let base_sql = "SELECT c.id,
+                           cp.name || '::' || p.slug,
                            COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug),
                            c.type,
                            c.description,
@@ -188,11 +323,12 @@ where
     let contradictions = statement
         .query_map(params, |row| {
             Ok(Contradiction {
-                page_slug: row.get(0)?,
-                other_page_slug: row.get(1)?,
-                r#type: row.get(2)?,
-                description: row.get(3)?,
-                detected_at: row.get(4)?,
+                id: row.get(0)?,
+                page_slug: row.get(1)?,
+                other_page_slug: row.get(2)?,
+                r#type: row.get(3)?,
+                description: row.get(4)?,
+                detected_at: row.get(5)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -211,8 +347,11 @@ fn render_output(report: &CheckReport, json: bool) -> Result<String> {
     } else {
         lines.extend(report.contradictions.iter().map(|contradiction| {
             format!(
-                "[{}] ↔ [{}]: {}",
-                contradiction.page_slug, contradiction.other_page_slug, contradiction.description
+                "#{} [{}] ↔ [{}]: {}",
+                contradiction.id,
+                contradiction.page_slug,
+                contradiction.other_page_slug,
+                contradiction.description
             )
         }));
     }

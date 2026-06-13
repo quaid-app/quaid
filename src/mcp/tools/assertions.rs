@@ -1,9 +1,11 @@
 //! Assertion / contradiction-detection tool body: `memory_check`. Runs
 //! `crate::core::assertions::extract_assertions` and `check_assertions*`
 //! over a single resolved page (or every page when no slug is provided)
-//! and returns the unresolved contradictions as JSON. Errors route through
-//! `mcp::errors::map_*` helpers so JSON-RPC error codes stay consistent
-//! with the rest of the MCP surface.
+//! and returns the unresolved contradictions as JSON. A `resolve` id flips
+//! the tool into resolution mode: it stamps `resolved_at` (optionally
+//! superseding the non-kept page when `keep` is supplied) instead of
+//! running detection. Errors route through `mcp::errors::map_*` helpers so
+//! JSON-RPC error codes stay consistent with the rest of the MCP surface.
 
 use rmcp::model::{CallToolResult, Content};
 use rmcp::tool;
@@ -23,7 +25,9 @@ impl QuaidServer {
     /// `memory_check` MCP tool: run heuristic contradiction detection
     /// over a single resolved page (when a slug is provided) or every
     /// page, returning the unresolved contradictions as JSON.
-    #[tool(description = "Run contradiction detection on a page or all pages")]
+    #[tool(
+        description = "Run contradiction detection on a page or all pages, or resolve a contradiction by id"
+    )]
     /// `memory_check` MCP tool: run heuristic contradiction detection
     /// over a single resolved page (when a slug is provided) or every
     /// page, returning the unresolved contradictions as JSON.
@@ -34,7 +38,18 @@ impl QuaidServer {
         if let Some(slug) = input.slug.as_deref() {
             validate_slug(slug)?;
         }
+        if let Some(keep) = input.keep.as_deref() {
+            validate_slug(keep)?;
+        }
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
+
+        if let Some(contradiction_id) = input.resolve {
+            let report = check::execute_resolve(&db, contradiction_id, input.keep.as_deref())
+                .map_err(map_anyhow_error)?;
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&report).map_err(map_serialize_error)?,
+            )]));
+        }
         let slug_filter = input
             .slug
             .as_deref()
@@ -69,7 +84,7 @@ impl QuaidServer {
         let contradictions: Vec<Contradiction> = if let Some(page_id) = selected_page_id {
             let mut stmt = db
                 .prepare(
-                    "SELECT cp.name || '::' || p.slug, \
+                    "SELECT c.id, cp.name || '::' || p.slug, \
                             COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug), \
                             c.type, c.description, c.detected_at \
                       FROM contradictions c \
@@ -85,11 +100,12 @@ impl QuaidServer {
             let rows = stmt
                 .query_map([page_id], |row| {
                     Ok(Contradiction {
-                        page_slug: row.get(0)?,
-                        other_page_slug: row.get(1)?,
-                        r#type: row.get(2)?,
-                        description: row.get(3)?,
-                        detected_at: row.get(4)?,
+                        id: row.get(0)?,
+                        page_slug: row.get(1)?,
+                        other_page_slug: row.get(2)?,
+                        r#type: row.get(3)?,
+                        description: row.get(4)?,
+                        detected_at: row.get(5)?,
                     })
                 })
                 .map_err(map_db_error)?;
@@ -98,7 +114,7 @@ impl QuaidServer {
         } else {
             let mut stmt = db
                 .prepare(
-                    "SELECT cp.name || '::' || p.slug, \
+                    "SELECT c.id, cp.name || '::' || p.slug, \
                             COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug), \
                             c.type, c.description, c.detected_at \
                       FROM contradictions c \
@@ -114,11 +130,12 @@ impl QuaidServer {
             let rows = stmt
                 .query_map([], |row| {
                     Ok(Contradiction {
-                        page_slug: row.get(0)?,
-                        other_page_slug: row.get(1)?,
-                        r#type: row.get(2)?,
-                        description: row.get(3)?,
-                        detected_at: row.get(4)?,
+                        id: row.get(0)?,
+                        page_slug: row.get(1)?,
+                        other_page_slug: row.get(2)?,
+                        r#type: row.get(3)?,
+                        description: row.get(4)?,
+                        detected_at: row.get(5)?,
                     })
                 })
                 .map_err(map_db_error)?;

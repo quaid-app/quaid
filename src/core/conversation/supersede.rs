@@ -36,6 +36,10 @@ use crate::core::{collections, markdown, namespace};
 
 const DEFAULT_DEDUP_COSINE_MIN: f64 = 0.92;
 const DEFAULT_SUPERSEDE_COSINE_MIN: f64 = 0.4;
+const DEFAULT_KEY_MATCH_COSINE_MIN: f64 = 0.85;
+/// Required cosine gap between the best and second-best fuzzy key match;
+/// anything closer is ambiguous and falls back to `Coexist`.
+const KEY_MATCH_COSINE_MARGIN: f64 = 0.05;
 const DEFAULT_MODEL_ALIAS: &str = "phi-3.5-mini";
 const MAX_SLUG_COLLISION_ATTEMPTS: u32 = 5;
 
@@ -238,7 +242,14 @@ pub fn resolve_in_scope(
     collection_id: i64,
     namespace: &str,
 ) -> Result<Resolution, FactResolutionError> {
-    let candidates = head_candidates(conn, collection_id, namespace, raw_fact)?;
+    let candidates = select_head_candidates(
+        conn,
+        collection_id,
+        namespace,
+        raw_fact,
+        &cosine_similarity,
+        true,
+    )?;
     resolve_from_candidates(raw_fact, conn, candidates, cosine_similarity, true)
 }
 
@@ -255,7 +266,8 @@ pub fn resolve_in_scope_with_similarity<F>(
 where
     F: Fn(&str, &str) -> Result<f64, FactResolutionError>,
 {
-    let candidates = head_candidates(conn, collection_id, namespace, raw_fact)?;
+    let candidates =
+        select_head_candidates(conn, collection_id, namespace, raw_fact, &similarity, false)?;
     resolve_from_candidates(raw_fact, conn, candidates, similarity, false)
 }
 
@@ -500,6 +512,158 @@ fn source_turn_refs(window: &WindowedTurns) -> Vec<String> {
         &window.new_turns
     };
     turns.iter().map(|turn| turn.ordinal.to_string()).collect()
+}
+
+/// Select the head candidates a fresh fact resolves against: exact type-key
+/// matches when they exist, otherwise a fuzzy embedding-cosine match over the
+/// normalized type keys of same-kind heads in the scope.
+fn select_head_candidates<F>(
+    conn: &Connection,
+    collection_id: i64,
+    namespace: &str,
+    raw_fact: &RawFact,
+    similarity: &F,
+    require_trustworthy_embeddings: bool,
+) -> Result<Vec<HeadCandidate>, FactResolutionError>
+where
+    F: Fn(&str, &str) -> Result<f64, FactResolutionError>,
+{
+    let exact = head_candidates(conn, collection_id, namespace, raw_fact)?;
+    if !exact.is_empty() {
+        return Ok(exact);
+    }
+    fuzzy_head_candidates(
+        conn,
+        collection_id,
+        namespace,
+        raw_fact,
+        similarity,
+        require_trustworthy_embeddings,
+    )
+}
+
+/// Fall back to fuzzy type-key matching when no head shares the exact key:
+/// rank unsuperseded same-kind heads by `similarity` over normalized
+/// (lowercased/trimmed) keys, and accept the top match only when it clears
+/// `fact_resolution.key_match_cosine_min` with a clear margin over the
+/// runner-up. Anything weaker or ambiguous returns no candidates so the
+/// caller resolves to `Coexist`.
+fn fuzzy_head_candidates<F>(
+    conn: &Connection,
+    collection_id: i64,
+    namespace: &str,
+    raw_fact: &RawFact,
+    similarity: &F,
+    require_trustworthy_embeddings: bool,
+) -> Result<Vec<HeadCandidate>, FactResolutionError>
+where
+    F: Fn(&str, &str) -> Result<f64, FactResolutionError>,
+{
+    let new_key = normalize_type_key(raw_fact.type_key());
+    if new_key.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let key_path = format!("$.{}", raw_fact.type_key_field());
+    let mut stmt = conn.prepare(
+        "SELECT slug,
+                COALESCE(NULLIF(compiled_truth, ''), summary, title, ''),
+                json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), ?4)
+         FROM pages
+         WHERE collection_id = ?1
+           AND namespace = ?2
+           AND type = ?3
+           AND superseded_by IS NULL
+           AND json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), ?4) IS NOT NULL
+         ORDER BY id",
+    )?;
+    let rows = stmt.query_map(
+        params![collection_id, namespace, raw_fact.kind_str(), key_path],
+        |row| {
+            Ok((
+                HeadCandidate {
+                    slug: row.get(0)?,
+                    body: row.get(1)?,
+                },
+                row.get::<_, String>(2)?,
+            ))
+        },
+    )?;
+
+    let mut keyed_candidates = Vec::new();
+    for row in rows {
+        let (candidate, raw_key) = row?;
+        let normalized_key = normalize_type_key(&raw_key);
+        if !normalized_key.is_empty() {
+            keyed_candidates.push((candidate, normalized_key));
+        }
+    }
+    if keyed_candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if require_trustworthy_embeddings
+        && !matches!(
+            embedding_evidence_kind(),
+            Ok(EmbeddingEvidenceKind::Semantic)
+        )
+    {
+        eprintln!(
+            "INFO: fact_resolution decision=coexist reason=fuzzy_key_match_skipped_untrustworthy_embeddings kind={} key={}",
+            raw_fact.kind_str(),
+            raw_fact.type_key()
+        );
+        return Ok(Vec::new());
+    }
+
+    let key_match_cosine_min = read_f64_config(
+        conn,
+        "fact_resolution.key_match_cosine_min",
+        DEFAULT_KEY_MATCH_COSINE_MIN,
+    )?;
+
+    let mut scored = Vec::with_capacity(keyed_candidates.len());
+    for (candidate, candidate_key) in keyed_candidates {
+        let cosine = similarity(&new_key, &candidate_key)?;
+        scored.push((candidate, cosine));
+    }
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let top_cosine = scored[0].1;
+    if top_cosine < key_match_cosine_min {
+        return Ok(Vec::new());
+    }
+    if let Some((_, runner_up_cosine)) = scored.get(1) {
+        if top_cosine - runner_up_cosine < KEY_MATCH_COSINE_MARGIN {
+            eprintln!(
+                "INFO: fact_resolution decision=coexist reason=fuzzy_key_match_ambiguous kind={} key={} top={:.4} runner_up={:.4}",
+                raw_fact.kind_str(),
+                raw_fact.type_key(),
+                top_cosine,
+                runner_up_cosine
+            );
+            return Ok(Vec::new());
+        }
+    }
+
+    let (top_candidate, _) = scored.swap_remove(0);
+    eprintln!(
+        "INFO: fact_resolution decision=fuzzy_key_match matched_head={} kind={} key={} cosine={:.4}",
+        top_candidate.slug,
+        raw_fact.kind_str(),
+        raw_fact.type_key(),
+        top_cosine
+    );
+    Ok(vec![top_candidate])
+}
+
+fn normalize_type_key(raw: &str) -> String {
+    raw.trim().to_lowercase()
 }
 
 fn head_candidates(

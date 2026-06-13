@@ -100,11 +100,40 @@ fn download_model_files(out_dir: &Path) -> Result<(), String> {
     for (file_name, expected_hash) in MODEL_FILES {
         let url = format!("https://huggingface.co/{MODEL_ID}/resolve/{MODEL_REVISION}/{file_name}");
         let temp_destination = out_dir.join(format!("{file_name}.download"));
-        let mut response = client
-            .get(&url)
-            .send()
-            .and_then(reqwest::blocking::Response::error_for_status)
-            .map_err(|error| format!("download {url}: {error}"))?;
+        // huggingface.co rate-limits cache-cold CI runners with HTTP 429, and
+        // transient 5xx/network blips happen too; retry with exponential
+        // backoff so a single flaky response doesn't fail the whole build.
+        let mut response = {
+            const MAX_ATTEMPTS: u32 = 6;
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match client
+                    .get(&url)
+                    .send()
+                    .and_then(reqwest::blocking::Response::error_for_status)
+                {
+                    Ok(resp) => break resp,
+                    Err(error) => {
+                        let retryable = error.status().is_none_or(|s| {
+                            s == reqwest::StatusCode::TOO_MANY_REQUESTS || s.is_server_error()
+                        });
+                        if attempt >= MAX_ATTEMPTS || !retryable {
+                            return Err(format!(
+                                "download {url} (attempt {attempt}/{MAX_ATTEMPTS}): {error}"
+                            ));
+                        }
+                        let backoff = Duration::from_secs(2_u64.pow(attempt));
+                        eprintln!(
+                            "quaid-build: {url} attempt {attempt} failed ({error}); \
+                             retrying in {}s",
+                            backoff.as_secs()
+                        );
+                        std::thread::sleep(backoff);
+                    }
+                }
+            }
+        };
 
         let mut file = fs::File::create(&temp_destination)
             .map_err(|error| format!("create {}: {error}", temp_destination.display()))?;

@@ -144,7 +144,7 @@ Once findings are ingested and a resolution page/slug exists:
 
 2. After approval is granted, confirm the gap appears in resolved state:
    ```bash
-   quaid gaps --resolved true --json | jq '.[] | select(.id == <gap_id>)'
+   quaid gaps --resolved --json | jq '.[] | select(.id == <gap_id>)'
    ```
 
 ---

@@ -1,8 +1,8 @@
 ---
 name: quaid-upgrade
 description: |
-  Agent-guided binary and skill updates: version check, download, SHA-256 verify,
-  post-upgrade validation, rollback on failure.
+  Agent-guided binary upgrades: version check, channel detection, download via
+  install.sh (or manual asset fetch + SHA-256 verify), and post-upgrade validation.
 min_binary_version: "0.3.0"
 ---
 
@@ -10,17 +10,23 @@ min_binary_version: "0.3.0"
 
 ## Overview
 
-The upgrade skill guides an agent through safely replacing the `quaid` binary and
-refreshing bundled skill files. It is conservative by default: it keeps a `.bak` copy
-of the previous binary, verifies checksums before replacing, and runs `quaid validate --all`
-before declaring success. If validation fails, it rolls back automatically.
+The upgrade skill guides an agent through safely replacing the `quaid` binary.
+The fast, supported path is to **re-run the official installer**, which already
+handles platform detection, channel selection, download, checksum verification,
+and PATH placement. Fall back to a manual download only when the installer
+cannot run (no network to the raw script, locked-down environment, etc.).
+
+Skills are embedded in the binary, so refreshing the binary refreshes the
+default skills automatically. User or project overrides under
+`~/.quaid/skills/` and `./skills/` are NOT touched by an upgrade — see
+[Refreshing skills after upgrade](#refreshing-skills-after-upgrade).
 
 ---
 
 ## Commands
 
 ```bash
-quaid version                          # print current binary version
+quaid version                          # print current binary version (e.g. "quaid 0.22.6")
 quaid validate --all --json            # post-upgrade integrity check
 quaid skills list --json               # list active skills after upgrade
 quaid skills doctor --json             # verify skill resolution and hashes
@@ -28,145 +34,174 @@ quaid skills doctor --json             # verify skill resolution and hashes
 
 ---
 
-## Upgrade Workflow
+## Preferred path — re-run install.sh
 
-### Step 1 — Check current version
+The installer is the single source of truth for the asset contract. Re-running
+it upgrades in place:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
+```
+
+Useful environment overrides (all optional):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `QUAID_CHANNEL` | `airgapped` | `airgapped` (embedded model, offline) or `online` (downloads model on first use) |
+| `QUAID_VERSION` | latest release tag | pin a specific version, e.g. `v0.22.6` |
+| `QUAID_INSTALL_DIR` | `~/.local/bin` | where the binary lands |
+
+To upgrade on the same channel you already run, detect it first (see
+[Channel detection](#channel-detection)) and pass it through:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh \
+  | QUAID_CHANNEL=online sh
+```
+
+The installer downloads the matching asset, downloads its `.sha256`, verifies
+the checksum, and refuses to proceed on mismatch. After it finishes, run
+[post-upgrade validation](#post-upgrade-validation).
+
+---
+
+## Channel detection
+
+Two channels ship for every platform:
+
+- **airgapped** — embeds BGE-small; fully offline. The default.
+- **online** — downloads/caches the selected model on first semantic use.
+
+Detecting the installed channel is best-effort. Heuristics, in order:
+
+1. If the user told you which channel they run, trust that.
+2. `quaid config get model_id` plus `~/.quaid/models/` — an online build that has
+   pulled a non-default model is online; a pristine offline DB is typically airgapped.
+3. If you cannot tell, default to `airgapped` (the installer default) and tell
+   the user which channel you chose so they can override with `QUAID_CHANNEL`.
+
+When in doubt, re-running the installer with no `QUAID_CHANNEL` keeps the
+default airgapped channel.
+
+---
+
+## Manual upgrade (fallback)
+
+Only if the installer cannot be used.
+
+### Step 1 — Record current version
 
 ```bash
 quaid version
 ```
 
-Output: `quaid 0.2.0 (commit abc1234)`
+Output looks like `quaid 0.22.6 (commit abc1234)`. Record it as `current_version`.
 
-Record `current_version` for comparison.
+### Step 2 — Resolve platform and channel
 
-### Step 2 — Fetch latest release metadata
+Build the platform token from the OS and architecture exactly as the installer does:
 
-Query the GitHub Releases API (no authentication required for public repos):
+| OS / arch | Platform token |
+|-----------|----------------|
+| macOS arm64 (Apple silicon) | `darwin-arm64` |
+| macOS x86_64 | `darwin-x86_64` |
+| Linux x86_64 | `linux-x86_64` |
+| Linux aarch64 | `linux-aarch64` |
+
+The asset name is `quaid-<platform>-<channel>`, where `<channel>` is `airgapped`
+or `online`. The checksum asset is the same name with a `.sha256` suffix. These
+names are the canonical release contract (`.github/release-assets.txt`). Examples:
+
+| Platform / channel | Asset filename |
+|--------------------|----------------|
+| Linux x86_64, airgapped | `quaid-linux-x86_64-airgapped` |
+| Linux aarch64, online | `quaid-linux-aarch64-online` |
+| macOS arm64, airgapped | `quaid-darwin-arm64-airgapped` |
+| macOS x86_64, online | `quaid-darwin-x86_64-online` |
+
+### Step 3 — Fetch latest release metadata
 
 ```
 GET https://api.github.com/repos/quaid-app/quaid/releases/latest
 ```
 
-Extract from response:
-- `tag_name` → `latest_version` (e.g., `v0.3.0`)
-- `assets[].browser_download_url` → download URL matching the current platform
-- `assets[].name` — find the `.sha256` checksum asset alongside the binary
-
-**Platform asset naming convention:**
-
-| Platform | Asset filename |
-|----------|---------------|
-| Linux x86_64 | `quaid-x86_64-unknown-linux-musl` |
-| Linux ARM64 | `quaid-aarch64-unknown-linux-musl` |
-| macOS x86_64 | `quaid-x86_64-apple-darwin` |
-| macOS ARM64 | `quaid-aarch64-apple-darwin` |
-
-If no asset matches the current platform, abort and report: `Error: no release asset for <platform>`.
-
-### Step 3 — Compare versions
-
-If `current_version == latest_version`:
-- Print: `quaid is already up to date (v<version>). No action taken.`
-- Exit.
-
-If `latest_version` is older than `current_version` (downgrade):
-- Warn: `Warning: release v<latest> is older than installed v<current>. Skipping.`
-- Exit unless the agent was explicitly instructed to downgrade.
+Take `tag_name` as `latest_version`. If `latest_version == current_version`,
+report "already up to date" and stop. If `latest_version` is older (a
+downgrade), stop unless explicitly asked to downgrade.
 
 ### Step 4 — Download binary and checksum
 
 ```bash
-curl -fL "<binary_url>" -o quaid.new
-curl -fL "<sha256_url>" -o quaid.new.sha256
+base="https://github.com/quaid-app/quaid/releases/download/<latest_version>"
+curl -fL "$base/quaid-<platform>-<channel>" -o quaid.new
+curl -fL "$base/quaid-<platform>-<channel>.sha256" -o quaid.new.sha256
 ```
 
-Do NOT replace the existing binary yet.
+Do not replace the existing binary yet.
 
 ### Step 5 — Verify checksum
 
 ```bash
-sha256sum -c quaid.new.sha256
+sha256sum -c quaid.new.sha256   # (shasum -a 256 -c on macOS)
 ```
 
-If verification fails:
-- Delete `quaid.new` and `quaid.new.sha256`
-- Abort: `Error: checksum verification failed. Downloaded binary is corrupt or tampered.`
-- Do NOT proceed.
+On failure: delete `quaid.new*`, abort, and never replace the binary.
 
-### Step 6 — Back up existing binary
+### Step 6 — Back up and replace
 
 ```bash
-cp "$(which quaid)" "$(which quaid).bak"
-```
-
-If `$(which quaid)` is not writable (e.g., installed in `/usr/local/bin` without sudo):
-- Report the path and instruct the user to run the replacement step with elevated privileges.
-- Provide the exact command: `sudo cp quaid.new $(which quaid) && sudo chmod +x $(which quaid)`
-
-### Step 7 — Replace binary
-
-```bash
+cp "$(command -v quaid)" "$(command -v quaid).bak"
 chmod +x quaid.new
-mv quaid.new "$(which quaid)"
+mv quaid.new "$(command -v quaid)"
 ```
 
-### Step 8 — Post-upgrade validation
+If the install path is not writable, print the exact `sudo` command rather than
+escalating unattended:
+`sudo cp quaid.new "$(command -v quaid)" && sudo chmod +x "$(command -v quaid)"`.
+
+---
+
+## Post-upgrade validation
 
 ```bash
-quaid version          # confirm new version reports correctly
+quaid version            # confirm the new version reports correctly
 quaid validate --all --json
 ```
 
-If `validate --all` exits with code 1 (violations found):
-- **Automatically roll back** (see Rollback Procedure below).
-- Report: `Upgrade validation failed. Rolled back to v<previous>. Run 'quaid validate --all' to inspect violations.`
+If `validate --all` exits non-zero (violations found):
 
-If `validate --all` exits with code 0:
-- Print: `Upgrade complete. quaid v<new_version> is active.`
+- Restore the backup if you made one:
+  `mv "$(command -v quaid)" "$(command -v quaid).failed" && cp "$(command -v quaid).bak" "$(command -v quaid)"`
+- Re-run `quaid version` to confirm the rollback, and report the violations.
 
-### Step 9 — Update skills
+If validation passes, print `Upgrade complete. quaid <new_version> is active.`
 
-If the new release bundles updated skill files (check release notes for mention of `SKILL.md` changes):
+---
+
+## Refreshing skills after upgrade
+
+Embedded skills travel with the binary, so a successful upgrade already ships
+the new defaults. Overrides do not update themselves:
 
 ```bash
 quaid skills doctor --json
 ```
 
-Review the output for skills where `embedded_hash != previous_hash`. The new embedded
-skills are automatically active for the embedded resolution tier. External overrides
-(`~/.quaid/skills/` or `./skills/`) take precedence and are NOT automatically updated
-— the agent should alert the user if an external override exists for a skill that changed.
+Review the output:
 
----
+- Skills resolving from `embedded://…` are already on the new version.
+- Skills resolving from `~/.quaid/skills/…` or `./skills/…` are **shadowing** the
+  new embedded copy. If the embedded default changed, your override may be stale.
 
-## Rollback Procedure
-
-If post-upgrade validation fails or the new binary does not start:
+To adopt the new embedded copy of an overridden skill, either delete the
+override (the embedded copy resolves again) or re-materialize it:
 
 ```bash
-mv "$(which quaid)" "$(which quaid).failed"
-cp "$(which quaid).bak" "$(which quaid)"
-quaid version    # confirm rollback succeeded
+quaid skills extract <name> --force   # overwrite the local override with the new embedded copy
 ```
 
-If the rollback binary also fails to start:
-- The `.bak` file is preserved as `quaid.failed` is moved aside.
-- Report: `Critical: rollback binary also failed. Manual recovery required. Backup at: $(which quaid).bak`
-
----
-
-## Version Pinning Rules
-
-Skills declare a minimum binary version via the `min_binary_version` frontmatter field.
-The upgrade skill enforces this:
-
-1. After upgrade, run `quaid skills doctor --json`.
-2. For each skill, check `min_binary_version` against the installed version.
-3. If any skill requires a higher version than installed, report:
-   `Warning: skill <name> requires quaid >= <version>. Current: <installed>. Upgrade to satisfy.`
-
-The binary will still run; this is a warning, not a hard block.
+`quaid skills doctor` flags shadowing so you can spot overrides that diverged
+from a freshly upgraded default.
 
 ---
 
@@ -174,9 +209,9 @@ The binary will still run; this is a warning, not a hard block.
 
 | Condition | Behaviour |
 |-----------|-----------|
-| GitHub API unreachable | Abort: `Error: cannot reach GitHub Releases API. Check network.` |
-| No matching platform asset | Abort with platform name in error message |
-| Checksum mismatch | Delete downloads, abort. Never replace binary. |
-| Insufficient write permissions | Print manual replacement command; do not attempt unattended escalation |
-| `validate --all` fails post-upgrade | Automatic rollback to `.bak` binary |
-| `.bak` missing at rollback time | Report critical error; preserve `.failed` binary for forensics |
+| GitHub API / raw script unreachable | Abort: report the network failure; do not guess a version |
+| No matching platform asset | Abort with the resolved platform token in the error |
+| Checksum mismatch | Delete downloads, abort. Never replace the binary. |
+| Install path not writable | Print the manual `sudo` command; do not escalate unattended |
+| `validate --all` fails post-upgrade | Roll back to the `.bak` binary if one exists; report violations |
+| Override shadows a changed embedded skill | Warn the user; offer `quaid skills extract <name> --force` |

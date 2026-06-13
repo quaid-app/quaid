@@ -73,3 +73,38 @@ quaid config set search_merge_strategy rrf    # reciprocal rank fusion
 quaid config set search_merge_strategy union  # set union (default)
 ```
 
+## Namespace-scoped search
+
+A **namespace** is an isolated partition of the brain (a project, a client, a
+privacy boundary). Scope a search to one namespace to keep results clean and to
+respect privacy boundaries between contexts.
+
+```bash
+quaid search "deadline" --namespace acme
+quaid query "open questions" --namespace acme --limit 5
+```
+
+The MCP tools take the same filter: `memory_search` and `memory_query` accept an
+optional `namespace` (and an optional `collection`) field. Omitting it searches
+global memory. List available namespaces with `quaid namespace list`.
+
+Use a namespace filter whenever the question is project- or client-specific — it
+prevents one context's facts from leaking into another's answers.
+
+## Conversation history and superseded facts
+
+Quaid extracts facts from captured conversations (see the ingest skill's
+conversation-capture flow), and corrections **supersede** rather than delete the
+prior fact. By default search returns only the current head of each fact.
+
+- To see retired/historical heads as well, pass `include_superseded`:
+
+```bash
+quaid search "title" --namespace acme --include-superseded
+quaid query "what did we decide about pricing" --include-superseded
+```
+
+  The MCP tools expose the same `include_superseded: true` flag.
+- When you cite a fact, prefer the head; only reach for superseded entries when
+  the user asks "what did we think before" or you are reconstructing history.
+

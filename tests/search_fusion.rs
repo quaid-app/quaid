@@ -107,9 +107,11 @@ fn hybrid_search_vector_arm_honours_limit_above_ten() {
 // ── 2. Relevance floor on the vector arm ──────────────────────────────────────
 
 fn seed_floor_corpus(conn: &rusqlite::Connection) {
-    // The target page's truth is byte-identical to the query, so its chunk
-    // embedding matches the query embedding at cosine ~1.0 under any
-    // deterministic backend.
+    // The target page's truth is byte-identical to the query. Under BGE's
+    // asymmetric retrieval (the query carries the "Represent this sentence…"
+    // instruction prefix, the passage does not) the cosine is high (~0.95)
+    // but not exactly 1.0 — well above the unrelated junk pages, so a 0.90
+    // floor keeps it while dropping them.
     insert_page(
         conn,
         "notes/target",
@@ -177,15 +179,15 @@ fn relevance_floor_seeded_zero_keeps_low_cosine_vector_hits() {
     );
 }
 
-/// A high floor drops the junk vector hits while the exact match (cosine
-/// ~1.0, plus its FTS hit) survives.
+/// A high floor (0.90) drops the junk vector hits while the near-exact match
+/// (cosine ~0.95 under asymmetric retrieval, plus its FTS hit) survives.
 #[test]
 fn relevance_floor_drops_low_cosine_vector_hits() {
     let conn = open_test_db();
     seed_floor_corpus(&conn);
 
     conn.execute(
-        "UPDATE config SET value = '0.995' WHERE key = 'search.relevance_floor'",
+        "UPDATE config SET value = '0.90' WHERE key = 'search.relevance_floor'",
         [],
     )
     .expect("raise relevance floor");

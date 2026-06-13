@@ -321,6 +321,9 @@ enum EarlyCommand {
     None,
     Init(String),
     Model(commands::model::ModelAction),
+    /// `quaid skills …` resolves embedded skills (and overrides on disk) without
+    /// opening or requiring an initialized memory database.
+    Skills,
     Version,
 }
 
@@ -333,6 +336,7 @@ fn early_command(cli: &Cli) -> EarlyCommand {
             EarlyCommand::Init(path.clone().unwrap_or_else(|| db_path.to_owned()))
         }
         Commands::Model { action } => EarlyCommand::Model(action.clone()),
+        Commands::Skills { .. } => EarlyCommand::Skills,
         _ => EarlyCommand::None,
     }
 }
@@ -365,6 +369,14 @@ async fn main() -> Result<()> {
         EarlyCommand::Version => return commands::version::run(),
         EarlyCommand::Init(path) => return commands::init::run(&path, &requested_model),
         EarlyCommand::Model(action) => return commands::model::run(action),
+        EarlyCommand::Skills => {
+            // Skill resolution reads embedded bytes plus on-disk overrides; it
+            // never touches the database, so dispatch before opening one.
+            let Commands::Skills { action } = cli.command else {
+                unreachable!("early_command mapped a non-Skills command to Skills")
+            };
+            return commands::skills::run(action, cli.json);
+        }
         EarlyCommand::None => {}
     }
 
@@ -374,7 +386,10 @@ async fn main() -> Result<()> {
     let db = opened.conn;
 
     match cli.command {
-        Commands::Init { .. } | Commands::Model { .. } | Commands::Version => unreachable!(),
+        Commands::Init { .. }
+        | Commands::Model { .. }
+        | Commands::Version
+        | Commands::Skills { .. } => unreachable!(),
         Commands::Get { slug, namespace } => {
             commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)
         }
@@ -534,7 +549,6 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Stats => commands::stats::run(&db, cli.json),
-        Commands::Skills { action } => commands::skills::run(action, cli.json),
         Commands::Call { tool, params } => commands::call::run(db, &tool, params),
         Commands::Pipe => commands::pipe::run(db),
     }

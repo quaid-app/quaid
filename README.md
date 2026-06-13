@@ -259,7 +259,7 @@ Retrieval quality is verified by [quaid-evals](https://github.com/quaid-app/quai
 
 ## Skills
 
-Skills are markdown files (`SKILL.md`) that tell agents how to use Quaid. Embedded in the binary, extracted to `~/.quaid/skills/` on first run. Drop a custom `SKILL.md` in your working directory to override any default.
+Skills are markdown files (`SKILL.md`) that tell agents how to use Quaid. They are embedded in the binary by default and never written to disk automatically. Override any default by dropping a `SKILL.md` in `~/.quaid/skills/<name>/` (user-global) or `./skills/<name>/` (working directory). To edit the embedded copies, materialize them on demand with `quaid skills extract` (use `--force` to overwrite local edits), then check resolution with `quaid skills doctor`.
 
 | Skill | Purpose |
 |-------|---------|

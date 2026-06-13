@@ -6,7 +6,7 @@ guide:
   accentBar: true
 ---
 
-Skills are markdown workflow files. The binary ships eight defaults, extracts them on first run, and lets you override any of them at the user or project level. This recipe covers the override mechanics.
+Skills are markdown workflow files. The binary ships eight defaults embedded inside it and lets you override any of them at the user or project level. The embedded copies are never written to disk automatically; run `quaid skills extract` when you want editable copies. This recipe covers the override mechanics.
 
 For the design, see [The skills system](/explanation/skills-system/).
 
@@ -36,7 +36,15 @@ The first hit wins. The other layers are still listed by `skills doctor`.
 
 ## Override at the user level
 
-The first time you run `quaid` after install, the embedded skills are extracted to `~/.quaid/skills/`:
+The embedded skills are never written to disk on their own. When you want editable copies under `~/.quaid/skills/`, materialize them with:
+
+```bash
+quaid skills extract           # all skills → ~/.quaid/skills/
+quaid skills extract query     # just one skill
+quaid skills extract --dir ./my-skills   # somewhere else
+```
+
+`extract` refuses to clobber a local file whose contents differ from the embedded copy; pass `--force` to overwrite it. The result:
 
 ```
 ~/.quaid/skills/
@@ -50,7 +58,7 @@ The first time you run `quaid` after install, the embedded skills are extracted 
 └── upgrade/SKILL.md
 ```
 
-Edit any of these. Next agent run picks up your changes — no rebuild.
+Edit any of these. Next agent run picks up your changes — no rebuild. Run `quaid skills doctor` afterward to confirm your copy shadows the embedded default (and to spot stale shadows after an upgrade).
 
 ## Override at the project level
 
@@ -68,10 +76,10 @@ If you've broken an override, blow it away:
 
 ```bash
 rm -rf ~/.quaid/skills/<skill-name>
-quaid skills list   # the next read re-extracts the embedded copy
+quaid skills list   # the embedded default resolves again — no override left to shadow it
 ```
 
-Embedded defaults are immutable — they're bytes inside the binary. You can't lose them by editing.
+Embedded defaults are immutable — they're bytes inside the binary. You can't lose them by editing, and deleting an override just lets the embedded copy resolve again. To get a fresh editable copy, run `quaid skills extract <skill-name>` again.
 
 ## Authoring conventions
 

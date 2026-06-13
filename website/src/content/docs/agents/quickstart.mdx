@@ -88,7 +88,7 @@ Read the [Sensitivity contract](/agents/sensitivity-contract/). It's two screens
 
 ## Skill load order
 
-The user has eight default skills (`ingest`, `query`, `maintain`, `enrich`, `briefing`, `alerts`, `research`, `upgrade`) extracted to `~/.quaid/skills/` and overridable per-project. When deciding what to do:
+The user has eight default skills (`ingest`, `query`, `maintain`, `enrich`, `briefing`, `alerts`, `research`, `upgrade`) embedded in the binary and overridable per-user (`~/.quaid/skills/`) or per-project (`./skills/`); run `quaid skills extract` to materialize editable copies. When deciding what to do:
 
 1. If the user has a project `SKILL.md` in cwd, follow it.
 2. Else, follow `~/.quaid/skills/<skill-name>/SKILL.md`.

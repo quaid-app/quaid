@@ -44,7 +44,8 @@ command; the agent runs these and synthesises results.
 quaid check --all --json
 
 # Check for recently resolved gaps (compare against last known state)
-quaid gaps --resolved true --json
+# `--resolved` is a bare boolean flag: present = list resolved gaps, absent = unresolved.
+quaid gaps --resolved --json
 
 # List pages for stale-risk check
 quaid list --json
@@ -132,7 +133,7 @@ predicate value pair changes — it will fire again. This is intentional.
 ### Gap resolved alerts
 
 ```
-1. Run: quaid gaps --resolved true --json
+1. Run: quaid gaps --resolved --json
 2. For each gap with resolved_at != null:
    a. Compute dedup_key = "gap_resolved::<gap_id>"
    b. If NOT in suppression log: emit low alert, record key
@@ -175,10 +176,14 @@ Write one JSON alert object per line to stdout:
 {"type":"page_stale","priority":"medium","slug":"companies/acme",...}
 ```
 
-Downstream handlers consume this stream. Examples:
-- Log to a brain page: `quaid alerts | quaid put logs/alerts-<date>`
-- Filter by priority: `quaid alerts | jq 'select(.priority == "high")'`
-- Count today's alerts: `quaid alerts | jq -s 'length'`
+There is **no** `quaid alerts` command — the agent itself synthesises this
+stream from the orchestrated `check` / `gaps` / `validate` calls above and
+writes it to stdout (or a file). Downstream handlers consume that stream.
+Assuming the agent has written its alerts to `alerts.jsonl`:
+
+- Log to a brain page: `quaid put logs/alerts-$(date +%F) < alerts.jsonl`
+- Filter by priority: `jq 'select(.priority == "high")' alerts.jsonl`
+- Count today's alerts: `jq -s 'length' alerts.jsonl`
 
 ---
 

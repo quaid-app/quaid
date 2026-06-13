@@ -30,11 +30,6 @@ const ALLOWLIST: &[(&str, usize, &str)] = &[
         "basename surface matcher with LIMIT 2 ambiguity guard; multi-match resolves to Unresolved",
     ),
     (
-        "src/core/novelty.rs",
-        1,
-        "cosine dedup joins every same-slug embedding; cross-namespace dedup is intentionally conservative",
-    ),
-    (
         "src/core/quarantine.rs",
         1,
         "quarantined-page load is collection-scoped and predicated on quarantined_at",

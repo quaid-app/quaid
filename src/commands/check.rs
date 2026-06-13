@@ -148,16 +148,18 @@ pub fn execute_resolve(
             .map_err(|err| anyhow!(err.to_string()))?;
         vault_sync::ensure_collection_write_allowed(db, resolved.collection_id)
             .map_err(|err| anyhow!(err.to_string()))?;
-        let keeper_id: i64 = db
-            .query_row(
-                "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-                rusqlite::params![resolved.collection_id, &resolved.slug],
-                |row| row.get(0),
-            )
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => anyhow!("page not found: {keep}"),
-                other => anyhow!(other),
-            })?;
+        let keeper_id: i64 = pages::resolve(
+            db,
+            &pages::PageKey {
+                collection_id: resolved.collection_id,
+                namespace: None,
+                slug: &resolved.slug,
+            },
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => anyhow!("page not found: {keep}"),
+            other => anyhow!(other),
+        })?;
 
         let loser_id = if keeper_id == page_id {
             other_page_id

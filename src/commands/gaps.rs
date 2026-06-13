@@ -46,11 +46,15 @@ pub fn resolve(db: &Connection, id: i64, slug: &str, json: bool) -> Result<()> {
             );
         }
     };
-    let page_exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pages WHERE collection_id = ?1 AND slug = ?2)",
-        rusqlite::params![collection_id, &resolved_slug],
-        |row| row.get(0),
-    )?;
+    let page_exists = crate::core::pages::resolve_optional(
+        db,
+        &crate::core::pages::PageKey {
+            collection_id,
+            namespace: None,
+            slug: &resolved_slug,
+        },
+    )?
+    .is_some();
     if !page_exists {
         anyhow::bail!("page not found: {resolved_slug}");
     }

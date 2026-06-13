@@ -3,6 +3,11 @@
 -- Standalone copy for reference and tooling.
 
 PRAGMA journal_mode = WAL;
+-- NORMAL drops the per-commit fsync of the WAL file (FULL fsyncs on every
+-- commit). Under WAL this is crash-safe — at most the last few committed
+-- transactions can be lost on power loss, never database corruption — and
+-- removes the dominant cost of bulk ingest / reconcile commits.
+PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 
 -- ============================================================
@@ -170,7 +175,19 @@ CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
     WHERE old.quarantined_at IS NULL;
 END;
 
-CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+-- Only re-tokenize when an FTS-visible column actually changes, or when the
+-- page crosses the quarantine NULL/NOT-NULL boundary (the quarantine flip must
+-- still fire so FTS-side quarantine filtering stays correct). Metadata-only
+-- writes — superseded_by stamps, version bumps, namespace re-stamping — skip
+-- the trigger body entirely, so per-event cost no longer scales with the
+-- corpus tokenization cost.
+CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages
+WHEN old.title IS NOT new.title
+    OR old.slug IS NOT new.slug
+    OR old.compiled_truth IS NOT new.compiled_truth
+    OR old.timeline IS NOT new.timeline
+    OR (old.quarantined_at IS NULL) <> (new.quarantined_at IS NULL)
+BEGIN
     INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
     SELECT 'delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline
     WHERE old.quarantined_at IS NULL;
@@ -516,3 +533,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_gaps_query_hash ON knowledge_gaps(query_ha
 CREATE INDEX IF NOT EXISTS idx_gaps_page ON knowledge_gaps(page_id) WHERE page_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at)
     WHERE resolved_at IS NULL;
+
+-- ============================================================
+-- conversation_sessions: per-session append cursor cache
+-- Caches the highest turn ordinal and most-recent day-file status
+-- per (namespace, session_id) so `append_turn` no longer re-parses
+-- every day-file on every turn (O(session^2) over a session's life).
+-- The on-disk day-files remain the source of truth; this is a derived
+-- cache that is rebuilt from disk if a row is missing.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS conversation_sessions (
+    namespace     TEXT    NOT NULL DEFAULT '',
+    session_id    TEXT    NOT NULL,
+    max_ordinal   INTEGER NOT NULL DEFAULT 0,
+    latest_status TEXT    DEFAULT NULL,
+    latest_date   TEXT    DEFAULT NULL,
+    updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (namespace, session_id)
+);

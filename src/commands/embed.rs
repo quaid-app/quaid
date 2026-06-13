@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use crate::commands::get::get_page_by_key;
 use crate::core::chunking::chunk_page;
 use crate::core::collections::OpKind;
-use crate::core::inference::{embed, embedding_to_blob};
+use crate::core::inference::{embed_batch, embedding_to_blob};
 use crate::core::vault_sync;
 
 const DEFAULT_BATCH_SIZE: usize = 32;
@@ -244,6 +244,15 @@ fn replace_page_embeddings(
     vec_table: &str,
     chunks: &[crate::core::types::Chunk],
 ) -> Result<()> {
+    // Embed all chunks before BEGIN so model inference (and the model lock)
+    // never overlaps the SQLite write transaction; the batched encode shares
+    // tokenizer/forward setup across chunks.
+    let chunk_texts: Vec<&str> = chunks.iter().map(|chunk| chunk.content.as_str()).collect();
+    let embedding_blobs: Vec<Vec<u8>> = embed_batch(&chunk_texts)?
+        .iter()
+        .map(|embedding| embedding_to_blob(embedding))
+        .collect();
+
     let tx = db.unchecked_transaction()?;
 
     let existing_rowids = existing_vec_rowids(&tx, page_id, model_name)?;
@@ -259,10 +268,9 @@ fn replace_page_embeddings(
     )?;
 
     let insert_vec_sql = format!("INSERT INTO {vec_table}(embedding) VALUES (?1)");
-    for (chunk_index, chunk) in chunks.iter().enumerate() {
-        let embedding = embed(&chunk.content)?;
-        let embedding_blob = embedding_to_blob(&embedding);
-
+    for (chunk_index, (chunk, embedding_blob)) in
+        chunks.iter().zip(embedding_blobs.iter()).enumerate()
+    {
         tx.execute(&insert_vec_sql, rusqlite::params![embedding_blob])?;
         let vec_rowid = tx.last_insert_rowid();
 

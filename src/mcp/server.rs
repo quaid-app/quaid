@@ -230,6 +230,17 @@ impl QuaidServer {
     pub(crate) fn slm(&self) -> &SlmRef {
         &self.slm
     }
+
+    /// Identity of the shared SLM `Arc` for this server, as a thin data
+    /// pointer. Two servers that share one runner (e.g. all SSE connections
+    /// after the process-wide hoist) return the same pointer; servers with
+    /// independent runners return different pointers. Exposed for tests that
+    /// assert the shared-runner invariant without depending on the concrete
+    /// SLM type.
+    #[doc(hidden)]
+    pub fn slm_identity(&self) -> *const () {
+        Arc::as_ptr(&self.slm) as *const ()
+    }
 }
 
 /// Input schema for the `memory_get` MCP tool.

@@ -38,11 +38,13 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rmcp::transport::SseServer;
 use rusqlite::Connection;
 use thiserror::Error;
 
+use crate::core::conversation::slm::LazySlmRunner;
 use crate::mcp::server::QuaidServer;
 
 /// Default port for the HTTP/SSE transport.
@@ -191,6 +193,12 @@ pub async fn run_http(
     // construct a new `QuaidServer` per connection because each MCP
     // session needs its own DB connection (`rusqlite::Connection` is
     // not shareable across tasks).
+    //
+    // The SLM runner, however, is process-wide: it lazily loads a
+    // multi-gigabyte model and caches it for the daemon's lifetime. We
+    // build one `Arc<LazySlmRunner>` here and clone the `Arc` into every
+    // per-connection `QuaidServer`, so all SSE connections share a single
+    // warm model load instead of each reloading their own.
     // `rmcp::SseServer::with_service` requires a `Fn() -> S` provider
     // and gives the closure no way to signal failure, so a per-connection
     // DB-open error has to either panic or fabricate a degraded
@@ -198,17 +206,9 @@ pub async fn run_http(
     // inside the SSE connection's tokio task, so other in-flight
     // connections aren't torn down; launchd/systemd's auto-restart
     // catches schema/file errors that affect the whole daemon.
-    #[allow(
-        clippy::panic,
-        reason = "rmcp::SseServer::with_service provider closure has no Result return; logging + panic surfaces fatal per-connection DB errors via the platform supervisor"
-    )]
-    let inner_ct = server.with_service(move || {
-        let conn = db_conn_factory().unwrap_or_else(|err| {
-            eprintln!("mcp_http_per_connection_db_open_failed error={err}");
-            panic!("per-connection DB open failed: {err}");
-        });
-        QuaidServer::new(conn)
-    });
+    let shared_slm = Arc::new(LazySlmRunner::new());
+    let inner_ct =
+        server.with_service(move || build_connection_service(&db_conn_factory, &shared_slm));
 
     // Block until the listener is cancelled. The `CancellationToken` is
     // owned by `server.config.ct` and any clone of it (including
@@ -217,6 +217,26 @@ pub async fn run_http(
     inner_ct.cancelled().await;
 
     Ok(())
+}
+
+/// Builds the per-SSE-connection [`QuaidServer`]: a fresh DB connection (each
+/// transport needs its own non-`Send` `rusqlite::Connection`) paired with a
+/// clone of the process-wide `shared_slm` `Arc`, so every connection shares one
+/// lazily-loaded model. Extracted so the `with_service` provider closure and
+/// tests construct connections identically.
+#[allow(
+    clippy::panic,
+    reason = "rmcp::SseServer::with_service provider closure has no Result return; logging + panic surfaces fatal per-connection DB errors via the platform supervisor"
+)]
+pub fn build_connection_service(
+    db_conn_factory: &(impl Fn() -> anyhow::Result<Connection> + ?Sized),
+    shared_slm: &Arc<LazySlmRunner>,
+) -> QuaidServer {
+    let conn = db_conn_factory().unwrap_or_else(|err| {
+        eprintln!("mcp_http_per_connection_db_open_failed error={err}");
+        panic!("per-connection DB open failed: {err}");
+    });
+    QuaidServer::new_with_slm(conn, Arc::clone(shared_slm))
 }
 
 #[cfg(test)]

@@ -68,6 +68,9 @@ pub(crate) fn resume_orphaned_embedding_jobs(conn: &Connection) -> Result<usize,
 /// failed `run_once` calls so a transient extractor error does not
 /// hot-loop the CPU.
 pub(super) fn run_extraction_worker(db_path: String, stop: Arc<AtomicBool>, session_id: String) {
+    // Route through `db::open_runtime` so the worker inherits the 5s
+    // busy_timeout (and WAL/sqlite-vec setup) instead of a bare connection
+    // that fails fast under write contention (review items #7 + #10).
     let conn = match crate::core::db::open_runtime(&db_path) {
         Ok(conn) => conn,
         Err(error) => {
@@ -103,26 +106,30 @@ pub(super) fn run_extraction_worker(db_path: String, stop: Arc<AtomicBool>, sess
 /// `configured_concurrency()` ready jobs in a single transaction,
 /// then processes them either inline (`:memory:` / single-claim) or
 /// in parallel on short-lived worker threads.
-pub fn drain_embedding_queue(conn: &Connection) -> Result<(), VaultSyncError> {
+pub fn drain_embedding_queue(conn: &Connection) -> Result<usize, VaultSyncError> {
     let claimed = claim_embedding_jobs(conn)?;
     if claimed.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let db_path = database_path(conn).unwrap_or_default();
     if db_path.is_empty() || db_path == ":memory:" || claimed.len() == 1 {
+        let mut processed = 0usize;
         for job in claimed {
-            if let Err(error) = process_embedding_job_on_connection(conn, job.id, job.page_id) {
-                mark_embedding_job_failed(conn, job.id, &error)?;
-                if job.attempt_count >= 5 {
-                    eprintln!(
-                        "WARN: embedding_job_failed_permanently job_id={} page_id={} error={}",
-                        job.id, job.page_id, error
-                    );
+            match process_embedding_job_on_connection(conn, job.id, job.page_id) {
+                Ok(()) => processed += 1,
+                Err(error) => {
+                    mark_embedding_job_failed(conn, job.id, &error)?;
+                    if job.attempt_count >= 5 {
+                        eprintln!(
+                            "WARN: embedding_job_failed_permanently job_id={} page_id={} error={}",
+                            job.id, job.page_id, error
+                        );
+                    }
                 }
             }
         }
-        return Ok(());
+        return Ok(processed);
     }
 
     let mut handles = Vec::new();
@@ -142,9 +149,10 @@ pub fn drain_embedding_queue(conn: &Connection) -> Result<(), VaultSyncError> {
         }));
     }
 
+    let mut processed = 0usize;
     for handle in handles {
         match handle.join() {
-            Ok(Ok(_)) => {}
+            Ok(Ok(_)) => processed += 1,
             Ok(Err(error)) => {
                 eprintln!("WARN: embedding_job_failed error={error}");
             }
@@ -154,7 +162,7 @@ pub fn drain_embedding_queue(conn: &Connection) -> Result<(), VaultSyncError> {
         }
     }
 
-    Ok(())
+    Ok(processed)
 }
 
 #[derive(Debug, Clone)]

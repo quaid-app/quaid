@@ -1326,7 +1326,9 @@ mod tests {
             })
             .unwrap();
 
-        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        // memory_query now returns a {results, pending_embedding_jobs?} envelope.
+        let envelope: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        let rows = envelope["results"].as_array().cloned().unwrap_or_default();
         let gap_count: i64 = server
             .db
             .lock()

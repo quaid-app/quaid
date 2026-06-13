@@ -110,3 +110,15 @@ pub fn extract_text(result: &CallToolResult) -> String {
         .collect::<Vec<_>>()
         .join("")
 }
+
+/// Extracts the `results` array from a `memory_query` / `memory_search`
+/// response envelope (which also carries the optional `pending_embedding_jobs`
+/// staleness hint). Use this instead of parsing the payload as a bare array.
+pub fn extract_query_results(result: &CallToolResult) -> Vec<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_str(&extract_text(result)).unwrap();
+    value
+        .get("results")
+        .and_then(|results| results.as_array())
+        .cloned()
+        .unwrap_or_default()
+}

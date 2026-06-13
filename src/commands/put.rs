@@ -163,7 +163,21 @@ fn put_from_cli_string(
     }
     let _lease = vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
         .map_err(anyhow::Error::new)?;
-    put_from_string_status_with_namespace(db, &canonical_slug, content, namespace, expected_version)
+    let status =
+        put_from_string_status_with_namespace(db, &canonical_slug, content, namespace, expected_version)?;
+    // Drain the embedding queue inline so CLI-only users (no running daemon)
+    // get semantic results for the page they just wrote. Job claiming is
+    // transactional, so this is safe even if a daemon races us (review #10).
+    match vault_sync::drain_embedding_queue(db) {
+        Ok(drained) if drained > 0 => {
+            println!("Embedded {drained} pending page(s)");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("WARN: cli_put_embedding_drain_failed error={error}");
+        }
+    }
+    Ok(status)
 }
 
 #[cfg(not(unix))]

@@ -2992,6 +2992,12 @@ fn apply_delete_or_quarantine(
             )?;
             file_state::delete_file_state(tx, collection_id, &path_to_string(relative_path))?;
         } else {
+            // vec0 rows do not cascade with the FK page delete; drop them
+            // first so the hard delete does not orphan the page's vectors
+            // (review item #10).
+            crate::core::inference::delete_page_vec_rows(tx, &[page_id]).map_err(|err| {
+                ReconcileError::DbError(rusqlite::Error::InvalidParameterName(err.to_string()))
+            })?;
             tx.execute("DELETE FROM pages WHERE id = ?1", [page_id])?;
         }
         Ok(branches)

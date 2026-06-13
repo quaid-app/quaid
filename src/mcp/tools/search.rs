@@ -9,6 +9,8 @@
 
 use rmcp::model::{CallToolResult, Content};
 use rmcp::tool;
+use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::core::fts::{sanitize_fts_query, search_fts_tiered, FtsQuery};
 use crate::core::gaps;
@@ -18,6 +20,7 @@ use crate::core::search::{
     configured_max_chunks_per_doc, configured_relevance_floor, dedup_chunks_per_page,
     filter_below_floor, hybrid_search, HybridSearch,
 };
+use crate::core::types::SearchResult;
 use crate::mcp::errors::{
     invalid_params, map_namespace_error, map_search_error, map_serialize_error,
 };
@@ -36,6 +39,40 @@ fn validate_relevance_floor(floor: Option<f64>) -> Result<Option<f64>, rmcp::Err
         }
     }
     Ok(floor)
+}
+
+/// Read-side response envelope for `memory_query` / `memory_search`.
+///
+/// The `results` array is unconditionally present so existing consumers keep
+/// the familiar list shape. `pending_embedding_jobs` is a staleness hint
+/// (review item #10): when the embedding queue is non-empty — e.g. a CLI-only
+/// write happened with no daemon to drain it — semantic results may be stale,
+/// so the count is surfaced. It is omitted entirely when the queue is empty.
+#[derive(Serialize)]
+struct ReadResponse {
+    results: Vec<SearchResult>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pending_embedding_jobs: i64,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if requires a `&T -> bool` predicate signature"
+)]
+fn is_zero(value: &i64) -> bool {
+    *value == 0
+}
+
+/// Counts queued (pending or failed-but-retryable) embedding jobs so the read
+/// tools can warn that semantic results may not yet reflect recent writes.
+fn pending_embedding_job_count(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM embedding_jobs \
+         WHERE job_state IN ('pending', 'failed', 'running')",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
 }
 
 impl QuaidServer {
@@ -117,7 +154,11 @@ impl QuaidServer {
             _ => results,
         };
 
-        let json = serde_json::to_string_pretty(&results).map_err(map_serialize_error)?;
+        let response = ReadResponse {
+            pending_embedding_jobs: pending_embedding_job_count(&db),
+            results,
+        };
+        let json = serde_json::to_string_pretty(&response).map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -177,7 +218,11 @@ impl QuaidServer {
         };
         let results = filter_below_floor(dedup_chunks_per_page(results, max_per_page), floor);
 
-        let json = serde_json::to_string_pretty(&results).map_err(map_serialize_error)?;
+        let response = ReadResponse {
+            pending_embedding_jobs: pending_embedding_job_count(&db),
+            results,
+        };
+        let json = serde_json::to_string_pretty(&response).map_err(map_serialize_error)?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }

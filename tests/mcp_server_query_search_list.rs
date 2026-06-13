@@ -15,8 +15,8 @@
 #[path = "common/mcp_harness.rs"]
 mod harness;
 use harness::{
-    create_page, create_page_in_collection, extract_text, insert_collection, open_test_db,
-    set_collection_state,
+    create_page, create_page_in_collection, extract_query_results, extract_text, insert_collection,
+    open_test_db, set_collection_state,
 };
 use quaid::core::conversation::turn_writer;
 use quaid::mcp::server::{
@@ -65,7 +65,7 @@ fn memory_query_auto_depth_expands_linked_results() {
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert!(rows
         .iter()
         .any(|row| row["slug"] == "default::concepts/child"));
@@ -117,7 +117,7 @@ fn memory_query_auto_depth_does_not_expand_across_collections() {
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert!(
         !rows
             .iter()
@@ -158,7 +158,7 @@ fn memory_query_explicit_collection_filter_returns_only_named_collection() {
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["slug"], "work::notes/work-hit");
 }
@@ -195,7 +195,7 @@ fn memory_query_defaults_to_write_target_when_multiple_collections_are_active() 
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["slug"], "default::notes/default-target");
 }
@@ -240,7 +240,7 @@ fn memory_query_defaults_to_memory_collection_when_dedicated_memory_location_is_
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0]["slug"],
@@ -271,8 +271,79 @@ fn memory_search_returns_matching_pages() {
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert_eq!(rows[0]["slug"], "default::companies/acme");
+}
+
+#[test]
+fn read_responses_surface_pending_embedding_jobs_hint() {
+    let (_dir, conn) = open_test_db();
+    let server = QuaidServer::new(conn);
+    // A CLI-style write through the MCP put enqueues an embedding job that no
+    // daemon has drained, so the read tools must warn about the stale queue.
+    create_page(
+        &server,
+        "companies/acme",
+        "---\ntitle: Acme\ntype: company\n---\nAcme builds fundraising software.\n",
+    );
+
+    let search = server
+        .memory_search(MemorySearchInput {
+            query: "fundraising".to_string(),
+            collection: None,
+            namespace: None,
+            wing: None,
+            limit: None,
+            include_superseded: None,
+        })
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&extract_text(&search)).unwrap();
+    assert!(
+        envelope["pending_embedding_jobs"].as_i64().unwrap_or(0) >= 1,
+        "memory_search must surface the pending-embedding-jobs hint when the \
+         queue is non-empty: {envelope}"
+    );
+
+    let query = server
+        .memory_query(MemoryQueryInput {
+            query: "fundraising".to_string(),
+            collection: None,
+            namespace: None,
+            wing: None,
+            limit: None,
+            depth: None,
+            include_superseded: None,
+        })
+        .unwrap();
+    let query_envelope: serde_json::Value = serde_json::from_str(&extract_text(&query)).unwrap();
+    assert!(
+        query_envelope["pending_embedding_jobs"]
+            .as_i64()
+            .unwrap_or(0)
+            >= 1,
+        "memory_query must surface the pending-embedding-jobs hint: {query_envelope}"
+    );
+
+    // With an empty queue the hint is omitted entirely.
+    let empty_dir = tempfile::TempDir::new().unwrap();
+    let empty_conn =
+        quaid::core::db::open(empty_dir.path().join("memory.db").to_str().unwrap()).unwrap();
+    let empty_server = QuaidServer::new(empty_conn);
+    let empty = empty_server
+        .memory_search(MemorySearchInput {
+            query: "nothing".to_string(),
+            collection: None,
+            namespace: None,
+            wing: None,
+            limit: None,
+            include_superseded: None,
+        })
+        .unwrap();
+    let empty_envelope: serde_json::Value = serde_json::from_str(&extract_text(&empty)).unwrap();
+    assert!(
+        empty_envelope.get("pending_embedding_jobs").is_none(),
+        "the staleness hint must be omitted when the queue is empty: {empty_envelope}"
+    );
 }
 
 #[test]
@@ -312,7 +383,7 @@ fn memory_search_defaults_to_memory_collection_when_dedicated_memory_location_is
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0]["slug"],
@@ -341,13 +412,16 @@ fn memory_search_natural_language_question_mark_returns_valid_response() {
         result.is_ok(),
         "memory_search with '?' must not return an MCP error: {result:?}"
     );
-    // The response content must parse as a JSON array (empty or populated).
+    // The response content must parse as a JSON envelope whose `results` is an
+    // array (empty or populated).
     let text = extract_text(&result.unwrap());
     let parsed: serde_json::Value =
         serde_json::from_str(&text).expect("memory_search response must be valid JSON");
     assert!(
-        parsed.is_array(),
-        "memory_search response must be a JSON array"
+        parsed
+            .get("results")
+            .is_some_and(serde_json::Value::is_array),
+        "memory_search response must carry a `results` array"
     );
 }
 
@@ -381,7 +455,7 @@ fn memory_search_explicit_collection_filter_returns_only_named_collection() {
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["slug"], "work::notes/work-hit");
 }
@@ -412,7 +486,7 @@ fn memory_search_defaults_to_single_active_collection() {
         })
         .unwrap();
 
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = extract_query_results(&result);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["slug"], "work::notes/only-active");
 }

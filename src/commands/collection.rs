@@ -114,6 +114,10 @@ pub struct CollectionSyncArgs {
     pub finalize_pending: bool,
     #[arg(long)]
     pub online: bool,
+    /// Skip the inline embedding-queue drain, leaving newly-synced pages
+    /// pending until a daemon (or a later sync) embeds them.
+    #[arg(long = "no-embed")]
+    pub no_embed: bool,
 }
 
 #[derive(Args, Debug)]
@@ -668,6 +672,11 @@ fn remove(db: &Connection, name: &str, purge: bool, confirm: bool, json: bool) -
             [collection.id],
         )?;
         let purged_pages = if purge {
+            // Drop backing vec0 rows before the pages: vec0 tables do not
+            // cascade with the FK delete, so otherwise they orphan (item #10).
+            let page_ids = collect_page_ids_for_collection(&tx, collection.id)?;
+            crate::core::inference::delete_page_vec_rows(&tx, &page_ids)
+                .map_err(|err| anyhow!(err.to_string()))?;
             tx.execute(
                 "DELETE FROM pages WHERE collection_id = ?1",
                 [collection.id],
@@ -699,6 +708,16 @@ fn remove(db: &Connection, name: &str, purge: bool, confirm: bool, json: bool) -
             "purged_page_rows": purged_pages
         }),
     )
+}
+
+fn collect_page_ids_for_collection(conn: &Connection, collection_id: i64) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare("SELECT id FROM pages WHERE collection_id = ?1")?;
+    let rows = stmt.query_map([collection_id], |row| row.get::<_, i64>(0))?;
+    let mut page_ids = Vec::new();
+    for row in rows {
+        page_ids.push(row?);
+    }
+    Ok(page_ids)
 }
 
 fn build_collection_info_output(
@@ -1347,6 +1366,20 @@ fn sync(db: &Connection, args: CollectionSyncArgs, json: bool) -> Result<()> {
         );
     }
     let stats = vault_sync::sync_collection(db, &args.name)?;
+    // Drain the embedding queue inline so a CLI-only `sync` (no running daemon)
+    // produces semantic results for the pages it just reconciled. Gated by
+    // --no-embed for callers who want to defer embedding work (review #10).
+    let drained_embedding_jobs = if args.no_embed {
+        0
+    } else {
+        match vault_sync::drain_embedding_queue(db) {
+            Ok(drained) => drained,
+            Err(error) => {
+                eprintln!("WARN: cli_sync_embedding_drain_failed error={error}");
+                0
+            }
+        }
+    };
     render_success(
         json,
         serde_json::json!({
@@ -1360,7 +1393,8 @@ fn sync(db: &Connection, args: CollectionSyncArgs, json: bool) -> Result<()> {
             "new": stats.new,
             "missing": stats.missing,
             "uuid_renamed": stats.uuid_renamed,
-            "hash_renamed": stats.hash_renamed
+            "hash_renamed": stats.hash_renamed,
+            "embedded": drained_embedding_jobs
         }),
     )
 }
@@ -3052,6 +3086,7 @@ mod tests {
                 remap_root: None,
                 finalize_pending: true,
                 online: false,
+                no_embed: false,
             },
             false,
         )
@@ -3082,6 +3117,7 @@ mod tests {
                 remap_root: None,
                 finalize_pending: true,
                 online: false,
+                no_embed: false,
             },
             true,
         )
@@ -3113,6 +3149,7 @@ mod tests {
                 remap_root: None,
                 finalize_pending: true,
                 online: false,
+                no_embed: false,
             },
             true,
         )
@@ -3158,6 +3195,7 @@ mod tests {
                 remap_root: Some(remapped_root.path().to_path_buf()),
                 finalize_pending: false,
                 online: false,
+                no_embed: false,
             },
             false,
         )
@@ -3208,6 +3246,7 @@ mod tests {
                 remap_root: Some(remapped_root.path().to_path_buf()),
                 finalize_pending: false,
                 online: false,
+                no_embed: false,
             },
             true,
         )
@@ -3244,6 +3283,7 @@ mod tests {
                 remap_root: Some(remapped_root.path().to_path_buf()),
                 finalize_pending: false,
                 online: false,
+                no_embed: false,
             },
             true,
         )
@@ -3366,6 +3406,7 @@ mod tests {
                 remap_root: None,
                 finalize_pending: false,
                 online: false,
+                no_embed: false,
             },
             true,
         )

@@ -249,8 +249,10 @@ fn call_memory_search_question_query_returns_json_array() {
 
     let parsed = parse_stdout_json(&output);
     assert!(
-        parsed.is_array(),
-        "memory_search call must emit a JSON array"
+        parsed
+            .get("results")
+            .is_some_and(serde_json::Value::is_array),
+        "memory_search call must emit a `results` array: {parsed:?}"
     );
 }
 
@@ -501,7 +503,10 @@ fn memory_search_compound_query_returns_valid_json_array() {
     );
 
     let parsed = parse_stdout_json(&output);
-    let results = parsed.as_array().expect("output must be a JSON array");
+    // memory_search now returns a {results, pending_embedding_jobs?} envelope.
+    let results = parsed["results"]
+        .as_array()
+        .expect("memory_search must emit a `results` array");
     assert_eq!(
         result_slugs(results),
         BTreeSet::from([
@@ -576,7 +581,9 @@ fn memory_search_numeric_query_matches_abbreviated_number_forms() {
     );
 
     let parsed = parse_stdout_json(&output);
-    let results = parsed.as_array().expect("output must be a JSON array");
+    let results = parsed["results"]
+        .as_array()
+        .expect("output must carry a `results` array");
     assert!(
         result_slugs(results).contains("default::journal/2026-04-15"),
         "memory_search numeric alias expansion should match $75K content: {results:?}"
@@ -647,7 +654,9 @@ fn memory_search_numeric_query_matches_grouped_number_forms() {
     );
 
     let parsed = parse_stdout_json(&output);
-    let results = parsed.as_array().expect("output must be a JSON array");
+    let results = parsed["results"]
+        .as_array()
+        .expect("output must carry a `results` array");
     assert!(
         result_slugs(results).contains("default::journal/2026-04-16"),
         "memory_search numeric alias expansion should match 75,000 content: {results:?}"

@@ -1759,6 +1759,135 @@ fn search_vec_internal(
     } else {
         ""
     };
+
+    let filters = VecSearchFilters {
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        include_superseded,
+    };
+
+    // Two-phase KNN retrieval (review item #10). Phase 1 over-fetches a
+    // candidate set from the vec0 SIMD top-k heap via the `MATCH ... k = ?`
+    // form; phase 2 joins those candidate rowids back to `page_embeddings` /
+    // `pages` and applies every business filter, recomputing the cosine score
+    // so it lands on the exact `1.0 - vec_distance_cosine` scale the merge
+    // layer expects. If a selective filter under-fills the candidate set we
+    // escalate the over-fetch (capped) and finally fall back to the original
+    // full-scan query, so results are always identical to brute force.
+    let mut overfetch = std::cmp::max(
+        k.saturating_mul(VEC_KNN_OVERFETCH_MULTIPLIER),
+        VEC_KNN_MIN_OVERFETCH,
+    );
+    loop {
+        if overfetch as i64 >= embedding_count {
+            // Candidate set already spans the whole table; a KNN pass would be
+            // strictly equivalent to the full scan, so just run the full scan.
+            break;
+        }
+
+        let candidate_rowids = knn_candidate_rowids(conn, &vec_table, &query_blob, overfetch)?;
+        let results = run_filtered_vec_query(
+            conn,
+            &vec_table,
+            slug_expr,
+            collection_join,
+            &query_blob,
+            &model_name,
+            &filters,
+            Some(&candidate_rowids),
+            k,
+        )?;
+
+        if results.len() >= k || candidate_rowids.len() < overfetch {
+            // Either we filled the page (the common case) or phase 1 returned
+            // fewer rows than requested, meaning the index is exhausted and a
+            // larger `k` cannot surface more candidates.
+            return Ok(results);
+        }
+
+        let next = overfetch.saturating_mul(VEC_KNN_ESCALATION_MULTIPLIER);
+        if next > VEC_KNN_MAX_OVERFETCH || next <= overfetch {
+            break;
+        }
+        overfetch = next;
+    }
+
+    // Full-scan fallback: no candidate restriction.
+    run_filtered_vec_query(
+        conn,
+        &vec_table,
+        slug_expr,
+        collection_join,
+        &query_blob,
+        &model_name,
+        &filters,
+        None,
+        k,
+    )
+}
+
+/// Initial over-fetch multiplier applied to the requested `k` for the phase-1
+/// KNN candidate set.
+const VEC_KNN_OVERFETCH_MULTIPLIER: usize = 8;
+/// Floor for the phase-1 candidate set so small `k` values still pull a useful
+/// candidate pool through selective filters.
+const VEC_KNN_MIN_OVERFETCH: usize = 256;
+/// Factor by which the over-fetch grows on each escalation when filters
+/// under-fill the requested page.
+const VEC_KNN_ESCALATION_MULTIPLIER: usize = 4;
+/// Cap on the escalated over-fetch before falling back to the full scan.
+const VEC_KNN_MAX_OVERFETCH: usize = 65_536;
+
+/// Business filters shared between the two-phase KNN path and the full-scan
+/// fallback. Bundled so the SQL builder stays a single function.
+struct VecSearchFilters<'a> {
+    wing_filter: Option<&'a str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&'a str>,
+    include_superseded: bool,
+}
+
+/// Phase 1: pull the `k` nearest candidate rowids from the vec0 table via its
+/// SIMD top-k heap. Returns rowids only; the cosine score is recomputed in
+/// phase 2 to guarantee bit-for-bit parity with the full-scan path.
+fn knn_candidate_rowids(
+    conn: &Connection,
+    vec_table: &str,
+    query_blob: &[u8],
+    k: usize,
+) -> Result<Vec<i64>, SearchError> {
+    let sql =
+        format!("SELECT rowid, distance FROM {vec_table} WHERE embedding MATCH ?1 AND k = ?2");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params![query_blob, k as i64], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    let mut rowids = Vec::new();
+    for row in rows {
+        rowids.push(row?);
+    }
+    Ok(rowids)
+}
+
+/// Phase 2 (and the full-scan fallback): join candidate rowids — or, when
+/// `candidate_rowids` is `None`, the whole table — back to `page_embeddings` /
+/// `pages`, apply every business filter, and rank by recomputed cosine score.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "this is the single SQL-building seam shared by both retrieval phases; the public wrappers are the right grouping boundary"
+)]
+fn run_filtered_vec_query(
+    conn: &Connection,
+    vec_table: &str,
+    slug_expr: &str,
+    collection_join: &str,
+    query_blob: &[u8],
+    model_name: &str,
+    filters: &VecSearchFilters<'_>,
+    candidate_rowids: Option<&[i64]>,
+    k: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     let mut sql = format!(
         "SELECT {slug_expr}, p.title, p.summary, \
                 MAX(1.0 - vec_distance_cosine(pev.embedding, ?1)) AS score, \
@@ -1770,20 +1899,23 @@ fn search_vec_internal(
            AND p.quarantined_at IS NULL"
     );
 
-    let mut params: Vec<Box<dyn ToSql>> = vec![Box::new(query_blob), Box::new(model_name)];
+    let mut params: Vec<Box<dyn ToSql>> = vec![
+        Box::new(query_blob.to_vec()),
+        Box::new(model_name.to_owned()),
+    ];
 
-    if let Some(wing) = wing_filter {
+    if let Some(wing) = filters.wing_filter {
         sql.push_str(" AND p.wing = ?3");
         params.push(Box::new(wing.to_owned()));
     }
 
-    if let Some(collection_id) = collection_filter {
+    if let Some(collection_id) = filters.collection_filter {
         sql.push_str(" AND p.collection_id = ?");
         sql.push_str(&(params.len() + 1).to_string());
         params.push(Box::new(collection_id));
     }
 
-    if let Some(namespace) = namespace_filter {
+    if let Some(namespace) = filters.namespace_filter {
         if namespace.is_empty() {
             sql.push_str(" AND p.namespace = ?");
             sql.push_str(&(params.len() + 1).to_string());
@@ -1796,8 +1928,29 @@ fn search_vec_internal(
         }
     }
 
-    if !include_superseded {
+    if !filters.include_superseded {
         sql.push_str(" AND p.superseded_by IS NULL");
+    }
+
+    if let Some(rowids) = candidate_rowids {
+        if rowids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Rowids are trusted i64s read from `page_embeddings.vec_rowid`, so we
+        // inline them as integer literals rather than binding one parameter
+        // each: the over-fetched candidate set can far exceed SQLite's bound
+        // variable limit (`SQLITE_MAX_VARIABLE_NUMBER`).
+        use std::fmt::Write as _;
+        sql.push_str(" AND pev.rowid IN (");
+        for (index, rowid) in rowids.iter().enumerate() {
+            if index > 0 {
+                sql.push(',');
+            }
+            // i64 Display only ever emits digits and a leading '-', so this is
+            // injection-safe by construction.
+            let _ = write!(sql, "{rowid}");
+        }
+        sql.push(')');
     }
 
     let limit_index = params.len() + 1;
@@ -1952,6 +2105,107 @@ fn existing_vec_rowids(
         rowids.push(row?);
     }
     Ok(rowids)
+}
+
+/// Deletes every `page_embeddings_vec_*` row backing the given pages, across
+/// all registered embedding models, **before** the pages themselves are
+/// deleted. vec0 virtual tables do not participate in SQLite foreign-key
+/// cascades, so bulk page deletes (namespace destroy, collection purge,
+/// reconciler hard-delete, quarantine discard) would otherwise orphan their
+/// vectors permanently (review item #10). Call this inside the same
+/// transaction as the page delete and while the `page_embeddings` rows still
+/// exist, since the vec rowids are resolved through them. Returns the number
+/// of vec rows deleted.
+pub fn delete_page_vec_rows(conn: &Connection, page_ids: &[i64]) -> Result<usize, SearchError> {
+    if page_ids.is_empty() {
+        return Ok(0);
+    }
+
+    // Resolve every (vec_table, vec_rowid) pair the pages reference, grouped by
+    // the model's vec table so we issue one DELETE per table.
+    let mut stmt = conn.prepare(
+        "SELECT em.vec_table, pe.vec_rowid \
+         FROM page_embeddings pe \
+         JOIN embedding_models em ON em.name = pe.model \
+         WHERE pe.page_id = ?1",
+    )?;
+
+    let mut by_table: std::collections::BTreeMap<String, Vec<i64>> =
+        std::collections::BTreeMap::new();
+    for page_id in page_ids {
+        let rows = stmt.query_map([page_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (vec_table, vec_rowid) = row?;
+            by_table.entry(vec_table).or_default().push(vec_rowid);
+        }
+    }
+    drop(stmt);
+
+    let mut deleted = 0usize;
+    for (vec_table, rowids) in by_table {
+        if !is_safe_identifier(&vec_table) {
+            return Err(SearchError::Internal {
+                message: format!("unsafe vec table name: {vec_table}"),
+            });
+        }
+        let delete_sql = format!("DELETE FROM {vec_table} WHERE rowid = ?1");
+        for rowid in rowids {
+            deleted += conn.execute(&delete_sql, [rowid])?;
+        }
+    }
+
+    Ok(deleted)
+}
+
+/// Sweeps `page_embeddings_vec_*` rows whose backing `page_embeddings` join row
+/// no longer exists, across every registered embedding model's vec table. This
+/// is the janitor counterpart to [`delete_page_vec_rows`]: it reclaims vectors
+/// that predate the vec-aware delete paths (or were orphaned by a crash between
+/// the `page_embeddings` cascade and a vec delete). Returns the number of
+/// orphaned vec rows removed.
+pub fn sweep_orphaned_vec_rows(conn: &Connection) -> Result<usize, SearchError> {
+    let vec_tables: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT vec_table FROM embedding_models")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut tables = Vec::new();
+        for row in rows {
+            tables.push(row?);
+        }
+        tables
+    };
+
+    let mut deleted = 0usize;
+    for vec_table in vec_tables {
+        if !is_safe_identifier(&vec_table) {
+            return Err(SearchError::Internal {
+                message: format!("unsafe vec table name: {vec_table}"),
+            });
+        }
+        // vec0 virtual tables do not support correlated DELETE subqueries
+        // against arbitrary tables on every build, so collect the orphan
+        // rowids first, then delete them by rowid.
+        let select_sql = format!(
+            "SELECT v.rowid FROM {vec_table} v \
+             WHERE NOT EXISTS (SELECT 1 FROM page_embeddings pe WHERE pe.vec_rowid = v.rowid)"
+        );
+        let orphan_rowids: Vec<i64> = {
+            let mut stmt = conn.prepare(&select_sql)?;
+            let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+            let mut ids = Vec::new();
+            for row in rows {
+                ids.push(row?);
+            }
+            ids
+        };
+        let delete_sql = format!("DELETE FROM {vec_table} WHERE rowid = ?1");
+        for rowid in orphan_rowids {
+            deleted += conn.execute(&delete_sql, [rowid])?;
+        }
+    }
+
+    Ok(deleted)
 }
 
 fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {

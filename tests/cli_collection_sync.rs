@@ -51,6 +51,7 @@ fn sync_finalize_pending_uses_external_finalize_path() {
             remap_root: None,
             finalize_pending: true,
             online: false,
+            no_embed: false,
         }),
         true,
     )
@@ -149,6 +150,7 @@ fn sync_without_flags_requires_active_root_collection() {
             remap_root: None,
             finalize_pending: false,
             online: false,
+            no_embed: false,
         }),
         true,
     )
@@ -178,6 +180,7 @@ fn sync_without_flags_refuses_restore_in_progress_state() {
             remap_root: None,
             finalize_pending: false,
             online: false,
+            no_embed: false,
         }),
         true,
     )
@@ -221,6 +224,7 @@ fn sync_without_flags_does_not_finalize_pending_restore_state() {
             remap_root: None,
             finalize_pending: false,
             online: false,
+            no_embed: false,
         }),
         true,
     )
@@ -262,6 +266,7 @@ fn sync_without_flags_refuses_restore_integrity_blocked_state() {
             remap_root: None,
             finalize_pending: false,
             online: false,
+            no_embed: false,
         }),
         true,
     )
@@ -302,6 +307,7 @@ fn sync_without_flags_does_not_clear_integrity_or_reconcile_halt_markers() {
             remap_root: None,
             finalize_pending: false,
             online: false,
+            no_embed: false,
         }),
         true,
     )

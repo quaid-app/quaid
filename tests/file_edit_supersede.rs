@@ -36,6 +36,14 @@ fn extract_text(result: &rmcp::model::CallToolResult) -> String {
         .join("")
 }
 
+/// Extracts the `results` array from a `memory_query` / `memory_search`
+/// response envelope (the envelope also carries a `pending_embedding_jobs`
+/// staleness hint).
+fn search_results(result: &rmcp::model::CallToolResult) -> Vec<Value> {
+    let envelope: Value = serde_json::from_str(&extract_text(result)).unwrap();
+    envelope["results"].as_array().cloned().unwrap_or_default()
+}
+
 fn put_page(server: &QuaidServer, slug: &str, content: &str) {
     server
         .memory_put(MemoryPutInput {
@@ -191,7 +199,7 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
     assert!(live_file.contains("corrected_via: file_edit"));
     assert!(live_file.contains(&format!("supersedes: {archived_slug}")));
 
-    let search_default: Vec<Value> = serde_json::from_str(&extract_text(
+    let search_default: Vec<Value> = search_results(
         &server
             .memory_search(MemorySearchInput {
                 query: "shared marker".to_string(),
@@ -204,14 +212,13 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
                 max_chunks_per_doc: None,
             })
             .unwrap(),
-    ))
-    .unwrap();
+    );
     assert_eq!(
         slugs(&search_default),
         vec!["default::preferences/foo".to_string()]
     );
 
-    let search_history: Vec<Value> = serde_json::from_str(&extract_text(
+    let search_history: Vec<Value> = search_results(
         &server
             .memory_search(MemorySearchInput {
                 query: "shared marker".to_string(),
@@ -224,8 +231,7 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
                 max_chunks_per_doc: None,
             })
             .unwrap(),
-    ))
-    .unwrap();
+    );
     assert_eq!(
         slugs(&search_history),
         vec![

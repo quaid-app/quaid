@@ -68,7 +68,11 @@ use crate::core::fs_safety;
 #[cfg(unix)]
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
-use crate::commands::{get::get_page_by_key, put};
+// `put` still lives in the CLI layer because moving the write path into core is
+// the deferred `core::pages::write_page` unification (review §16, steps 2/3),
+// which overlaps with the unmerged write-path stack. The page reader has been
+// relocated to `crate::core::pages`, breaking that half of the dependency edge.
+use crate::commands::put;
 use crate::core::collections::{self, Collection, CollectionState, OpKind, SlugResolution};
 use crate::core::conversation::idle_close;
 use crate::core::conversation::janitor;
@@ -78,6 +82,7 @@ use crate::core::db;
 use crate::core::file_state;
 use crate::core::markdown;
 use crate::core::page_uuid;
+use crate::core::pages::get_page_by_key;
 use crate::core::quarantine;
 use crate::core::raw_imports;
 use crate::core::reconciler::{

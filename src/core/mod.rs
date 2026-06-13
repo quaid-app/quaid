@@ -50,6 +50,8 @@ pub mod namespace;
 pub mod novelty;
 /// Stable per-page UUID derivation and lookup.
 pub mod page_uuid;
+/// Page-record read helpers shared across the CLI, MCP, and core subsystems.
+pub mod pages;
 /// Memory-palace classification: wing/room derivation and intent routing.
 pub mod palace;
 /// Token-budgeted expansion of search hits into context-window-sized payloads.

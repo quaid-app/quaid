@@ -594,8 +594,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::commands::get::get_page;
     use crate::core::db;
+    use crate::core::pages::get_page;
 
     fn open_test_db() -> Connection {
         db::open(":memory:").unwrap()
@@ -790,7 +790,7 @@ mod tests {
                 .unwrap();
 
             let page =
-                crate::commands::get::get_page_by_key(&conn, memory_id, "people/alice").unwrap();
+                crate::core::pages::get_page_by_key(&conn, memory_id, "people/alice").unwrap();
 
             let inserted = extract_assertions(&page, &conn).unwrap();
             let rows: Vec<(i64, String)> = conn

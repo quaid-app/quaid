@@ -4,6 +4,35 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
+## Unreleased
+
+### Added
+
+- **Versioned schema migration ladder + `quaid migrate`.** New explicit
+  `quaid migrate [path]` command upgrades older databases in place by walking
+  a versioned migration registry in `src/core/db.rs`. The first registered
+  rung migrates schema v9 (v0.20.x / v0.21.x) databases to v10: `links`
+  table rebuild (extended `source_kind` CHECK plus the `edge_weight` column),
+  derived-edge dedup with the `idx_links_unique_derived_edge` partial unique
+  index, and the v10 graph config seeds. The run writes a `<db>.bak` backup
+  first, applies each step in its own transaction (bumping
+  `quaid_config.schema_version` and the legacy `config.version` mirror per
+  step), and verifies `PRAGMA integrity_check` plus row-count sanity
+  afterwards. Plain opens remain fail-closed on any schema-version mismatch.
+
+### Changed
+
+- The formerly scattered open-time `ensure_*` schema patches are consolidated
+  into one idempotent current-version maintenance step shared by `open` and
+  `quaid migrate`. Future DDL changes must land as new migration-registry
+  rungs with a `SCHEMA_VERSION` bump, not as unversioned open-time patches.
+
+### Migration
+
+- Schema v9 databases (v0.20.x / v0.21.x) can now be upgraded in place with
+  `quaid migrate` instead of export + re-ingest. v0.22.x (v10) databases are
+  unaffected; running `quaid migrate` on them is a no-op.
+
 ## v0.22.3 — post-release bug fixes
 
 ### Fixed

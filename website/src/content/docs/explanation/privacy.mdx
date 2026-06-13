@@ -1,12 +1,14 @@
 ---
 title: Privacy and data sovereignty
-description: What leaves your machine (nothing, unless you ask) and how the gap-tracking system enforces consent before storing query text.
+description: What runs locally, the real egress map (including MCP reads into a cloud LLM's context), the opt-in secret scrubbing layer, and how the gap-tracking system enforces consent before storing query text.
 guide:
   eyebrow: Explanation
   accentBar: true
 ---
 
-Quaid is local-first by construction. This page makes the privacy posture explicit: what runs locally, what (rarely) goes over the wire, and how the knowledge-gap system handles the one place where consent matters.
+Quaid is local-first by construction. This page makes the privacy posture explicit: what runs locally, the real ways content can leave your machine, the opt-in secret-scrubbing layer that masks machine-shaped secrets on outbound reads, and how the knowledge-gap system handles the one place where consent matters.
+
+**The dominant egress path is the MCP client, not the network.** `quaid` itself contacts almost nothing. But the whole point of the MCP server is that a *client* reads your memory — and the common clients are cloud-hosted LLMs (Claude Code, Cursor, etc.). When such a client calls `memory_get`/`memory_query`/`memory_search`, the returned page content enters that client's context window and is sent to the model provider. "Nothing leaves your machine" describes the binary; it does **not** describe what your agent does with what it reads. See the egress map below.
 
 ## What runs locally
 
@@ -22,9 +24,18 @@ Everything that touches your notes runs on your machine:
 
 No API keys are required. No third-party service is contacted by `quaid` during normal use.
 
-## What can go over the wire
+## The real egress map
 
-Three narrow exceptions, all opt-in:
+There are two categories of egress, and the dangerous one is easy to miss.
+
+**Content `quaid` reads out to a client.** This is the high-volume path. The MCP read tools return page content into the calling client's context. If that client is a cloud LLM, the content is sent to the provider as part of the model request.
+
+| Path | When | What is sent |
+| ---- | ---- | ------------ |
+| MCP reads (`memory_get`, `memory_query`, `memory_search`) | Every read your agent makes | Full page content (`compiled_truth` + `timeline` for `memory_get`; summaries, and full chunks under `depth:"auto"`, for query/search) into the client's context — i.e. to the model provider when the client is cloud-hosted. |
+| Skill research (`research`) | If a skill calls an external search/LLM API (e.g. Exa) | The query the skill sends. Its "redacted" mode is prompt-enforced by the agent today, not code-enforced. |
+
+**Network calls `quaid` itself can make.** Three narrow exceptions, all opt-in:
 
 | Path | When | What is sent |
 | ---- | ---- | ------------ |
@@ -32,7 +43,32 @@ Three narrow exceptions, all opt-in:
 | Skill enrichment (`enrich`) | If you authorize an external API call from a skill | Whatever the skill's `memory_raw` payload is — under your control. |
 | Knowledge gap escalation | If you approve a gap for `external` sensitivity | Only after explicit approval — see below. |
 
-The airgapped build can refuse all of these by construction. The online build lets you participate in the first; the other two require you to wire and authorize them.
+The airgapped build can refuse the second category by construction. It cannot stop the first: once a client is connected, what the agent reads is by definition headed into that client. That is what the secret-scrubbing layer below is for.
+
+## Outbound secret scrubbing (opt-in)
+
+To reduce what crosses the MCP wire, Quaid can scrub machine-shaped secrets out of read-tool responses **before they are serialized to the client**. It is off by default and deterministic.
+
+**This is secret scrubbing, not full PII redaction.** It is a phase-1, regex-based pass: it catches high-confidence machine-shaped secrets — email addresses, phone numbers, API-key shapes (`sk-…`, `AKIA…`, GitHub/Slack tokens), long opaque hex/base64 tokens, and account/card-number shapes — plus a user-defined blocklist. It does **not** recognise names or other free-text PII; that (NER) is deliberately deferred to a later phase. Do not treat a scrubbed payload as anonymised.
+
+### Turning it on
+
+```bash
+# Mask secrets on every read for this brain:
+quaid config set mcp.redact_outbound patterns   # default: off
+
+# Optional: always scrub these literal strings (comma- or newline-separated):
+quaid config set mcp.redact_blocklist "Project Bluebird, internal-codename"
+```
+
+Each read tool also accepts a per-call `redact` boolean that overrides the config default — `redact: true` forces scrubbing even when the config is `off`; `redact: false` forces plaintext even when the config is `patterns`.
+
+### How it behaves
+
+- **Outbound only.** FTS5 and the embeddings index always store the *originals*, so retrieval quality is unchanged — only the bytes returned to the client are masked. A search for a term that lives inside a secret still finds the page; the returned preview is what gets tokenised.
+- **Deterministic, stable tokens.** Each distinct secret is replaced with a stable token like `<EMAIL_1>` or `<SECRET_2>`. The same value maps to the same token for the life of the connection, so an LLM can still reason about "the same key" appearing twice (coreference is preserved).
+- **Byte-identical when off.** With `mcp.redact_outbound = off` (and no per-call `redact: true`), read output is byte-for-byte what it was before this feature existed.
+- **Locally reversible.** The token map lives in memory on the per-connection server, never on disk and never on the wire. The `memory_rehydrate` MCP tool reverses the map (`<EMAIL_1>` → the original) locally, so an agent that needs the real value can round-trip without the original ever being sent to the provider.
 
 ## The knowledge gap problem
 
@@ -97,9 +133,10 @@ If you redirect stderr to a file or a SIEM, audit what gets captured before you 
 
 The same MCP surface that humans use is exposed to agents. An agent connected over MCP can read every page in your memory and call every tool. That's a feature: agents need access to do useful work.
 
-It's also a responsibility. Two practical implications:
+It's also a responsibility. Three practical implications:
 
-1. **Trust your client.** Anything that connects via `quaid serve` can read everything. Don't run unknown MCP clients against a memory that contains sensitive material.
-2. **Use sensitivity tiers.** If an agent escalates a gap, the sensitivity contract is what keeps the raw query out of any outbound payload by default.
+1. **Trust your client.** Anything that connects via `quaid serve` can read everything, and a cloud client forwards what it reads to its model provider. Don't run unknown MCP clients against a memory that contains sensitive material.
+2. **Scrub outbound reads when the client is cloud-hosted.** Turn on `mcp.redact_outbound = patterns` to mask machine-shaped secrets before they reach the client's context (see [Outbound secret scrubbing](#outbound-secret-scrubbing-opt-in)). Remember it is secret scrubbing, not full PII redaction.
+3. **Use sensitivity tiers.** If an agent escalates a gap, the sensitivity contract is what keeps the raw query out of any outbound payload by default.
 
 Local-first doesn't make those concerns disappear. It just means the trust boundary is at your machine instead of a SaaS dashboard.

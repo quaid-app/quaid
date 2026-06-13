@@ -208,6 +208,7 @@ fn turn_capture_close_extract_fact_and_search_smoke() {
             wing: None,
             limit: Some(5),
             include_superseded: Some(false),
+            redact: None,
         })
         .unwrap();
     let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&search)).unwrap();

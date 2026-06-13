@@ -30,6 +30,7 @@ fn memory_get_returns_not_found_error_code_for_missing_slug() {
     let error = server
         .memory_get(MemoryGetInput {
             slug: "definitely-does-not-exist".to_string(),
+            redact: None,
         })
         .unwrap_err();
 
@@ -44,6 +45,7 @@ fn memory_get_rejects_invalid_slug() {
     let error = server
         .memory_get(MemoryGetInput {
             slug: "Invalid/SLUG!".to_string(),
+            redact: None,
         })
         .unwrap_err();
 
@@ -70,6 +72,7 @@ fn memory_get_returns_structured_ambiguity_payload_for_colliding_bare_slug() {
     let error = server
         .memory_get(MemoryGetInput {
             slug: "people/alice".to_string(),
+            redact: None,
         })
         .unwrap_err();
 
@@ -112,6 +115,7 @@ fn memory_get_explicit_collection_slug_reads_resolved_page_when_slug_collides() 
     let result = server
         .memory_get(MemoryGetInput {
             slug: "memory::people/alice".to_string(),
+            redact: None,
         })
         .unwrap();
 
@@ -145,6 +149,7 @@ fn memory_get_renders_persisted_memory_id_after_update_omits_frontmatter_uuid() 
     let result = server
         .memory_get(MemoryGetInput {
             slug: "notes/uuid".to_string(),
+            redact: None,
         })
         .unwrap();
     let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();

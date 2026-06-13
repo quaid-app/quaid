@@ -35,6 +35,7 @@ impl QuaidServer {
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
         namespace::validate_optional_namespace(input.namespace.as_deref())
             .map_err(map_namespace_error)?;
+        let redact_mode = self.resolve_redact_mode(&db, input.redact);
         let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
             resolve_memory_collection_filter_for_mcp(&db, input.collection.as_deref())?;
@@ -94,6 +95,9 @@ impl QuaidServer {
         };
 
         let json = serde_json::to_string_pretty(&results).map_err(map_serialize_error)?;
+        // Outbound-only scrub: the hybrid index used the originals; only the
+        // serialized result payload is masked. Off => byte-identical output.
+        let json = self.apply_redaction(redact_mode, json);
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -111,6 +115,7 @@ impl QuaidServer {
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
         namespace::validate_optional_namespace(input.namespace.as_deref())
             .map_err(map_namespace_error)?;
+        let redact_mode = self.resolve_redact_mode(&db, input.redact);
         let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
             resolve_memory_collection_filter_for_mcp(&db, input.collection.as_deref())?;
@@ -133,6 +138,8 @@ impl QuaidServer {
         .map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results).map_err(map_serialize_error)?;
+        // Outbound-only scrub; Off => byte-identical output.
+        let json = self.apply_redaction(redact_mode, json);
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }

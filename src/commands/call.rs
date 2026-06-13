@@ -277,7 +277,8 @@ mod tests {
         let server = make_server();
         let result = dispatch_tool(&server, "memory_search", json!({"query": "anything"}))
             .expect("dispatch memory_search");
-        assert!(result.as_array().is_some());
+        // memory_search now returns a {results, pending_embedding_jobs?} envelope.
+        assert!(result["results"].as_array().is_some());
     }
 
     #[test]
@@ -418,7 +419,8 @@ mod tests {
         let server = make_server();
         let result = dispatch_tool(&server, "memory_query", json!({"query": "anything"}))
             .expect("memory_query should succeed");
-        assert!(result.is_array() || result.is_string());
+        // memory_query now returns a {results, pending_embedding_jobs?} envelope.
+        assert!(result["results"].is_array() || result.is_string());
     }
 
     #[test]

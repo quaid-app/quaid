@@ -36,6 +36,10 @@ use crate::core::types::{
 pub const DEFAULT_EXTRACTION_MAX_TOKENS: usize = 2048;
 /// Default sleep interval between worker polls when the queue is empty.
 pub const DEFAULT_WORKER_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// How long the loaded SLM may sit idle before the worker drops it to
+/// reclaim its multi-GB resident footprint; the next job transparently
+/// reloads it.
+pub const DEFAULT_SLM_IDLE_UNLOAD_TTL: Duration = Duration::from_secs(300);
 
 const DEFAULT_WINDOW_TURNS: usize = 5;
 const DEFAULT_MODEL_ALIAS: &str = "phi-3.5-mini";
@@ -77,6 +81,11 @@ pub trait SlmClient {
     fn is_runtime_disabled(&self) -> bool {
         false
     }
+
+    /// Hook invoked when the worker has been idle, giving a runtime that
+    /// caches a loaded model the chance to drop it after `idle_ttl`.
+    /// Defaults to a no-op for stub clients that hold no weights.
+    fn unload_if_idle(&self, _idle_ttl: Duration) {}
 }
 
 impl SlmClient for LazySlmRunner {
@@ -86,6 +95,10 @@ impl SlmClient for LazySlmRunner {
 
     fn is_runtime_disabled(&self) -> bool {
         LazySlmRunner::is_runtime_disabled(self)
+    }
+
+    fn unload_if_idle(&self, idle_ttl: Duration) {
+        LazySlmRunner::unload_if_idle(self, idle_ttl);
     }
 }
 
@@ -241,6 +254,10 @@ where
     pub fn run_once(&self) -> Result<bool, WorkerError> {
         let processed = self.poll_once()?;
         if !processed {
+            // Queue is quiet: give the SLM client a chance to drop a
+            // cold, cached model before parking, so an idle MCP server
+            // does not pin ~8 GB indefinitely.
+            self.slm.unload_if_idle(DEFAULT_SLM_IDLE_UNLOAD_TTL);
             self.sleep_until_next_poll();
         }
         Ok(processed)
@@ -482,13 +499,32 @@ pub fn compute_windows(
 /// Render the SLM prompt for one extraction window, framing the new
 /// turns as the extraction target and the lookback turns as
 /// reference-only context.
+///
+/// The prompt is emitted in Phi-3's chat template
+/// (`<|system|>…<|end|><|user|>…<|end|><|assistant|>`) so the
+/// instruct-tuned model receives the role markers and the trailing
+/// `<|assistant|>` generation cue it was fine-tuned on, instead of the
+/// plain `SYSTEM:/USER:` framing that made it behave base-like. The
+/// `<|system|>`, `<|user|>`, `<|end|>`, and `<|assistant|>` markers are
+/// recognized as special tokens by the Phi-3 tokenizer (see
+/// `crate::core::conversation::slm::SlmRunner::infer`, which encodes
+/// with `add_special_tokens` enabled).
 pub fn build_prompt(session_id: &str, window: &WindowedTurns) -> String {
-    format!(
-        "SYSTEM:\n{EXTRACTION_SYSTEM_PROMPT}\n\nUSER:\nSession: {session_id}\nNew turns to extract from ({}):\n{}\nLookback context (do not extract from these — for reference only):\n{}",
+    let user = format!(
+        "Session: {session_id}\nNew turns to extract from ({}):\n{}\nLookback context (do not extract from these — for reference only):\n{}",
         ordinal_range_label(&window.new_turns),
         render_prompt_turns(&window.new_turns),
         render_prompt_turns(&window.lookback_turns)
-    )
+    );
+    render_phi3_chat_prompt(EXTRACTION_SYSTEM_PROMPT, &user)
+}
+
+/// Wrap a system+user message pair in the Phi-3 chat template the
+/// instruct model was trained on. Kept separate from
+/// [`build_prompt`] so the exact rendered string is covered by a
+/// golden-prompt snapshot test.
+pub fn render_phi3_chat_prompt(system: &str, user: &str) -> String {
+    format!("<|system|>\n{system}<|end|>\n<|user|>\n{user}<|end|>\n<|assistant|>\n")
 }
 
 fn ordinal_range_label(turns: &[Turn]) -> String {

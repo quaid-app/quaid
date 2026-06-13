@@ -196,7 +196,11 @@ fn plain_sync_reconciles_active_root_and_clears_needs_full_sync() {
 
 #[cfg(unix)]
 #[test]
-fn plain_sync_turns_duplicate_uuid_into_terminal_reconcile_halt() {
+fn plain_sync_quarantines_duplicate_uuid_loser_without_terminal_halt() {
+    // Formerly an abort expectation (terminal reconcile_halted_at): duplicate
+    // frontmatter uuids — the exact shape a git merge-conflict copy produces —
+    // now quarantine the newest-mtime file individually; the collection keeps
+    // syncing and is never halted.
     let (_dir, _db_path, conn) = open_test_db_file();
     let root = tempfile::TempDir::new().unwrap();
     let collection_id = insert_collection(&conn, "work", root.path());
@@ -209,8 +213,19 @@ fn plain_sync_turns_duplicate_uuid_into_terminal_reconcile_halt() {
     );
     fs::write(root.path().join("a.md"), note_a).unwrap();
     fs::write(root.path().join("b.md"), note_b).unwrap();
+    // Deterministic contest: a.md older, b.md newer → b.md loses.
+    filetime::set_file_mtime(
+        root.path().join("a.md"),
+        filetime::FileTime::from_unix_time(1_000_000, 0),
+    )
+    .unwrap();
+    filetime::set_file_mtime(
+        root.path().join("b.md"),
+        filetime::FileTime::from_unix_time(2_000_000, 0),
+    )
+    .unwrap();
 
-    let error = sync_collection(&conn, "work").unwrap_err().to_string();
+    sync_collection(&conn, "work").unwrap();
     let row: (Option<String>, Option<String>, i64) = conn
         .query_row(
             "SELECT reconcile_halted_at, reconcile_halt_reason,
@@ -221,11 +236,24 @@ fn plain_sync_turns_duplicate_uuid_into_terminal_reconcile_halt() {
         )
         .unwrap();
 
-    assert!(error.contains("ReconcileHaltedError"));
-    assert!(error.contains("DuplicateUuidError"));
-    assert!(row.0.is_some());
-    assert_eq!(row.1.as_deref(), Some("duplicate_uuid"));
-    assert_eq!(row.2, 0);
+    assert!(
+        row.0.is_none(),
+        "duplicate uuid must not halt the collection"
+    );
+    assert!(row.1.is_none());
+    assert_eq!(row.2, 1, "exactly the winner file ingests");
+    let winner_slug: String = conn
+        .query_row(
+            "SELECT slug FROM pages WHERE collection_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(winner_slug, "notes/a");
+    assert!(
+        root.path().join("b.md").exists(),
+        "losing file must stay on disk for manual resolution"
+    );
 }
 
 #[cfg(unix)]

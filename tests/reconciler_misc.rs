@@ -57,7 +57,11 @@ fn reconcile_commits_in_500_file_chunks() {
 
 #[cfg(unix)]
 #[test]
-fn reconcile_halts_when_two_files_share_the_same_memory_id() {
+fn reconcile_quarantines_newest_duplicate_memory_id_file_without_halting() {
+    // Formerly an abort expectation (collection-wide DuplicateUuidError):
+    // duplicate frontmatter uuids — the exact shape a git merge-conflict
+    // copy produces — now quarantine the newest-mtime file individually so
+    // the rest of the collection keeps syncing.
     let conn = open_test_db();
     let root = TempDir::new().unwrap();
     let collection = insert_collection(&conn, root.path());
@@ -70,8 +74,41 @@ fn reconcile_halts_when_two_files_share_the_same_memory_id() {
     );
     fs::write(root.path().join("a.md"), note_a).unwrap();
     fs::write(root.path().join("b.md"), note_b).unwrap();
+    // Make the contest deterministic: a.md is older, b.md is newer → b loses.
+    filetime::set_file_mtime(
+        root.path().join("a.md"),
+        filetime::FileTime::from_unix_time(1_000_000, 0),
+    )
+    .unwrap();
+    filetime::set_file_mtime(
+        root.path().join("b.md"),
+        filetime::FileTime::from_unix_time(2_000_000, 0),
+    )
+    .unwrap();
 
-    let error = reconcile(&conn, &collection).unwrap_err().to_string();
+    let stats = reconcile(&conn, &collection).unwrap();
+    let slugs: Vec<String> = conn
+        .prepare("SELECT slug FROM pages WHERE collection_id = ?1 ORDER BY slug")
+        .unwrap()
+        .query_map([collection.id], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert_eq!(slugs, vec!["notes/a".to_owned()], "only the winner ingests");
+    assert_eq!(
+        stats.quarantined_ambiguous, 0,
+        "untracked loser has no page to quarantine"
+    );
+    assert_eq!(stats.hard_deleted, 0);
+    assert!(
+        root.path().join("b.md").exists(),
+        "losing file must stay on disk for manual resolution"
+    );
+
+    // The loser stays excluded on subsequent passes instead of halting them.
+    let second = reconcile(&conn, &collection).unwrap();
+    assert_eq!(second.hard_deleted, 0);
     let page_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pages WHERE collection_id = ?1",
@@ -79,14 +116,7 @@ fn reconcile_halts_when_two_files_share_the_same_memory_id() {
             |row| row.get(0),
         )
         .unwrap();
-
-    assert!(error.contains("DuplicateUuidError"));
-    assert!(error.contains("a.md"));
-    assert!(error.contains("b.md"));
-    assert_eq!(
-        page_count, 0,
-        "duplicate uuid halt must abort before mutation"
-    );
+    assert_eq!(page_count, 1);
 }
 
 #[test]

@@ -214,11 +214,10 @@ pub fn try_promote_to_serve_host(
 }
 
 fn try_promote_inner(conn: &Connection, session_id: &str) -> Result<bool, VaultSyncError> {
-    conn.execute(
-        "DELETE FROM serve_sessions
-         WHERE heartbeat_at < datetime('now', ?1)",
-        [format!("-{SESSION_LIVENESS_SECS} seconds")],
-    )?;
+    // Same pid-aware sweep as the supervisor tick: a stale-by-time row whose
+    // process is still alive on this host (e.g. wedged mid-heartbeat) must
+    // not be deleted by a promotion attempt either.
+    sweep_stale_sessions(conn)?;
 
     let caller_type: Option<String> = conn
         .query_row(
@@ -314,11 +313,73 @@ pub fn heartbeat_session(conn: &Connection, session_id: &str) -> Result<(), Vaul
 /// Deletes session rows whose `heartbeat_at` has fallen outside the
 /// liveness window and returns the number reaped — the GC the
 /// supervisor runs each tick to keep `serve_sessions` bounded.
+///
+/// Rows registered from this host whose pid is still alive (kill-0
+/// probe) are skipped with a WARN instead of deleted: a session that is
+/// busy or briefly wedged must not be reaped mid-operation, because the
+/// reaped row is what stops a second process from promoting itself to
+/// runtime owner. Rows from other hosts keep the pure time-window
+/// behaviour since pid liveness cannot be probed across hosts.
 pub fn sweep_stale_sessions(conn: &Connection) -> Result<usize, VaultSyncError> {
-    let removed = conn.execute(
-        "DELETE FROM serve_sessions
+    let liveness_window = format!("-{SESSION_LIVENESS_SECS} seconds");
+    let mut stmt = conn.prepare(
+        "SELECT session_id, pid, host
+         FROM serve_sessions
          WHERE heartbeat_at < datetime('now', ?1)",
-        [format!("-{SESSION_LIVENESS_SECS} seconds")],
     )?;
+    let stale_rows = stmt
+        .query_map([&liveness_window], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let local_host = current_host();
+    let mut removed = 0usize;
+    for (session_id, pid, host) in stale_rows {
+        if host == local_host && pid_is_alive(pid) {
+            eprintln!(
+                "WARN: session_sweep_skipped_live_pid session_id={session_id} pid={pid} host={host}"
+            );
+            continue;
+        }
+        // Re-check the window in the DELETE so a row that heartbeated
+        // between the SELECT and now is not reaped.
+        removed += conn.execute(
+            "DELETE FROM serve_sessions
+             WHERE session_id = ?1 AND heartbeat_at < datetime('now', ?2)",
+            params![session_id, liveness_window],
+        )?;
+    }
     Ok(removed)
+}
+
+/// Kill-0 liveness probe for a pid on the local host. EPERM means the
+/// process exists but belongs to another user, so it counts as alive.
+#[cfg(unix)]
+fn pid_is_alive(pid: i64) -> bool {
+    let Ok(raw_pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if raw_pid <= 0 {
+        return false;
+    }
+    let Some(pid) = rustix::process::Pid::from_raw(raw_pid) else {
+        return false;
+    };
+    match rustix::process::test_kill_process(pid) {
+        Ok(()) => true,
+        Err(rustix::io::Errno::PERM) => true,
+        Err(_) => false,
+    }
+}
+
+/// Non-Unix fallback: no portable kill-0 probe, so the time-window
+/// behaviour applies to every row.
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: i64) -> bool {
+    false
 }

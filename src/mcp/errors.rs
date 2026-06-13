@@ -380,11 +380,23 @@ fn resolved_page_version(
     resolved: &vault_sync::ResolvedSlug,
 ) -> Result<Option<i64>, rmcp::Error> {
     use rusqlite::OptionalExtension;
+    // Close-action puts always write the global namespace, so the version
+    // readback pins namespace = '' explicitly.
+    let page_id = crate::core::pages::resolve_optional(
+        db,
+        &crate::core::pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace: Some(""),
+            slug: &resolved.slug,
+        },
+    )
+    .map_err(map_db_error)?;
+    let Some(page_id) = page_id else {
+        return Ok(None);
+    };
     db.query_row(
-        "SELECT version
-         FROM pages
-         WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![resolved.collection_id, &resolved.slug],
+        "SELECT version FROM pages WHERE id = ?1",
+        [page_id],
         |row| row.get(0),
     )
     .optional()

@@ -41,6 +41,7 @@ fn memory_query_auto_depth_expands_linked_results() {
     );
     server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "concepts/root".to_string(),
             to_slug: "concepts/child".to_string(),
             relationship: "related".to_string(),
@@ -89,6 +90,7 @@ fn memory_query_auto_depth_does_not_expand_across_collections() {
     // Cross-collection link: default::concepts/anchor -> work::concepts/outside
     server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "default::concepts/anchor".to_string(),
             to_slug: "work::concepts/outside".to_string(),
             relationship: "related".to_string(),

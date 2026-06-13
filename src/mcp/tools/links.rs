@@ -42,19 +42,22 @@ impl QuaidServer {
         if let Some(valid_until) = input.valid_until.as_deref() {
             validate_temporal_value(valid_until, "valid_until")?;
         }
+        crate::core::namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(crate::mcp::errors::map_namespace_error)?;
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
         let from = resolve_slug_for_mcp(&db, &input.from_slug, OpKind::WriteUpdate)?;
         let to = resolve_slug_for_mcp(&db, &input.to_slug, OpKind::WriteUpdate)?;
         let from_slug = canonical_slug(&from.collection_name, &from.slug);
         let to_slug = canonical_slug(&to.collection_name, &to.slug);
 
-        link::run_silent(
+        link::run_silent_with_namespace(
             &db,
             &from_slug,
             &to_slug,
             &input.relationship,
             input.valid_from,
             input.valid_until,
+            input.namespace.as_deref(),
         )
         .map_err(map_anyhow_error)?;
 
@@ -101,8 +104,10 @@ impl QuaidServer {
         let filter = parse_temporal_filter(input.temporal.as_deref())?;
         let limit = input.limit.unwrap_or(100).min(MAX_LIMIT);
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
+        crate::core::namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(crate::mcp::errors::map_namespace_error)?;
         let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
-        let to_id = page_id_for_resolved(&db, &resolved)?;
+        let to_id = page_id_for_resolved(&db, &resolved, input.namespace.as_deref())?;
 
         #[derive(Serialize)]
         struct BacklinkRow {
@@ -167,8 +172,10 @@ impl QuaidServer {
 
         let depth = input.depth.unwrap_or(1).min(graph::MAX_DEPTH);
         let filter = parse_temporal_filter(input.temporal.as_deref())?;
+        crate::core::namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(crate::mcp::errors::map_namespace_error)?;
         let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
-        let page_id = page_id_for_resolved(&db, &resolved)?;
+        let page_id = page_id_for_resolved(&db, &resolved, input.namespace.as_deref())?;
         let result = graph::neighborhood_graph_for_page(
             page_id,
             &resolved.collection_name,

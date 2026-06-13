@@ -41,12 +41,19 @@ impl QuaidServer {
             .map(|slug| resolve_slug_for_mcp(&db, slug, OpKind::WriteUpdate))
             .transpose()?;
 
+        crate::core::namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(crate::mcp::errors::map_namespace_error)?;
         let selected_page_id = if let Some(resolved) = slug_filter.as_ref() {
             vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
                 .map_err(map_vault_sync_error)?;
-            let page_id = page_id_for_resolved(&db, resolved)?;
-            let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
-                .map_err(map_anyhow_error)?;
+            let page_id = page_id_for_resolved(&db, resolved, input.namespace.as_deref())?;
+            let page = get::get_page_by_key_with_namespace(
+                &db,
+                resolved.collection_id,
+                &resolved.slug,
+                input.namespace.as_deref(),
+            )
+            .map_err(map_anyhow_error)?;
             crate::core::assertions::extract_assertions(&page, &db)
                 .map_err(|error| map_anyhow_error(error.into()))?;
             crate::core::assertions::check_assertions_for_page_id(page_id, &db)

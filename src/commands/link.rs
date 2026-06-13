@@ -12,6 +12,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::core::collections::OpKind;
+use crate::core::pages;
 use crate::core::types::Link;
 use crate::core::vault_sync;
 
@@ -23,19 +24,26 @@ struct ResolvedPage {
 }
 
 /// Resolve a slug to its integer page ID. Returns an error if the page doesn't exist.
-fn resolve_page(db: &Connection, slug: &str, op_kind: OpKind) -> Result<ResolvedPage> {
+fn resolve_page(
+    db: &Connection,
+    slug: &str,
+    op_kind: OpKind,
+    namespace: Option<&str>,
+) -> Result<ResolvedPage> {
     let resolved = vault_sync::resolve_slug_for_op(db, slug, op_kind)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    let page_id = db
-        .query_row(
-            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-            rusqlite::params![resolved.collection_id, resolved.slug],
-            |row| row.get(0),
-        )
-        .map_err(|error| match error {
-            rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
-            other => anyhow::anyhow!(other),
-        })?;
+    let page_id = pages::resolve(
+        db,
+        &pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace,
+            slug: &resolved.slug,
+        },
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
+        other => anyhow::anyhow!(other),
+    })?;
     Ok(ResolvedPage { resolved, page_id })
 }
 
@@ -55,8 +63,8 @@ pub fn run(
     valid_until: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
-    let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
+    let from_page = resolve_page(db, from, OpKind::WriteUpdate, None)?;
+    let to_page = resolve_page(db, to, OpKind::WriteUpdate, None)?;
     let closed = run_resolved(
         db,
         &from_page,
@@ -101,8 +109,24 @@ pub fn run_silent(
     valid_from: Option<String>,
     valid_until: Option<String>,
 ) -> Result<bool> {
-    let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
-    let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
+    run_silent_with_namespace(db, from, to, relationship, valid_from, valid_until, None)
+}
+
+/// Namespace-aware variant of [`run_silent`]: both endpoints resolve in
+/// `namespace` (with the documented global fallback) instead of the
+/// deterministic any-namespace ordering.
+#[allow(clippy::too_many_arguments)]
+pub fn run_silent_with_namespace(
+    db: &Connection,
+    from: &str,
+    to: &str,
+    relationship: &str,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+    namespace: Option<&str>,
+) -> Result<bool> {
+    let from_page = resolve_page(db, from, OpKind::WriteUpdate, namespace)?;
+    let to_page = resolve_page(db, to, OpKind::WriteUpdate, namespace)?;
     run_resolved(
         db,
         &from_page,
@@ -226,7 +250,7 @@ struct BacklinkRow {
 
 /// List all outbound links for a page.
 pub fn links(db: &Connection, slug: &str, _temporal: Option<String>, json: bool) -> Result<()> {
-    let resolved = resolve_page(db, slug, OpKind::Read)?;
+    let resolved = resolve_page(db, slug, OpKind::Read, None)?;
 
     let mut stmt = db.prepare(
         "SELECT l.id, c.name || '::' || p.slug, l.relationship, l.valid_from, l.valid_until \
@@ -281,8 +305,8 @@ pub fn unlink(
     relationship: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let from_page = resolve_page(db, from, OpKind::WriteUpdate)?;
-    let to_page = resolve_page(db, to, OpKind::WriteUpdate)?;
+    let from_page = resolve_page(db, from, OpKind::WriteUpdate, None)?;
+    let to_page = resolve_page(db, to, OpKind::WriteUpdate, None)?;
     vault_sync::ensure_collection_write_allowed(db, from_page.resolved.collection_id)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     vault_sync::ensure_collection_write_allowed(db, to_page.resolved.collection_id)
@@ -332,7 +356,7 @@ pub fn unlink(
 
 /// List backlinks (inbound links) for a page.
 pub fn backlinks(db: &Connection, slug: &str, _temporal: Option<String>, json: bool) -> Result<()> {
-    let resolved = resolve_page(db, slug, OpKind::Read)?;
+    let resolved = resolve_page(db, slug, OpKind::Read, None)?;
 
     let mut stmt = db.prepare(
         "SELECT l.id, c.name || '::' || p.slug, l.relationship, l.valid_from, l.valid_until \

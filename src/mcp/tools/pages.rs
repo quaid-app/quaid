@@ -39,9 +39,26 @@ impl QuaidServer {
         #[tool(aggr)] input: MemoryGetInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
         let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
-        let page = vault_sync::get_page_by_input(&db, &input.slug).map_err(map_vault_sync_error)?;
+        let page = crate::commands::get::get_page_by_key_with_namespace(
+            &db,
+            resolved.collection_id,
+            &resolved.slug,
+            input.namespace.as_deref(),
+        )
+        .map_err(|err| {
+            let message = err.to_string();
+            if message.contains("page not found") {
+                map_vault_sync_error(vault_sync::VaultSyncError::PageNotFound {
+                    slug: input.slug.clone(),
+                })
+            } else {
+                map_anyhow_error(err)
+            }
+        })?;
         let canonical_page = canonicalize_page_for_mcp(&page, &resolved);
         let successor_slug = supersede::successor_slug_by_id(&db, canonical_page.superseded_by)
             .map_err(map_db_error)?;
@@ -282,12 +299,14 @@ impl QuaidServer {
             )));
         }
         let overwrite = input.overwrite.unwrap_or(false);
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
         let db = self.db().lock().unwrap_or_else(|e| e.into_inner());
         let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
         vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
             .map_err(map_vault_sync_error)?;
 
-        let page_id = page_id_for_resolved(&db, &resolved)?;
+        let page_id = page_id_for_resolved(&db, &resolved, input.namespace.as_deref())?;
         let canonical_page_slug = canonical_slug(&resolved.collection_name, &resolved.slug);
 
         // Guard against silent replacement of existing source data.

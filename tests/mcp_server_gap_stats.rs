@@ -248,6 +248,7 @@ fn memory_raw_with_unknown_slug_returns_not_found() {
 
     let error = server
         .memory_raw(MemoryRawInput {
+            namespace: None,
             slug: "nobody/ghost".to_string(),
             source: "test".to_string(),
             data: json!({"key": "value"}),
@@ -270,6 +271,7 @@ fn memory_raw_rejects_empty_source() {
 
     let error = server
         .memory_raw(MemoryRawInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             source: "".to_string(),
             data: json!({}),
@@ -287,6 +289,7 @@ fn memory_raw_rejects_invalid_slug() {
 
     let error = server
         .memory_raw(MemoryRawInput {
+            namespace: None,
             slug: "Invalid/SLUG!".to_string(),
             source: "test".to_string(),
             data: json!({}),
@@ -309,6 +312,7 @@ fn memory_raw_rejects_array_payload() {
 
     let error = server
         .memory_raw(MemoryRawInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             source: "crustdata".to_string(),
             data: json!([1, 2, 3]),
@@ -333,6 +337,7 @@ fn memory_raw_rejects_scalar_payload() {
     for bad in [json!("string"), json!(42), json!(true), json!(null)] {
         let error = server
             .memory_raw(MemoryRawInput {
+                namespace: None,
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: bad,
@@ -355,6 +360,7 @@ fn memory_raw_rejects_duplicate_source_without_overwrite() {
 
     server
         .memory_raw(MemoryRawInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             source: "crustdata".to_string(),
             data: json!({"v": 1}),
@@ -365,6 +371,7 @@ fn memory_raw_rejects_duplicate_source_without_overwrite() {
     // Second write without overwrite must fail.
     let error = server
         .memory_raw(MemoryRawInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             source: "crustdata".to_string(),
             data: json!({"v": 2}),

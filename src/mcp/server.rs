@@ -119,11 +119,15 @@ pub(crate) fn resolve_memory_collection_filter_for_mcp(
 pub(crate) fn page_id_for_resolved(
     db: &Connection,
     resolved: &vault_sync::ResolvedSlug,
+    namespace: Option<&str>,
 ) -> Result<i64, rmcp::Error> {
-    db.query_row(
-        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![resolved.collection_id, &resolved.slug],
-        |row| row.get(0),
+    crate::core::pages::resolve(
+        db,
+        &crate::core::pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace,
+            slug: &resolved.slug,
+        },
     )
     .map_err(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => {
@@ -248,6 +252,9 @@ impl QuaidServer {
 pub struct MemoryGetInput {
     /// Page slug to retrieve
     pub slug: String,
+    /// Optional namespace to resolve in (named namespace falls back to
+    /// global memory); omitted resolves deterministically across namespaces
+    pub namespace: Option<String>,
 }
 
 /// Input schema for the `memory_put` MCP tool.
@@ -378,6 +385,9 @@ pub struct MemoryLinkInput {
     pub from_slug: String,
     /// Slug of the target page (the "to" end of the directed link).
     pub to_slug: String,
+    /// Optional namespace both endpoints resolve in (named namespace falls
+    /// back to global memory); omitted resolves deterministically
+    pub namespace: Option<String>,
     /// Relationship token classifying the link (e.g. `works_at`).
     pub relationship: String,
     /// Optional ISO-8601 lower bound for when the link is valid.
@@ -400,6 +410,9 @@ pub struct MemoryLinkCloseInput {
 pub struct MemoryBacklinksInput {
     /// Slug of the page whose inbound edges should be listed.
     pub slug: String,
+    /// Optional namespace to resolve in (named namespace falls back to
+    /// global memory); omitted resolves deterministically across namespaces
+    pub namespace: Option<String>,
     /// Maximum number of backlinks to return.
     pub limit: Option<u32>,
     /// Optional temporal filter (`active` or `all`); defaults to `active`.
@@ -411,6 +424,9 @@ pub struct MemoryBacklinksInput {
 pub struct MemoryGraphInput {
     /// Slug of the page to use as the graph root.
     pub slug: String,
+    /// Optional namespace to resolve in (named namespace falls back to
+    /// global memory); omitted resolves deterministically across namespaces
+    pub namespace: Option<String>,
     /// Optional traversal depth (clamped to `graph::MAX_DEPTH`).
     pub depth: Option<u32>,
     /// Optional temporal filter (`active` or `all`); defaults to `active`.
@@ -423,6 +439,9 @@ pub struct MemoryCheckInput {
     /// Optional slug restricting the check to a single page; omitted runs
     /// detection across every page.
     pub slug: Option<String>,
+    /// Optional namespace to resolve in (named namespace falls back to
+    /// global memory); omitted resolves deterministically across namespaces
+    pub namespace: Option<String>,
 }
 
 /// Input schema for the `memory_timeline` MCP tool.
@@ -430,6 +449,9 @@ pub struct MemoryCheckInput {
 pub struct MemoryTimelineInput {
     /// Slug of the page whose timeline entries should be returned.
     pub slug: String,
+    /// Optional namespace to resolve in (named namespace falls back to
+    /// global memory); omitted resolves deterministically across namespaces
+    pub namespace: Option<String>,
     /// Maximum number of entries to return.
     pub limit: Option<u32>,
 }
@@ -439,6 +461,9 @@ pub struct MemoryTimelineInput {
 pub struct MemoryTagsInput {
     /// Slug of the page whose tags should be listed or mutated.
     pub slug: String,
+    /// Optional namespace to resolve in (named namespace falls back to
+    /// global memory); omitted resolves deterministically across namespaces
+    pub namespace: Option<String>,
     /// Optional tag tokens to add (created if missing).
     pub add: Option<Vec<String>>,
     /// Optional tag tokens to remove.
@@ -494,6 +519,9 @@ pub struct MemoryNamespaceDestroyInput {
 pub struct MemoryRawInput {
     /// Page slug to attach raw data to
     pub slug: String,
+    /// Optional namespace to resolve in (named namespace falls back to
+    /// global memory); omitted resolves deterministically across namespaces
+    pub namespace: Option<String>,
     /// Source identifier (e.g. "crustdata", "exa", "meeting")
     pub source: String,
     /// Arbitrary JSON object to store (must be a JSON object, not array/scalar)
@@ -1517,6 +1545,7 @@ mod tests {
 
         server
             .memory_link(MemoryLinkInput {
+                namespace: None,
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -1569,6 +1598,7 @@ mod tests {
 
         server
             .memory_tags(MemoryTagsInput {
+                namespace: None,
                 slug: "memory::people/alice".to_string(),
                 add: Some(vec!["memory".to_string()]),
                 remove: None,
@@ -1635,6 +1665,7 @@ mod tests {
 
         let result = server
             .memory_timeline(MemoryTimelineInput {
+                namespace: None,
                 slug: "people/alice".to_string(),
                 limit: Some(1),
             })
@@ -2083,6 +2114,7 @@ mod tests {
 
         let result = server
             .memory_raw(MemoryRawInput {
+                namespace: None,
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"funding": "$10M", "headcount": 50}),
@@ -2117,6 +2149,7 @@ mod tests {
 
         server
             .memory_raw(MemoryRawInput {
+                namespace: None,
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 1}),
@@ -2127,6 +2160,7 @@ mod tests {
         // Explicit overwrite must succeed and persist new data.
         server
             .memory_raw(MemoryRawInput {
+                namespace: None,
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 2}),
@@ -2165,6 +2199,7 @@ mod tests {
 
         let error = server
             .memory_raw(MemoryRawInput {
+                namespace: None,
                 slug: "people/alice".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 1}),
@@ -2358,6 +2393,7 @@ mod tests {
 
         let error = server
             .memory_link(MemoryLinkInput {
+                namespace: None,
                 from_slug: "people/alice".to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -2398,6 +2434,7 @@ mod tests {
 
         let error = server
             .memory_link(MemoryLinkInput {
+                namespace: None,
                 from_slug: "people/bob".to_string(),
                 to_slug: "companies/initech".to_string(),
                 relationship: "works_at".to_string(),
@@ -2434,6 +2471,7 @@ mod tests {
 
         let error = server
             .memory_check(MemoryCheckInput {
+                namespace: None,
                 slug: Some("notes/check-restoring".to_string()),
             })
             .unwrap_err();
@@ -2465,6 +2503,7 @@ mod tests {
 
         let error = server
             .memory_check(MemoryCheckInput {
+                namespace: None,
                 slug: Some("notes/check-needs-sync".to_string()),
             })
             .unwrap_err();
@@ -2497,6 +2536,7 @@ mod tests {
 
         let error = server
             .memory_raw(MemoryRawInput {
+                namespace: None,
                 slug: "people/carol".to_string(),
                 source: "crustdata".to_string(),
                 data: json!({"v": 1}),

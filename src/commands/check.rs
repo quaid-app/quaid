@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use crate::commands::get::get_page_by_key;
 use crate::core::assertions::{self, Contradiction};
 use crate::core::collections::OpKind;
+use crate::core::pages;
 use crate::core::vault_sync;
 
 #[derive(Debug)]
@@ -80,16 +81,18 @@ pub fn execute_check(
 fn resolve_target(db: &Connection, slug: &str) -> Result<CheckTarget> {
     let resolved = vault_sync::resolve_slug_for_op(db, slug, OpKind::WriteUpdate)
         .map_err(|err| anyhow!(err.to_string()))?;
-    let page_id = db
-        .query_row(
-            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-            rusqlite::params![resolved.collection_id, &resolved.slug],
-            |row| row.get(0),
-        )
-        .map_err(|error| match error {
-            rusqlite::Error::QueryReturnedNoRows => anyhow!("page not found: {slug}"),
-            other => anyhow!(other),
-        })?;
+    let page_id = pages::resolve(
+        db,
+        &pages::PageKey {
+            collection_id: resolved.collection_id,
+            namespace: None,
+            slug: &resolved.slug,
+        },
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => anyhow!("page not found: {slug}"),
+        other => anyhow!(other),
+    })?;
     Ok(CheckTarget { resolved, page_id })
 }
 

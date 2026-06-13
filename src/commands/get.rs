@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use rusqlite::Connection;
 
 use crate::core::types::{frontmatter_insert_string, Frontmatter, Page};
-use crate::core::{markdown, page_uuid, vault_sync};
+use crate::core::{markdown, page_uuid, pages, vault_sync};
 
 /// Read a page by slug and print it to stdout.
 pub fn run(db: &Connection, slug: &str, namespace: Option<&str>, json: bool) -> Result<()> {
@@ -60,39 +60,37 @@ pub fn get_page_by_key_with_namespace(
 ) -> Result<Page> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-    let mut sql = String::from(
+    let Some(page_id) = pages::resolve_optional(
+        db,
+        &pages::PageKey {
+            collection_id,
+            namespace,
+            slug,
+        },
+    )?
+    else {
+        bail!("page not found: {slug}")
+    };
+    get_page_by_id(db, page_id).map_err(|err| {
+        let message = err.to_string();
+        if message.contains("page not found") {
+            anyhow::anyhow!("page not found: {slug}")
+        } else {
+            err
+        }
+    })
+}
+
+/// Load a single page from the database by its row id.
+pub fn get_page_by_id(db: &Connection, page_id: i64) -> Result<Page> {
+    let mut stmt = db.prepare(
         "SELECT slug, uuid, type, title, summary, compiled_truth, timeline, \
                 frontmatter, wing, room, superseded_by, version, created_at, updated_at, \
                 truth_updated_at, timeline_updated_at \
-           FROM pages WHERE collection_id = ?1 AND slug = ?2",
-    );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        vec![Box::new(collection_id), Box::new(slug.to_owned())];
+           FROM pages WHERE id = ?1",
+    )?;
 
-    if let Some(namespace) = namespace {
-        if namespace.is_empty() {
-            sql.push_str(" AND namespace = ?");
-            sql.push_str(&(params.len() + 1).to_string());
-            params.push(Box::new(String::new()));
-        } else {
-            sql.push_str(" AND (namespace = ?");
-            sql.push_str(&(params.len() + 1).to_string());
-            sql.push_str(" OR namespace = '')");
-            params.push(Box::new(namespace.to_owned()));
-        }
-    }
-    if let Some(namespace) = namespace.filter(|namespace| !namespace.is_empty()) {
-        sql.push_str(" ORDER BY CASE WHEN namespace = ?");
-        sql.push_str(&(params.len() + 1).to_string());
-        sql.push_str(" THEN 0 ELSE 1 END");
-        params.push(Box::new(namespace.to_owned()));
-    }
-    sql.push_str(" LIMIT 1");
-
-    let mut stmt = db.prepare(&sql)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-
-    let page = stmt.query_row(param_refs.as_slice(), |row| {
+    let page = stmt.query_row([page_id], |row| {
         let frontmatter_json: String = row.get(7)?;
         let frontmatter: Frontmatter = serde_json::from_str(&frontmatter_json).unwrap_or_default();
 
@@ -125,7 +123,7 @@ pub fn get_page_by_key_with_namespace(
     match page {
         Ok(page) => Ok(page),
         Err(rusqlite::Error::QueryReturnedNoRows) => {
-            bail!("page not found: {slug}")
+            bail!("page not found: id {page_id}")
         }
         Err(e) => Err(e.into()),
     }

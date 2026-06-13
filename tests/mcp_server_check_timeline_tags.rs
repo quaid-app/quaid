@@ -32,6 +32,7 @@ fn memory_check_on_clean_page_returns_empty_array() {
 
     let result = server
         .memory_check(MemoryCheckInput {
+            namespace: None,
             slug: Some("people/alice".to_string()),
         })
         .unwrap();
@@ -53,6 +54,7 @@ fn memory_check_detects_contradiction_on_page() {
 
     let result = server
         .memory_check(MemoryCheckInput {
+            namespace: None,
             slug: Some("people/alice".to_string()),
         })
         .unwrap();
@@ -79,12 +81,14 @@ fn memory_check_filters_output_to_requested_slug() {
 
     server
         .memory_check(MemoryCheckInput {
+            namespace: None,
             slug: Some("people/bob".to_string()),
         })
         .unwrap();
 
     let result = server
         .memory_check(MemoryCheckInput {
+            namespace: None,
             slug: Some("people/alice".to_string()),
         })
         .unwrap();
@@ -117,12 +121,14 @@ fn memory_check_explicit_collection_slug_filters_to_resolved_page_when_slug_coll
 
     server
         .memory_check(MemoryCheckInput {
+            namespace: None,
             slug: Some("default::people/alice".to_string()),
         })
         .unwrap();
 
     let result = server
         .memory_check(MemoryCheckInput {
+            namespace: None,
             slug: Some("memory::people/alice".to_string()),
         })
         .unwrap();
@@ -147,7 +153,10 @@ fn memory_check_without_slug_returns_all_unresolved_contradictions() {
     );
 
     let result = server
-        .memory_check(MemoryCheckInput { slug: None })
+        .memory_check(MemoryCheckInput {
+            namespace: None,
+            slug: None,
+        })
         .unwrap();
 
     let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
@@ -161,6 +170,7 @@ fn memory_timeline_on_unknown_slug_returns_not_found() {
 
     let error = server
         .memory_timeline(MemoryTimelineInput {
+            namespace: None,
             slug: "nobody/ghost".to_string(),
             limit: None,
         })
@@ -181,6 +191,7 @@ fn memory_timeline_returns_entries_for_page_with_timeline() {
 
     let result = server
         .memory_timeline(MemoryTimelineInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             limit: Some(10),
         })
@@ -203,6 +214,7 @@ fn memory_timeline_returns_empty_entries_for_page_without_timeline_data() {
 
     let result = server
         .memory_timeline(MemoryTimelineInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             limit: None,
         })
@@ -225,6 +237,7 @@ fn memory_tags_list_add_remove_round_trip() {
     // List tags — should be empty
     let result = server
         .memory_tags(MemoryTagsInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             add: None,
             remove: None,
@@ -237,6 +250,7 @@ fn memory_tags_list_add_remove_round_trip() {
     // Add tags
     let result = server
         .memory_tags(MemoryTagsInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             add: Some(vec!["investor".to_string(), "founder".to_string()]),
             remove: None,
@@ -249,6 +263,7 @@ fn memory_tags_list_add_remove_round_trip() {
     // Remove a tag
     let result = server
         .memory_tags(MemoryTagsInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             add: None,
             remove: Some(vec!["investor".to_string()]),
@@ -266,6 +281,7 @@ fn memory_tags_unknown_slug_returns_not_found() {
 
     let error = server
         .memory_tags(MemoryTagsInput {
+            namespace: None,
             slug: "nobody/ghost".to_string(),
             add: Some(vec!["tag".to_string()]),
             remove: None,
@@ -287,6 +303,7 @@ fn memory_tags_rejects_invalid_tag_values() {
 
     let error = server
         .memory_tags(MemoryTagsInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             add: Some(vec!["bad tag".to_string()]),
             remove: None,

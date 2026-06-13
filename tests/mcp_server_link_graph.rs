@@ -32,6 +32,7 @@ fn memory_link_with_unknown_from_slug_returns_not_found() {
 
     let error = server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "people/ghost".to_string(),
             to_slug: "companies/acme".to_string(),
             relationship: "works_at".to_string(),
@@ -60,6 +61,7 @@ fn memory_link_creates_link_between_existing_pages() {
 
     let result = server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "people/alice".to_string(),
             to_slug: "companies/acme".to_string(),
             relationship: "works_at".to_string(),
@@ -91,6 +93,7 @@ fn memory_link_rejects_invalid_relationship() {
 
     let error = server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "people/alice".to_string(),
             to_slug: "companies/acme".to_string(),
             relationship: "works at".to_string(),
@@ -149,6 +152,7 @@ fn memory_backlinks_returns_link_array() {
 
     server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "people/alice".to_string(),
             to_slug: "companies/acme".to_string(),
             relationship: "works_at".to_string(),
@@ -159,6 +163,7 @@ fn memory_backlinks_returns_link_array() {
 
     let result = server
         .memory_backlinks(MemoryBacklinksInput {
+            namespace: None,
             slug: "companies/acme".to_string(),
             limit: None,
             temporal: None,
@@ -180,6 +185,7 @@ fn memory_backlinks_unknown_slug_returns_not_found() {
 
     let error = server
         .memory_backlinks(MemoryBacklinksInput {
+            namespace: None,
             slug: "nobody/ghost".to_string(),
             limit: None,
             temporal: None,
@@ -207,6 +213,7 @@ fn memory_backlinks_applies_limit() {
         );
         server
             .memory_link(MemoryLinkInput {
+                namespace: None,
                 from_slug: slug.to_string(),
                 to_slug: "companies/acme".to_string(),
                 relationship: "works_at".to_string(),
@@ -218,6 +225,7 @@ fn memory_backlinks_applies_limit() {
 
     let result = server
         .memory_backlinks(MemoryBacklinksInput {
+            namespace: None,
             slug: "companies/acme".to_string(),
             limit: Some(2),
             temporal: None,
@@ -246,6 +254,7 @@ fn memory_backlinks_temporal_all_includes_closed_links() {
 
     server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "people/alice".to_string(),
             to_slug: "companies/acme".to_string(),
             relationship: "works_at".to_string(),
@@ -256,6 +265,7 @@ fn memory_backlinks_temporal_all_includes_closed_links() {
 
     let result = server
         .memory_backlinks(MemoryBacklinksInput {
+            namespace: None,
             slug: "companies/acme".to_string(),
             limit: None,
             temporal: Some("all".to_string()),
@@ -273,6 +283,7 @@ fn memory_backlinks_rejects_invalid_temporal_filter() {
 
     let error = server
         .memory_backlinks(MemoryBacklinksInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             limit: None,
             temporal: Some("future".to_string()),
@@ -299,6 +310,7 @@ fn memory_graph_returns_nodes_and_edges_json() {
 
     server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "people/alice".to_string(),
             to_slug: "companies/acme".to_string(),
             relationship: "works_at".to_string(),
@@ -309,6 +321,7 @@ fn memory_graph_returns_nodes_and_edges_json() {
 
     let result = server
         .memory_graph(MemoryGraphInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             depth: Some(2),
             temporal: None,
@@ -337,6 +350,7 @@ fn memory_graph_unknown_slug_returns_not_found() {
 
     let error = server
         .memory_graph(MemoryGraphInput {
+            namespace: None,
             slug: "people/ghost".to_string(),
             depth: None,
             temporal: None,
@@ -363,6 +377,7 @@ fn memory_graph_temporal_all_includes_closed_links() {
 
     server
         .memory_link(MemoryLinkInput {
+            namespace: None,
             from_slug: "people/alice".to_string(),
             to_slug: "companies/acme".to_string(),
             relationship: "works_at".to_string(),
@@ -373,6 +388,7 @@ fn memory_graph_temporal_all_includes_closed_links() {
 
     let result = server
         .memory_graph(MemoryGraphInput {
+            namespace: None,
             slug: "people/alice".to_string(),
             depth: None,
             temporal: Some("all".to_string()),

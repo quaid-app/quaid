@@ -215,9 +215,14 @@ pub fn check_assertions_for_page_id(
 }
 
 fn resolve_page_id(conn: &Connection, slug: &str) -> Result<i64, AssertionError> {
-    conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
-        row.get(0)
-    })
+    // Legacy collection-blind fallback (uuid lookup is the primary identity):
+    // prefer the global namespace, then order deterministically instead of
+    // binding to an arbitrary row when a slug exists in several namespaces.
+    conn.query_row(
+        "SELECT id FROM pages WHERE slug = ?1          ORDER BY CASE WHEN namespace = '' THEN 0 ELSE 1 END, namespace, collection_id          LIMIT 1",
+        [slug],
+        |row| row.get(0),
+    )
     .map_err(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => AssertionError::PageNotFound {
             slug: slug.to_string(),

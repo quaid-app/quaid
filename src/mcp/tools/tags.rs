@@ -39,10 +39,17 @@ impl QuaidServer {
 
         let limit = input.limit.unwrap_or(20).min(MAX_LIMIT);
 
-        let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
-            .map_err(map_anyhow_error)?;
+        crate::core::namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(crate::mcp::errors::map_namespace_error)?;
+        let page = get::get_page_by_key_with_namespace(
+            &db,
+            resolved.collection_id,
+            &resolved.slug,
+            input.namespace.as_deref(),
+        )
+        .map_err(map_anyhow_error)?;
 
-        let page_id = page_id_for_resolved(&db, &resolved)?;
+        let page_id = page_id_for_resolved(&db, &resolved, input.namespace.as_deref())?;
 
         // Query structured timeline_entries table
         let mut stmt = db
@@ -120,21 +127,25 @@ impl QuaidServer {
         let remove = input.remove.unwrap_or_default();
         validate_tag_list(&add, "add")?;
         validate_tag_list(&remove, "remove")?;
+        crate::core::namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(crate::mcp::errors::map_namespace_error)?;
         let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
         if !add.is_empty() || !remove.is_empty() {
             vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
                 .map_err(map_vault_sync_error)?;
         }
-        let page_id: i64 = db
-            .query_row(
-                "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
-                rusqlite::params![resolved.collection_id, &resolved.slug],
-                |row| row.get(0),
-            )
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => page_not_found(&input.slug),
-                other => map_db_error(other),
-            })?;
+        let page_id: i64 = crate::core::pages::resolve(
+            &db,
+            &crate::core::pages::PageKey {
+                collection_id: resolved.collection_id,
+                namespace: input.namespace.as_deref(),
+                slug: &resolved.slug,
+            },
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => page_not_found(&input.slug),
+            other => map_db_error(other),
+        })?;
 
         for tag in &add {
             db.execute(

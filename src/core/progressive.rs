@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use rusqlite::Connection;
 
 use super::collections::{self, OpKind, SlugResolution};
+use super::pages::{self, PageKey};
 use super::types::{SearchError, SearchResult};
 
 /// Hard safety cap on expansion depth regardless of caller-supplied value.
@@ -51,7 +52,7 @@ pub fn progressive_retrieve_with_namespace(
     } else {
         initial
             .into_iter()
-            .filter(|result| page_is_head(&result.slug, conn))
+            .filter(|result| page_is_head(&result.slug, namespace_filter, conn))
             .collect()
     };
     if initial.is_empty() || depth == 0 {
@@ -69,7 +70,7 @@ pub fn progressive_retrieve_with_namespace(
     // results — the same policy the expansion loop below applies. Entries
     // whose slug cannot be costed are skipped rather than riding for free.
     for r in &initial {
-        let Some(cost) = token_cost(&r.slug, conn) else {
+        let Some(cost) = token_cost(&r.slug, namespace_filter, conn) else {
             continue;
         };
         if tokens_used + cost > budget {
@@ -103,7 +104,7 @@ pub fn progressive_retrieve_with_namespace(
                     continue;
                 }
 
-                let Some(cost) = token_cost(&neighbour.slug, conn) else {
+                let Some(cost) = token_cost(&neighbour.slug, namespace_filter, conn) else {
                     continue;
                 };
                 if tokens_used + cost > budget {
@@ -126,30 +127,43 @@ pub fn progressive_retrieve_with_namespace(
 ///
 /// Returns `None` when the slug cannot be resolved or the page row is
 /// missing, so callers can skip the entry instead of treating it as free.
-fn token_cost(slug: &str, conn: &Connection) -> Option<usize> {
-    let (collection_id, resolved_slug) = resolve_slug_key(conn, slug)?;
+fn token_cost(slug: &str, namespace_filter: Option<&str>, conn: &Connection) -> Option<usize> {
+    let page_id = resolve_page_id(conn, slug, namespace_filter)?;
 
     conn.query_row(
-        "SELECT LENGTH(compiled_truth) + LENGTH(timeline) \
-         FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![collection_id, resolved_slug],
+        "SELECT LENGTH(compiled_truth) + LENGTH(timeline) FROM pages WHERE id = ?1",
+        [page_id],
         |row| row.get::<_, i64>(0),
     )
     .ok()
     .map(|len| (len as usize) / 4)
 }
 
-fn page_is_head(slug: &str, conn: &Connection) -> bool {
-    let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, slug) else {
+fn page_is_head(slug: &str, namespace_filter: Option<&str>, conn: &Connection) -> bool {
+    let Some(page_id) = resolve_page_id(conn, slug, namespace_filter) else {
         return false;
     };
 
     conn.query_row(
-        "SELECT superseded_by IS NULL FROM pages WHERE collection_id = ?1 AND slug = ?2",
-        rusqlite::params![collection_id, resolved_slug],
+        "SELECT superseded_by IS NULL FROM pages WHERE id = ?1",
+        [page_id],
         |row| row.get::<_, bool>(0),
     )
     .unwrap_or(false)
+}
+
+fn resolve_page_id(conn: &Connection, slug: &str, namespace_filter: Option<&str>) -> Option<i64> {
+    let (collection_id, resolved_slug) = resolve_slug_key(conn, slug)?;
+    pages::resolve_optional(
+        conn,
+        &PageKey {
+            collection_id,
+            namespace: namespace_filter,
+            slug: &resolved_slug,
+        },
+    )
+    .ok()
+    .flatten()
 }
 
 /// Fetch outbound link targets from a page, returning them as SearchResults.

@@ -163,6 +163,11 @@ pub struct FileStateRow {
 /// Upsert a `file_state` row after ingesting a file.
 ///
 /// This should be called in the same transaction as the `pages` insert/update.
+///
+/// Resets `frontmatter_uuid` to NULL ("not yet cached") on conflict so callers
+/// that install new content at an existing path (reingest, restore, remap)
+/// can never leave a stale uuid cache behind; the reconciler's duplicate-uuid
+/// scan re-reads and re-caches the value on its next pass.
 pub fn upsert_file_state(
     conn: &Connection,
     collection_id: i64,
@@ -181,6 +186,7 @@ pub fn upsert_file_state(
              size_bytes = excluded.size_bytes,
              inode = excluded.inode,
              sha256 = excluded.sha256,
+             frontmatter_uuid = NULL,
              last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
              last_full_hash_at = excluded.last_full_hash_at",
         rusqlite::params![

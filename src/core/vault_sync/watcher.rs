@@ -342,13 +342,15 @@ pub(super) fn classify_watch_event(
     Ok(actions)
 }
 
-/// Builds the closure passed to `notify::Watcher::new`. Drops
-/// notify errors silently, classifies the event into one or more
-/// [`WatchEvent`]s, and pushes each onto the per-collection mpsc
-/// channel. On `try_send`-full it marks the collection
-/// `needs_full_sync = 1` via a fresh connection so the next
-/// supervisor pass picks up the lost events; on closed it returns
-/// (the collection has been detached).
+/// Builds the closure passed to `notify::Watcher::new`. Classifies
+/// the event into one or more [`WatchEvent`]s and pushes each onto
+/// the per-collection mpsc channel. Every degradation is fail-safe:
+/// notify backend errors (including rescan signals), classification
+/// failures, and `try_send`-full all mark the collection
+/// `needs_full_sync = 1` via a fresh [`crate::core::db::open_runtime`]
+/// connection so the next supervisor pass runs a full-hash recovery
+/// instead of silently going stale; on closed it returns (the
+/// collection has been detached).
 #[cfg(unix)]
 pub(super) fn watch_callback(
     collection_id: i64,
@@ -357,19 +359,37 @@ pub(super) fn watch_callback(
     sender: mpsc::Sender<WatchEvent>,
 ) -> impl FnMut(notify::Result<NotifyEvent>) + Send + 'static {
     move |result: notify::Result<NotifyEvent>| {
-        let Ok(event) = result else {
-            return;
+        let event = match result {
+            Ok(event) => event,
+            Err(error) => {
+                eprintln!(
+                    "ERROR: watch_event_error collection_id={} root={} error={} flagging_full_sync",
+                    collection_id,
+                    callback_root.display(),
+                    error
+                );
+                flag_needs_full_sync_via_runtime_connection(&db_path, collection_id);
+                return;
+            }
         };
-        let Ok(actions) = classify_watch_event(&callback_root, event) else {
-            return;
+        let actions = match classify_watch_event(&callback_root, event) {
+            Ok(actions) => actions,
+            Err(error) => {
+                eprintln!(
+                    "ERROR: watch_classify_error collection_id={} root={} error={} flagging_full_sync",
+                    collection_id,
+                    callback_root.display(),
+                    error
+                );
+                flag_needs_full_sync_via_runtime_connection(&db_path, collection_id);
+                return;
+            }
         };
         for action in actions {
             match sender.try_send(action) {
                 Ok(()) => {}
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    if let Ok(conn) = crate::core::db::open_runtime(&db_path) {
-                        let _ = super::mark_collection_needs_full_sync(&conn, collection_id);
-                    }
+                    flag_needs_full_sync_via_runtime_connection(&db_path, collection_id);
                     eprintln!(
                         "WARN: watch_channel_full collection_id={} root={}",
                         collection_id,
@@ -378,6 +398,30 @@ pub(super) fn watch_callback(
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
             }
+        }
+    }
+}
+
+/// Best-effort `needs_full_sync = 1` flag write over a fresh
+/// [`crate::core::db::open_runtime`] connection (5s busy timeout, so
+/// the write-burst contention that causes channel overflow doesn't
+/// instantly fail the flag write too). Failures are logged loudly:
+/// this flag is the only thing standing between a degraded watcher
+/// and a silently-stale collection.
+#[cfg(unix)]
+pub(super) fn flag_needs_full_sync_via_runtime_connection(db_path: &str, collection_id: i64) {
+    match crate::core::db::open_runtime(db_path) {
+        Ok(conn) => {
+            if let Err(error) = super::mark_collection_needs_full_sync(&conn, collection_id) {
+                eprintln!(
+                    "ERROR: needs_full_sync_flag_write_failed collection_id={collection_id} error={error}"
+                );
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "ERROR: needs_full_sync_flag_open_failed collection_id={collection_id} error={error}"
+            );
         }
     }
 }

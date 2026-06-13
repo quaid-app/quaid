@@ -400,6 +400,7 @@ fn apply_current_version_maintenance(conn: &Connection) -> Result<(), DbError> {
     ensure_serve_session_columns(conn)?;
     ensure_collection_name_guards(conn)?;
     ensure_raw_import_hash_schema(conn)?;
+    ensure_file_state_uuid_cache_schema(conn)?;
     Ok(())
 }
 
@@ -1000,6 +1001,29 @@ fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
             )?;
         }
         tx.commit()?;
+    }
+
+    Ok(())
+}
+
+/// Adds the `file_state.frontmatter_uuid` cache column to databases created
+/// before it existed in `schema.sql`. NULL means "not yet cached" so the
+/// reconciler's duplicate-uuid scan lazily backfills it on the next pass;
+/// no eager backfill is needed here.
+fn ensure_file_state_uuid_cache_schema(conn: &Connection) -> Result<(), DbError> {
+    if !table_exists(conn, "file_state")? {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare("PRAGMA table_info(file_state)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    if !existing_columns.contains("frontmatter_uuid") {
+        conn.execute_batch(
+            "ALTER TABLE file_state ADD COLUMN frontmatter_uuid TEXT DEFAULT NULL;",
+        )?;
     }
 
     Ok(())

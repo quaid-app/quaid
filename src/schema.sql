@@ -368,6 +368,11 @@ CREATE TABLE IF NOT EXISTS file_state (
     size_bytes      INTEGER NOT NULL,
     inode           INTEGER DEFAULT NULL,
     sha256          TEXT    NOT NULL,
+    -- Cached frontmatter uuid for duplicate-uuid detection: NULL = not yet
+    -- cached (file must be read), '' = file has no frontmatter uuid.
+    -- Reset to NULL on every content upsert; refreshed lazily by the
+    -- reconciler's duplicate-uuid scan so unchanged files are not re-read.
+    frontmatter_uuid TEXT   DEFAULT NULL,
     last_seen_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     last_full_hash_at TEXT  NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (collection_id, relative_path)

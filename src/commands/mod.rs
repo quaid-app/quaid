@@ -22,6 +22,7 @@ pub mod put;
 pub mod query;
 pub mod search;
 pub mod serve;
+pub mod setup;
 #[cfg(unix)]
 pub(crate) mod shutdown;
 pub mod skills;

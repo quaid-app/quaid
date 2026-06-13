@@ -7,6 +7,7 @@ API_URL="${QUAID_RELEASE_API_URL:-https://api.github.com/repos/${REPO}/releases/
 RELEASE_BASE="${QUAID_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download}"
 INSTALL_DIR="${QUAID_INSTALL_DIR:-$HOME/.local/bin}"
 NO_PROFILE="${QUAID_NO_PROFILE:-0}"
+NO_REGISTER="${QUAID_NO_REGISTER:-0}"
 
 tmp_dir=""
 
@@ -221,6 +222,38 @@ print_sandboxed_hint() {
   printf '    -o quaid-install.sh && sh quaid-install.sh\n'
 }
 
+# Initialize the database (if absent) and wire MCP clients. Non-interactive and
+# best-effort: a failure here never fails the install, since the binary is
+# already in place. Skippable via QUAID_NO_REGISTER=1. Honors any QUAID_DB /
+# QUAID_MODEL already in the environment, which the binary reads directly.
+register_runtime() {
+  _install_path="$1"
+
+  if [ "$NO_REGISTER" = "1" ]; then
+    printf '%s\n' ""
+    printf '%s\n' "Skipping quaid init / MCP registration (QUAID_NO_REGISTER=1)."
+    return 0
+  fi
+
+  # Resolve the DB path the same way the binary does: QUAID_DB wins, else the
+  # default ~/.quaid/memory.db.
+  _db_path="${QUAID_DB:-$HOME/.quaid/memory.db}"
+
+  if [ ! -f "$_db_path" ]; then
+    printf '%s\n' ""
+    printf 'Initializing memory database at %s ...\n' "$_db_path"
+    if ! "$_install_path" init "$_db_path"; then
+      printf '%s\n' "Warning: 'quaid init' failed; run it manually before first use." >&2
+    fi
+  fi
+
+  printf '%s\n' ""
+  printf '%s\n' "Registering quaid with MCP clients (Claude Code, Cursor) ..."
+  if ! "$_install_path" setup --register-mcp; then
+    printf '%s\n' "Warning: 'quaid setup --register-mcp' failed; wire MCP clients manually." >&2
+  fi
+}
+
 # --- Main execution ---
 
 main() {
@@ -285,6 +318,8 @@ main() {
   printf '%s\n' ""
   printf 'Installed quaid to %s\n' "$install_path"
 
+  register_runtime "$install_path"
+
   printf '%s\n' ""
   printf '%s\n' "── Rename notice ──────────────────────────────────────────────────────────────"
   printf '%s\n' "  If you previously used an older binary under a different name, this install"
@@ -294,7 +329,8 @@ main() {
   printf '%s\n' "    2. Replace old env vars in your shell profile with QUAID_DB, QUAID_MODEL,"
   printf '%s\n' "       QUAID_CHANNEL, QUAID_INSTALL_DIR, etc."
   printf '%s\n' "    3. Migrate your database: export with the old binary, then run:"
-  printf '%s\n' "         quaid init ~/.quaid/memory.db && quaid import <backup-dir/>"
+  printf '%s\n' "         quaid init ~/.quaid/memory.db"
+  printf '%s\n' "         quaid collection add backup <backup-dir>"
   printf '%s\n' "  See https://github.com/quaid-app/quaid for the full migration guide."
   printf '%s\n' "───────────────────────────────────────────────────────────────────────────────"
   printf '%s\n' ""
@@ -303,11 +339,14 @@ main() {
     print_manual_hints
   else
     if ! write_profile; then
+      # The binary is installed and smoke-tested; a missing profile line is not
+      # an install failure. Warn with manual recovery steps and exit 0 so
+      # curl|sh automation reports success.
       printf '%s\n' "" >&2
       printf '%s\n' "Warning: quaid was installed, but PATH/QUAID_DB were not persisted automatically." >&2
       print_manual_hints >&2
       print_sandboxed_hint >&2
-      return 1
+      return 0
     fi
   fi
 

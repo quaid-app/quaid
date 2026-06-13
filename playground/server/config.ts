@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlaygroundConfig } from "./types";
@@ -6,8 +5,10 @@ import type { PlaygroundConfig } from "./types";
 const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(serverDir, "..");
 
+// Default to a throwaway, in-repo database so the playground never reads or
+// writes the developer's real ~/.quaid/memory.db. Override with QUAID_DB.
 function defaultDbPath(): string {
-  return path.join(os.homedir(), ".quaid", "memory.db");
+  return path.join(rootDir, ".data", "memory.db");
 }
 
 function envFlag(name: string, defaultValue: boolean): boolean {

@@ -4,5 +4,6 @@ coverage/
 test-results/
 playwright-report/
 .quaid-profiles/
+.data/
 *.local
 *.log

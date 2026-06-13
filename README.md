@@ -81,7 +81,20 @@ quaid query "what decisions did we make last week"
 
 ## MCP Setup (Claude Code / Cursor / Windsurf)
 
-Add to your `.mcp.json`:
+The fastest path is to let Quaid wire the clients for you:
+
+```bash
+quaid setup --register-mcp           # merge into ~/.claude/mcp.json and ~/.cursor/mcp.json
+quaid setup --register-mcp --dry-run # preview the diff without writing
+```
+
+This parses each client config, merges an `mcpServers.quaid` entry that points
+at your resolved `QUAID_DB`, and preserves any servers you already have. Writes
+are atomic and a `.bak` of the previous file is kept. Restart the MCP client
+afterward so it picks up the new server. The one-line installer (below) runs
+this for you automatically unless `QUAID_NO_REGISTER=1` is set.
+
+If you prefer to edit by hand, add this to your `.mcp.json`:
 
 ```json
 {
@@ -109,7 +122,7 @@ The current published release (`v0.22.3`) exposes 24 MCP tools over stdio, graph
 curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/main/scripts/install.sh | sh
 ```
 
-Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the smaller binary that downloads embeddings on first use.
+Sets up `PATH` and `QUAID_DB`, initializes the database if it is missing, and registers Quaid with your MCP clients (`quaid setup --register-mcp`) — all automatically. Set `QUAID_NO_REGISTER=1` to skip the init/MCP step, or `QUAID_NO_PROFILE=1` to skip the shell-profile edit. Use `QUAID_CHANNEL=online` for the smaller binary that downloads embeddings on first use.
 
 ### Download a binary
 

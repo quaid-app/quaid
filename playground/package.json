@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "serve": "QUAID_PLAYGROUND_AUTO_ENABLE_EXTRACTION=1 QUAID_BIN=../target/release/quaid QUAID_DB=\"$HOME/.quaid/memory.db\" vite",
+    "serve": "QUAID_PLAYGROUND_AUTO_ENABLE_EXTRACTION=1 QUAID_BIN=../target/release/quaid QUAID_DB=\"$PWD/.data/memory.db\" vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",

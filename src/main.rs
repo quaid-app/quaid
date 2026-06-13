@@ -286,6 +286,17 @@ enum Commands {
         #[arg(long, requires = "http")]
         trust_loopback: bool,
     },
+    /// Onboarding helpers: wire Quaid into MCP clients, etc.
+    Setup {
+        /// Merge a `quaid` server entry into known MCP client configs
+        /// (~/.claude/mcp.json and ~/.cursor/mcp.json), preserving any
+        /// existing servers.
+        #[arg(long)]
+        register_mcp: bool,
+        /// Print the planned changes without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Background-daemon lifecycle: install, run, status, logs, etc.
     Daemon {
         #[command(subcommand)]
@@ -321,6 +332,11 @@ enum EarlyCommand {
     None,
     Init(String),
     Model(commands::model::ModelAction),
+    Setup {
+        register_mcp: bool,
+        dry_run: bool,
+        db_path: String,
+    },
     Version,
 }
 
@@ -333,6 +349,18 @@ fn early_command(cli: &Cli) -> EarlyCommand {
             EarlyCommand::Init(path.clone().unwrap_or_else(|| db_path.to_owned()))
         }
         Commands::Model { action } => EarlyCommand::Model(action.clone()),
+        Commands::Setup {
+            register_mcp,
+            dry_run,
+        } => {
+            let default_path = core::db::default_db_path_string();
+            let db_path = cli.db.clone().unwrap_or(default_path);
+            EarlyCommand::Setup {
+                register_mcp: *register_mcp,
+                dry_run: *dry_run,
+                db_path,
+            }
+        }
         _ => EarlyCommand::None,
     }
 }
@@ -365,6 +393,11 @@ async fn main() -> Result<()> {
         EarlyCommand::Version => return commands::version::run(),
         EarlyCommand::Init(path) => return commands::init::run(&path, &requested_model),
         EarlyCommand::Model(action) => return commands::model::run(action),
+        EarlyCommand::Setup {
+            register_mcp,
+            dry_run,
+            db_path,
+        } => return commands::setup::run(register_mcp, dry_run, &db_path),
         EarlyCommand::None => {}
     }
 
@@ -374,7 +407,10 @@ async fn main() -> Result<()> {
     let db = opened.conn;
 
     match cli.command {
-        Commands::Init { .. } | Commands::Model { .. } | Commands::Version => unreachable!(),
+        Commands::Init { .. }
+        | Commands::Model { .. }
+        | Commands::Setup { .. }
+        | Commands::Version => unreachable!(),
         Commands::Get { slug, namespace } => {
             commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)
         }

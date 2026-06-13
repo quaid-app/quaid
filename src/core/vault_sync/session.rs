@@ -266,20 +266,103 @@ fn try_promote_inner(conn: &Connection, session_id: &str) -> Result<bool, VaultS
     Ok(true)
 }
 
+/// Outcome of [`try_claim_daemon_session`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonSessionClaim {
+    /// The caller now owns the unique `daemon` slot; carries the
+    /// freshly registered `session_id`.
+    Claimed(String),
+    /// A live `daemon` already owns the slot; carries its snapshot so
+    /// the caller can report pid/host in its refusal message.
+    AlreadyRunning(ActiveSessionInfo),
+}
+
+/// Atomically claims the unique `daemon` session slot for this process.
+///
+/// Runs inside a single `BEGIN IMMEDIATE` transaction (mirroring
+/// [`try_promote_to_serve_host`]) that (a) sweeps stale rows via the
+/// pid-aware [`sweep_stale_sessions`], (b) probes any remaining
+/// heartbeat-live `daemon` row — a same-host row whose pid fails the
+/// kill-0 probe is the leftover of a SIGKILLed daemon and is deleted
+/// (together with its lease rows) so the service manager's replacement
+/// can start immediately instead of crash-looping until the row ages
+/// past `SESSION_LIVENESS_SECS` — and (c) registers the caller's
+/// `daemon` row when no live owner remains. The `BEGIN IMMEDIATE`
+/// closes the sweep→probe→register TOCTOU window between two
+/// concurrent daemon starts: exactly one claims, the other observes
+/// the winner's freshly inserted row.
+///
+/// Foreign-host rows are never pid-probed (liveness cannot be checked
+/// across hosts) and keep the pure heartbeat-window behaviour, as do
+/// all rows on platforms without a kill-0 probe.
+pub fn try_claim_daemon_session(conn: &Connection) -> Result<DaemonSessionClaim, VaultSyncError> {
+    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+
+    let result = try_claim_daemon_inner(conn);
+
+    match &result {
+        Ok(_) => {
+            if let Err(commit_err) = conn.execute_batch("COMMIT TRANSACTION") {
+                let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+                return Err(VaultSyncError::from(commit_err));
+            }
+        }
+        Err(_) => {
+            let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+        }
+    }
+
+    result
+}
+
+fn try_claim_daemon_inner(conn: &Connection) -> Result<DaemonSessionClaim, VaultSyncError> {
+    sweep_stale_sessions(conn)?;
+
+    if let Some(existing) = find_active_daemon_session(conn)? {
+        if existing.host == current_host() && pid_known_dead(existing.pid) {
+            // Fresh heartbeat but provably dead process: the row a
+            // SIGKILLed daemon leaves behind. Reap it here so the
+            // replacement start succeeds now rather than after the
+            // remainder of the liveness window.
+            eprintln!(
+                "WARN: daemon_session_reaped_dead_pid session_id={} pid={} host={}",
+                existing.session_id, existing.pid, existing.host
+            );
+            delete_session_rows(conn, &existing.session_id)?;
+        } else {
+            return Ok(DaemonSessionClaim::AlreadyRunning(existing));
+        }
+    }
+
+    let session_id = register_session(conn, SessionType::Daemon)?;
+    Ok(DaemonSessionClaim::Claimed(session_id))
+}
+
 /// Atomically removes a session and any owner / lease rows that
 /// referenced it so the session table and the lease columns on
 /// `collections` never drift out of sync.
 pub fn unregister_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
     let tx = conn.unchecked_transaction()?;
-    tx.execute(
+    delete_session_rows(&tx, session_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Deletes a session row together with the owner-lease rows that
+/// reference it. Statement bundle shared by [`unregister_session`]
+/// (which wraps it in its own transaction) and the dead-daemon reap
+/// inside [`try_claim_daemon_session`] (already inside its
+/// `BEGIN IMMEDIATE` transaction).
+fn delete_session_rows(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
+    conn.execute(
         "DELETE FROM collection_owners WHERE session_id = ?1",
         [session_id],
     )?;
-    tx.execute(
+    conn.execute(
         "DELETE FROM serve_sessions WHERE session_id = ?1",
         [session_id],
     )?;
-    tx.execute(
+    conn.execute(
         "UPDATE collections
          SET active_lease_session_id = CASE
                  WHEN active_lease_session_id = ?1 THEN NULL
@@ -293,7 +376,6 @@ pub fn unregister_session(conn: &Connection, session_id: &str) -> Result<(), Vau
          WHERE active_lease_session_id = ?1 OR restore_lease_session_id = ?1",
         [session_id],
     )?;
-    tx.commit()?;
     Ok(())
 }
 
@@ -381,5 +463,22 @@ fn pid_is_alive(pid: i64) -> bool {
 /// behaviour applies to every row.
 #[cfg(not(unix))]
 fn pid_is_alive(_pid: i64) -> bool {
+    false
+}
+
+/// Positive evidence of death, required before the dead-daemon reap in
+/// [`try_claim_daemon_session`] may delete a fresh-heartbeat row: on
+/// Unix the inverse of the kill-0 probe; elsewhere always `false` so a
+/// possibly-live daemon's row is never reaped without proof (unlike the
+/// sweep, which only handles rows that are already stale by time).
+#[cfg(unix)]
+fn pid_known_dead(pid: i64) -> bool {
+    !pid_is_alive(pid)
+}
+
+/// Non-Unix fallback for [`pid_known_dead`]: liveness cannot be probed,
+/// so death is never assumed.
+#[cfg(not(unix))]
+fn pid_known_dead(_pid: i64) -> bool {
     false
 }

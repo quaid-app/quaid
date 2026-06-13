@@ -28,9 +28,10 @@ use std::thread;
 use rusqlite::params;
 
 use quaid::core::vault_sync::{
-    find_active_daemon_session, find_active_runtime_host, heartbeat_session, register_cli_session,
-    register_session, start_daemon_runtime, start_serve_runtime, sweep_stale_sessions,
-    try_promote_to_serve_host, SessionType,
+    current_host, find_active_daemon_session, find_active_runtime_host, heartbeat_session,
+    register_cli_session, register_session, start_daemon_runtime, start_serve_runtime,
+    sweep_stale_sessions, try_claim_daemon_session, try_promote_to_serve_host, DaemonSessionClaim,
+    SessionType,
 };
 
 #[test]
@@ -452,6 +453,190 @@ fn start_serve_runtime_returns_transport_only_when_daemon_is_live() {
         .unwrap();
     assert_eq!(remaining_transport_rows, 0);
     assert_eq!(daemon_rows, 1);
+}
+
+/// A `daemon` row with a *fresh* heartbeat but a provably dead pid on
+/// this host is what a SIGKILLed daemon leaves behind. The claim must
+/// reap it and register the caller — otherwise the service manager's
+/// replacement crash-loops until the row ages past the 15s liveness
+/// window.
+#[cfg(unix)]
+#[test]
+fn try_claim_daemon_session_reaps_dead_pid_row_with_fresh_heartbeat() {
+    let conn = open_test_db();
+
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead_pid = i64::from(child.id());
+    child.wait().unwrap();
+
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, session_type, heartbeat_at)
+         VALUES ('dead-daemon', ?1, ?2, 'daemon', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        params![dead_pid, current_host()],
+    )
+    .unwrap();
+
+    let session_id = match try_claim_daemon_session(&conn).unwrap() {
+        DaemonSessionClaim::Claimed(session_id) => session_id,
+        DaemonSessionClaim::AlreadyRunning(info) => {
+            panic!("dead-pid fresh-heartbeat row must be reaped, got AlreadyRunning({info:?})")
+        }
+    };
+
+    let dead_remaining: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_id = 'dead-daemon'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(dead_remaining, 0, "dead daemon's row must be deleted");
+
+    let daemon_rows: Vec<String> = conn
+        .prepare("SELECT session_id FROM serve_sessions WHERE session_type = 'daemon'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(daemon_rows, vec![session_id]);
+}
+
+/// Rows the claim must *not* reap: a foreign-host row (pid liveness
+/// cannot be probed across hosts) and a live local pid. Both refuse
+/// the claim with the existing row's snapshot.
+#[test]
+fn try_claim_daemon_session_respects_foreign_host_and_live_local_rows() {
+    let conn = open_test_db();
+
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, session_type, heartbeat_at)
+         VALUES ('foreign-daemon', 1, 'definitely-not-this-host', 'daemon',
+                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        [],
+    )
+    .unwrap();
+    match try_claim_daemon_session(&conn).unwrap() {
+        DaemonSessionClaim::AlreadyRunning(info) => {
+            assert_eq!(info.session_id, "foreign-daemon");
+        }
+        DaemonSessionClaim::Claimed(id) => {
+            panic!("foreign-host fresh-heartbeat row must refuse the claim, got Claimed({id})")
+        }
+    }
+    conn.execute(
+        "DELETE FROM serve_sessions WHERE session_id = 'foreign-daemon'",
+        [],
+    )
+    .unwrap();
+
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, session_type, heartbeat_at)
+         VALUES ('live-local', ?1, ?2, 'daemon', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        params![i64::from(std::process::id()), current_host()],
+    )
+    .unwrap();
+    match try_claim_daemon_session(&conn).unwrap() {
+        DaemonSessionClaim::AlreadyRunning(info) => {
+            assert_eq!(info.session_id, "live-local");
+        }
+        DaemonSessionClaim::Claimed(id) => {
+            panic!("live local pid must refuse the claim, got Claimed({id})")
+        }
+    }
+}
+
+/// Full-path version of the dead-pid reap: `start_daemon_runtime`
+/// against a database whose `daemon` row points at a dead local pid
+/// with a fresh heartbeat must boot immediately instead of erroring
+/// with DaemonAlreadyRunningError for up to 15s.
+#[cfg(unix)]
+#[test]
+fn start_daemon_runtime_reaps_dead_pid_daemon_row_and_starts() {
+    let (_dir, db_path, conn) = fixtures::open_test_db_file();
+
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead_pid = i64::from(child.id());
+    child.wait().unwrap();
+
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, session_type, heartbeat_at)
+         VALUES ('sigkilled-daemon', ?1, ?2, 'daemon', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        params![dead_pid, current_host()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let runtime = start_daemon_runtime(db_path.clone()).unwrap();
+
+    let conn = quaid::core::db::open(&db_path).unwrap();
+    let dead_remaining: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_id = 'sigkilled-daemon'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(dead_remaining, 0);
+    let daemon_session: String = conn
+        .query_row(
+            "SELECT session_id FROM serve_sessions WHERE session_type = 'daemon'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(daemon_session, runtime.session_id);
+    drop(conn);
+
+    drop(runtime);
+}
+
+/// Two concurrent daemon starts against the same database must elect
+/// exactly one winner: the claim's `BEGIN IMMEDIATE` closes the old
+/// sweep→find→register TOCTOU where both could observe "no live
+/// daemon" and both register.
+#[test]
+fn start_daemon_runtime_concurrent_starts_elect_exactly_one_winner() {
+    let (_dir, db_path, conn) = fixtures::open_test_db_file();
+    drop(conn);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let spawn_start = |path: String, barrier: Arc<Barrier>| {
+        thread::spawn(move || {
+            barrier.wait();
+            start_daemon_runtime(path)
+        })
+    };
+    let t1 = spawn_start(db_path.clone(), Arc::clone(&barrier));
+    let t2 = spawn_start(db_path.clone(), Arc::clone(&barrier));
+
+    let results = [t1.join().unwrap(), t2.join().unwrap()];
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "exactly one concurrent daemon start may win"
+    );
+    for result in &results {
+        if let Err(error) = result {
+            assert!(
+                error.to_string().contains("DaemonAlreadyRunningError"),
+                "loser must observe the winner's row, got: {error}"
+            );
+        }
+    }
+
+    let conn = quaid::core::db::open(&db_path).unwrap();
+    let daemon_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM serve_sessions WHERE session_type = 'daemon'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(daemon_rows, 1);
+    drop(conn);
+
+    drop(results);
 }
 
 #[test]

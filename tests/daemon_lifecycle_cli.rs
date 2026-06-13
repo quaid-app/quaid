@@ -18,11 +18,53 @@ use std::process::{Command, Output};
 use quaid::core::db;
 use serde_json::Value;
 
+/// Stateful fake `launchctl`: `bootstrap` marks the unit loaded,
+/// `bootout` marks it unloaded (failing when it already is, like real
+/// launchd), `kickstart -k` fails on an unloaded unit, and `print`'s
+/// exit status reports load state. This is the contract that made the
+/// old kickstart-only `start()` fail after every `stop` — an
+/// unconditional `exit 0` stub could never catch that verb mismatch.
+#[cfg(target_os = "macos")]
+const STATEFUL_LAUNCHCTL_STUB: &str = r#"#!/bin/sh
+printf 'launchctl:%s\n' "$*" >> "$FAKE_PLATFORM_LOG"
+state() { cat "$FAKE_LAUNCHCTL_STATE" 2>/dev/null || echo unloaded; }
+case "$1" in
+  print)
+    [ "$(state)" = "loaded" ] && exit 0
+    echo "Could not find service \"app.quaid.daemon\" in domain for user gui" >&2
+    exit 113
+    ;;
+  bootstrap)
+    if [ "$(state)" = "loaded" ]; then
+      echo "Bootstrap failed: 17: File exists" >&2
+      exit 17
+    fi
+    echo loaded > "$FAKE_LAUNCHCTL_STATE"
+    exit 0
+    ;;
+  bootout)
+    if [ "$(state)" = "loaded" ]; then
+      echo unloaded > "$FAKE_LAUNCHCTL_STATE"
+      exit 0
+    fi
+    echo "Boot-out failed: 3: No such process" >&2
+    exit 3
+    ;;
+  kickstart)
+    [ "$(state)" = "loaded" ] && exit 0
+    echo "Could not find service \"app.quaid.daemon\" in domain for user gui" >&2
+    exit 113
+    ;;
+esac
+exit 0
+"#;
+
 struct FakePlatform {
     _dir: tempfile::TempDir,
     home_dir: PathBuf,
     path_env: OsString,
     log_path: PathBuf,
+    state_path: PathBuf,
 }
 
 impl FakePlatform {
@@ -34,11 +76,9 @@ impl FakePlatform {
         fs::create_dir_all(&bin_dir).unwrap();
 
         let log_path = dir.path().join("platform.log");
+        let state_path = dir.path().join("launchctl.state");
         #[cfg(target_os = "macos")]
-        write_fake_command(
-            &bin_dir.join("launchctl"),
-            "#!/bin/sh\nprintf 'launchctl:%s\\n' \"$*\" >> \"$FAKE_PLATFORM_LOG\"\nexit 0\n",
-        );
+        write_fake_command(&bin_dir.join("launchctl"), STATEFUL_LAUNCHCTL_STUB);
         #[cfg(target_os = "linux")]
         {
             write_fake_command(
@@ -61,6 +101,7 @@ impl FakePlatform {
             home_dir,
             path_env,
             log_path,
+            state_path,
         }
     }
 
@@ -72,6 +113,7 @@ impl FakePlatform {
             .env("USERPROFILE", &self.home_dir)
             .env("PATH", &self.path_env)
             .env("FAKE_PLATFORM_LOG", &self.log_path)
+            .env("FAKE_LAUNCHCTL_STATE", &self.state_path)
             .arg("--db")
             .arg(db_path)
             .args(args);
@@ -216,7 +258,23 @@ fn daemon_start_stop_restart_and_logs_dispatch_to_platform() {
     let log = platform.log();
     #[cfg(target_os = "macos")]
     {
-        assert!(log.contains("launchctl:kickstart -k"));
+        // install loaded the unit (bootstrap #1); `start` saw it loaded
+        // (print) and kickstarted; `stop` booted it out; `restart` =
+        // stop (bootout on an unloaded unit fails and is ignored) +
+        // start, which saw the unit unloaded and bootstrapped again
+        // (#2). The pre-fix kickstart-only start fails that last arm
+        // against this stateful stub, which is the macOS restart bug.
+        assert!(log.contains("launchctl:print"));
+        assert_eq!(
+            log.matches("launchctl:kickstart -k").count(),
+            1,
+            "only the loaded-state start may kickstart"
+        );
+        assert_eq!(
+            log.matches("launchctl:bootstrap").count(),
+            2,
+            "install and the restart-after-stop start must both bootstrap"
+        );
         assert!(log.contains("launchctl:bootout"));
     }
     #[cfg(target_os = "linux")]

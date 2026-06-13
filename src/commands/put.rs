@@ -175,7 +175,9 @@ fn put_from_cli_string(
     // transactional, so this is safe even if a daemon races us (review #10).
     match vault_sync::drain_embedding_queue(db) {
         Ok(drained) if drained > 0 => {
-            println!("Embedded {drained} pending page(s)");
+            // Progress note, not result data — keep it off stdout so `--json`
+            // (and plain) put output stays a clean, parseable payload.
+            eprintln!("Embedded {drained} pending page(s)");
         }
         Ok(_) => {}
         Err(error) => {

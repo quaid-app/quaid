@@ -14,9 +14,9 @@ mod common_subprocess;
 use filetime::{set_file_mtime, FileTime};
 use quaid::core::{
     conversation::model_lifecycle::{
-        cache_dir_for_alias, cached_model_status, download_model, inspect_model_caches,
-        remove_model_cache_entries, resolve_model_alias, ModelCacheState, NoopProgressReporter,
-        ProgressReporter,
+        cache_dir_for_alias, cached_model_status, download_model, download_model_pinned,
+        inspect_model_caches, remove_model_cache_entries, resolve_model_alias, ModelCacheState,
+        NoopProgressReporter, ProgressReporter,
     },
     db, inference,
 };
@@ -87,6 +87,7 @@ struct SeedCacheOnFirstDownloadReporter {
     cache_dir: PathBuf,
     requested_alias: String,
     repo_id: String,
+    revision: Option<String>,
     files: HashMap<String, MockFile>,
     seeded: bool,
 }
@@ -100,6 +101,7 @@ impl ProgressReporter for SeedCacheOnFirstDownloadReporter {
             &self.cache_dir,
             &self.requested_alias,
             &self.repo_id,
+            self.revision.as_deref(),
             &self.files,
         );
         self.seeded = true;
@@ -299,6 +301,7 @@ fn seed_valid_cache(
     cache_dir: &Path,
     requested_alias: &str,
     repo_id: &str,
+    revision: Option<&str>,
     files: &HashMap<String, MockFile>,
 ) {
     std::fs::create_dir_all(cache_dir).expect("create seeded cache dir");
@@ -317,7 +320,7 @@ fn seed_valid_cache(
     let manifest = serde_json::json!({
         "requested_alias": requested_alias,
         "repo_id": repo_id,
-        "revision": serde_json::Value::Null,
+        "revision": revision.map_or(serde_json::Value::Null, |r| serde_json::Value::String(r.to_owned())),
         "files": manifest_files
     });
     std::fs::write(
@@ -376,7 +379,8 @@ fn download_model_installs_manifest_and_recovers_stale_cache() {
     ]);
 
     let mut reporter = NoopProgressReporter;
-    let cache_dir = download_model(repo_id, &mut reporter).expect("download model");
+    let cache_dir =
+        download_model_pinned(repo_id, Some(revision), &mut reporter).expect("download model");
 
     assert_eq!(cache_dir, stale_cache_dir);
     assert!(cache_dir.join("manifest.json").is_file());
@@ -416,7 +420,8 @@ fn download_model_rejects_bad_integrity_and_cleans_partial_cache() {
     ]);
 
     let mut reporter = NoopProgressReporter;
-    let error = download_model(repo_id, &mut reporter).expect_err("integrity failure");
+    let error = download_model_pinned(repo_id, Some(revision), &mut reporter)
+        .expect_err("integrity failure");
     let message = error.to_string();
     assert!(message.contains("integrity check failed"));
 
@@ -493,11 +498,12 @@ fn download_model_succeeds_when_another_writer_populates_the_cache_first() {
         cache_dir: cache_dir.clone(),
         requested_alias: repo_id.to_owned(),
         repo_id: repo_id.to_owned(),
+        revision: Some(revision.to_owned()),
         files,
         seeded: false,
     };
-    let result =
-        download_model(repo_id, &mut reporter).expect("download should treat race as success");
+    let result = download_model_pinned(repo_id, Some(revision), &mut reporter)
+        .expect("download should treat race as success");
     assert_eq!(result, cache_dir);
 
     let status = cached_model_status(repo_id).expect("cache status");
@@ -564,7 +570,8 @@ fn download_model_scavenges_stale_download_dirs_without_touching_recent_ones() {
     ]);
 
     let mut reporter = NoopProgressReporter;
-    let _cache_dir = download_model(repo_id, &mut reporter).expect("download model");
+    let _cache_dir =
+        download_model_pinned(repo_id, Some(revision), &mut reporter).expect("download model");
 
     assert!(!stale_dir.exists(), "stale dir should be scavenged");
     assert!(recent_dir.exists(), "recent dir should be preserved");
@@ -689,7 +696,18 @@ fn cli_model_pull_caches_without_flipping_extraction_flag() {
             dir.path().join("cache").display().to_string(),
         ),
     ];
-    let output = run_quaid_with_env(&db_path, &["model", "pull", repo_id], &envs);
+    let output = run_quaid_with_env(
+        &db_path,
+        &[
+            "--allow-unverified-model",
+            "--model-revision",
+            revision,
+            "model",
+            "pull",
+            repo_id,
+        ],
+        &envs,
+    );
     assert!(
         output.status.success(),
         "stdout: {}\nstderr: {}",
@@ -812,7 +830,17 @@ fn cli_extraction_enable_then_disable_updates_flag() {
             dir.path().join("cache").display().to_string(),
         ),
     ];
-    let enable_output = run_quaid_with_env(&db_path, &["extraction", "enable"], &envs);
+    let enable_output = run_quaid_with_env(
+        &db_path,
+        &[
+            "--allow-unverified-model",
+            "--model-revision",
+            revision,
+            "extraction",
+            "enable",
+        ],
+        &envs,
+    );
     assert!(
         enable_output.status.success(),
         "stdout: {}\nstderr: {}",

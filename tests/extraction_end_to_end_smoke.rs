@@ -210,7 +210,8 @@ fn turn_capture_close_extract_fact_and_search_smoke() {
             include_superseded: Some(false),
         })
         .unwrap();
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&search)).unwrap();
+    let search_envelope: serde_json::Value = serde_json::from_str(&extract_text(&search)).unwrap();
+    let rows = search_envelope["results"].as_array().cloned().unwrap();
     assert!(
         rows.iter().any(|row| {
             row["summary"]

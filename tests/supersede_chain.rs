@@ -60,6 +60,14 @@ fn extract_text(result: &rmcp::model::CallToolResult) -> String {
         .join("")
 }
 
+/// Extracts the `results` array from a `memory_query` / `memory_search`
+/// response envelope (the envelope also carries a `pending_embedding_jobs`
+/// staleness hint).
+fn search_results(result: &rmcp::model::CallToolResult) -> Vec<Value> {
+    let envelope: Value = serde_json::from_str(&extract_text(result)).unwrap();
+    envelope["results"].as_array().cloned().unwrap_or_default()
+}
+
 fn put_page(server: &QuaidServer, slug: &str, content: &str, expected_version: Option<i64>) {
     server
         .memory_put(MemoryPutInput {
@@ -219,7 +227,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
         None,
     );
 
-    let default_search: Vec<Value> = serde_json::from_str(&extract_text(
+    let default_search: Vec<Value> = search_results(
         &server
             .memory_search(MemorySearchInput {
                 query: "shared retrieval marker".to_string(),
@@ -230,9 +238,8 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: None,
             })
             .unwrap(),
-    ))
-    .unwrap();
-    let historical_search: Vec<Value> = serde_json::from_str(&extract_text(
+    );
+    let historical_search: Vec<Value> = search_results(
         &server
             .memory_search(MemorySearchInput {
                 query: "shared retrieval marker".to_string(),
@@ -243,8 +250,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: Some(true),
             })
             .unwrap(),
-    ))
-    .unwrap();
+    );
     assert_eq!(slugs(&default_search), vec!["default::facts/c".to_string()]);
     assert_eq!(
         slugs(&historical_search),
@@ -255,7 +261,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
         ]
     );
 
-    let default_query: Vec<Value> = serde_json::from_str(&extract_text(
+    let default_query: Vec<Value> = search_results(
         &server
             .memory_query(MemoryQueryInput {
                 query: "shared retrieval marker".to_string(),
@@ -267,9 +273,8 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: None,
             })
             .unwrap(),
-    ))
-    .unwrap();
-    let historical_query: Vec<Value> = serde_json::from_str(&extract_text(
+    );
+    let historical_query: Vec<Value> = search_results(
         &server
             .memory_query(MemoryQueryInput {
                 query: "shared retrieval marker".to_string(),
@@ -281,8 +286,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: Some(true),
             })
             .unwrap(),
-    ))
-    .unwrap();
+    );
     assert_eq!(slugs(&default_query), vec!["default::facts/c".to_string()]);
     assert_eq!(
         slugs(&historical_query),

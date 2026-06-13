@@ -370,6 +370,25 @@ fn check_embeddings(db: &Connection, violations: &mut Vec<Violation>) -> Result<
         });
     }
 
+    // 5. Orphaned vec rows: vec0 entries with no backing page_embeddings join
+    // row. These accumulate when a page is deleted without dropping its vectors
+    // (the vec0 table does not cascade with the FK page delete — review #10).
+    let orphan_sql = format!(
+        "SELECT COUNT(*) FROM {vec_table} v \
+         WHERE NOT EXISTS (SELECT 1 FROM page_embeddings pe WHERE pe.vec_rowid = v.rowid)"
+    );
+    let vec_orphan_count: i64 = db.query_row(&orphan_sql, [], |row| row.get(0))?;
+    if vec_orphan_count > 0 {
+        violations.push(Violation {
+            check: "embeddings".into(),
+            violation_type: "vec_orphans".into(),
+            details: serde_json::json!({
+                "orphan_count": vec_orphan_count,
+                "vec_table": vec_table.as_str(),
+            }),
+        });
+    }
+
     Ok(())
 }
 

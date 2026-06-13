@@ -154,7 +154,8 @@ fn mcp_exact_slug_query_logs_no_gap() {
     let result = server
         .memory_query(memory_query_input("notes/target"))
         .unwrap();
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = envelope["results"].as_array().cloned().unwrap_or_default();
     assert_eq!(rows.len(), 1, "slug lookup must hit");
 
     assert!(
@@ -186,7 +187,8 @@ fn rrf_strong_single_result_logs_no_gap_and_empty_results_do() {
     let result = server
         .memory_query(memory_query_input("widget assembly"))
         .unwrap();
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = envelope["results"].as_array().cloned().unwrap_or_default();
     assert_eq!(rows.len(), 1);
     let top_score = rows[0]["score"].as_f64().unwrap();
     assert!(
@@ -202,7 +204,8 @@ fn rrf_strong_single_result_logs_no_gap_and_empty_results_do() {
     let result = server
         .memory_query(memory_query_input("entirely unknown moon colony"))
         .unwrap();
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+    let rows = envelope["results"].as_array().cloned().unwrap_or_default();
     assert!(rows.is_empty());
 
     let gaps = list_gaps_json(&server);

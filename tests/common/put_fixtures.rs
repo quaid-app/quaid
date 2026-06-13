@@ -17,10 +17,20 @@
 //! they reference private items and per the test-organization spec
 //! visibility cannot be widened.
 
+use std::path::PathBuf;
+
 use quaid::core::db;
 use rusqlite::Connection;
 
 pub fn open_test_db() -> Connection {
+    open_test_db_with_path().0
+}
+
+/// Open an on-disk test database (in a leaked tempdir) and return both the
+/// connection and the database path, so callers can open additional
+/// connections to the same file and exercise cross-connection write
+/// contention.
+pub fn open_test_db_with_path() -> (Connection, PathBuf) {
     let dir = tempfile::TempDir::new().unwrap();
     #[cfg(unix)]
     {
@@ -43,7 +53,12 @@ pub fn open_test_db() -> Connection {
     )
     .unwrap();
     std::mem::forget(dir);
-    conn
+    (conn, db_path)
+}
+
+/// Open an additional connection to an already-initialized test database.
+pub fn reopen_test_db(db_path: &std::path::Path) -> Connection {
+    db::open(db_path.to_str().unwrap()).unwrap()
 }
 
 pub fn active_raw_import_count_for_slug(conn: &Connection, slug: &str) -> i64 {

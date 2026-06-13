@@ -2777,7 +2777,7 @@ fn apply_reingest(
     }
 
     if let Some((page_id, _)) = current_page.as_ref() {
-        let prior_page = crate::commands::get::get_page_by_key(conn, collection_id, &parsed.slug)
+        let prior_page = crate::core::pages::get_page_by_key(conn, collection_id, &parsed.slug)
             .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?;
         let edited_page = EditedPage {
             slug: parsed.slug.clone(),

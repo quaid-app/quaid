@@ -13,6 +13,16 @@ mod common_reconciler_fixtures;
 
 use common_reconciler_fixtures::*;
 
+// PIN JUSTIFICATION: the safety pipeline's *internal* phase ordering (drift
+// capture → stability proof → pre-destruction fence → fresh-connection dirty
+// recheck) and the no-mount wrapper's closure wiring are fd/mount-verifier
+// seams that cannot be observed from the public restore/remap API — the
+// behavioural restore/remap tests (`tests/vault_sync_restore.rs`,
+// `tests/vault_sync_remap.rs`) prove the *outcome* (drift refusal, new-root
+// verification, fail-closed halts) but not the relative ordering of these
+// private phases. These two source pins guard that ordering against a silent
+// refactor that would reorder the fence after the dirty recheck.
+
 #[test]
 fn remap_safety_pipeline_wrapper_source_skips_mount_verifier_only() {
     let source = production_reconciler_source();
@@ -26,8 +36,10 @@ fn remap_safety_pipeline_wrapper_source_skips_mount_verifier_only() {
     let snippet = &source[start..end];
 
     assert!(
-        snippet.contains("run_restore_remap_safety_pipeline_inner(conn, request, |_| Ok(()), || Ok(()))"),
-        "the no-mount wrapper must reuse the shared safety pipeline and only skip the mount verifier"
+        snippet.contains(
+            "run_restore_remap_safety_pipeline_inner(conn, request, |_| Ok(()), || Ok(()))"
+        ),
+        "the no-mount wrapper must reuse the shared safety pipeline with a no-op mount verifier"
     );
 }
 
@@ -38,7 +50,7 @@ fn remap_safety_pipeline_source_keeps_phase_order_before_dirty_recheck() {
         .find("fn run_restore_remap_safety_pipeline_inner")
         .expect("shared restore/remap safety pipeline must remain present");
     let end = source[start..]
-        .find("pub fn run_restore_remap_safety_pipeline(")
+        .find("pub(crate) fn run_restore_remap_safety_pipeline_without_mount_check(")
         .map(|offset| start + offset)
         .expect("shared restore/remap safety wrapper must remain present");
     let snippet = &source[start..end];
@@ -60,6 +72,13 @@ fn remap_safety_pipeline_source_keeps_phase_order_before_dirty_recheck() {
     );
 }
 
+// PIN JUSTIFICATION: this pins the *symlink-safety mechanism* — fd-relative
+// NOFOLLOW reads (`OFlags::NOFOLLOW`, `stat_at_nofollow`, `walk_to_parent`)
+// rather than path-based stat/hash that follows symlinks. The security
+// property (a symlinked audit path is not followed) is impossible to assert
+// from a unit test without racing a TOCTOU symlink swap against the live
+// audit; the flag choice itself is the load-bearing invariant, so it stays a
+// source pin per the established `tests/cli_put_source_invariants.rs` pattern.
 #[test]
 fn scheduled_full_hash_audit_source_uses_nofollow_fd_relative_reads() {
     let source = production_reconciler_source();
@@ -93,24 +112,19 @@ fn scheduled_full_hash_audit_source_uses_nofollow_fd_relative_reads() {
     );
 }
 
-#[test]
-fn capture_phase1_drift_source_refuses_remap_on_material_changes() {
-    let source = production_reconciler_source();
-    let start = source.find("fn capture_phase1_drift(").unwrap();
-    let end = source[start..]
-        .find("fn run_phase2_stability_check")
-        .map(|offset| start + offset)
-        .unwrap();
-    let snippet = &source[start..end];
+// NOTE: the remap-drift-refusal source pin that used to live here was deleted.
+// Its property — Phase 1 fails closed with `RemapDriftConflictError` when
+// old-root drift would otherwise be silently lost — is now fully driven
+// behaviourally by `remap_collection_refuses_phase1_drift_until_new_root_catches_up`
+// in `tests/vault_sync_remap.rs`, which mutates the old root mid-remap and
+// asserts the typed error plus the preserved drift in `raw_imports`.
 
-    assert!(
-        snippet.contains("RestoreRemapOperation::Remap if summary.has_material_changes()")
-            && snippet.contains("ERROR: remap_drift_refused")
-            && snippet.contains("ReconcileError::RemapDriftConflictError"),
-        "Phase 1 remap capture must fail closed when old-root drift would otherwise be lost"
-    );
-}
-
+// PIN JUSTIFICATION: the *restore* branch of Phase 1 (as opposed to remap)
+// adopts old-root drift rather than refusing it, and the only externally
+// observable signal of that decision is a `WARN: restore_drift_captured` log
+// line (the page contents converge either way, so a behavioural assert cannot
+// distinguish "captured" from "no drift"). This pin guards that the restore
+// branch keeps capturing-without-refusing.
 #[test]
 fn capture_phase1_drift_source_logs_restore_capture_without_refusal() {
     let source = production_reconciler_source();
@@ -128,6 +142,11 @@ fn capture_phase1_drift_source_logs_restore_capture_without_refusal() {
     );
 }
 
+// PIN JUSTIFICATION: the authorization match arms bind both remap full-hash
+// modes to an active owner lease. Driving the *negative* case behaviourally
+// (a remap full-hash attempted without the active lease) would require
+// fabricating an inconsistent owner-lease/state combination that the rest of
+// the runtime refuses to produce, so the binding stays a source pin.
 #[test]
 fn authorize_full_hash_source_requires_active_lease_for_remap_modes() {
     let source = production_reconciler_source();

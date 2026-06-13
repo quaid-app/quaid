@@ -1197,7 +1197,14 @@ fn uuid_migration_preflight(
     })
 }
 
+// The read-only-mount verifier is retained for its behavioural inline tests
+// (`verify_read_only_mount_rejects_writable_mounts` and the Windows fail-closed
+// path); its only former production caller — the unused
+// `run_restore_remap_safety_pipeline` wrapper — was deleted, so flag it
+// `allow(dead_code)` outside test builds rather than re-introducing dead public
+// surface just to keep a caller.
 #[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
 fn verify_read_only_mount(collection: &Collection) -> Result<(), ReconcileError> {
     use rustix::fs::{fstatvfs, StatVfsMountFlags};
 
@@ -1218,6 +1225,7 @@ fn verify_read_only_mount(collection: &Collection) -> Result<(), ReconcileError>
 }
 
 #[cfg(not(unix))]
+#[cfg_attr(not(test), allow(dead_code))]
 fn verify_read_only_mount(collection: &Collection) -> Result<(), ReconcileError> {
     Err(ReconcileError::Other(format!(
         "restore/remap safety checks are not supported on Windows for collection={}",
@@ -1425,16 +1433,6 @@ where
         stability_retries: retries,
         final_snapshot_files: stable_snapshot.len(),
     })
-}
-
-/// Run the drift-capture and stability-proof pipeline that gates a restore
-/// or remap-root, verifying the recovery root is mounted read-only and that
-/// two consecutive walks observe identical state before reporting success.
-pub fn run_restore_remap_safety_pipeline(
-    conn: &Connection,
-    request: &RestoreRemapSafetyRequest<'_>,
-) -> Result<RestoreRemapSafetyOutcome, ReconcileError> {
-    run_restore_remap_safety_pipeline_inner(conn, request, verify_read_only_mount, || Ok(()))
 }
 
 pub(crate) fn run_restore_remap_safety_pipeline_without_mount_check(

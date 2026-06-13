@@ -74,6 +74,13 @@ fn verify_remap_root_rejects_invalid_quaidignore_in_new_root() {
 }
 
 #[cfg(unix)]
+// PIN JUSTIFICATION: online remap must *not* run the attach/full-hash pass
+// inline (it only flips DB state + resets `file_state` under the acked owner
+// lease) and must hand the attach off to exactly one RCRT arm. This is a
+// cross-function handoff between `remap_collection` and `run_rcrt_pass` driven
+// by a live serve runtime; reproducing it behaviourally needs a full
+// daemon-owned online remap with watcher acks, which the offline behavioural
+// remap tests cannot exercise. The pin guards the inline/deferred split.
 #[test]
 fn remap_online_source_defers_attach_to_rcrt_and_remap_attach_reason_appears_once() {
     let source = production_vault_sync_source();
@@ -622,6 +629,11 @@ fn verify_remap_root_reports_mismatched_count_for_duplicate_uuid_candidates() {
     ));
 }
 
+// PIN JUSTIFICATION: `verify_remap_root` fences the new-root tree before and
+// after matching and fails closed with `NewRootUnstableError` if the fence
+// changed mid-flight. Like `take_tree_fence_source_uses_full_stat_tuple`, the
+// guarded property is a TOCTOU window with no public injection seam, so the
+// before/after fence wiring stays a source pin.
 #[test]
 fn verify_remap_root_source_uses_before_and_after_tree_fences() {
     let source = production_vault_sync_source();
@@ -643,30 +655,22 @@ fn verify_remap_root_source_uses_before_and_after_tree_fences() {
     );
 }
 
-#[test]
-fn load_new_root_files_source_applies_new_root_ignore_matcher() {
-    let source = production_vault_sync_source();
-    let start = source.find("fn load_new_root_files(").unwrap();
-    let end = source[start..]
-        .find("fn resolve_page_matches(")
-        .map(|offset| start + offset)
-        .unwrap();
-    let snippet = &source[start..end];
+// NOTE: two source pins were deleted from here —
+// `load_new_root_files_source_applies_new_root_ignore_matcher` and
+// `walk_tree_source_skips_symlinked_entries`. Both properties are now driven
+// end-to-end through the public `verify_remap_root` API:
+// `verify_remap_root_uses_unique_hash_fallback_and_ignores_quaidignore_patterns`
+// proves `.quaidignore`-matched files are excluded from the extra-file count,
+// `verify_remap_root_ignores_non_markdown_files` proves the Markdown gate, and
+// `verify_remap_root_skips_symlinked_entries_in_new_root` proves the symlink
+// skip — each asserting `extra_files == 0`, which only holds if the source
+// invariants hold.
 
-    assert!(
-        snippet.contains("let ignore_globset = build_new_root_ignore_globset(root)?;"),
-        "load_new_root_files must build a fresh ignore matcher from the remap root before counting files"
-    );
-    assert!(
-        snippet.contains("if ignore_globset.is_match(relative_path) {"),
-        "load_new_root_files must exclude .quaidignore-matched files from remap verification counts"
-    );
-    assert!(
-        snippet.contains("if !is_markdown_file(relative_path) {"),
-        "load_new_root_files must reuse the reconciler's Markdown gate so Phase 4 extra counts stay in parity"
-    );
-}
-
+// PIN JUSTIFICATION: `resolve_page_matches` must funnel through the shared
+// `resolve_page_identity` helper (uuid-then-hash) rather than re-implementing
+// matching. The behavioural remap tests prove correct *resolution*, but not
+// that it reuses the canonical helper; this pin guards against a divergent
+// bespoke matcher drifting from the reconciler's identity rules.
 #[test]
 fn resolve_page_matches_source_uses_canonical_resolver_helper() {
     let source = production_vault_sync_source();
@@ -683,6 +687,12 @@ fn resolve_page_matches_source_uses_canonical_resolver_helper() {
     );
 }
 
+// PIN JUSTIFICATION: the tree fence must capture mtime+ctime+inode (the full
+// stat tuple), not just size, so a same-size atomic-replace mid-verification
+// is detected. Asserting this behaviourally would require winning a race to
+// swap a file between the two fence walks within `verify_remap_root` — a
+// TOCTOU window with no public injection seam — so the stat-tuple composition
+// stays a source pin.
 #[test]
 fn take_tree_fence_source_uses_full_stat_tuple() {
     let source = production_vault_sync_source();
@@ -694,23 +704,16 @@ fn take_tree_fence_source_uses_full_stat_tuple() {
     );
 }
 
-#[test]
-fn walk_tree_source_skips_symlinked_entries() {
-    let source = production_vault_sync_source();
-    let start = source.find("fn walk_tree(").unwrap();
-    let end = source[start..]
-        .find("fn path_string(")
-        .map(|offset| start + offset)
-        .unwrap();
-    let snippet = &source[start..end];
-
-    assert!(
-        snippet.contains("let file_type = entry.file_type()?;")
-            && snippet.contains("if file_type.is_symlink() {"),
-        "Phase 4 tree walks must inspect entry file types without following symlinks"
-    );
-}
-
+// PIN JUSTIFICATION: the following four pins guard the *relative ordering* of
+// private phases inside `remap_collection` — safety pipeline before new-root
+// verification, exact-ack before the safety pipeline (online), new-root
+// verification before the `root_path` UPDATE, and inline short-lived-lease
+// attach (offline). Each ordering is a fail-closed safety boundary (capture
+// drift under the owner lease before trusting the new tree), but the steps
+// share inputs and converge on the same end state, so the public remap API
+// cannot observe their interleaving. They remain source pins per the
+// `tests/cli_put_source_invariants.rs` ordering-seam pattern; the behavioural
+// remap tests above prove the end-to-end outcomes.
 #[test]
 fn remap_source_runs_safety_pipeline_before_new_root_verification() {
     let source = production_vault_sync_source();

@@ -332,7 +332,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "blocked on task 5.4d/5.4g: ingest write path does not rotate raw_imports yet"]
     fn ingest_force_reingest_keeps_exactly_one_active_raw_import_row_for_latest_bytes() {
         let conn = open_test_db();
         let dir = tempfile::TempDir::new().unwrap();

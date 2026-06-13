@@ -9,11 +9,13 @@
 //! documented "manual setup" message.
 //!
 //! Module layout:
-//! - `launchd` (macOS only) — plist generator, `launchctl` wrappers
+//! - `launchd` (macOS at runtime; compiled on all Unix so the
+//!   `launchctl` state machine stays covered by PATH-stubbed
+//!   integration tests on Linux CI) — plist generator, `launchctl` wrappers
 //! - `systemd` (Linux only) — unit generator, `systemctl --user` wrappers
 //! - [`UnitArgs`] — the shared argument shape both generators consume
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub mod launchd;
 #[cfg(target_os = "linux")]
 pub mod systemd;

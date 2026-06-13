@@ -7,7 +7,7 @@
 //! without relying on `os_log` subsystem registration.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{argv, home_dir, PlatformError, UnitArgs, UnitStatus, DAEMON_LABEL};
@@ -127,20 +127,7 @@ pub fn install(args: &UnitArgs) -> Result<(), PlatformError> {
 
     fs::write(&path, plist_text)?;
 
-    let domain = format!("gui/{}", current_uid());
-    let output = Command::new("launchctl")
-        .arg("bootstrap")
-        .arg(&domain)
-        .arg(&path)
-        .output()?;
-    if !output.status.success() {
-        return Err(PlatformError::CommandFailed {
-            command: format!("launchctl bootstrap {} {}", domain, path.display()),
-            status: output.status.code().unwrap_or(-1),
-            stderr: truncate_stderr(&output.stderr),
-        });
-    }
-    Ok(())
+    launchctl_bootstrap(&path)
 }
 
 /// `launchctl bootout` and delete the plist file. Idempotent: returns
@@ -175,9 +162,30 @@ fn launchctl_bootout() -> Result<(), PlatformError> {
     Ok(())
 }
 
-/// `launchctl kickstart -k <gui/uid/Label>`. Fails if the unit isn't
-/// installed (caller should check via [`status`] first).
-pub fn start() -> Result<(), PlatformError> {
+/// `launchctl bootstrap gui/<uid> <plist>` — loads the unit into the
+/// user's launchd domain. Shared by [`install`] (fresh plist) and the
+/// not-loaded branch of [`start`] (re-load after `stop`'s bootout).
+fn launchctl_bootstrap(plist: &Path) -> Result<(), PlatformError> {
+    let domain = format!("gui/{}", current_uid());
+    let output = Command::new("launchctl")
+        .arg("bootstrap")
+        .arg(&domain)
+        .arg(plist)
+        .output()?;
+    if !output.status.success() {
+        return Err(PlatformError::CommandFailed {
+            command: format!("launchctl bootstrap {} {}", domain, plist.display()),
+            status: output.status.code().unwrap_or(-1),
+            stderr: truncate_stderr(&output.stderr),
+        });
+    }
+    Ok(())
+}
+
+/// `launchctl kickstart -k <gui/uid/Label>` — (re)starts a unit that is
+/// already loaded in the domain. Errors on an unloaded unit, which is
+/// why [`start`] probes load state first.
+fn launchctl_kickstart() -> Result<(), PlatformError> {
     let domain = format!("gui/{}", current_uid());
     let target = format!("{}/{}", domain, DAEMON_LABEL);
     let output = Command::new("launchctl")
@@ -193,6 +201,34 @@ pub fn start() -> Result<(), PlatformError> {
         });
     }
     Ok(())
+}
+
+/// Probes whether the unit is loaded in the `gui/<uid>` domain by
+/// branching on the exit status of `launchctl print gui/<uid>/<label>`
+/// (0 iff loaded). Exit-status branching, not error-string parsing:
+/// launchctl's messages vary across macOS versions but the probe's
+/// exit status does not.
+fn service_is_loaded() -> Result<bool, PlatformError> {
+    let target = format!("gui/{}/{}", current_uid(), DAEMON_LABEL);
+    let output = Command::new("launchctl")
+        .arg("print")
+        .arg(&target)
+        .output()?;
+    Ok(output.status.success())
+}
+
+/// Start the daemon, state-aware: when the unit is already loaded,
+/// `launchctl kickstart -k` (re)starts it; when it is not loaded — the
+/// state [`stop`]'s `bootout` leaves behind — `launchctl bootstrap` the
+/// on-disk plist instead. `kickstart` errors with "Could not find
+/// service" on an unloaded unit, which is exactly why the old
+/// kickstart-only `start` failed after every `stop` and made
+/// `daemon restart` (stop + start) fail unconditionally on macOS.
+pub fn start() -> Result<(), PlatformError> {
+    if service_is_loaded()? {
+        return launchctl_kickstart();
+    }
+    launchctl_bootstrap(&plist_path()?)
 }
 
 /// Stop the daemon via `launchctl bootout`. Returns `Ok(())` even if the

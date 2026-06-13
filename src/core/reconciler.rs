@@ -2911,6 +2911,41 @@ fn apply_reingest(
         (tx.last_insert_rowid(), true)
     };
 
+    // Stop-the-bleed supersede wiring (#135): retire the prior head exactly
+    // as the synchronous `quaid ingest` path does (src/commands/ingest.rs),
+    // so a watcher-ingested fact whose `supersedes:` frontmatter names a
+    // prior page doesn't leave two live heads in the same (kind, key)
+    // partition and park subsequent extractions on AmbiguousMatchingHeads.
+    // Semantic failures (missing / ambiguous / non-head target) are tolerated
+    // with a WARN — mirroring `sync_page_graph_artifacts_tolerant` — because
+    // an external edit must not be able to wedge the whole reconcile pass;
+    // SQLite errors still abort the transaction.
+    let supersedes = parsed
+        .frontmatter
+        .get("supersedes")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    if let Err(error) = crate::core::supersede::reconcile_supersede_chain(
+        &tx,
+        collection_id,
+        "",
+        page_id,
+        &parsed.slug,
+        supersedes.as_deref(),
+    ) {
+        match error {
+            crate::core::supersede::SupersedeError::Sqlite(sqlite_error) => {
+                return Err(ReconcileError::Other(format!(
+                    "apply_reingest: supersede chain: {sqlite_error}"
+                )));
+            }
+            other => eprintln!(
+                "WARN: supersede_chain_unresolved context={} error={other}",
+                absolute_path.to_string_lossy()
+            ),
+        }
+    }
+
     file_state::upsert_file_state(
         &tx,
         collection_id,

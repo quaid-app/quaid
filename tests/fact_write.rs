@@ -259,13 +259,60 @@ fn write_fact_coexist_writes_null_supersedes_without_page_insert() {
 }
 
 #[test]
-fn write_fact_slug_collision_appends_counter_suffix() {
+fn write_fact_identical_rerun_reuses_existing_file_without_suffix() {
+    // Idempotency: a retried window re-renders the same fact; allocation
+    // must recognise the identical on-disk file (even across a different
+    // `extracted_at` stamp) and reuse the base slug instead of emitting a
+    // duplicate `-2` head.
     let dir = tempfile::TempDir::new().unwrap();
     let conn = open_test_db(&dir.path().join("memory.db"));
     let context = write_context(dir.path(), None);
     let fact = preference_fact("Matt prefers Rust");
 
     let first = write_fact_in_context(&Resolution::Coexist, &fact, &conn, &context).unwrap();
+    let first_path = dir.path().join(
+        first
+            .relative_path
+            .clone()
+            .unwrap()
+            .replace('/', std::path::MAIN_SEPARATOR_STR),
+    );
+    let first_bytes = fs::read(&first_path).unwrap();
+
+    let mut later_context = context;
+    later_context.extracted_at = "2026-05-05T09:07:31Z".to_string();
+    let rerun = write_fact_in_context(&Resolution::Coexist, &fact, &conn, &later_context).unwrap();
+
+    assert_eq!(first.slug, rerun.slug);
+    assert_eq!(first.relative_path, rerun.relative_path);
+    assert_eq!(
+        fs::read(&first_path).unwrap(),
+        first_bytes,
+        "idempotent rerun must leave the existing file's bytes untouched"
+    );
+}
+
+#[test]
+fn write_fact_true_slug_collision_appends_counter_suffix() {
+    // A genuinely different file already occupying the base path (e.g. an
+    // externally edited fact) must still push allocation to the `-2` suffix.
+    let dir = tempfile::TempDir::new().unwrap();
+    let conn = open_test_db(&dir.path().join("memory.db"));
+    let context = write_context(dir.path(), None);
+    let fact = preference_fact("Matt prefers Rust");
+
+    let first = write_fact_in_context(&Resolution::Coexist, &fact, &conn, &context).unwrap();
+    let first_path = dir.path().join(
+        first
+            .relative_path
+            .clone()
+            .unwrap()
+            .replace('/', std::path::MAIN_SEPARATOR_STR),
+    );
+    let mut tampered = fs::read_to_string(&first_path).unwrap();
+    tampered.push_str("\nManually edited addendum.\n");
+    fs::write(&first_path, tampered).unwrap();
+
     let second = write_fact_in_context(&Resolution::Coexist, &fact, &conn, &context).unwrap();
 
     assert_ne!(first.slug, second.slug);

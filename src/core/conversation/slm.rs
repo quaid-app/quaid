@@ -67,7 +67,13 @@ pub struct SlmRunner {
     model: Phi3Model,
     device: Device,
     inference: SlmInferenceConfig,
-    eos_token_id: Option<u32>,
+    /// Every token id that should halt generation. Seeded from
+    /// `config.json`'s single `eos_token_id` and unioned with the full
+    /// stop-token list in `generation_config.json` (Phi-3.5 ships
+    /// `<|endoftext|>`, `<|end|>`, and `<|assistant|>` here), so
+    /// completions stop at the chat-template boundary instead of
+    /// burning the whole token budget.
+    eos_token_ids: std::collections::HashSet<u32>,
     #[expect(
         dead_code,
         reason = "model_dir is held for diagnostics/Debug logging of which weights backed this runner; not read from struct fields directly"
@@ -89,6 +95,10 @@ struct LazySlmState {
     runner: Option<SlmRunner>,
     runtime_disabled: bool,
     last_error: Option<String>,
+    /// When the loaded runner was last used for inference. Consulted by
+    /// [`LazySlmRunner::unload_if_idle`] to drop the multi-GB model
+    /// after an idle interval; `None` whenever no runner is loaded.
+    last_used: Option<std::time::Instant>,
 }
 
 /// Errors surfaced by SLM load, inference, and response parsing.
@@ -228,25 +238,38 @@ impl SlmRunner {
 
         let model_paths = safetensor_paths(&model_dir)?;
         let device = Device::Cpu;
+        // Load the Phi-3.5 weights in half precision rather than F32.
+        // The 3.8B-parameter checkpoint resides ~15 GB at F32 but only
+        // ~8 GB at half precision; candle's mmaped backend converts the
+        // on-disk tensors to the requested dtype, and the phi3 model
+        // adopts `VarBuilder::dtype()` for all of its internal math (the
+        // attention mask is built in F32 then cast to the model dtype).
+        // F16 (not BF16) is used because candle's CPU `matmul` only
+        // supports F16/F32/F64, and Phi-3 weights and activations sit
+        // well inside F16's dynamic range.
+        let weights_dtype = select_weights_dtype(&device);
         #[expect(
             unsafe_code,
             reason = "candle's VarBuilder::from_mmaped_safetensors mmaps the on-disk Phi-3 weights; safety holds because we treat the cached model files as immutable for the lifetime of the VarBuilder"
         )]
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_paths, DType::F32, &device) }
-            .map_err(|error| SlmError::Weights {
-                cache_dir: model_dir.display().to_string(),
-                message: error.to_string(),
-            })?;
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&model_paths, weights_dtype, &device) }
+                .map_err(|error| SlmError::Weights {
+                    cache_dir: model_dir.display().to_string(),
+                    message: error.to_string(),
+                })?;
         let model = Phi3Model::new(&config, vb).map_err(|error| SlmError::Inference {
             message: format!("build phi3 model: {error}"),
         })?;
+
+        let eos_token_ids = collect_eos_token_ids(&model_dir, config.eos_token_id);
 
         Ok(Self {
             tokenizer,
             model,
             device,
             inference: SlmInferenceConfig::default(),
-            eos_token_id: config.eos_token_id,
+            eos_token_ids,
             model_dir,
         })
     }
@@ -276,9 +299,15 @@ impl SlmRunner {
             return Ok(String::new());
         }
 
+        // Encode with `add_special_tokens` so the Phi-3 chat-template
+        // markers (`<|system|>`, `<|user|>`, `<|end|>`, `<|assistant|>`)
+        // rendered by `super::extractor::render_phi3_chat_prompt` are
+        // tokenized as their dedicated special-token ids and the
+        // tokenizer's post-processor applies the model's BOS handling,
+        // rather than splitting the markers into ordinary subwords.
         let encoding =
             self.tokenizer
-                .encode(prompt, false)
+                .encode(prompt, true)
                 .map_err(|error| SlmError::Inference {
                     message: format!("tokenizer encode: {error}"),
                 })?;
@@ -317,7 +346,7 @@ impl SlmRunner {
                 .map_err(|error| SlmError::Inference {
                     message: format!("sample logits: {error}"),
                 })?;
-            if Some(next_token) == self.eos_token_id {
+            if self.eos_token_ids.contains(&next_token) {
                 break;
             }
             all_tokens.push(next_token);
@@ -349,6 +378,7 @@ impl SlmRunner {
 impl LazySlmState {
     fn disable_runtime(&mut self, error: &SlmError) {
         self.runner = None;
+        self.last_used = None;
         self.runtime_disabled = true;
         self.last_error = Some(error.to_string());
     }
@@ -397,8 +427,39 @@ impl LazySlmRunner {
             .infer(prompt, max_tokens);
         if let Err(error @ SlmError::Panic { .. }) = &result {
             state.disable_runtime(error);
+        } else {
+            // Record activity so a later `unload_if_idle` sweep can tell
+            // whether the multi-GB model has gone cold; a panic above
+            // already cleared the runner, so only touch this when the
+            // runner survives.
+            state.last_used = Some(std::time::Instant::now());
         }
         result
+    }
+
+    /// Drop the loaded model when it has been idle for at least
+    /// `idle_ttl`, freeing its multi-GB resident footprint until the
+    /// next [`infer`](Self::infer) transparently reloads it. Returns
+    /// `true` when a runner was unloaded. A disabled runtime or an
+    /// already-empty handle is left untouched and returns `false`.
+    pub fn unload_if_idle(&self, idle_ttl: std::time::Duration) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.runner.is_none() {
+            return false;
+        }
+        let idle_for = state
+            .last_used
+            .map(|last| last.elapsed())
+            .unwrap_or(idle_ttl);
+        if idle_for < idle_ttl {
+            return false;
+        }
+        state.runner = None;
+        state.last_used = None;
+        true
     }
 
     /// Report whether a runner has been successfully loaded into the
@@ -425,6 +486,69 @@ fn parse_phi3_config(config_text: &str) -> serde_json::Result<Phi3Config> {
     let mut config_value: JsonValue = serde_json::from_str(config_text)?;
     normalize_phi3_rope_scaling(&mut config_value);
     serde_json::from_value(config_value)
+}
+
+/// Pick the dtype the Phi-3 weights load under. Half precision roughly
+/// halves resident memory versus F32. On the CPU backend candle's
+/// `matmul` only implements F16/F32/F64 — BF16 is rejected at runtime —
+/// so F16 is the half-precision choice here. The device is taken as
+/// input so a future accelerated backend (where BF16 matmul is
+/// available and numerically preferable) can override the choice.
+fn select_weights_dtype(device: &Device) -> DType {
+    match device {
+        Device::Cpu => DType::F16,
+        // GPU/Metal backends support BF16 matmul and prefer its wider
+        // exponent range; today the runner only builds CPU models, but
+        // keep the mapping explicit for when that changes.
+        _ => DType::BF16,
+    }
+}
+
+/// Build the set of token ids that halt generation. The single
+/// `eos_token_id` from `config.json` is always included; when a
+/// sibling `generation_config.json` is present its `eos_token_id`
+/// field (a scalar or an array — Phi-3.5 ships `[32007, 32001,
+/// 32000]`) is unioned in so the runner stops at the chat-template
+/// boundary instead of running to the token budget. A missing or
+/// malformed `generation_config.json` is non-fatal: the function falls
+/// back to whatever `config.json` provided.
+fn collect_eos_token_ids(
+    model_dir: &Path,
+    config_eos: Option<u32>,
+) -> std::collections::HashSet<u32> {
+    let mut ids = std::collections::HashSet::new();
+    ids.extend(config_eos);
+
+    let generation_config_path = model_dir.join("generation_config.json");
+    if let Ok(text) = fs::read_to_string(&generation_config_path) {
+        for id in parse_generation_config_eos_ids(&text) {
+            ids.insert(id);
+        }
+    }
+
+    ids
+}
+
+/// Extract every `eos_token_id` declared in a `generation_config.json`
+/// body, accepting both the scalar form (`"eos_token_id": 32000`) and
+/// the array form (`"eos_token_id": [32007, 32001, 32000]`). Values
+/// that are not non-negative integers in `u32` range are skipped.
+/// Unparseable JSON yields an empty list rather than an error.
+fn parse_generation_config_eos_ids(text: &str) -> Vec<u32> {
+    let Ok(value) = serde_json::from_str::<JsonValue>(text) else {
+        return Vec::new();
+    };
+    let Some(field) = value.get("eos_token_id") else {
+        return Vec::new();
+    };
+    match field {
+        JsonValue::Array(entries) => entries.iter().filter_map(json_value_as_u32).collect(),
+        scalar => json_value_as_u32(scalar).into_iter().collect(),
+    }
+}
+
+fn json_value_as_u32(value: &JsonValue) -> Option<u32> {
+    value.as_u64().and_then(|id| u32::try_from(id).ok())
 }
 
 fn normalize_phi3_rope_scaling(config: &mut JsonValue) {
@@ -542,6 +666,9 @@ fn recover_commentary_wrapped_object(raw: &str) -> Option<&str> {
     };
     let prefix = &raw[..candidate.0];
     let suffix = &raw[candidate.1..];
+    if let Some(object) = single_fenced_json_object(raw, prefix, suffix, *candidate) {
+        return Some(object);
+    }
     if !candidate_has_adjacent_container_chars(prefix, suffix)
         && !candidate_is_inside_container(prefix, suffix)
         && wrapper_is_plain_commentary(prefix)
@@ -551,6 +678,58 @@ fn recover_commentary_wrapped_object(raw: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// Accept exactly one JSON object wrapped in a single Markdown fence
+/// (```` ```json … ``` ```` or a bare ```` ``` … ``` ````). Returns the
+/// inner object span when the wrapper is *only* a fence — an optional
+/// `json`/`json5` info string before the object and the closing fence
+/// after it, with nothing but whitespace otherwise. Any extra prose,
+/// a missing closing fence, or a second object outside the fence falls
+/// through to the stricter plain-commentary path, which fails closed.
+fn single_fenced_json_object<'raw>(
+    raw: &'raw str,
+    prefix: &str,
+    suffix: &str,
+    candidate: (usize, usize),
+) -> Option<&'raw str> {
+    let opening = fence_opening_before(prefix)?;
+    if !fence_closing_after(suffix) {
+        return None;
+    }
+    // The text before the opening fence must be empty so we only ever
+    // unwrap a lone fenced envelope, never a fence buried in prose.
+    if !prefix[..opening].trim().is_empty() {
+        return None;
+    }
+    Some(&raw[candidate.0..candidate.1])
+}
+
+/// When `prefix` (everything before the JSON object) ends in an opening
+/// code fence — optionally carrying an info string like `json` — return
+/// the byte offset where that fence marker begins. The only content
+/// allowed between the fence's newline and the object is whitespace.
+fn fence_opening_before(prefix: &str) -> Option<usize> {
+    let trimmed_end = prefix.trim_end();
+    let last_line_start = trimmed_end.rfind('\n').map_or(0, |index| index + 1);
+    let last_line = trimmed_end[last_line_start..].trim();
+    let info = last_line
+        .strip_prefix("```")
+        .or_else(|| last_line.strip_prefix("~~~"))?;
+    // Reject fences that themselves contain non-info characters (e.g.
+    // the model put the object on the same line as the fence) so we
+    // keep matching only clean, single-object fences.
+    if info.contains('`') || info.contains('{') {
+        return None;
+    }
+    Some(last_line_start)
+}
+
+/// True when `suffix` (everything after the JSON object) is just
+/// whitespace followed by a closing code fence and nothing else.
+fn fence_closing_after(suffix: &str) -> bool {
+    let trimmed = suffix.trim();
+    matches!(trimmed.strip_prefix("```").or_else(|| trimmed.strip_prefix("~~~")), Some(rest) if rest.trim().is_empty())
 }
 
 fn candidate_has_adjacent_container_chars(prefix: &str, suffix: &str) -> bool {
@@ -930,9 +1109,12 @@ mod tests {
     use tokenizers::Tokenizer;
 
     #[test]
-    fn parse_response_rejects_json_code_fence() {
-        let error = parse_response("```json\n{\"facts\":[]}\n```").unwrap_err();
-        assert!(matches!(error, SlmError::Parse { .. }));
+    fn parse_response_accepts_single_json_code_fence() {
+        // A lone fenced JSON envelope is now unwrapped and parsed; the
+        // exhaustive fence-recovery matrix lives in
+        // tests/slm_parse_response.rs.
+        let parsed = parse_response("```json\n{\"facts\":[]}\n```").unwrap();
+        assert!(parsed.facts.is_empty());
     }
 
     #[test]

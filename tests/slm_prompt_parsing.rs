@@ -54,8 +54,13 @@ fn build_prompt_should_match_foundation_contract_for_sparse_window() {
 
     let prompt = worker.build_prompt("session-42", &window);
 
+    // Golden Phi-3 chat-template render: the system prompt is wrapped
+    // in `<|system|>…<|end|>`, the windowed turns in `<|user|>…<|end|>`,
+    // and the prompt ends with the bare `<|assistant|>\n` generation
+    // cue. This is the exact byte sequence the tokenizer encodes with
+    // special tokens before inference.
     let expected = concat!(
-        "SYSTEM:\n",
+        "<|system|>\n",
         "You extract durable facts from conversations. Output JSON only — no prose,\n",
         "no markdown fences. Each fact is one of four kinds:\n\n",
         "  decision     — a choice made between alternatives\n",
@@ -75,8 +80,9 @@ fn build_prompt_should_match_foundation_contract_for_sparse_window() {
         "Allowed outputs only:\n",
         "  {\"facts\":[]}\n",
         "  {\"facts\":[{\"kind\":\"preference\",\"about\":\"beverage\",\"strength\":\"high\",\"summary\":\"The user prefers coffee to tea.\"}]}\n",
-        "Return: {\"facts\": [...]}. Empty array if nothing durable.\n\n",
-        "USER:\n",
+        "Return: {\"facts\": [...]}. Empty array if nothing durable.",
+        "<|end|>\n",
+        "<|user|>\n",
         "Session: session-42\n",
         "New turns to extract from (turns 11..12):\n",
         "  [turn 11, user, 2026-05-03T10:00:11Z]\n",
@@ -89,7 +95,9 @@ fn build_prompt_should_match_foundation_contract_for_sparse_window() {
         "  [turn 9, assistant, 2026-05-03T10:00:09Z]\n",
         "    Rust would keep the CLI local-first.\n",
         "  [turn 10, user, 2026-05-03T10:00:10Z]\n",
-        "    I care most about stability."
+        "    I care most about stability.",
+        "<|end|>\n",
+        "<|assistant|>\n"
     );
 
     assert_eq!(prompt, expected);
@@ -193,10 +201,13 @@ fn parse_response_should_recover_json_after_bracketed_prose_only_line() {
 }
 
 #[test]
-fn parse_response_should_reject_fenced_wrapper() {
-    let error = parse_response("```json\n{\"facts\":[]}\n```").unwrap_err();
+fn parse_response_should_accept_single_json_fence() {
+    // A lone fenced JSON envelope is unwrapped and parsed; the full
+    // fence-recovery matrix lives in tests/slm_parse_response.rs.
+    let parsed = parse_response("```json\n{\"facts\":[]}\n```").unwrap();
 
-    assert!(matches!(error, SlmError::Parse { .. }));
+    assert!(parsed.facts.is_empty());
+    assert!(parsed.validation_errors.is_empty());
 }
 
 #[test]

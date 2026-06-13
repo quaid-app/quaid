@@ -1711,6 +1711,24 @@ fn sync_collection_watchers(
         if !needs_replace {
             continue;
         }
+        let rearming_after_crash = watchers
+            .get(&collection_id)
+            .is_some_and(|state| matches!(state.mode, WatcherMode::Crashed));
+        if rearming_after_crash {
+            // Fail-safe staleness: the crash discarded the event buffer, so
+            // events may have been lost while the watcher was down. Flag the
+            // collection for a full-hash recovery pass before trusting
+            // incremental events again; a failed flag write is logged loudly
+            // because silence here is exactly how collections go stale.
+            match mark_collection_needs_full_sync(conn, collection_id) {
+                Ok(()) => eprintln!(
+                    "WARN: watcher_rearm_flagged_full_sync collection_id={collection_id}"
+                ),
+                Err(error) => eprintln!(
+                    "ERROR: watcher_rearm_needs_full_sync_write_failed collection_id={collection_id} error={error}"
+                ),
+            }
+        }
         let previous_failures = watchers
             .get(&collection_id)
             .map(|state| state.consecutive_failures)
@@ -2881,7 +2899,19 @@ fn run_supervisor_loop(
     #[cfg(unix)] ipc_in_flight: Arc<AtomicUsize>,
     #[cfg(unix)] mut watchers: HashMap<i64, CollectionWatcherState>,
 ) {
-    let mut last_heartbeat = Instant::now();
+    // The session heartbeat runs on its own thread so long work on this
+    // thread (watcher reconciles, full-hash audits, inline embedding
+    // inference) can never stall the keepalive past SESSION_LIVENESS_SECS —
+    // which would let another process's sweep delete the live session and
+    // hand runtime ownership away mid-operation.
+    let heartbeat_handle = {
+        let heartbeat_db_path = db_path.clone();
+        let heartbeat_session_id = session_id_for_thread.clone();
+        let heartbeat_stop = Arc::clone(&stop_signal);
+        thread::spawn(move || {
+            run_session_heartbeat_loop(&heartbeat_db_path, &heartbeat_session_id, &heartbeat_stop);
+        })
+    };
     let mut last_idle_close_sweep =
         Instant::now() - Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS);
     let mut last_janitor_sweep = Instant::now() - Duration::from_secs(JANITOR_SWEEP_INTERVAL_SECS);
@@ -2898,12 +2928,8 @@ fn run_supervisor_loop(
     let mut last_embedding_drain =
         Instant::now() - Duration::from_secs(embedding::drain_interval_secs());
     while !stop_signal.load(Ordering::SeqCst) {
+        maybe_hold_supervisor_tick_for_tests(&stop_signal);
         if let Ok(conn) = db::open_runtime(&db_path) {
-            if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
-                let _ = sweep_stale_sessions(&conn);
-                let _ = heartbeat_session(&conn, &session_id_for_thread);
-                last_heartbeat = Instant::now();
-            }
             if last_idle_close_sweep.elapsed()
                 >= Duration::from_secs(IDLE_CLOSE_SWEEP_INTERVAL_SECS)
             {
@@ -3034,11 +3060,67 @@ fn run_supervisor_loop(
         }
         thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
     }
+    // Stop the heartbeat before unregistering so a final keepalive can't
+    // race the session-row delete.
+    let _ = heartbeat_handle.join();
     if let Ok(conn) = db::open_runtime(&db_path) {
         #[cfg(unix)]
         let _ = cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path);
         let _ = clear_supervisor_handles_for_session(&session_id_for_thread);
         let _ = unregister_session(&conn, &session_id_for_thread);
+    }
+}
+
+/// Dedicated session-heartbeat loop: refreshes `serve_sessions.heartbeat_at`
+/// (and runs the stale-session sweep) every `HEARTBEAT_INTERVAL_SECS` on a
+/// fresh [`db::open_runtime`] connection, fully isolated from the supervisor
+/// work thread so a long reconcile, audit, or inference pass cannot starve
+/// the keepalive. Failures are logged instead of swallowed — a heartbeat
+/// that silently stops is exactly how runtime ownership gets stolen.
+fn run_session_heartbeat_loop(db_path: &str, session_id: &str, stop: &AtomicBool) {
+    while !stop.load(Ordering::SeqCst) {
+        match db::open_runtime(db_path) {
+            Ok(conn) => {
+                if let Err(error) = sweep_stale_sessions(&conn) {
+                    eprintln!("WARN: session_sweep_failed session_id={session_id} error={error}");
+                }
+                if let Err(error) = heartbeat_session(&conn, session_id) {
+                    eprintln!(
+                        "WARN: session_heartbeat_failed session_id={session_id} error={error}"
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "WARN: session_heartbeat_open_failed session_id={session_id} error={error}"
+                );
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
+        while Instant::now() < deadline {
+            if stop.load(Ordering::SeqCst) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+/// Test-only injection point (mirroring `QUAID_TEST_APPEND_TURN_HOLD_MS` in
+/// `turn_writer`): when `QUAID_TEST_SUPERVISOR_TICK_HOLD_MS` is set, every
+/// supervisor work tick sleeps that long in stop-aware slices, simulating a
+/// long reconcile so integration tests can prove the dedicated heartbeat
+/// thread keeps the session alive while the work thread is busy.
+fn maybe_hold_supervisor_tick_for_tests(stop: &AtomicBool) {
+    let Some(raw_ms) = std::env::var_os("QUAID_TEST_SUPERVISOR_TICK_HOLD_MS") else {
+        return;
+    };
+    let Ok(hold_ms) = raw_ms.to_string_lossy().parse::<u64>() else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_millis(hold_ms);
+    while Instant::now() < deadline && !stop.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -5129,6 +5211,16 @@ mod tests {
             WatcherMode::Native | WatcherMode::Poll
         ));
         assert!(!matches!(restarted.mode, WatcherMode::Crashed));
+        // Crash re-arm is fail-safe: events may have been lost while the
+        // watcher was down, so the re-arm must flag a full recovery pass.
+        let needs_full_sync: i64 = conn
+            .query_row(
+                "SELECT needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(needs_full_sync, 1);
     }
 
     #[cfg(unix)]
@@ -5806,15 +5898,28 @@ mod tests {
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", root.path());
-        let uuid = "01969f11-9448-7d79-8d3f-c68f54768890";
-        let note_a = format!(
-            "---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nThis body is comfortably above the minimum size for rename inference.\n"
+        // Duplicate uuids no longer halt reconcile (they quarantine per
+        // file), so the startup-failure fixture uses the other terminal
+        // halt: an unresolvable trivial-content hash ambiguity.
+        let content = concat!(
+            "---\n",
+            "slug: notes/template\n",
+            "title: Template Note\n",
+            "type: concept\n",
+            "meta: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "---\n",
+            "Hi\n",
         );
-        let note_b = format!(
-            "---\nmemory_id: {uuid}\nslug: notes/b\ntitle: B\ntype: concept\n---\nThis second body is also comfortably above the minimum size for rename inference.\n"
+        fs::write(root.path().join("template.md"), content).unwrap();
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/template",
+            "01969f11-9448-7d79-8d3f-c68f54768890",
+            "Hi",
+            content.as_bytes(),
+            "old-template.md",
         );
-        fs::write(root.path().join("a.md"), note_a).unwrap();
-        fs::write(root.path().join("b.md"), note_b).unwrap();
         let recovery_root = dir.path().join("recovery");
         create_startup_recovery_sentinel(&recovery_root, collection_id, "write-1.needs_full_sync");
         drop(conn);
@@ -5837,9 +5942,9 @@ mod tests {
             .unwrap();
 
         assert!(row.0.is_some());
-        assert_eq!(row.1.as_deref(), Some("duplicate_uuid"));
+        assert_eq!(row.1.as_deref(), Some("unresolvable_trivial_content"));
         assert_eq!(row.2, 1);
-        assert_eq!(row.3, 0);
+        assert_eq!(row.3, 1, "only the pre-seeded page; nothing ingested");
         assert_eq!(
             startup_recovery_sentinel_count(&recovery_root, collection_id),
             1

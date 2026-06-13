@@ -34,7 +34,7 @@ use crate::core::raw_imports;
 use ignore::WalkBuilder;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 #[cfg(unix)]
@@ -77,8 +77,11 @@ pub struct ReconcileStats {
     /// Missing/new pairs resolved by matching a uniquely-identifying content
     /// hash across both sides.
     pub hash_renamed: usize,
-    /// Pages quarantined because rename resolution found multiple candidate
-    /// matches and could not pick safely.
+    /// Pages actually quarantined this pass because their disposition could
+    /// not be resolved safely: rename resolution found multiple candidate
+    /// matches, or the on-disk file lost a duplicate-uuid contest. Counted
+    /// at apply time, so the number is truthful (a page later reclaimed by a
+    /// slug-matching reingest in the same pass is not counted).
     pub quarantined_ambiguous: usize,
     /// Pages quarantined because the database row carries state (links,
     /// tags, …) that must not be silently dropped on delete.
@@ -232,6 +235,9 @@ impl DriftCaptureSummary {
         Self {
             pages_updated: stats.modified,
             pages_added: stats.new,
+            // Both counters are recorded at apply time (see ApplySummary), so
+            // this reports pages that were actually quarantined — not merely
+            // paths whose rename inference was refused.
             pages_quarantined: stats.quarantined_ambiguous + stats.quarantined_db_state,
             pages_deleted: stats.hard_deleted,
         }
@@ -370,23 +376,41 @@ pub(crate) fn reconcile_with_native_events(
                     "reconcile: refusing to walk with stale .quaidignore state: {err}"
                 ))
             })?;
-        let walked = walk_collection(conn, &root_fd, collection)?;
-        detect_duplicate_uuids_in_tree(Path::new(&collection.root_path), &walked.files)?;
-        let diff = stat_diff_from_walk(
+        let mut walked = walk_collection(conn, &root_fd, collection)?;
+        let duplicate_losers = detect_duplicate_uuids_in_tree(
+            conn,
+            collection.id,
+            Path::new(&collection.root_path),
+            &walked.files,
+            UuidCachePolicy::TrustStatCache,
+        )?;
+        for loser in &duplicate_losers {
+            walked.files.remove(loser);
+        }
+        let mut diff = stat_diff_from_walk(
             conn,
             collection.id,
             Path::new(&collection.root_path),
             walked.files,
         )?;
-        let rename_resolution = resolve_rename_resolution(
+        // Tracked duplicate-uuid losers land in `missing` (their file_state
+        // row exists but the file was excluded above); divert them to the
+        // quarantine path so the delete/quarantine pass can't fire on them.
+        let tracked_losers: Vec<PathBuf> = duplicate_losers
+            .iter()
+            .filter(|loser| diff.missing.remove(*loser))
+            .cloned()
+            .collect();
+        let mut rename_resolution = resolve_rename_resolution(
             conn,
             collection.id,
             Path::new(&collection.root_path),
             &diff,
             native_renames,
         )?;
+        rename_resolution.ambiguous.extend(tracked_losers);
         eprintln!(
-            "INFO: reconcile_plan collection={} walked={} unchanged={} modified={} new={} missing={} native_renamed={} hash_renamed={} quarantined_ambiguous={}",
+            "INFO: reconcile_plan collection={} walked={} unchanged={} modified={} new={} missing={} native_renamed={} hash_renamed={} unresolved_quarantine_candidates={}",
             collection.name,
             walked.walked,
             diff.unchanged.len(),
@@ -395,7 +419,7 @@ pub(crate) fn reconcile_with_native_events(
             rename_resolution.remaining_missing.len(),
             rename_resolution.native_renamed,
             rename_resolution.hash_renamed,
-            rename_resolution.quarantined_ambiguous
+            rename_resolution.ambiguous.len()
         );
         let apply_summary = apply_reconciliation(
             conn,
@@ -405,10 +429,11 @@ pub(crate) fn reconcile_with_native_events(
             Path::new(&collection.root_path),
         )?;
         eprintln!(
-            "INFO: reconcile_apply collection={} reingested={} created={} quarantined_db_state={} hard_deleted={}",
+            "INFO: reconcile_apply collection={} reingested={} created={} quarantined_ambiguous={} quarantined_db_state={} hard_deleted={}",
             collection.name,
             apply_summary.reingested,
             apply_summary.created,
+            apply_summary.quarantined_ambiguous,
             apply_summary.quarantined_db_state,
             apply_summary.hard_deleted
         );
@@ -422,7 +447,7 @@ pub(crate) fn reconcile_with_native_events(
             native_renamed: rename_resolution.native_renamed,
             uuid_renamed: rename_resolution.uuid_renamed,
             hash_renamed: rename_resolution.hash_renamed,
-            quarantined_ambiguous: rename_resolution.quarantined_ambiguous,
+            quarantined_ambiguous: apply_summary.quarantined_ambiguous,
             quarantined_db_state: apply_summary.quarantined_db_state,
             hard_deleted: apply_summary.hard_deleted,
         })
@@ -516,11 +541,28 @@ pub fn full_hash_reconcile_authorized(
                 "full_hash_reconcile: refusing to walk with stale .quaidignore state: {err}"
             ))
         })?;
-        let walked = walk_collection(conn, &root_fd, &collection)?;
-        detect_duplicate_uuids_in_tree(root_path, &walked.files)?;
-        let plan = build_full_hash_plan(conn, collection.id, root_path, &walked.files)?;
-        let rename_resolution =
+        let mut walked = walk_collection(conn, &root_fd, &collection)?;
+        // Full-hash passes exist to catch content drift behind unchanged
+        // stats, so the uuid stat-cache is bypassed (every file is re-read).
+        let duplicate_losers = detect_duplicate_uuids_in_tree(
+            conn,
+            collection.id,
+            root_path,
+            &walked.files,
+            UuidCachePolicy::Bypass,
+        )?;
+        for loser in &duplicate_losers {
+            walked.files.remove(loser);
+        }
+        let mut plan = build_full_hash_plan(conn, collection.id, root_path, &walked.files)?;
+        let tracked_losers: Vec<PathBuf> = duplicate_losers
+            .iter()
+            .filter(|loser| plan.diff.missing.remove(*loser))
+            .cloned()
+            .collect();
+        let mut rename_resolution =
             resolve_rename_resolution(conn, collection.id, root_path, &plan.diff, &[])?;
+        rename_resolution.ambiguous.extend(tracked_losers);
 
         assert_full_hash_raw_import_invariants(conn, collection.id)?;
         apply_full_hash_metadata_self_heal(conn, collection.id, &plan.unchanged)?;
@@ -536,7 +578,7 @@ pub fn full_hash_reconcile_authorized(
             native_renamed: rename_resolution.native_renamed,
             uuid_renamed: rename_resolution.uuid_renamed,
             hash_renamed: rename_resolution.hash_renamed,
-            quarantined_ambiguous: rename_resolution.quarantined_ambiguous,
+            quarantined_ambiguous: apply_summary.quarantined_ambiguous,
             quarantined_db_state: apply_summary.quarantined_db_state,
             hard_deleted: apply_summary.hard_deleted,
         })
@@ -1771,7 +1813,13 @@ struct RenameResolution {
     native_renamed: usize,
     uuid_renamed: usize,
     hash_renamed: usize,
-    quarantined_ambiguous: usize,
+    /// Missing paths whose page must be quarantined (not deleted) because
+    /// its disposition could not be resolved safely: rename inference found
+    /// multiple candidates, or the file lost a duplicate-uuid contest.
+    /// `build_apply_actions` turns each entry into a `QuarantinePage` action
+    /// so the page row — with its links, assertions, and history — survives
+    /// instead of being deleted by the next pass.
+    ambiguous: BTreeSet<PathBuf>,
     remaining_new: HashMap<PathBuf, FileStat>,
     remaining_missing: HashSet<PathBuf>,
     matches: Vec<RenameMatch>,
@@ -1780,6 +1828,14 @@ struct RenameResolution {
 #[derive(Debug, Clone)]
 enum ApplyAction {
     DeleteOrQuarantine {
+        page_id: i64,
+        relative_path: PathBuf,
+    },
+    /// Quarantine a page whose disposition could not be resolved safely
+    /// (ambiguous rename inference or duplicate-uuid loser): sets
+    /// `pages.quarantined_at` and clears the `file_state` binding so the
+    /// next pass neither deletes the page nor treats the path as missing.
+    QuarantinePage {
         page_id: i64,
         relative_path: PathBuf,
     },
@@ -1795,6 +1851,7 @@ enum ApplyAction {
 struct ApplySummary {
     reingested: usize,
     created: usize,
+    quarantined_ambiguous: usize,
     quarantined_db_state: usize,
     hard_deleted: usize,
 }
@@ -1936,7 +1993,7 @@ fn apply_uuid_rename_matches(
             [] => {}
             _ => {
                 resolution.remaining_missing.remove(&path);
-                resolution.quarantined_ambiguous += 1;
+                resolution.ambiguous.insert(path);
             }
         }
     }
@@ -2044,13 +2101,13 @@ fn apply_hash_rename_matches(
                 };
                 log_hash_refusal(&reason, &path, &remaining_candidates);
                 resolution.remaining_missing.remove(&path);
-                resolution.quarantined_ambiguous += 1;
+                resolution.ambiguous.insert(path);
             }
             PageIdentityResolution::DuplicateUuid { .. } => {
                 let reason = "duplicate_uuid_candidates".to_owned();
                 log_hash_refusal(&reason, &path, &remaining_candidates);
                 resolution.remaining_missing.remove(&path);
-                resolution.quarantined_ambiguous += 1;
+                resolution.ambiguous.insert(path);
             }
         }
     }
@@ -2224,37 +2281,159 @@ fn load_new_tree_identities(
     Ok(identities)
 }
 
+/// Whether the duplicate-uuid scan may trust the `file_state.frontmatter_uuid`
+/// cache for files whose stat tuple is unchanged, or must re-read every file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UuidCachePolicy {
+    /// Trust the cached uuid when the stored stat tuple matches the walked
+    /// one — the watcher-driven hot path, where re-reading every file's
+    /// bytes on every reconcile is the cost being avoided.
+    TrustStatCache,
+    /// Re-read every file regardless of stat metadata (full-hash passes,
+    /// which exist precisely to catch content drift behind unchanged stats).
+    /// Fresh values are still written back to the cache.
+    Bypass,
+}
+
+/// Detects files that share a frontmatter uuid and resolves each conflict
+/// per file instead of halting the collection: within each duplicate group
+/// the file currently tracked in `file_state` wins (falling back to oldest
+/// mtime, then lexicographically-first path), and every other file is
+/// quarantined — excluded from this reconciliation pass and reported back to
+/// the caller — with an ERROR log naming the uuid, loser, and winner. The
+/// losing bytes are left untouched on disk so the conflict is reversible by
+/// editing the uuid; a git merge-conflict copy therefore degrades to one
+/// loudly-skipped file rather than a collection-wide `reconcile_halted_at`.
+///
+/// Caches each file's frontmatter uuid in `file_state.frontmatter_uuid`
+/// (`''` = no uuid) so unchanged files are not re-read on subsequent passes.
 fn detect_duplicate_uuids_in_tree(
+    conn: &Connection,
+    collection_id: i64,
     root_path: &Path,
     walked_files: &HashMap<PathBuf, FileStat>,
-) -> Result<(), ReconcileError> {
+    cache_policy: UuidCachePolicy,
+) -> Result<Vec<PathBuf>, ReconcileError> {
     let mut relative_paths = walked_files.keys().cloned().collect::<Vec<_>>();
     relative_paths.sort();
 
-    let mut uuids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let cached = load_frontmatter_uuid_cache(conn, collection_id)?;
+    let mut update_cache_stmt = conn.prepare(
+        "UPDATE file_state
+         SET frontmatter_uuid = ?3
+         WHERE collection_id = ?1 AND relative_path = ?2",
+    )?;
+
+    let mut uuids: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for relative_path in relative_paths {
-        let absolute_path = root_path.join(&relative_path);
-        let raw_bytes = fs::read(&absolute_path)?;
-        let raw = String::from_utf8_lossy(&raw_bytes);
-        let (frontmatter, _) = markdown::parse_frontmatter(&raw);
-        if let Some(uuid) = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
-            ReconcileError::Other(format!(
-                "detect_duplicate_uuids_in_tree: {} has invalid frontmatter uuid: {err}",
-                relative_path.display()
-            ))
-        })? {
-            uuids
-                .entry(uuid)
-                .or_default()
-                .push(path_to_string(&relative_path));
+        let walked_stat = &walked_files[&relative_path];
+        let cache_entry = cached.get(&relative_path);
+        let cached_uuid = match (cache_policy, cache_entry) {
+            (UuidCachePolicy::TrustStatCache, Some((stored_stat, Some(cached_uuid))))
+                if !file_state::stat_differs(walked_stat, stored_stat) =>
+            {
+                Some(cached_uuid.clone())
+            }
+            _ => None,
+        };
+        let uuid = match cached_uuid {
+            Some(cached_uuid) if cached_uuid.is_empty() => None,
+            Some(cached_uuid) => Some(cached_uuid),
+            None => {
+                let absolute_path = root_path.join(&relative_path);
+                let raw_bytes = fs::read(&absolute_path)?;
+                let raw = String::from_utf8_lossy(&raw_bytes);
+                let (frontmatter, _) = markdown::parse_frontmatter(&raw);
+                let parsed_uuid =
+                    page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
+                        ReconcileError::Other(format!(
+                            "detect_duplicate_uuids_in_tree: {} has invalid frontmatter uuid: {err}",
+                            relative_path.display()
+                        ))
+                    })?;
+                if cache_entry.is_some() {
+                    update_cache_stmt.execute(params![
+                        collection_id,
+                        path_to_string(&relative_path),
+                        parsed_uuid.clone().unwrap_or_default(),
+                    ])?;
+                }
+                parsed_uuid
+            }
+        };
+        if let Some(uuid) = uuid {
+            uuids.entry(uuid).or_default().push(relative_path);
         }
     }
 
-    if let Some((uuid, paths)) = uuids.into_iter().find(|(_, paths)| paths.len() > 1) {
-        return Err(ReconcileError::DuplicateUuidError { uuid, paths });
+    let mut quarantined = Vec::new();
+    for (uuid, paths) in uuids {
+        if paths.len() < 2 {
+            continue;
+        }
+        let winner = paths
+            .iter()
+            .min_by_key(|path| {
+                (
+                    // Prefer the file already bound in file_state: quarantining
+                    // an untracked conflict copy touches no page row, while
+                    // quarantining the tracked original would orphan its page.
+                    usize::from(!cached.contains_key(*path)),
+                    walked_files[*path].mtime_ns,
+                    (*path).clone(),
+                )
+            })
+            .cloned()
+            .unwrap_or_default();
+        for path in paths {
+            if path == winner {
+                continue;
+            }
+            eprintln!(
+                "ERROR: reconcile_duplicate_uuid_file_quarantined uuid={} loser={} winner={} \
+                 (file left on disk and excluded from sync; edit its frontmatter uuid to resolve)",
+                uuid,
+                path.display(),
+                winner.display()
+            );
+            quarantined.push(path);
+        }
     }
 
-    Ok(())
+    quarantined.sort();
+    Ok(quarantined)
+}
+
+/// Loads the per-path `(stored stat tuple, cached frontmatter uuid)` map the
+/// duplicate-uuid scan consults; `None` uuid = never cached, `Some("")` =
+/// cached as "file has no frontmatter uuid".
+fn load_frontmatter_uuid_cache(
+    conn: &Connection,
+    collection_id: i64,
+) -> Result<HashMap<PathBuf, (FileStat, Option<String>)>, ReconcileError> {
+    let mut stmt = conn.prepare(
+        "SELECT relative_path, mtime_ns, ctime_ns, size_bytes, inode, frontmatter_uuid
+         FROM file_state
+         WHERE collection_id = ?1",
+    )?;
+    let rows = stmt.query_map([collection_id], |row| {
+        let path: String = row.get(0)?;
+        let stat = FileStat {
+            mtime_ns: row.get(1)?,
+            ctime_ns: row.get(2)?,
+            size_bytes: row.get(3)?,
+            inode: row.get(4)?,
+        };
+        let cached_uuid: Option<String> = row.get(5)?;
+        Ok((PathBuf::from(path), (stat, cached_uuid)))
+    })?;
+
+    let mut cache = HashMap::new();
+    for row in rows {
+        let (path, entry) = row?;
+        cache.insert(path, entry);
+    }
+    Ok(cache)
 }
 
 // ── DB-Only State Predicate (stub) ────────────────────────────
@@ -2659,6 +2838,18 @@ fn build_apply_actions(
         });
     }
 
+    // Quarantine actions run after every reingest so a page that a
+    // slug-matching reingest legitimately reclaimed in this pass is left
+    // alive instead of being quarantined out from under its new binding.
+    for relative_path in &rename_resolution.ambiguous {
+        if let Some(page_id) = page_id_for_relative_path(conn, collection_id, relative_path)? {
+            actions.push(ApplyAction::QuarantinePage {
+                page_id,
+                relative_path: relative_path.clone(),
+            });
+        }
+    }
+
     Ok(actions)
 }
 
@@ -2674,6 +2865,12 @@ fn apply_action(
             page_id,
             relative_path,
         } => apply_delete_or_quarantine(conn, collection_id, *page_id, relative_path, summary),
+        ApplyAction::QuarantinePage {
+            page_id,
+            relative_path,
+        } => {
+            apply_quarantine_unresolved_page(conn, collection_id, *page_id, relative_path, summary)
+        }
         ApplyAction::Reingest {
             existing_page_id,
             old_relative_path,
@@ -2734,6 +2931,53 @@ fn apply_delete_or_quarantine(
     tx.execute("DELETE FROM pages WHERE id = ?1", [page_id])?;
     tx.commit()?;
     summary.hard_deleted += 1;
+    Ok(())
+}
+
+/// Quarantines a page whose missing path could not be resolved safely
+/// (ambiguous rename inference or duplicate-uuid loser): clears the stale
+/// `file_state` binding and sets `pages.quarantined_at` so the page — with
+/// its links, assertions, and version history — survives instead of being
+/// deleted on the next pass. If a reingest earlier in the same pass already
+/// reclaimed the page under a new path (slug match), the page is left alive
+/// and only the stale binding is removed; nothing is counted as quarantined
+/// in that case, keeping `ReconcileStats::quarantined_ambiguous` truthful.
+fn apply_quarantine_unresolved_page(
+    conn: &Connection,
+    collection_id: i64,
+    page_id: i64,
+    relative_path: &Path,
+    summary: &mut ApplySummary,
+) -> Result<(), ReconcileError> {
+    let tx = conn.unchecked_transaction()?;
+    file_state::delete_file_state(&tx, collection_id, &path_to_string(relative_path))?;
+    let still_bound: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM file_state WHERE page_id = ?1",
+        [page_id],
+        |row| row.get(0),
+    )?;
+    if still_bound > 0 {
+        tx.commit()?;
+        eprintln!(
+            "INFO: reconcile_unresolved_page_reclaimed page_id={} stale_path={}",
+            page_id,
+            relative_path.display()
+        );
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE pages
+         SET quarantined_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?1",
+        [page_id],
+    )?;
+    tx.commit()?;
+    summary.quarantined_ambiguous += 1;
+    eprintln!(
+        "WARN: reconcile_quarantined_unresolved page_id={} path={}",
+        page_id,
+        relative_path.display()
+    );
     Ok(())
 }
 
@@ -5426,7 +5670,8 @@ mod tests {
             resolve_rename_resolution(&conn, collection.id, root.path(), &diff, &[]).unwrap();
 
         assert_eq!(resolution.hash_renamed, 0);
-        assert_eq!(resolution.quarantined_ambiguous, 1);
+        assert_eq!(resolution.ambiguous.len(), 1);
+        assert!(resolution.ambiguous.contains(Path::new("old-name.md")));
         assert_eq!(resolution.remaining_new.len(), 2);
         assert!(resolution.remaining_missing.is_empty());
     }
@@ -6027,7 +6272,9 @@ mod tests {
 
     #[test]
     fn detect_duplicate_uuids_in_tree_rejects_invalid_frontmatter_uuid() {
+        let conn = open_test_db();
         let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
         fs::write(
             root.path().join("broken.md"),
             b"---\nmemory_id: not-a-uuid\ntitle: Broken\ntype: concept\n---\nbody\n",
@@ -6038,33 +6285,107 @@ mod tests {
             stat_for(root.path(), "broken.md"),
         )]);
 
-        let error = detect_duplicate_uuids_in_tree(root.path(), &walked_files).unwrap_err();
+        let error = detect_duplicate_uuids_in_tree(
+            &conn,
+            collection.id,
+            root.path(),
+            &walked_files,
+            UuidCachePolicy::TrustStatCache,
+        )
+        .unwrap_err();
 
         assert!(error
             .to_string()
             .contains("detect_duplicate_uuids_in_tree: broken.md has invalid frontmatter uuid"));
     }
 
+    // Formerly an abort expectation (collection-wide DuplicateUuidError):
+    // duplicate frontmatter uuids now quarantine per file, newest mtime
+    // losing, so a git merge-conflict copy can't halt the collection.
     #[test]
-    fn detect_duplicate_uuids_in_tree_rejects_duplicate_uuid_paths() {
+    fn detect_duplicate_uuids_in_tree_quarantines_newest_mtime_loser() {
+        let conn = open_test_db();
         let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
         let raw_bytes =
             b"---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Duplicate\ntype: concept\n---\nbody\n";
         fs::write(root.path().join("one.md"), raw_bytes).unwrap();
         fs::write(root.path().join("two.md"), raw_bytes).unwrap();
+        let older = FileStat {
+            mtime_ns: 1_000,
+            ctime_ns: Some(1_000),
+            size_bytes: raw_bytes.len() as i64,
+            inode: Some(1),
+        };
+        let newer = FileStat {
+            mtime_ns: 2_000,
+            ctime_ns: Some(2_000),
+            size_bytes: raw_bytes.len() as i64,
+            inode: Some(2),
+        };
         let walked_files = HashMap::from([
-            (PathBuf::from("one.md"), stat_for(root.path(), "one.md")),
-            (PathBuf::from("two.md"), stat_for(root.path(), "two.md")),
+            (PathBuf::from("one.md"), older),
+            (PathBuf::from("two.md"), newer),
         ]);
 
-        let error = detect_duplicate_uuids_in_tree(root.path(), &walked_files).unwrap_err();
+        let quarantined = detect_duplicate_uuids_in_tree(
+            &conn,
+            collection.id,
+            root.path(),
+            &walked_files,
+            UuidCachePolicy::TrustStatCache,
+        )
+        .unwrap();
 
-        assert!(matches!(
-            error,
-            ReconcileError::DuplicateUuidError { ref uuid, ref paths }
-                if uuid == "01969f11-9448-7d79-8d3f-c68f54761234"
-                    && paths == &vec!["one.md".to_owned(), "two.md".to_owned()]
-        ));
+        assert_eq!(quarantined, vec![PathBuf::from("two.md")]);
+    }
+
+    // The file already tracked in file_state wins even when it is newer:
+    // quarantining an untracked conflict copy touches no page row, while
+    // quarantining the tracked original would orphan its page.
+    #[test]
+    fn detect_duplicate_uuids_in_tree_prefers_tracked_file_over_mtime() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Duplicate\ntype: concept\n---\nbody\n";
+        fs::write(root.path().join("tracked.md"), raw_bytes).unwrap();
+        fs::write(root.path().join("copy.md"), raw_bytes).unwrap();
+        let tracked_stat = FileStat {
+            mtime_ns: 2_000,
+            ctime_ns: Some(2_000),
+            size_bytes: raw_bytes.len() as i64,
+            inode: Some(1),
+        };
+        let copy_stat = FileStat {
+            mtime_ns: 1_000,
+            ctime_ns: Some(1_000),
+            size_bytes: raw_bytes.len() as i64,
+            inode: Some(2),
+        };
+        seed_file_state(
+            &conn,
+            collection.id,
+            "notes/tracked",
+            "tracked.md",
+            &tracked_stat,
+        );
+        let walked_files = HashMap::from([
+            (PathBuf::from("tracked.md"), tracked_stat),
+            (PathBuf::from("copy.md"), copy_stat),
+        ]);
+
+        let quarantined = detect_duplicate_uuids_in_tree(
+            &conn,
+            collection.id,
+            root.path(),
+            &walked_files,
+            UuidCachePolicy::TrustStatCache,
+        )
+        .unwrap();
+
+        assert_eq!(quarantined, vec![PathBuf::from("copy.md")]);
     }
 
     #[test]

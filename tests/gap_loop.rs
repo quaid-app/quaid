@@ -143,7 +143,7 @@ fn cli_exact_slug_query_logs_no_gap() {
 
 #[test]
 fn mcp_exact_slug_query_logs_no_gap() {
-    let (_dir, conn) = harness::open_test_db();
+    let (dir, conn) = harness::open_test_db();
     let server = QuaidServer::new(conn);
     create_page(
         &server,
@@ -156,7 +156,50 @@ fn mcp_exact_slug_query_logs_no_gap() {
         .unwrap();
     let envelope: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
     let rows = envelope["results"].as_array().cloned().unwrap_or_default();
-    assert_eq!(rows.len(), 1, "slug lookup must hit");
+    if rows.len() != 1 {
+        // CI-only diagnostic (see #228 gap-loop): dump the DB state so a single
+        // failing run reveals why the exact-slug short-circuit missed.
+        let db = open_test_db(&dir.path().join("server.db"));
+        let pages: Vec<String> = db
+            .prepare("SELECT id, collection_id, namespace, slug, superseded_by, quarantined_at FROM pages")
+            .unwrap()
+            .query_map([], |r| {
+                Ok(format!(
+                    "id={:?} coll={:?} ns={:?} slug={:?} superseded_by={:?} quarantined_at={:?}",
+                    r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let colls: Vec<String> = db
+            .prepare("SELECT id, name, state, root_path FROM collections")
+            .unwrap()
+            .query_map([], |r| {
+                Ok(format!(
+                    "id={:?} name={:?} state={:?} root={:?}",
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let mem_loc: String = db
+            .query_row(
+                "SELECT value FROM config WHERE key='memory.location'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| "<unset>".to_owned());
+        panic!(
+            "slug lookup must hit (got {} rows)\n  rows={rows:?}\n  pages={pages:?}\n  collections={colls:?}\n  memory.location={mem_loc:?}",
+            rows.len()
+        );
+    }
 
     assert!(
         list_gaps_json(&server).is_empty(),

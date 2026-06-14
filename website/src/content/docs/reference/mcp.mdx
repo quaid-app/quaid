@@ -6,11 +6,11 @@ guide:
   accentBar: true
 ---
 
-`quaid serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Twenty-four `memory_*` tools cover the read, write, graph, intelligence, conversation memory, and namespace surfaces. This page is the canonical catalog.
+`quaid serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Twenty-six `memory_*` tools cover the read, write, graph, intelligence, conversation memory, and namespace surfaces. This page is the canonical catalog.
 
-> **Version note.** The 24-tool stdio surface, graph path output, HTTP/SSE transport, and `quaid daemon` lifecycle commands are all available in the current published release (`v0.22.6`). Main currently carries the same `0.22.6` manifest, so there is no separate branch-only MCP surface documented here.
+> **Version note.** The stdio surface grew to 26 tools (adding `memory_gap_resolve` and `memory_rehydrate`); graph path output, HTTP/SSE transport, and `quaid daemon` lifecycle commands are all available in the current published release (`v0.23.0`). Main currently carries the same `0.23.0` manifest, so there is no separate branch-only MCP surface documented here.
 
-The default transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http` in `v0.22.6`. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
+The default transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http` in `v0.23.0`. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
 
 > **Platform note.** `quaid serve` and all MCP tools are cross-platform. Live vault-sync watcher threads (automatic reconcile on file edits) start only on Unix (macOS / Linux) and are simply not started on Windows — MCP tool calls continue to work normally on all platforms.
 
@@ -30,6 +30,7 @@ The default transport is stdio. Any MCP-compatible client (Claude Code, Cursor, 
 | `memory_query` | Hybrid semantic + FTS5 query | – |
 | `memory_search` | FTS5 keyword search | – |
 | `memory_list` | List pages with filters | – |
+| `memory_rehydrate` | Reverse outbound redaction tokens (session) | – |
 | `memory_link` | Create a temporal link | ✓ |
 | `memory_link_close` | Close a temporal link interval | ✓ |
 | `memory_backlinks` | List inbound links | – |
@@ -39,6 +40,7 @@ The default transport is stdio. Any MCP-compatible client (Claude Code, Cursor, 
 | `memory_tags` | List, add, or remove tags | ✓ |
 | `memory_gap` | Log a knowledge gap (privacy-safe) | ✓ |
 | `memory_gaps` | List knowledge gaps | – |
+| `memory_gap_resolve` | Resolve a gap by its answering page | ✓ |
 | `memory_stats` | Memory statistics | – |
 | `memory_collections` | List collection status | – |
 | `memory_raw` | Store raw structured data | ✓ |
@@ -112,6 +114,16 @@ Returns a ranked, fused result list with optional progressive context up to the 
 | `wing` | string | no | – |
 | `page_type` | string | no | – |
 | `limit` | u32 | no | 50 |
+
+### `memory_rehydrate`
+
+> Reverse this session's outbound redaction tokens back to their originals.
+
+| Param | Type | Required | Notes |
+| ----- | ---- | :------: | ----- |
+| `text` | string | yes | Text containing tokens like `<EMAIL_1>` to restore |
+
+Reversal uses the redaction map built for this connection by earlier `redact: true` reads. The substitution happens locally; originals never leave the machine until the agent acts on the rehydrated text. Unknown tokens pass through untouched.
 
 ## Write tools
 
@@ -200,7 +212,7 @@ object keyed by reachable slug. Each value is a list of
 `(from_slug, relationship, to_slug)` triples describing the first path
 found to that node during BFS; the value for the root slug is an empty
 list. This shape shipped in `v0.22.0` and remains part of the current
-published release (`v0.22.6`). There is no compatibility mode.
+published release (`v0.23.0`). There is no compatibility mode.
 
 ## Intelligence tools
 
@@ -251,6 +263,17 @@ The raw query is **not** persisted unless explicitly approved via the `knowledge
 | ----- | ---- | :------: | ------- |
 | `resolved` | boolean | no | `false` |
 | `limit` | u32 | no | 20 (max 1000) |
+
+### `memory_gap_resolve`
+
+> Mark a logged gap resolved by the page that answered it.
+
+| Param | Type | Required |
+| ----- | ---- | :------: |
+| `id` | i64 | yes |
+| `slug` | string | yes |
+
+Flips the gap's `resolved_at` / `resolved_by_slug`; the slug must resolve to an existing page. Resolved gaps drop out of the default `memory_gaps` queue.
 
 ## Stats and collections
 

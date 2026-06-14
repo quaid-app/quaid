@@ -1,6 +1,6 @@
 ---
 title: Tool catalog
-description: All twenty-four memory_* tools, annotated with "use when" guidance for agents.
+description: All twenty-six memory_* tools, annotated with "use when" guidance for agents.
 guide:
   eyebrow: For agents
   accentBar: true
@@ -38,6 +38,14 @@ For the exact parameter schemas, follow the link in each section.
 **Pass `depth: "auto"`** when you need assembled context to drop into an LLM prompt. Otherwise leave `depth` unset for raw ranked results.
 
 → [reference](/reference/mcp/#memory_query)
+
+### `memory_rehydrate`
+
+> Reverse outbound redaction tokens back to originals (this session).
+
+**Use when** a redacted read returned tokens like `<EMAIL_1>` and you need the original value to act on (e.g. to actually send that email). Reversal uses this connection's in-memory session map and stays entirely local; unknown tokens pass through untouched. Pairs with the `redact` option on `memory_query` / `memory_search` / `memory_get`.
+
+→ [reference](/reference/mcp/#memory_rehydrate)
 
 ### `memory_list`
 
@@ -141,6 +149,14 @@ For the exact parameter schemas, follow the link in each section.
 **Use when** triaging the user's open questions, or as the work queue for a `research` skill. `resolved: false` (default) returns unresolved gaps only.
 
 → [reference](/reference/mcp/#memory_gaps)
+
+### `memory_gap_resolve`
+
+> Mark a knowledge gap resolved by the page that answered it.
+
+**Use when** you've answered a previously-logged gap (from `memory_gaps`) by writing or finding the page that covers it. Pass the gap `id` and the answering `slug`; the gap flips to resolved and drops out of the work queue.
+
+→ [reference](/reference/mcp/#memory_gap_resolve)
 
 ## Stats and collections
 

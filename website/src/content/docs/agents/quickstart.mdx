@@ -10,7 +10,7 @@ You are an agent connecting to a Quaid via the MCP server. Read this once, then 
 
 ## What this memory is
 
-A single SQLite file (`memory.db`) on the user's machine, exposed over stdio JSON-RPC 2.0 by `quaid serve`. Twenty-four `memory_*` tools cover every supported operation. There is no other API; you cannot reach external services through the memory.
+A single SQLite file (`memory.db`) on the user's machine, exposed over stdio JSON-RPC 2.0 by `quaid serve`. Twenty-six `memory_*` tools cover every supported operation. There is no other API; you cannot reach external services through the memory.
 
 The memory holds:
 
@@ -24,7 +24,7 @@ See [Compiled truth + timeline](/explanation/page-model/) for the page model.
 
 ## Connection
 
-The user has already wired the MCP server. Your runtime spawned `quaid serve` and exchanged the standard MCP `initialize` and `tools/list` handshake. You should see twenty-four `memory_*` tools registered.
+The user has already wired the MCP server. Your runtime spawned `quaid serve` and exchanged the standard MCP `initialize` and `tools/list` handshake. You should see twenty-six `memory_*` tools registered.
 
 If a tool call fails before any work happens, the most likely reason is a model mismatch (the memory's model doesn't match the runtime's). Surface the error to the user; do not retry.
 

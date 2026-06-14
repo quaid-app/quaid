@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. The current published release is `v0.22.6`, which ships the knowledge graph layer, graph path explanations, daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. The current published release is `v0.23.0`, which ships the knowledge graph layer, graph path explanations, daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport.
 
 ## What it does
 
@@ -15,9 +15,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **The current published release is `v0.22.6`.** It ships the knowledge graph layer, graph path explanations, structured frontmatter link/tag autowiring, `quaid graph extract-entities`, a detached background daemon (`quaid daemon run`, managed via launchd on macOS and systemd on Linux), `quaid daemon install|uninstall|start|stop|restart|status|logs`, `quaid status`, and an opt-in HTTP/SSE MCP transport (`quaid serve --http`). The 24-tool MCP surface is unchanged.
+> **The current published release is `v0.23.0`.** It ships the knowledge graph layer, graph path explanations, structured frontmatter link/tag autowiring, `quaid graph extract-entities`, a detached background daemon (`quaid daemon run`, managed via launchd on macOS and systemd on Linux), `quaid daemon install|uninstall|start|stop|restart|status|logs`, `quaid status`, and an opt-in HTTP/SSE MCP transport (`quaid serve --http`). The MCP surface grew to 26 tools.
 >
-> Published GitHub Release binaries and `install.sh` resolve to `v0.22.6`. `main` currently carries the same manifest version, so the roadmap describes future follow-ons rather than a hidden `v0.23.0` release lane. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
+> Published GitHub Release binaries and `install.sh` resolve to `v0.23.0`. `main` currently carries the same manifest version, so the roadmap describes future follow-ons rather than a hidden release lane. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
 
 ---
 
@@ -26,7 +26,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — the latest published tag is `v0.22.6`, including the knowledge graph layer, daemon runtime, and HTTP/SSE transport |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — the latest published tag is `v0.23.0`, including the knowledge graph layer, daemon runtime, and HTTP/SSE transport |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
@@ -67,7 +67,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first memory store
 
-> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. **Phase 5b commands** (daemon lifecycle, `quaid status`, HTTP/SSE transport) and the knowledge graph layer are available in `v0.22.6`; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. **Phase 5b commands** (daemon lifecycle, `quaid status`, HTTP/SSE transport) and the knowledge graph layer are available in `v0.23.0`; see [Status](#status) and [Install options](#install-options) above.
 
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
@@ -180,17 +180,17 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 > For OpenClaw, put the same server definition under `mcp.servers` in `openclaw.json`. See [openclaw-harness.md](openclaw-harness.md) for the full harness setup, collections-based vault sync, and `memory_collections` health checks.
 
-**Core read/write (5):** `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
+**Core read/write (6):** `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_rehydrate`, `memory_list`
 
 **Conversation workflows (5):** `memory_add_turn`, `memory_close_session`, `memory_close_action`, `memory_correct`, `memory_correct_continue`
 
 **Knowledge + graph (7):** `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`
 
-**Gaps, stats, and raw data (4):** `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
+**Gaps, stats, and raw data (5):** `memory_gap`, `memory_gaps`, `memory_gap_resolve`, `memory_stats`, `memory_raw`
 
 **Collections + namespaces (3):** `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`
 
-The current published release (`v0.22.6`) exposes 24 tools and adds graph path output, daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport. See [spec.md](spec.md#mcp-server) for tool signatures.
+The current published release (`v0.23.0`) exposes 26 tools and adds graph path output, daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ### Capture a conversation on this branch
 
@@ -200,7 +200,7 @@ quaid call memory_add_turn '{"session_id":"demo","role":"assistant","content":"G
 quaid call memory_close_session '{"session_id":"demo"}'
 ```
 
-Those calls append turns to `conversations/YYYY-MM-DD/<session-id>.md` and queue extraction work. The capture layer accepts ordinary Markdown content, including horizontal rules (`---`) inside turn text, while using an internal Quaid marker between turn blocks. The capture layer, extraction worker, fact-page write path, and benchmark/integration proofs are all available in the published `v0.22.6` release.
+Those calls append turns to `conversations/YYYY-MM-DD/<session-id>.md` and queue extraction work. The capture layer accepts ordinary Markdown content, including horizontal rules (`---`) inside turn text, while using an internal Quaid marker between turn blocks. The capture layer, extraction worker, fact-page write path, and benchmark/integration proofs are all available in the published `v0.23.0` release.
 
 ---
 
@@ -438,7 +438,7 @@ Exit 0 means clean; exit 1 means violations were found.
 
 ### Raw MCP tool invocation
 
-Call MCP tools directly from the CLI without starting the server. On this branch, the dispatcher covers all 24 MCP tools.
+Call MCP tools directly from the CLI without starting the server. On this branch, the dispatcher covers all 26 MCP tools.
 
 ```bash
 quaid call memory_stats '{}'
@@ -468,7 +468,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands first shipped in `v0.9.6` and remain part of the published `v0.22.6` vault-sync surface, including same-root single-file `quaid put` proxying on Unix.
+> These commands first shipped in `v0.9.6` and remain part of the published `v0.23.0` vault-sync surface, including same-root single-file `quaid put` proxying on Unix.
 
 ### Attach a vault
 

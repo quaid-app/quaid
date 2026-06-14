@@ -9,10 +9,10 @@ aliases: [quaid-roadmap]
 # Quaid Product Roadmap
 
 **Last updated:** 2026-05-14T10:44:54.579+00:00
-**Latest public release:** v0.22.6
-**Main branch manifest:** v0.22.6
+**Latest public release:** v0.23.0
+**Main branch manifest:** v0.23.0
 **Next release lane:** not tagged yet
-**Benchmark status:** the latest DAB v1.0 run scored 140/200 (70%) on `v0.22.6` ([#220](https://github.com/quaid-app/quaid/issues/220)); scores published before DAB v1.0 used the original 215-point rubric and are not directly comparable. Conversation-memory and scale benchmarks remain the main public gap.
+**Benchmark status:** DAB v1.0 last scored 140/200 (70%) before this release; a v0.23.0 re-baseline is pending ([#220](https://github.com/quaid-app/quaid/issues/220)); scores published before DAB v1.0 used the original 215-point rubric and are not directly comparable. Conversation-memory and scale benchmarks remain the main public gap.
 
 ---
 
@@ -22,8 +22,8 @@ Quaid is local-first persistent memory for AI agents. A single static binary wra
 
 Release truth matters here:
 
-- GitHub Releases and `install.sh` currently resolve to **`v0.22.6`**.
-- `Cargo.toml` on `main` also now reads **`0.22.6`**, so there is no separate public `v0.23.0` lane waiting to be tagged.
+- GitHub Releases and `install.sh` currently resolve to **`v0.23.0`**.
+- `Cargo.toml` on `main` also now reads **`0.23.0`**, so there is no separate public lane waiting to be tagged.
 - The roadmap below mixes **already shipped foundations** with **follow-on work that is still branch-only or not started**. Those states are called out explicitly.
 
 ---
@@ -105,17 +105,17 @@ The single biggest gap vs Mem0/GBrain: Quaid stores raw conversation turns as do
 - `quaid serve --http` — opt-in HTTP/SSE MCP transport on loopback (v1: `--trust-loopback` required; non-loopback binds and `--token-file` are refused in v1); stdio behavior unchanged
 - Session-type expansion: `daemon`, `serve_host`, `serve`, `cli` — exactly one process holds the runtime-host lease per database
 - `RuntimeOwnsCollectionError` replaces `ServeOwnsCollectionError` in ownership predicates and error payloads
-- No new MCP tools; the 24-tool surface is unchanged
+- The MCP surface grew to 26 tools (memory_gap_resolve and memory_rehydrate were added)
 
 ### Release truth
-- First shipped in `v0.21.0`; GitHub Releases and `install.sh` now resolve to `v0.22.6`.
+- First shipped in `v0.21.0`; GitHub Releases and `install.sh` now resolve to `v0.23.0`.
 
 ---
 
 ## Phase 6 - Knowledge graph foundations ✅ Shipped foundation in v0.22.0
 
 **Shipped foundation:** `v0.22.0`  
-**Latest published release carrying it:** `v0.22.6`  
+**Latest published release carrying it:** `v0.23.0`  
 **Issues still open for follow-ons:** #107, #72, #133, #74
 
 ### What already landed

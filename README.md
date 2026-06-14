@@ -23,7 +23,7 @@ Most agent memory systems require a cloud service, a running database, or an API
 
 - **Local-first** — single SQLite file, no cloud dependency, works offline
 - **PARA-native** — organizes memory as a knowledge base (Projects, Areas, Resources, Archives), not a flat list of facts
-- **24 MCP tools, knowledge-graph path output, daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport in the current published release (`v0.22.6`)**
+- **26 MCP tools, knowledge-graph path output, daemon runtime, `quaid daemon` lifecycle commands, `quaid status`, and an opt-in HTTP/SSE MCP transport in the current published release (`v0.23.0`)**
 - **Hybrid retrieval** — FTS5 full-text + local BGE vector embeddings, combined via RRF
 - **Verified by benchmarks** — [140/200 (70%) on DAB v1.0](https://github.com/quaid-app/quaid/issues/220), P@5 on MSMARCO ahead of BM25 baseline
 
@@ -110,7 +110,7 @@ If you prefer to edit by hand, add this to your `.mcp.json`:
 }
 ```
 
-The current published release (`v0.22.6`) exposes 24 MCP tools over stdio, graph path output, and an opt-in HTTP/SSE transport via `quaid serve --http` or `quaid daemon run --http`.
+The current published release (`v0.23.0`) exposes 26 MCP tools over stdio, graph path output, and an opt-in HTTP/SSE transport via `quaid serve --http` or `quaid daemon run --http`.
 
 ---
 
@@ -127,7 +127,7 @@ Sets up `PATH` and `QUAID_DB`, initializes the database if it is missing, and re
 ### Download a binary
 
 ```bash
-VERSION="<published-tag>"   # for example: v0.22.6
+VERSION="<published-tag>"   # for example: v0.23.0
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
@@ -156,7 +156,7 @@ Two ideas borrowed from [Garry Tan's compiled knowledge model](https://gist.gith
 
 **Timeline (below the line)** — append-only, never rewritten. What happened and when.
 
-Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 24 tools in the current published release (`v0.22.6`) — with no REST API and no network dependency. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http`.
+Every page in Quaid has both. Agents read and write through Quaid's MCP surface via stdio — 26 tools in the current published release (`v0.23.0`) — with no REST API and no network dependency. An opt-in HTTP/SSE transport is also available via `quaid serve --http` or `quaid daemon run --http`.
 
 **Hybrid retrieval:** FTS5 keyword search for exact recall (names, slugs, tags) combined with local BGE vector embeddings for semantic search. Set-union merge, exact-match short-circuit.
 
@@ -227,14 +227,14 @@ quaid status
 
 ## MCP tools
 
-The current published release (`v0.22.6`) exposes 24 MCP tools over stdio, plus graph path output, daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport:
+The current published release (`v0.23.0`) exposes 26 MCP tools over stdio, plus graph path output, daemon runtime, `quaid daemon` commands, `quaid status`, and opt-in HTTP/SSE transport:
 
 | Category | Tools |
 |----------|-------|
-| **Core read/write** | `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list` |
+| **Core read/write** | `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_rehydrate`, `memory_list` |
 | **Conversation workflows** | `memory_add_turn`, `memory_close_session`, `memory_close_action`, `memory_correct`, `memory_correct_continue` |
 | **Intelligence** | `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags` |
-| **Gaps + stats** | `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw` |
+| **Gaps + stats** | `memory_gap`, `memory_gaps`, `memory_gap_resolve`, `memory_stats`, `memory_raw` |
 | **Collections + namespaces** | `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy` |
 
 ---
@@ -262,7 +262,7 @@ Retrieval quality is verified by [quaid-evals](https://github.com/quaid-app/quai
 
 | Benchmark | Score | Reference |
 |-----------|-------|-----------|
-| DAB v1.0 (FTS + semantic + MCP) | **140/200 (70%)** on `v0.22.6` | [#220](https://github.com/quaid-app/quaid/issues/220) |
+| DAB v1.0 (FTS + semantic + MCP) | **140/200 (70%)** last scored before this release; a `v0.23.0` re-baseline is pending | [#220](https://github.com/quaid-app/quaid/issues/220) |
 | MSMARCO P@5 | — | GBrain: 49.1% |
 | LoCoMo | — | Mem0: 91.6% |
 

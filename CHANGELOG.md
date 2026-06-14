@@ -4,10 +4,45 @@ All notable changes to Quaid are tracked here. Pre-1.0, schema and
 response-shape changes may break compatibility between minor versions —
 each entry below calls out the migration implications.
 
-## Unreleased
+## v0.23.0 — code-review remediation (Waves 0–4)
+
+This release lands the full 26-area code-review remediation: structural
+retrieval-quality fixes, namespace-aware page identity, a versioned schema
+migration ladder, security hardening, daemon and vault-sync robustness, an
+opt-in outbound redaction layer, two new MCP tools (the registry is now **26
+tools**), and broad correctness, performance, and test-effectiveness work.
+
+**Breaking for consumers:** the `memory_query` / `memory_search` responses are
+now an object envelope (was a bare array), all conflict errors carry one
+canonical `ConflictError:` prefix, and conversation capture moved to format v2.
+The embedding pooling/instruction changes alter every stored vector — a one-time
+`quaid embed --all` re-embed is required after upgrading. See **Migration**.
 
 ### Added
 
+- **Two new MCP tools (24 → 26).** `memory_gap_resolve` (resolve a logged
+  knowledge gap by the page that answered it) and `memory_rehydrate` (reverse
+  this session's outbound redaction tokens such as `<EMAIL_1>` back to their
+  original values — the read-side counterpart to the new `redact` option) join
+  the stdio registry.
+- **Namespace-aware MCP surface + `core::pages` identity resolver.** A single
+  sanctioned `core::pages::resolve*` path now keys page identity by
+  `(collection, namespace, slug)`; the MCP surface, reconciler reingest, and a
+  backfill migration were threaded through it. A source-audit test fails on any
+  new namespace-blind `slug = ?` lookup.
+- **Opt-in outbound secret scrubbing (redaction phase 1).** Read-chokepoint
+  redaction (`redact` option on `memory_query`/`memory_search`/`memory_get`)
+  scrubs secrets before results leave the process, for cloud-LLM contexts.
+- **Rerank plumbing, MCP `hops`, and gap-loop fixes.** Optional rerank stage,
+  multi-hop neighbourhood expansion on reads, and a corrected gap-logging
+  heuristic that no longer logs phantom gaps on strong hits.
+- **Contradiction detection & resolution surface.** Heuristic contradiction
+  detection is exposed through the surface rather than requiring an explicit
+  `## Assertions` section.
+- **`quaid setup --register-mcp` + installer onboarding.** First-run MCP client
+  registration and clearer installer guidance.
+- **`quaid skills extract` + skills refresh.** Materialize embedded skills to
+  disk for editing; refreshed skill content and resolution doctor.
 - **Versioned schema migration ladder + `quaid migrate`.** New explicit
   `quaid migrate [path]` command upgrades older databases in place by walking
   a versioned migration registry in `src/core/db.rs`. The first registered
@@ -19,28 +54,48 @@ each entry below calls out the migration implications.
   `quaid_config.schema_version` and the legacy `config.version` mirror per
   step), and verifies `PRAGMA integrity_check` plus row-count sanity
   afterwards. Plain opens remain fail-closed on any schema-version mismatch.
+- **CI benchmark/release gates + docs-truth grep gates.** Mini-bench retrieval
+  gate, release-asset/version verification, and docs gates that pin
+  current-release version, MCP tool-surface, and schema-version claims to the
+  code.
 
 ### Changed
 
+- **MCP read envelope (BREAKING).** `memory_query` and `memory_search` now
+  return `{ "results": [...], "pending_embedding_jobs"?: N }` instead of a bare
+  array. Clients must read `.results`.
+- **Embedding quality (re-embed required).** The BGE path now uses CLS pooling
+  (was mean) on both queries and passages, applies the BGE query-instruction
+  prefix asymmetrically (queries only), caps chunks, and records an embedder
+  version. This materially changes stored vectors and improves semantic recall.
+- **Retrieval fusion.** Recalibrated fusion `k`/relevance floor, tiered OR
+  blending, numeric-alias symmetry (e.g. `$75K` ↔ `75000`), and `memory_search`
+  parity with `memory_query`.
+- **Two-phase KNN vector retrieval** with vec0 cleanup and a CLI embed drain,
+  for correctness and scale on larger stores.
+- **Conflict message prefix (BREAKING).** All JSON-RPC `-32009` conflict
+  messages now carry the single canonical `ConflictError: ` prefix (previously
+  a mix of `conflict: `, `Conflict: `, and `ConflictError: `). The error code is
+  unchanged; consumers pattern-matching the old spellings should match
+  `ConflictError`.
+- **Hot-path cost** is now proportional to change size per vault event.
+- **Layering.** Page reads moved out of `commands` into `core::pages`; `put`
+  uses `BEGIN IMMEDIATE` to fix cross-process write contention.
 - The formerly scattered open-time `ensure_*` schema patches are consolidated
   into one idempotent current-version maintenance step shared by `open` and
   `quaid migrate`. Future DDL changes must land as new migration-registry
   rungs with a `SCHEMA_VERSION` bump, not as unversioned open-time patches.
 
-### Migration
-
-- Schema v9 databases (v0.20.x / v0.21.x) can now be upgraded in place with
-  `quaid migrate` instead of export + re-ingest. v0.22.x (v10) databases are
-  unaffected; running `quaid migrate` on them is a no-op.
 ### Fixed
 
 - **CLI ↔ MCP dispatch parity.** `quaid call` / `quaid pipe` now route
-  `memory_correct` and `memory_correct_continue`, matching the 24-tool MCP
+  `memory_correct` and `memory_correct_continue`, matching the 26-tool MCP
   registry. A parity test pins the dispatcher to the registry.
 - **Global `--json` flag.** `--json` is now honoured by `put`, `ingest`,
   `export`, `extract`, `embed`, `link`, `link-close`, `unlink`, `tags`,
   `timeline-add`, `compact`, and `config`; `quaid --json status` and
-  `quaid status --json` are equivalent.
+  `quaid status --json` are equivalent. `put` keeps stdout JSON-clean by
+  routing its embedding-drain note to stderr.
 - **Dead flags implemented.** `quaid export --raw [--import-id <id>]` now
   performs a byte-exact restore from `raw_imports`; `quaid embed --all`
   forces a re-embed (bypassing the unchanged-hash skip) while `--stale`
@@ -54,14 +109,35 @@ each entry below calls out the migration implications.
   no longer claims the file predates the Quaid rename; the message now
   distinguishes older/newer/legacy cases and instructs backing up the old
   file before `quaid init` (the previous remediation dead-looped).
+- **Conversation extraction atomicity & idempotency.** Session close and SLM
+  fact extraction are now atomic and safely re-runnable.
+- **SLM extraction quality.** Phi-3 chat template, EOS-token union, fenced-JSON
+  recovery, F16 weight load, and a runner gate.
+- **Custom-model safety.** Unpinned custom-model downloads are refused; the
+  loader never silently falls back to the default model.
+- **Daemon lifecycle.** State-aware launchd start, atomic dead-PID daemon
+  claim, and a clean exit on supervisor death.
+- **Vault-sync robustness.** Pages whose vault file vanished or became
+  unparseable are quarantined instead of destroyed; the heartbeat is isolated
+  and staleness handling is fail-safe. Restore validates DB-sourced paths and
+  uses fd-pinned durable writes.
+- **Retrieval / data-fidelity correctness cluster** plus a supersede-cycle
+  guard.
+- **Security hardening.** `Origin`/`Host` validation on the opt-in HTTP/SSE
+  transport; conversation turn-boundary and metadata markers are escaped behind
+  capture format v2.
 
-### Changed
+### Migration
 
-- **Conflict message prefix.** All JSON-RPC `-32009` conflict messages now
-  carry the single canonical `ConflictError: ` prefix (previously a mix of
-  `conflict: `, `Conflict: `, and `ConflictError: `). The JSON-RPC error
-  code is unchanged; consumers pattern-matching the old spellings should
-  match `ConflictError` instead.
+- **Re-embed after upgrading.** The CLS-pooling, query-instruction, and chunking
+  changes alter every stored vector. Run `quaid embed --all` once after
+  installing v0.23.0 so semantic search reflects the new embeddings.
+- **MCP consumers** must read the `{ "results": [...] }` envelope from
+  `memory_query` / `memory_search`, match `ConflictError:` on `-32009`, and
+  update conversation readers for capture format v2.
+- Schema v9 databases (v0.20.x / v0.21.x) can be upgraded in place with
+  `quaid migrate` instead of export + re-ingest. v0.22.x (v10) databases are
+  unaffected; running `quaid migrate` on them is a no-op.
 
 ## v0.22.6 — namespaced search and numeric FTS fixes
 

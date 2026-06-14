@@ -10,7 +10,7 @@ import CodePanel from "../../../components/docs/CodePanel.astro";
 import GuideStep from "../../../components/docs/GuideStep.astro";
 import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
 
-In this tutorial you'll connect a running memory to Claude Code so the model can call any of the twenty-four `memory_*` tools. The transport is stdio, so there's nothing to host, no keys to manage, and no port to open.
+In this tutorial you'll connect a running memory to Claude Code so the model can call any of the twenty-six `memory_*` tools. The transport is stdio, so there's nothing to host, no keys to manage, and no port to open.
 
 This is the canonical wiring path. For other MCP clients (Cursor, custom rmcp clients) the shape of the config is identical; only the location of the config file differs.
 
@@ -62,7 +62,7 @@ This is the canonical wiring path. For other MCP clients (Cursor, custom rmcp cl
     title="Confirm the tools are available"
     code={`# Within Claude Code:
 # /mcp list         (see "quaid" in the list of servers)
-# /mcp tools        (see all 17 memory_* tools)`}
+# /mcp tools        (see all 26 memory_* tools)`}
     codeLabel="In Claude Code"
   >
     <p>If the server doesn't appear, check the Claude Code logs for spawn errors. The most common issue is <code>command: "quaid"</code> not being on PATH for the spawned shell — use the absolute path (<code>/Users/you/.local/bin/quaid</code>) if needed.</p>
@@ -80,7 +80,7 @@ This is the canonical wiring path. For other MCP clients (Cursor, custom rmcp cl
 
 - Claude Code spawned `quaid serve` as a child process.
 - The child opened your `memory.db`, validated the recorded embedding model, and started listening on stdio.
-- Claude Code issued an MCP handshake (`initialize` → `tools/list`) and got back the twenty-four `memory_*` tool definitions.
+- Claude Code issued an MCP handshake (`initialize` → `tools/list`) and got back the twenty-six `memory_*` tool definitions.
 - When you asked a question, the model picked the appropriate tool, made a `tools/call`, and rendered the result.
 
 There is no daemon, no port, no auth layer. The trust boundary is "anything Claude Code can spawn".

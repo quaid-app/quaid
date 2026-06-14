@@ -121,7 +121,7 @@ See `src/schema.sql` for the current DDL. Key tables:
 
 ## MCP tools
 
-24 tools, registered in `src/mcp/server.rs` (`rmcp::tool_box!`):
+26 tools, registered in `src/mcp/server.rs` (`rmcp::tool_box!`):
 
 - Pages: `memory_get`, `memory_put`, `memory_list`, `memory_raw`
 - Search: `memory_query`, `memory_search`, `memory_rehydrate`

@@ -310,6 +310,7 @@ pub fn mark_failed(
 
 fn recover_expired_leases(conn: &Connection) -> Result<(), ExtractionQueueError> {
     let max_retries = max_retries(conn)?;
+    let lease_expiry_seconds = lease_expiry_seconds(conn)?;
     conn.execute(
         "UPDATE extraction_queue
          SET attempts = attempts + 1,
@@ -320,7 +321,7 @@ fn recover_expired_leases(conn: &Connection) -> Result<(), ExtractionQueueError>
              last_error = COALESCE(last_error, 'lease expired')
          WHERE status = 'running'
            AND julianday('now') >= julianday(scheduled_for) + (?2 / 86400.0)",
-        params![max_retries, DEFAULT_LEASE_EXPIRY_SECONDS],
+        params![max_retries, lease_expiry_seconds],
     )?;
     Ok(())
 }
@@ -372,6 +373,29 @@ fn max_retries(conn: &Connection) -> Result<i64, ExtractionQueueError> {
         .map_err(|_| ExtractionQueueError::Config {
             message: format!("invalid extraction.max_retries value: {raw}"),
         })
+}
+
+fn lease_expiry_seconds(conn: &Connection) -> Result<i64, ExtractionQueueError> {
+    let raw = db::read_config_value_or(
+        conn,
+        "extraction.lease_expiry_seconds",
+        &DEFAULT_LEASE_EXPIRY_SECONDS.to_string(),
+    )
+    .map_err(|error| ExtractionQueueError::Config {
+        message: error.to_string(),
+    })?;
+
+    let parsed = raw
+        .parse::<i64>()
+        .map_err(|_| ExtractionQueueError::Config {
+            message: format!("invalid extraction.lease_expiry_seconds value: {raw}"),
+        })?;
+    if parsed <= 0 {
+        return Err(ExtractionQueueError::Config {
+            message: format!("invalid extraction.lease_expiry_seconds value: {raw}"),
+        });
+    }
+    Ok(parsed)
 }
 
 /// Read SQLite's current UTC timestamp in canonical

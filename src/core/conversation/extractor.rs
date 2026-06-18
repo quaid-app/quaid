@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -39,6 +40,7 @@ pub const DEFAULT_WORKER_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 const DEFAULT_WINDOW_TURNS: usize = 5;
 const DEFAULT_MODEL_ALIAS: &str = "phi-3.5-mini";
+const DEFAULT_LEASE_HEARTBEAT_MAX_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_RECORDED_PARSE_OUTPUT: usize = 240;
 const EXTRACTION_SYSTEM_PROMPT: &str = concat!(
     "You extract durable facts from conversations. Output JSON only — no prose,\n",
@@ -146,6 +148,8 @@ pub struct Worker<'db, S = LazySlmRunner, W = ResolvingFactWriter> {
     window_turns: usize,
     poll_interval: Duration,
     max_tokens: usize,
+    lease_heartbeat_interval: Duration,
+    db_path: Option<PathBuf>,
 }
 
 /// Errors returned from the extraction worker's polling and processing loop.
@@ -195,6 +199,7 @@ where
                 },
             )?;
         let window_turns = parse_usize_config(db, "extraction.window_turns", DEFAULT_WINDOW_TURNS)?;
+        let lease_expiry_seconds = queue::lease_expiry_seconds(db)?;
 
         Ok(Self {
             db,
@@ -204,6 +209,8 @@ where
             window_turns,
             poll_interval: DEFAULT_WORKER_POLL_INTERVAL,
             max_tokens: DEFAULT_EXTRACTION_MAX_TOKENS,
+            lease_heartbeat_interval: lease_heartbeat_interval(lease_expiry_seconds),
+            db_path: database_path(db)?,
         })
     }
 
@@ -212,6 +219,13 @@ where
     pub fn with_limits(mut self, poll_interval: Duration, max_tokens: usize) -> Self {
         self.poll_interval = poll_interval;
         self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Override the lease heartbeat interval; used by tests to prove
+    /// renewal without waiting on the production lease window.
+    pub fn with_lease_heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.lease_heartbeat_interval = interval;
         self
     }
 
@@ -316,10 +330,7 @@ where
         window: &WindowedTurns,
     ) -> Result<ExtractionResponse, WorkerError> {
         let prompt = self.build_prompt(&job.session_id, window);
-        let raw = self
-            .slm
-            .infer(&self.model_alias, &prompt, self.max_tokens)
-            .map_err(WorkerError::from)?;
+        let raw = self.infer_with_lease_heartbeat(job, &prompt)?;
 
         match parse_response(&raw) {
             Ok(response) => Ok(response),
@@ -349,13 +360,23 @@ where
                 }
             };
 
-            if let Err(error) = self
-                ._vault_writer
-                .write_window(self.db, job, window, &response)
-            {
+            if let Err(error) = self.refresh_job_lease(job).and_then(|_| {
+                self._vault_writer
+                    .write_window(self.db, job, window, &response)
+            }) {
                 self.record_job_failure(job, &error)?;
                 return Err(error);
             }
+
+            if let Err(error) = self.refresh_job_lease(job) {
+                self.record_job_failure(job, &error)?;
+                return Err(error);
+            }
+        }
+
+        if let Err(error) = self.refresh_job_lease(job) {
+            self.record_job_failure(job, &error)?;
+            return Err(error);
         }
 
         if !windows.is_empty() {
@@ -368,8 +389,45 @@ where
             )?;
         }
 
-        self._vault_writer.before_mark_done(self.db, job)?;
+        if let Err(error) = self.refresh_job_lease(job) {
+            self.record_job_failure(job, &error)?;
+            return Err(error);
+        }
+
+        if let Err(error) = self._vault_writer.before_mark_done(self.db, job) {
+            self.record_job_failure(job, &error)?;
+            return Err(error);
+        }
+
+        if let Err(error) = self.refresh_job_lease(job) {
+            self.record_job_failure(job, &error)?;
+            return Err(error);
+        }
+
         queue::mark_done(self.db, job.id, job.attempts).map_err(WorkerError::from)
+    }
+
+    fn infer_with_lease_heartbeat(
+        &self,
+        job: &ExtractionJob,
+        prompt: &str,
+    ) -> Result<String, WorkerError> {
+        let heartbeat = LeaseHeartbeat::start(
+            self.db_path.clone(),
+            job.id,
+            job.attempts,
+            self.lease_heartbeat_interval,
+        );
+        let result = self
+            .slm
+            .infer(&self.model_alias, prompt, self.max_tokens)
+            .map_err(WorkerError::from);
+        heartbeat.stop();
+        result
+    }
+
+    fn refresh_job_lease(&self, job: &ExtractionJob) -> Result<(), WorkerError> {
+        queue::refresh_lease(self.db, job.id, job.attempts).map_err(WorkerError::from)
     }
 
     /// Persist a truncated copy of the offending raw SLM output to the
@@ -411,6 +469,83 @@ where
         Ok(memory_root
             .root_path
             .join(slash_path_to_platform(conversation_path)))
+    }
+}
+
+struct LeaseHeartbeat {
+    stop_tx: Option<mpsc::Sender<()>>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl LeaseHeartbeat {
+    fn start(db_path: Option<PathBuf>, job_id: i64, attempts: i64, interval: Duration) -> Self {
+        let Some(db_path) = db_path else {
+            return Self {
+                stop_tx: None,
+                handle: None,
+            };
+        };
+        if interval.is_zero() {
+            return Self {
+                stop_tx: None,
+                handle: None,
+            };
+        }
+
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let handle = thread::spawn(move || loop {
+            match stop_rx.recv_timeout(interval) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let Some(db_path) = db_path.to_str() else {
+                        break;
+                    };
+                    let Ok(conn) = db::open(db_path) else {
+                        continue;
+                    };
+                    if queue::refresh_lease(&conn, job_id, attempts).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            stop_tx: Some(stop_tx),
+            handle: Some(handle),
+        }
+    }
+
+    fn stop(mut self) {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            let _ = stop_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn lease_heartbeat_interval(lease_expiry_seconds: i64) -> Duration {
+    let expiry = Duration::from_secs(lease_expiry_seconds.max(1) as u64);
+    let third = expiry / 3;
+    if third.is_zero() {
+        Duration::from_secs(1)
+    } else {
+        std::cmp::min(third, DEFAULT_LEASE_HEARTBEAT_MAX_INTERVAL)
+    }
+}
+
+fn database_path(conn: &Connection) -> Result<Option<PathBuf>, WorkerError> {
+    let path = conn
+        .query_row("PRAGMA database_list", [], |row| row.get::<_, String>(2))
+        .map_err(|error| WorkerError::Config {
+            message: error.to_string(),
+        })?;
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(PathBuf::from(path)))
     }
 }
 

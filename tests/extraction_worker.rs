@@ -770,11 +770,57 @@ fn claim_next_job_returns_none_when_runtime_is_disabled() {
     assert_eq!(worker.claim_next_job().unwrap(), None);
 }
 
+#[test]
+fn slow_inference_heartbeats_running_lease() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_worker_db_at(&db_path);
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value)
+         VALUES ('extraction.lease_expiry_seconds', '1')",
+        [],
+    )
+    .unwrap();
+
+    let conversation_path =
+        seed_conversation_file(dir.path(), "s1", conversation_with_cursor("s1", 0, 2));
+    queue::enqueue(
+        &conn,
+        "s1",
+        &conversation_path,
+        ExtractionTriggerKind::Manual,
+        "2000-01-01T00:00:00Z",
+    )
+    .unwrap();
+
+    let slm = StubSlm::with_results([Ok("{\"facts\":[]}")]).with_delay(Duration::from_millis(1500));
+    let worker =
+        worker_with_stub(&conn, slm).with_lease_heartbeat_interval(Duration::from_millis(100));
+    let claimed = worker.claim_next_job().unwrap().unwrap();
+
+    let competing_db_path = db_path.clone();
+    let competing = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1200));
+        let competing_conn = open_worker_db_at(&competing_db_path);
+        queue::dequeue(&competing_conn).unwrap()
+    });
+
+    worker.process_job(&claimed).unwrap();
+    let stolen = competing.join().unwrap();
+
+    assert_eq!(stolen, None);
+    assert_eq!(
+        job_status(&conn, claimed.id),
+        ExtractionJobStatus::Done.as_str()
+    );
+}
+
 #[derive(Debug, Clone)]
 struct StubSlm {
     results: Arc<Mutex<VecDeque<Result<String, SlmError>>>>,
     calls: Arc<Mutex<Vec<InferCall>>>,
     runtime_disabled: bool,
+    delay: Duration,
 }
 
 impl StubSlm {
@@ -783,6 +829,7 @@ impl StubSlm {
             results: Arc::new(Mutex::new(VecDeque::new())),
             calls: Arc::new(Mutex::new(Vec::new())),
             runtime_disabled: false,
+            delay: Duration::ZERO,
         }
     }
 
@@ -796,7 +843,13 @@ impl StubSlm {
             )),
             calls: Arc::new(Mutex::new(Vec::new())),
             runtime_disabled: false,
+            delay: Duration::ZERO,
         }
+    }
+
+    fn with_delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
     }
 
     fn runtime_disabled() -> Self {
@@ -818,6 +871,9 @@ impl SlmClient for StubSlm {
             prompt: prompt.to_string(),
             max_tokens,
         });
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
+        }
         self.results
             .lock()
             .unwrap()

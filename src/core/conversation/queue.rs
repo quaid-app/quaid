@@ -25,6 +25,8 @@ pub const DEFAULT_EXTRACTION_MAX_RETRIES: i64 = 3;
 /// Default lease window for a `running` job; once this many seconds
 /// elapse without a status update, [`dequeue`] reclaims the row.
 pub const DEFAULT_LEASE_EXPIRY_SECONDS: i64 = 300;
+/// Config key used to override the extraction lease expiry window.
+pub const LEASE_EXPIRY_CONFIG_KEY: &str = "extraction.lease_expiry_seconds";
 
 /// Errors surfaced by the extraction-queue API.
 #[derive(Debug, Error)]
@@ -238,7 +240,7 @@ pub fn pending_queue_position(
 /// when retries are exhausted).
 pub fn dequeue(conn: &Connection) -> Result<Option<ExtractionJob>, ExtractionQueueError> {
     recover_expired_leases(conn)?;
-    let now = current_timestamp(conn)?;
+    let now = current_lease_timestamp(conn)?;
     let mut stmt = conn.prepare(
         "UPDATE extraction_queue
          SET status = 'running',
@@ -309,8 +311,30 @@ pub fn mark_failed(
     Ok(())
 }
 
+/// Renew a running job's lease by stamping `scheduled_for` to the
+/// current SQLite timestamp. Returns [`ExtractionQueueError::StaleLease`]
+/// if the row has already been reclaimed or completed.
+pub fn refresh_lease(
+    conn: &Connection,
+    job_id: i64,
+    attempts: i64,
+) -> Result<(), ExtractionQueueError> {
+    let now = current_lease_timestamp(conn)?;
+    let updated = conn.execute(
+        "UPDATE extraction_queue
+         SET scheduled_for = ?3
+         WHERE id = ?1 AND status = 'running' AND attempts = ?2",
+        params![job_id, attempts, now],
+    )?;
+    if updated == 0 {
+        return Err(ExtractionQueueError::StaleLease { job_id, attempts });
+    }
+    Ok(())
+}
+
 fn recover_expired_leases(conn: &Connection) -> Result<(), ExtractionQueueError> {
     let max_retries = max_retries(conn)?;
+    let lease_expiry_seconds = lease_expiry_seconds(conn)?;
     conn.execute(
         "UPDATE extraction_queue
          SET attempts = attempts + 1,
@@ -321,7 +345,7 @@ fn recover_expired_leases(conn: &Connection) -> Result<(), ExtractionQueueError>
              last_error = COALESCE(last_error, 'lease expired')
          WHERE status = 'running'
            AND julianday('now') >= julianday(scheduled_for) + (?2 / 86400.0)",
-        params![max_retries, DEFAULT_LEASE_EXPIRY_SECONDS],
+        params![max_retries, lease_expiry_seconds],
     )?;
     Ok(())
 }
@@ -375,10 +399,41 @@ fn max_retries(conn: &Connection) -> Result<i64, ExtractionQueueError> {
         })
 }
 
+/// Read the configured extraction lease expiry in seconds.
+pub fn lease_expiry_seconds(conn: &Connection) -> Result<i64, ExtractionQueueError> {
+    let raw = db::read_config_value_or(
+        conn,
+        LEASE_EXPIRY_CONFIG_KEY,
+        &DEFAULT_LEASE_EXPIRY_SECONDS.to_string(),
+    )
+    .map_err(|error| ExtractionQueueError::Config {
+        message: error.to_string(),
+    })?;
+
+    let parsed = raw
+        .parse::<i64>()
+        .map_err(|_| ExtractionQueueError::Config {
+            message: format!("invalid {LEASE_EXPIRY_CONFIG_KEY} value: {raw}"),
+        })?;
+    if parsed <= 0 {
+        return Err(ExtractionQueueError::Config {
+            message: format!("{LEASE_EXPIRY_CONFIG_KEY} must be positive: {raw}"),
+        });
+    }
+    Ok(parsed)
+}
+
 /// Read SQLite's current UTC timestamp in canonical
 /// `YYYY-MM-DDTHH:MM:SSZ` form for use in queue-row timestamps.
 pub fn current_timestamp(conn: &Connection) -> Result<String, ExtractionQueueError> {
     conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
+        row.get(0)
+    })
+    .map_err(ExtractionQueueError::from)
+}
+
+fn current_lease_timestamp(conn: &Connection) -> Result<String, ExtractionQueueError> {
+    conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |row| {
         row.get(0)
     })
     .map_err(ExtractionQueueError::from)

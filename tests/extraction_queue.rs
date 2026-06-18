@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use quaid::core::conversation::queue::{dequeue, enqueue, mark_done, mark_failed};
+use quaid::core::conversation::queue::{dequeue, enqueue, mark_done, mark_failed, refresh_lease};
 use quaid::core::db;
 use quaid::core::types::{ExtractionJobStatus, ExtractionTriggerKind};
 use rusqlite::Connection;
@@ -280,4 +280,41 @@ fn stale_worker_cannot_finish_released_job_after_lease_expiry() {
         )
         .unwrap();
     assert_eq!(status, ExtractionJobStatus::Done.as_str());
+}
+
+#[test]
+fn refresh_lease_keeps_running_job_from_expiring() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_queue_db(&db_path);
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value)
+         VALUES ('extraction.lease_expiry_seconds', '1')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO extraction_queue
+             (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+         VALUES
+             ('running', 'conversations/2026-05-03/running.md', 'manual', '2000-01-01T00:00:00Z', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 0, NULL, 'running'),
+             ('pending', 'conversations/2026-05-03/pending.md', 'manual', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', 0, NULL, 'pending')",
+        [],
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    refresh_lease(&conn, 1, 0).unwrap();
+    let claimed = dequeue(&conn).unwrap().unwrap();
+
+    assert_eq!(claimed.session_id, "pending");
+    let row: (i64, String) = conn
+        .query_row(
+            "SELECT attempts, status FROM extraction_queue WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row.0, 0);
+    assert_eq!(row.1, ExtractionJobStatus::Running.as_str());
 }

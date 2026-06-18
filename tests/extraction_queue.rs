@@ -265,6 +265,60 @@ fn lease_expiry_recovers_running_job_and_increments_attempts() {
 }
 
 #[test]
+fn configured_lease_expiry_keeps_slow_running_job_claimed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_queue_db(&db_path);
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value)
+         VALUES ('extraction.lease_expiry_seconds', '3600')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO extraction_queue
+             (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, attempts, last_error, status)
+         VALUES
+             ('slow', 'conversations/2026-05-03/slow.md', 'debounce', '2000-01-01T00:00:00Z', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-10 minutes'), 0, NULL, 'running'),
+             ('ready', 'conversations/2026-05-03/ready.md', 'debounce', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', 0, NULL, 'pending')",
+        [],
+    )
+    .unwrap();
+
+    let claimed = dequeue(&conn).unwrap().unwrap();
+    let slow_row: (i64, String) = conn
+        .query_row(
+            "SELECT attempts, status FROM extraction_queue WHERE session_id = 'slow'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(claimed.session_id, "ready");
+    assert_eq!(slow_row.0, 0);
+    assert_eq!(slow_row.1, "running");
+}
+
+#[test]
+fn invalid_lease_expiry_config_is_rejected() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("memory.db");
+    let conn = open_queue_db(&db_path);
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value)
+         VALUES ('extraction.lease_expiry_seconds', '0')",
+        [],
+    )
+    .unwrap();
+
+    let error = dequeue(&conn).unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("invalid extraction.lease_expiry_seconds"));
+}
+
+#[test]
 fn queue_rows_survive_reopen_and_done_rows_stop_dequeueing() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");

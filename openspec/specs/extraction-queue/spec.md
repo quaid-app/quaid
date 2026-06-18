@@ -64,15 +64,19 @@ The worker SHALL transition a claimed job to `status = 'done'` on success or to 
 - **THEN** the stale transition is rejected and the newer lease remains authoritative
 
 ### Requirement: Queue persistence survives daemon restart
-The system SHALL persist `extraction_queue` rows durably (SQLite WAL, the project's existing durability mode). On `quaid serve` restart, `pending` rows SHALL remain in `pending` and SHALL be dequeued in normal order; `running` rows that were claimed by a worker that did not complete SHALL be re-eligible for dequeue after the shipped fixed 300-second lease-expiry interval so that a crashed worker does not orphan a row indefinitely.
+The system SHALL persist `extraction_queue` rows durably (SQLite WAL, the project's existing durability mode). On `quaid serve` restart, `pending` rows SHALL remain in `pending` and SHALL be dequeued in normal order; `running` rows that were claimed by a worker that did not complete SHALL be re-eligible for dequeue after the configured `extraction.lease_expiry_seconds` interval, defaulting to 300 seconds, so that a crashed worker does not orphan a row indefinitely while slow extraction runtimes can extend the crash-recovery window.
 
 #### Scenario: Pending rows survive a daemon restart
 - **WHEN** `quaid serve` is killed while pending rows exist and is then restarted
 - **THEN** the previously pending rows are still present with `status = 'pending'` and are dequeued in normal `scheduled_for` order
 
 #### Scenario: Stale running rows recover after lease expiry
-- **WHEN** a `running` row's `scheduled_for + 300 seconds` has passed without a `done` or `failed` transition
+- **WHEN** a `running` row's `scheduled_for + extraction.lease_expiry_seconds` has passed without a `done` or `failed` transition
 - **THEN** the row is re-eligible for dequeue and the next claim transitions it back to `running` with `attempts += 1`
+
+#### Scenario: Configured lease expiry preserves a slow live job
+- **WHEN** `extraction.lease_expiry_seconds = 3600` and a `running` row was claimed 10 minutes ago
+- **THEN** dequeue does not reclaim that row as expired
 
 ### Requirement: A single in-process worker drains the queue inside `quaid serve`
 The system SHALL run a single extraction worker as a long-lived task inside `quaid serve` whenever extraction is enabled (and not runtime-disabled per `slm-runtime`). The worker SHALL claim pending jobs via the dequeue contract defined in proposal #1, process them serially, and report success or failure via the existing accounting paths. Concurrent multi-worker operation SHALL NOT be introduced in this proposal ΓÇö single-worker is the v1 model.
@@ -154,4 +158,3 @@ The system SHALL wrap multi-statement queue mutations (enqueue, dequeue, mark-do
 
 - **WHEN** a queue write closure returns an error
 - **THEN** the in-flight changes are rolled back, the connection is no longer inside a transaction, and a follow-up queue write on the same connection succeeds normally
-

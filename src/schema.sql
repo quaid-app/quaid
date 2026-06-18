@@ -480,6 +480,7 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('extraction.window_turns', '5'),
     ('extraction.debounce_ms', '5000'),
     ('extraction.idle_close_ms', '60000'),
+    ('extraction.lease_expiry_seconds', '300'),
     ('extraction.retention_days', '30'),
     ('fact_resolution.dedup_cosine_min', '0.92'),
     ('fact_resolution.supersede_cosine_min', '0.4'),

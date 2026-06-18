@@ -112,6 +112,7 @@ fn fresh_v10_schema_includes_conversation_memory_artifacts_and_defaults() {
                  'extraction.window_turns',
                  'extraction.debounce_ms',
                  'extraction.idle_close_ms',
+                 'extraction.lease_expiry_seconds',
                  'extraction.retention_days',
                  'fact_resolution.dedup_cosine_min',
                  'fact_resolution.key_match_cosine_min',
@@ -134,6 +135,10 @@ fn fresh_v10_schema_includes_conversation_memory_artifacts_and_defaults() {
             ("extraction.debounce_ms".to_string(), "5000".to_string()),
             ("extraction.enabled".to_string(), "false".to_string()),
             ("extraction.idle_close_ms".to_string(), "60000".to_string()),
+            (
+                "extraction.lease_expiry_seconds".to_string(),
+                "300".to_string()
+            ),
             ("extraction.max_retries".to_string(), "3".to_string()),
             (
                 "extraction.model_alias".to_string(),

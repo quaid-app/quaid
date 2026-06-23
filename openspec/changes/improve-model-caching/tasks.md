@@ -160,7 +160,7 @@
   - `cargo fmt --check`
   - `cargo clippy --all-targets --all-features --locked -- -D warnings`
 
-- [ ] 7.4 Performance check
+- [x] 7.4 Performance check
   - Normal fast cache status should avoid full hashing and stay responsive for multi-GB caches
   - `status --verify` may take longer, but should report elapsed time and remain bounded by disk throughput
   - Cleanup should avoid recursively scanning unrelated directories outside the model cache root

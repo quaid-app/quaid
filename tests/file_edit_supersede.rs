@@ -210,6 +210,7 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
                 include_superseded: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                mmr_lambda: None,
                 redact: None,
             })
             .unwrap(),
@@ -230,6 +231,7 @@ fn editing_chained_extracted_preference_preserves_one_linear_chain() {
                 include_superseded: Some(true),
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                mmr_lambda: None,
                 redact: None,
             })
             .unwrap(),

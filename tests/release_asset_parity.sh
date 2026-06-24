@@ -64,22 +64,11 @@ QUAID_TEST_MODE=1 \
   HOME="$HOME_DIR" \
   . "$INSTALL_SH"
 
-# Simulate install.sh asset naming for all platform+channel combos.
-# install.sh uses: asset_name="quaid-${PLATFORM}-${CHANNEL}"
-# Platform resolution: os_name-arch_name (see resolve_platform).
-simulate_asset() {
-  platform="$1"
-  channel="$2"
-  printf 'quaid-%s-%s' "$platform" "$channel"
-}
-
+# Single channel: install.sh uses asset_name="quaid-${PLATFORM}" — one binary
+# per platform, no -airgapped/-online suffix.
 for name in $(canonical_assets); do
-  # Extract platform and channel from canonical name
-  # Format: quaid-<platform>-<channel>  where channel is last segment
-  channel="${name##*-}"
-  without_channel="${name%-*}"
-  platform="${without_channel#quaid-}"
-  expected="$(simulate_asset "$platform" "$channel")"
+  platform="${name#quaid-}"
+  expected="quaid-${platform}"
   if [ "$expected" = "$name" ]; then
     ok "T1[$name]: install.sh naming formula generates expected asset name"
   else
@@ -114,10 +103,10 @@ fi
 
 # ── T5: canonical manifest counts remain closed ──
 manifest_count=$(manifest_entries | wc -l | tr -d ' ')
-if [ "$manifest_count" = "17" ]; then
-  ok "T5: canonical manifest has 17 release files (8 binaries + 8 checksums + install.sh)"
+if [ "$manifest_count" = "9" ]; then
+  ok "T5: canonical manifest has 9 release files (4 binaries + 4 checksums + install.sh)"
 else
-  not_ok "T5: canonical manifest has $manifest_count entries; want 17"
+  not_ok "T5: canonical manifest has $manifest_count entries; want 9"
 fi
 
 # ── T6: RELEASE_CHECKLIST.md uses channel-suffixed names and points at the manifest ──
@@ -133,20 +122,19 @@ else
   not_ok "T6: .github/RELEASE_CHECKLIST.md not found"
 fi
 
-# ── T7: installer does not attempt to download anything without channel suffix ──
-if grep -Fq 'quaid-${PLATFORM}-${CHANNEL}' "$INSTALL_SH" || \
-   grep -Fq '"quaid-${PLATFORM}-${CHANNEL}"' "$INSTALL_SH"; then
-  ok "T7: install.sh asset name always includes CHANNEL suffix (no bare fallback path)"
+# ── T7: installer builds the single per-platform asset name ──
+if grep -Fq 'quaid-${PLATFORM}' "$INSTALL_SH"; then
+  ok "T7: install.sh asset name is the single per-platform binary (no channel suffix)"
 else
-  not_ok "T7: install.sh asset construction does not consistently include CHANNEL suffix"
+  not_ok "T7: install.sh asset construction does not use the quaid-\${PLATFORM} form"
 fi
 
-# ── T8: spec docs describe the channel-suffixed schema ──
-if grep -Fq 'quaid-<platform>-<channel>' "$SCRIPT_DIR/docs/spec.md" && \
-   grep -Fq 'quaid-<platform>-<channel>' "$SCRIPT_DIR/website/src/content/docs/contributing/specification.md"; then
-  ok "T8: spec docs describe the channel-suffixed release asset schema"
+# ── T8: spec docs describe the single per-platform asset schema ──
+if grep -Fq 'quaid-<platform>' "$SCRIPT_DIR/docs/spec.md" && \
+   grep -Fq 'quaid-<platform>' "$SCRIPT_DIR/website/src/content/docs/contributing/specification.md"; then
+  ok "T8: spec docs describe the single per-platform release asset schema"
 else
-  not_ok "T8: spec docs are missing the channel-suffixed release asset schema"
+  not_ok "T8: spec docs are missing the single per-platform release asset schema"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────

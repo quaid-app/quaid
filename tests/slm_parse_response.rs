@@ -13,7 +13,6 @@
 //! other SLM integration suites use, so no real multi-GB download is
 //! required.
 
-use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -352,12 +351,18 @@ fn seed_tiny_phi3_cache(alias: &str) {
 
     let mut tokenizer = Tokenizer::new(
         WordLevel::builder()
-            .vocab(HashMap::from([
-                ("<unk>".to_string(), 0),
-                ("hello".to_string(), 1),
-                ("world".to_string(), 2),
-                ("<eos>".to_string(), 3),
-            ]))
+            // tokenizers 0.21 takes `ahash::AHashMap` here; collect into the
+            // method's parameter type rather than naming the ahash re-export.
+            .vocab(
+                [
+                    ("<unk>".to_string(), 0_u32),
+                    ("hello".to_string(), 1),
+                    ("world".to_string(), 2),
+                    ("<eos>".to_string(), 3),
+                ]
+                .into_iter()
+                .collect(),
+            )
             .unk_token("<unk>".to_string())
             .build()
             .unwrap(),

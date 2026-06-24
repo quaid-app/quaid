@@ -40,6 +40,7 @@ pub async fn run(
     hops: Option<u32>,
     relevance_floor: Option<f64>,
     max_chunks_per_doc: Option<usize>,
+    mmr_lambda: Option<f64>,
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
@@ -56,6 +57,7 @@ pub async fn run(
             hops,
             relevance_floor,
             max_chunks_per_doc,
+            mmr_lambda,
             ..Default::default()
         },
     )?;
@@ -247,6 +249,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -269,6 +272,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -280,7 +284,7 @@ mod tests {
         let conn = db::open(":memory:").unwrap();
         // depth="auto" triggers read_token_budget + progressive_retrieve path
         let result = run(
-            &conn, "anything", "auto", 5, 0, None, None, false, false, None, None, None,
+            &conn, "anything", "auto", 5, 0, None, None, false, false, None, None, None, None,
         )
         .await;
         assert!(result.is_ok());
@@ -291,7 +295,7 @@ mod tests {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
         let result = run(
-            &conn, "query", "auto", 5, 2000, None, None, false, true, None, None, None,
+            &conn, "query", "auto", 5, 2000, None, None, false, true, None, None, None, None,
         )
         .await;
         assert!(result.is_ok());
@@ -324,6 +328,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
         assert!(result.is_ok());
@@ -350,6 +355,7 @@ mod tests {
             None,
             false,
             true,
+            None,
             None,
             None,
             None,

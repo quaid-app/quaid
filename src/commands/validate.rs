@@ -405,7 +405,10 @@ mod tests {
     use crate::core::db;
 
     fn open_test_db() -> Connection {
-        db::open(":memory:").unwrap()
+        // Pin the small BGE model (384d) so the `vec_384` / bge-small fixtures
+        // resolve against the active model, independent of the production
+        // default (Qwen3-Embedding-0.6B).
+        db::init(":memory:", &crate::core::inference::resolve_model("small")).unwrap()
     }
 
     fn insert_page(conn: &Connection, slug: &str) {

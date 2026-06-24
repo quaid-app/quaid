@@ -55,11 +55,11 @@ memory.db                  — SQLite: pages + FTS5 + vec0 + links + assertions
 # Debug
 cargo build
 
-# Release (airgapped default — embeds BGE-small-en-v1.5 for offline use)
+# Release (single channel — provisions the configured model on first semantic use)
 cargo build --release
 
-# Online release (downloads/caches the selected BGE model on first semantic use)
-cargo build --release --no-default-features --features bundled,online-model
+# Offline-stub build (hash-shim embeddings only, no model download/provisioning)
+cargo build --release --no-default-features --features bundled
 
 # Cross-compile
 cargo install cross
@@ -82,20 +82,35 @@ Testing rules:
 
 ## Embedding model
 
-Quaid defaults to `BAAI/bge-small-en-v1.5` (384 dimensions), but the `online-model`
-build now accepts runtime model selection via `QUAID_MODEL` or `--model`.
+Quaid defaults to `Qwen/Qwen3-Embedding-0.6B` (1024 dimensions, last-token
+pooling, instruction-aware queries). Selection is via `QUAID_MODEL` or `--model`.
 
-- `small` → `BAAI/bge-small-en-v1.5` (384d, default)
-- `base` → `BAAI/bge-base-en-v1.5` (768d)
+- `qwen3-0.6b` → `Qwen/Qwen3-Embedding-0.6B` (1024d, **default**; last-token pooling, `Instruct: …\nQuery: …` queries)
+- `small` → `BAAI/bge-small-en-v1.5` (384d, CLS pooling)
+- `base` (alias `medium`) → `BAAI/bge-base-en-v1.5` (768d)
 - `large` → `BAAI/bge-large-en-v1.5` (1024d)
-- `m3` → `BAAI/bge-m3` (1024d, multilingual)
+- `m3` (alias `max`) → `BAAI/bge-m3` (1024d, multilingual)
 - any other value is treated as a full Hugging Face model ID
 
-Compile-time channels:
-- default `embedded-model` build — airgapped channel, always uses embedded BGE-small and warns if another model is requested
-- `online-model` build — downloads/caches the selected model on first semantic use
+Aliases no longer carry pinned commit SHAs or file hashes (those rotted on HF
+repo reorganisations); reproducibility rests on the `model_id` persisted in
+`quaid_config`. Run `quaid model list` (`--json` for scripting) to see the
+built-in aliases, their dimensions, and approximate download sizes. Downloads
+use the model's `main` revision unless `--model-revision <sha>` pins one.
 
-Model metadata is persisted in the `quaid_config` table at `quaid init` and validated on every subsequent open. If the requested model differs from the initialized model, the command errors before touching embeddings.
+### Airgapped = local-only inference, not embedded weights
+
+"Airgapped" means local-only inference (no cloud, no API keys, no data egress) —
+**not** weights baked into the binary. There is a **single build/release channel**
+(the former `embedded-model`/`online-model` split is gone): one binary per
+platform that provisions the configured model on first semantic use (download +
+verify + cache), then runs fully offline. The default models are too large to
+`include_bytes!` (~1.2 GB embedder, ~2.5 GB GGUF extractor). A fully offline-stub
+build is still possible via `--no-default-features --features bundled` (hash-shim
+embeddings only). Tests force the deterministic hash shim with
+`QUAID_FORCE_HASH_SHIM=1`.
+
+Model metadata is persisted in the `quaid_config` table at `quaid init` and validated on every subsequent open. If the requested model differs from the initialized model, the command errors before touching embeddings (a pre-change 384d database must be re-initialized — no in-place 384→1024 migration is provided).
 
 ## Skills
 

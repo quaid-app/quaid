@@ -29,8 +29,8 @@ fn open_seeds_default_embedding_model() {
         )
         .unwrap();
 
-    assert_eq!(name, "BAAI/bge-small-en-v1.5");
-    assert_eq!(dims, 384);
+    assert_eq!(name, "Qwen/Qwen3-Embedding-0.6B");
+    assert_eq!(dims, 1024);
     assert_eq!(active, 1);
 }
 
@@ -44,9 +44,9 @@ fn quaid_config_roundtrip_preserves_values() {
     assert_eq!(
         config,
         QuaidConfig {
-            model_id: "BAAI/bge-small-en-v1.5".to_owned(),
-            model_alias: "small".to_owned(),
-            embedding_dim: 384,
+            model_id: "Qwen/Qwen3-Embedding-0.6B".to_owned(),
+            model_alias: "qwen3-0.6b".to_owned(),
+            embedding_dim: 1024,
             schema_version: 10,
         }
     );

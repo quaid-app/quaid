@@ -2081,8 +2081,8 @@ If anything goes wrong:
 ## CI release requirements
 
 Every GitHub release MUST publish:
-- Platform binaries: `quaid-<platform>-<channel>` where `<platform>` ∈ `{darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64}` and `<channel>` ∈ `{airgapped, online}`.
-- SHA-256 checksums: `quaid-<platform>-<channel>.sha256`.
+- Platform binaries: `quaid-<platform>` where `<platform>` ∈ `{darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64}`. A single channel per platform — the binary provisions its model on first use (no `-airgapped`/`-online` suffix).
+- SHA-256 checksums: `quaid-<platform>.sha256`.
 - `.github/release-assets.txt` is the canonical manifest consumed by release validation and release-check tests.
 - Each `.sha256` file contains standard `shasum -a 256` output: `<hex-digest>  <filename>`, one line.
 - The release workflow generates checksums in CI, not locally, to prevent tampering.

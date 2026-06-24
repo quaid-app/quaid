@@ -157,6 +157,7 @@ fn memory_search_masks_summary_but_fts_indexes_originals() {
 
             relevance_floor: None,
             max_chunks_per_doc: None,
+            mmr_lambda: None,
         })
         .unwrap();
     let text = extract_text(&result);
@@ -196,6 +197,7 @@ fn memory_query_masks_summary_when_enabled() {
             hops: None,
             relevance_floor: None,
             max_chunks_per_doc: None,
+            mmr_lambda: None,
         })
         .unwrap();
     let text = extract_text(&result);

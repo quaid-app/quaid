@@ -25,12 +25,14 @@ rusqlite = { version = "0.31", features = ["bundled", "hooks"] }
 # sqlite-vec — vector search as a SQLite extension, statically linked
 sqlite-vec = "0.1"
 
-# Embeddings — pure Rust ML framework, no ONNX runtime, true static linking
-candle-core = "0.8"
-candle-nn = "0.8"
-candle-transformers = "0.8"
+# Embeddings + extraction — pure Rust ML framework, no ONNX runtime, true
+# static linking. 0.10.x ships `models::quantized_qwen3` (GGUF Q4_K/Q6_K) and
+# `models::qwen3` (the Qwen3-Embedding decoder) used by the Qwen3 defaults.
+candle-core = "0.10"
+candle-nn = "0.10"
+candle-transformers = "0.10"
 safetensors = "0.4"
-tokenizers = "0.20"
+tokenizers = "0.21"
 
 # Model download for the online channel
 reqwest = { version = "0.12", default-features = false, features = [
@@ -84,19 +86,16 @@ tempfile = "3"
 serial_test = "3"
 proptest = "1"
 
-[build-dependencies]
-reqwest = { version = "0.12", default-features = false, features = [
-    "blocking",
-    "rustls-tls",
-] }
-sha2 = "0.10"
-
 [features]
-default = ["bundled", "embedded-model"]
+# Single channel (qwen3-models-airgapped §5): "airgapped" now means local-only
+# inference with a one-time provision-on-first-use download, not embedded
+# weights. The former `embedded-model` (`include_bytes!`) channel is removed;
+# the download channel (`online-model`) is the sole default. The feature flag
+# is retained so a fully offline-stub build is still possible via
+# `--no-default-features --features bundled`.
+default = ["bundled", "online-model"]
 bundled = ["rusqlite/bundled"]
-# embedded-model: include_bytes!() BGE-small assets into the binary for the airgapped release channel
-embedded-model = []
-# online-model: online release channel; download BGE-small assets on first semantic use
+# online-model: download/provision the configured model on first semantic use
 online-model = ["dep:reqwest"]
 # test-harness: enables in-library test fixtures (curated-alias stubs) for integration tests
 test-harness = []

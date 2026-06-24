@@ -12,27 +12,28 @@ const releaseBaseUrl = process.env.QUAID_RELEASE_BASE_URL || `https://github.com
 const releaseTagUrl =
   process.env.QUAID_RELEASE_TAG_URL || `https://github.com/${repo}/releases/tag/${tag}`;
 
+// Single channel (qwen3-models-airgapped §5): one binary per platform that
+// provisions its model on first use — no -airgapped/-online suffix.
 function platformToAsset() {
   if (process.platform === "darwin" && process.arch === "arm64") {
-    return "quaid-darwin-arm64-online";
+    return "quaid-darwin-arm64";
   }
   if (process.platform === "darwin" && process.arch === "x64") {
-    return "quaid-darwin-x86_64-online";
+    return "quaid-darwin-x86_64";
   }
   if (process.platform === "linux" && process.arch === "x64") {
-    return "quaid-linux-x86_64-online";
+    return "quaid-linux-x86_64";
   }
   if (process.platform === "linux" && process.arch === "arm64") {
-    return "quaid-linux-aarch64-online";
+    return "quaid-linux-aarch64";
   }
   return null;
 }
 
 function manualInstallMessage(reason) {
   console.warn(`[quaid] ${reason}`);
-  console.warn("[quaid] npm installs the online BGE-small channel only.");
+  console.warn("[quaid] The binary provisions its model on first use (local-only inference).");
   console.warn(`[quaid] Install manually from ${releaseTagUrl}`);
-  console.warn("[quaid] Need an offline-safe build? Download the airgapped release asset or use the shell installer.");
 }
 
 function gracefulSkip(reason) {
@@ -171,7 +172,7 @@ async function main() {
     await fs.promises.rename(tempBinaryPath, binaryPath);
     fs.chmodSync(binaryPath, 0o755);
 
-    console.log(`[quaid] Installed ${assetName} (online channel) from GitHub Releases.`);
+    console.log(`[quaid] Installed ${assetName} from GitHub Releases.`);
     printDbTip();
   } catch (error) {
     await fs.promises.rm(tempBinaryPath, { force: true }).catch(() => {});

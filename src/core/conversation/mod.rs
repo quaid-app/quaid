@@ -63,6 +63,9 @@ pub mod queue;
 /// Small language model runner (Phi-3 via candle) used to extract
 /// structured facts from raw conversation turns.
 pub mod slm;
+/// In-process GGUF (q4_K_M) SLM runner for the Qwen3 extraction model,
+/// selected by [`slm::LazySlmRunner`] when the cached model is a `.gguf`.
+pub mod slm_gguf;
 /// Temporal-correction primitives that link a newer page to an older
 /// one and mark the older one superseded.
 pub mod supersede;

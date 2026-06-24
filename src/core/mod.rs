@@ -66,6 +66,10 @@ pub mod reconciler;
 /// Outbound secret scrubbing for the MCP read surface (deterministic,
 /// pattern-based, opt-in via `mcp.redact_outbound`).
 pub mod redaction;
+/// Opt-in extractive sentence reranker: deterministic punctuation
+/// segmentation plus contiguous-span selection by cosine, time-budgeted and
+/// dependency-free.
+pub mod rerank;
 /// Hybrid search composition that fuses FTS5, vector, and palace filters.
 pub mod search;
 /// Superseding-page semantics: redirect chains and freshness ordering.

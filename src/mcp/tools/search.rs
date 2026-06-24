@@ -17,8 +17,8 @@ use crate::core::gaps;
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::search::{
-    configured_max_chunks_per_doc, configured_relevance_floor, dedup_chunks_per_page,
-    filter_below_floor, hybrid_search, HybridSearch,
+    apply_mmr, configured_max_chunks_per_doc, configured_mmr_lambda, configured_relevance_floor,
+    dedup_chunks_per_page, filter_below_floor, hybrid_search, HybridSearch,
 };
 use crate::core::types::SearchResult;
 use crate::mcp::errors::{
@@ -39,6 +39,18 @@ fn validate_relevance_floor(floor: Option<f64>) -> Result<Option<f64>, rmcp::Err
         }
     }
     Ok(floor)
+}
+
+/// Reject a caller-supplied MMR lambda outside `[0.0, 1.0]`.
+fn validate_mmr_lambda(lambda: Option<f64>) -> Result<Option<f64>, rmcp::Error> {
+    if let Some(value) = lambda {
+        if !(0.0..=1.0).contains(&value) {
+            return Err(invalid_params(format!(
+                "mmr_lambda must be between 0.0 and 1.0, got {value}"
+            )));
+        }
+    }
+    Ok(lambda)
 }
 
 /// Read-side response envelope for `memory_query` / `memory_search`.
@@ -97,6 +109,7 @@ impl QuaidServer {
         let include_superseded = input.include_superseded.unwrap_or(false);
 
         let relevance_floor = validate_relevance_floor(input.relevance_floor)?;
+        let mmr_lambda = validate_mmr_lambda(input.mmr_lambda)?;
 
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
         let results = hybrid_search(
@@ -113,6 +126,7 @@ impl QuaidServer {
                 hops: input.hops,
                 relevance_floor,
                 max_chunks_per_doc: input.max_chunks_per_doc.map(|value| value as usize),
+                mmr_lambda,
             },
         )
         .map_err(map_search_error)?;
@@ -191,6 +205,7 @@ impl QuaidServer {
         let include_superseded = input.include_superseded.unwrap_or(false);
 
         let relevance_floor = validate_relevance_floor(input.relevance_floor)?;
+        let mmr_lambda = validate_mmr_lambda(input.mmr_lambda)?;
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         // `search_fts_tiered` applies numeric-alias expansion in its AND
@@ -210,9 +225,11 @@ impl QuaidServer {
         )
         .map_err(map_search_error)?;
 
-        // Post-retrieval quality passes (dedup → floor); identity no-ops at
-        // the seeded config defaults. Parameter values, when given, override
-        // the `search.*` config keys.
+        // Post-retrieval quality passes (dedup → floor → MMR); identity no-ops
+        // at the seeded config defaults. Parameter values, when given, override
+        // the `search.*` config keys. The FTS arm has no vector diversity
+        // signal beyond what `apply_mmr` reads back from `page_embeddings`, so
+        // MMR degrades to relevance ordering when embeddings are absent.
         let max_per_page = match input.max_chunks_per_doc {
             Some(value) => value as usize,
             None => configured_max_chunks_per_doc(&db).map_err(map_search_error)?,
@@ -221,7 +238,12 @@ impl QuaidServer {
             Some(value) => value,
             None => configured_relevance_floor(&db).map_err(map_search_error)?,
         };
+        let lambda = match mmr_lambda {
+            Some(value) => value,
+            None => configured_mmr_lambda(&db).map_err(map_search_error)?,
+        };
         let results = filter_below_floor(dedup_chunks_per_page(results, max_per_page), floor);
+        let results = apply_mmr(&db, results, lambda, limit);
 
         let response = ReadResponse {
             pending_embedding_jobs: pending_embedding_job_count(&db),

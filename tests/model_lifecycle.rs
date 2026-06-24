@@ -442,13 +442,12 @@ fn download_model_rejects_bad_integrity_and_cleans_partial_cache() {
 }
 
 #[test]
-fn embedding_download_removes_temp_file_after_hash_failure() {
+fn embedding_download_removes_temp_file_after_successful_install() {
     let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
     let model = inference::resolve_model("base");
-    let revision = model
-        .sha256_hashes
-        .and_then(|hashes| hashes.revision)
-        .expect("base revision");
+    // Embedding downloads request the model's `main` revision now that per-alias
+    // commit pins are gone; the mock server must answer on that path.
+    let revision = "main";
     let server = MockModelServer::start(&model.model_id, revision, mock_files(false));
     let cache_root = tempfile::TempDir::new().expect("cache root");
     let _env = EnvGuard::set_all(&[

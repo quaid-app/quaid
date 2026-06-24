@@ -907,7 +907,7 @@ pub fn inspect_model_caches(
         #[cfg(feature = "online-model")]
         if let Some(model) = crate::core::inference::resolve_known_embedding_model(selector) {
             matched = true;
-            inspect_embedding_model(&mut entries, &cache_root, &model, true, verify_hashes);
+            inspect_embedding_model(&mut entries, &cache_root, &model, true);
         }
 
         if !matched {
@@ -918,7 +918,7 @@ pub fn inspect_model_caches(
 
         #[cfg(feature = "online-model")]
         for model in crate::core::inference::known_embedding_models() {
-            inspect_embedding_model(&mut entries, &cache_root, &model, false, verify_hashes);
+            inspect_embedding_model(&mut entries, &cache_root, &model, false);
         }
     }
 
@@ -1215,7 +1215,6 @@ fn inspect_embedding_model(
     cache_root: &Path,
     model: &crate::core::inference::ModelConfig,
     include_missing: bool,
-    verify_hashes: bool,
 ) {
     let cache_key = crate::core::inference::embedding_model_cache_key(model);
     let cache_dir = cache_root.join(&cache_key);
@@ -1224,7 +1223,6 @@ fn inspect_embedding_model(
             cache_dir.clone(),
             &cache_key,
             model,
-            verify_hashes,
         ));
     }
     inspect_embedding_temp_files(entries, &cache_dir, &cache_key, model);
@@ -1235,7 +1233,6 @@ fn inspect_embedding_cache_dir(
     path: PathBuf,
     cache_key: &str,
     model: &crate::core::inference::ModelConfig,
-    verify_hashes: bool,
 ) -> ModelCacheEntry {
     if !path.exists() {
         return cache_entry(
@@ -1263,18 +1260,14 @@ fn inspect_embedding_cache_dir(
         );
     }
 
-    match crate::core::inference::verify_embedding_model_cache(model, &path, verify_hashes) {
+    match crate::core::inference::verify_embedding_model_cache(&path) {
         Ok(()) => cache_entry(
             CacheEntryParams::new(
                 ModelCacheFamily::Embedding,
                 cache_key,
                 path,
                 ModelCacheState::Complete,
-                if verify_hashes {
-                    "required files and file hashes verified"
-                } else {
-                    "required files are present"
-                },
+                "required files are present",
             )
             .alias(Some(model.alias.clone()))
             .complete_cache(true),

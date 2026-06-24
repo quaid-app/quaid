@@ -98,7 +98,10 @@ impl Drop for EnvVarGuard {
 }
 
 pub fn open_test_db() -> Connection {
-    db::open(":memory:").unwrap()
+    // Pin the small BGE model (384d) so these fixtures keep their
+    // `page_embeddings_vec_384` expectations, independent of the production
+    // default (Qwen3-Embedding-0.6B, 1024d).
+    db::init(":memory:", &quaid::core::inference::resolve_model("small")).unwrap()
 }
 
 pub fn open_test_db_file() -> (tempfile::TempDir, String, Connection) {
@@ -109,7 +112,11 @@ pub fn open_test_db_file() -> (tempfile::TempDir, String, Connection) {
     // registry keys) match.
     let canonical_dir = fs::canonicalize(dir.path()).unwrap();
     let db_path = canonical_dir.join("memory.db");
-    let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    let conn = db::init(
+        db_path.to_str().unwrap(),
+        &quaid::core::inference::resolve_model("small"),
+    )
+    .unwrap();
     (dir, db_path.display().to_string(), conn)
 }
 

@@ -210,6 +210,7 @@ fn turn_capture_close_extract_fact_and_search_smoke() {
             include_superseded: Some(false),
             relevance_floor: None,
             max_chunks_per_doc: None,
+            mmr_lambda: None,
             redact: None,
         })
         .unwrap();

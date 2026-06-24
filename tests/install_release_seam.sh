@@ -40,7 +40,6 @@ QUAID_TEST_MODE=1
 QUAID_RELEASE_API_URL="https://example.invalid"
 QUAID_RELEASE_BASE_URL="https://example.invalid"
 QUAID_INSTALL_DIR="$TEST_ROOT/bin"
-QUAID_CHANNEL="airgapped"
 QUAID_VERSION="v0.0.0-test"
 HOME="$TEST_ROOT/home"
 mkdir -p "$QUAID_INSTALL_DIR" "$HOME"
@@ -54,17 +53,16 @@ check_case() {
   label="$1"
   uname_s="$2"
   uname_m="$3"
-  channel="$4"
-  expected_asset="$5"
+  expected_asset="$4"
 
   PATH="$STUBS_DIR:$ORIGINAL_PATH"
   export QUAID_TEST_UNAME_S="$uname_s"
   export QUAID_TEST_UNAME_M="$uname_m"
-  QUAID_CHANNEL="$channel"
 
   resolve_platform
   resolve_channel
-  asset_name="quaid-${PLATFORM}-${CHANNEL}"
+  # Single channel: one binary per platform, no -airgapped/-online suffix.
+  asset_name="quaid-${PLATFORM}"
   checksum_name="${asset_name}.sha256"
 
   if [ "$asset_name" = "$expected_asset" ]; then
@@ -100,14 +98,10 @@ check_case() {
 
 printf '\nRunning install/release seam tests...\n\n'
 
-check_case "T1 darwin x86_64 airgapped" Darwin x86_64 airgapped quaid-darwin-x86_64-airgapped
-check_case "T2 darwin x86_64 online" Darwin x86_64 online quaid-darwin-x86_64-online
-check_case "T3 darwin arm64 airgapped" Darwin arm64 airgapped quaid-darwin-arm64-airgapped
-check_case "T4 darwin arm64 online" Darwin arm64 online quaid-darwin-arm64-online
-check_case "T5 linux x86_64 airgapped" Linux x86_64 airgapped quaid-linux-x86_64-airgapped
-check_case "T6 linux x86_64 online" Linux x86_64 online quaid-linux-x86_64-online
-check_case "T7 linux aarch64 airgapped" Linux aarch64 airgapped quaid-linux-aarch64-airgapped
-check_case "T8 linux aarch64 online" Linux aarch64 online quaid-linux-aarch64-online
+check_case "T1 darwin x86_64" Darwin x86_64 quaid-darwin-x86_64
+check_case "T2 darwin arm64" Darwin arm64 quaid-darwin-arm64
+check_case "T3 linux x86_64" Linux x86_64 quaid-linux-x86_64
+check_case "T4 linux aarch64" Linux aarch64 quaid-linux-aarch64
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 

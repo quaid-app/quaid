@@ -230,7 +230,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_embedding_models_one_active
 CREATE TABLE IF NOT EXISTS page_embeddings (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-    model           TEXT    NOT NULL DEFAULT 'BAAI/bge-small-en-v1.5'
+    model           TEXT    NOT NULL DEFAULT 'Qwen/Qwen3-Embedding-0.6B'
                             REFERENCES embedding_models(name),
     vec_rowid       INTEGER NOT NULL,
     chunk_type      TEXT    NOT NULL,   -- 'truth_section' | 'timeline_entry'
@@ -466,8 +466,8 @@ CREATE TABLE IF NOT EXISTS config (
 
 INSERT OR IGNORE INTO config (key, value) VALUES
     ('version',               '10'),
-    ('embedding_model',       'BAAI/bge-small-en-v1.5'),
-    ('embedding_dimensions',  '384'),
+    ('embedding_model',       'Qwen/Qwen3-Embedding-0.6B'),
+    ('embedding_dimensions',  '1024'),
     ('chunk_strategy',        'section'),
     ('search_merge_strategy', 'set-union'),
     ('search.relevance_floor', '0.0'),

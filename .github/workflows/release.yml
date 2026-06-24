@@ -65,14 +65,8 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Run tests (default / airgapped channel)
-        run: cargo nextest run --locked
-
-      - name: Free target space before online channel tests
-        run: cargo clean
-
-      - name: Run tests (online channel)
-        run: cargo nextest run --locked -j 1 --no-default-features --features bundled,online-model,test-harness
+      - name: Run tests (single channel)
+        run: cargo nextest run --locked --features test-harness
         env:
           QUAID_FORCE_HASH_SHIM: "1"
 
@@ -112,53 +106,31 @@ jobs:
         run: ./scripts/mini-bench.sh --no-build
 
   build:
-    name: Build ${{ matrix.channel }} ${{ matrix.target }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     needs: [verify-version, test, mini-bench]
     strategy:
       fail-fast: false
+      # Single channel (qwen3-models-airgapped §5): one binary per platform,
+      # provisions its model on first use. No -airgapped/-online split.
       matrix:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            channel: airgapped
-            features: bundled,embedded-model
-            artifact: quaid-darwin-arm64-airgapped
+            features: bundled,online-model
+            artifact: quaid-darwin-arm64
           - target: x86_64-apple-darwin
             os: macos-latest
-            channel: airgapped
-            features: bundled,embedded-model
-            artifact: quaid-darwin-x86_64-airgapped
+            features: bundled,online-model
+            artifact: quaid-darwin-x86_64
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            channel: airgapped
-            features: bundled,embedded-model
-            artifact: quaid-linux-x86_64-airgapped
+            features: bundled,online-model
+            artifact: quaid-linux-x86_64
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            channel: airgapped
-            features: bundled,embedded-model
-            artifact: quaid-linux-aarch64-airgapped
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            channel: online
             features: bundled,online-model
-            artifact: quaid-darwin-arm64-online
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            channel: online
-            features: bundled,online-model
-            artifact: quaid-darwin-x86_64-online
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            channel: online
-            features: bundled,online-model
-            artifact: quaid-linux-x86_64-online
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            channel: online
-            features: bundled,online-model
-            artifact: quaid-linux-aarch64-online
+            artifact: quaid-linux-aarch64
 
     steps:
       - uses: actions/checkout@v4
@@ -274,42 +246,29 @@ jobs:
           body: |
             ## Install
 
-            Default airgapped installer:
+            One binary per platform — provisions its model on first use (local-only
+            inference, no embedded weights):
 
             ```bash
             curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/${{ github.ref_name }}/scripts/install.sh | sh
             ```
 
-            Online installer override:
-
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/quaid-app/quaid/${{ github.ref_name }}/scripts/install.sh \
-              | QUAID_CHANNEL=online sh
-            ```
-
-            Manual downloads use the channel-suffixed assets:
+            Manual download:
 
             ```bash
             VERSION="${{ github.ref_name }}"
             PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 
-            AIRGAPPED_ASSET="quaid-${PLATFORM}-airgapped"
-            ONLINE_ASSET="quaid-${PLATFORM}-online"
-
-            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${AIRGAPPED_ASSET}" -o "${AIRGAPPED_ASSET}"
-            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${AIRGAPPED_ASSET}.sha256" -o "${AIRGAPPED_ASSET}.sha256"
-            shasum -a 256 --check "${AIRGAPPED_ASSET}.sha256"
-
-            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ONLINE_ASSET}" -o "${ONLINE_ASSET}"
-            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ONLINE_ASSET}.sha256" -o "${ONLINE_ASSET}.sha256"
-            shasum -a 256 --check "${ONLINE_ASSET}.sha256"
+            ASSET="quaid-${PLATFORM}"
+            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
+            curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/${ASSET}.sha256" -o "${ASSET}.sha256"
+            shasum -a 256 --check "${ASSET}.sha256"
             ```
 
             Or build from source:
 
             ```bash
             cargo build --release
-            cargo build --release --no-default-features --features bundled,online-model
             ```
 
             > **npm — planned follow-on, not yet available.** `quaid` is not in the public

@@ -64,11 +64,12 @@ resolve_version() {
 }
 
 resolve_channel() {
-  case "${QUAID_CHANNEL:-airgapped}" in
-    airgapped) CHANNEL="airgapped" ;;
-    online) CHANNEL="online" ;;
-    *) fail "Unsupported QUAID_CHANNEL: ${QUAID_CHANNEL}. Use airgapped or online." ;;
-  esac
+  # Single channel (qwen3-models-airgapped §5): the airgapped/online split is
+  # gone — one asset per platform that provisions its model on first use.
+  # QUAID_CHANNEL is accepted but ignored for backward compatibility.
+  if [ -n "${QUAID_CHANNEL:-}" ]; then
+    printf '%s\n' "Note: QUAID_CHANNEL is deprecated and ignored; there is now a single binary per platform." >&2
+  fi
 }
 
 verify_checksum() {
@@ -276,16 +277,14 @@ main() {
   resolve_channel
   resolve_version
 
-  case "$CHANNEL" in
-    airgapped|online) asset_name="quaid-${PLATFORM}-${CHANNEL}" ;;
-  esac
+  asset_name="quaid-${PLATFORM}"
   checksum_name="${asset_name}.sha256"
   binary_url="${RELEASE_BASE}/${VERSION}/${asset_name}"
   checksum_url="${RELEASE_BASE}/${VERSION}/${checksum_name}"
 
   tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t quaid-install)" || fail "Cannot create temporary directory with mktemp"
 
-  printf '%s\n' "Installing quaid ${VERSION} for ${PLATFORM} (${CHANNEL})..."
+  printf '%s\n' "Installing quaid ${VERSION} for ${PLATFORM}..."
   curl -fsSL "$binary_url" -o "$tmp_dir/$asset_name" || fail "Failed to download ${binary_url}"
   curl -fsSL "$checksum_url" -o "$tmp_dir/$checksum_name" || fail "Failed to download ${checksum_url}"
 

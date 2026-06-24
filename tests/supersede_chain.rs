@@ -243,6 +243,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                mmr_lambda: None,
                 redact: None,
             })
             .unwrap(),
@@ -258,6 +259,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 include_superseded: Some(true),
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                mmr_lambda: None,
                 redact: None,
             })
             .unwrap(),
@@ -285,6 +287,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 hops: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                mmr_lambda: None,
                 redact: None,
             })
             .unwrap(),
@@ -302,6 +305,7 @@ fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
                 hops: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                mmr_lambda: None,
                 redact: None,
             })
             .unwrap(),

@@ -92,13 +92,52 @@ pub struct LazySlmRunner {
 
 #[derive(Debug, Default)]
 struct LazySlmState {
-    runner: Option<SlmRunner>,
+    runner: Option<LoadedRunner>,
     runtime_disabled: bool,
     last_error: Option<String>,
     /// When the loaded runner was last used for inference. Consulted by
     /// [`LazySlmRunner::unload_if_idle`] to drop the multi-GB model
     /// after an idle interval; `None` whenever no runner is loaded.
     last_used: Option<std::time::Instant>,
+}
+
+/// A loaded extraction runner: the safetensors Phi-3 path or the GGUF Qwen3
+/// path. Which one is built is decided per-alias by the cached model's file
+/// layout (see [`load_runner`]); [`SlmClient`](super::extractor::SlmClient)
+/// consumers are unaffected.
+#[derive(Debug)]
+enum LoadedRunner {
+    Phi3(SlmRunner),
+    Gguf(super::slm_gguf::SlmGgufRunner),
+}
+
+impl LoadedRunner {
+    fn infer(&mut self, prompt: &str, max_tokens: usize) -> Result<String, SlmError> {
+        match self {
+            LoadedRunner::Phi3(runner) => runner.infer(prompt, max_tokens),
+            LoadedRunner::Gguf(runner) => runner.infer(prompt, max_tokens),
+        }
+    }
+}
+
+/// Load the runner for `alias`, selecting the GGUF (Qwen3) backend when the
+/// cached model is a single `.gguf` weight file and the safetensors Phi-3
+/// backend otherwise.
+fn load_runner(alias: &str) -> Result<LoadedRunner, SlmError> {
+    // The Phi-3 loader owns the test-only load-panic shortcut; route straight
+    // to it so the cache lookup below doesn't preempt that path.
+    #[cfg(test)]
+    if alias == "__panic_during_load__" {
+        return Ok(LoadedRunner::Phi3(SlmRunner::load(alias)?));
+    }
+    let model_dir = load_model_from_local_cache(alias)?;
+    if super::slm_gguf::find_gguf_file(&model_dir).is_some() {
+        Ok(LoadedRunner::Gguf(super::slm_gguf::SlmGgufRunner::load(
+            alias,
+        )?))
+    } else {
+        Ok(LoadedRunner::Phi3(SlmRunner::load(alias)?))
+    }
 }
 
 /// Errors surfaced by SLM load, inference, and response parsing.
@@ -409,7 +448,7 @@ impl LazySlmRunner {
             });
         }
         if state.runner.is_none() {
-            match SlmRunner::load(alias) {
+            match load_runner(alias) {
                 Ok(runner) => state.runner = Some(runner),
                 Err(error) => {
                     if should_disable_runtime_after_load_failure(&error) {
@@ -483,9 +522,12 @@ impl LazySlmRunner {
 }
 
 fn parse_phi3_config(config_text: &str) -> serde_json::Result<Phi3Config> {
-    let mut config_value: JsonValue = serde_json::from_str(config_text)?;
-    normalize_phi3_rope_scaling(&mut config_value);
-    serde_json::from_value(config_value)
+    // candle ≥0.10's `phi3::Config` deserializes the HuggingFace `rope_scaling`
+    // object (`{short_factor, long_factor, type}`) directly into its
+    // `Option<RopeScaling>` field. candle 0.8 wanted a bare type string, which
+    // is why earlier code collapsed the object; that normalization is now
+    // harmful and has been removed.
+    serde_json::from_str(config_text)
 }
 
 /// Pick the dtype the Phi-3 weights load under. Half precision roughly
@@ -549,22 +591,6 @@ fn parse_generation_config_eos_ids(text: &str) -> Vec<u32> {
 
 fn json_value_as_u32(value: &JsonValue) -> Option<u32> {
     value.as_u64().and_then(|id| u32::try_from(id).ok())
-}
-
-fn normalize_phi3_rope_scaling(config: &mut JsonValue) {
-    let Some(rope_scaling) = config.get_mut("rope_scaling") else {
-        return;
-    };
-    let JsonValue::Object(rope_scaling_object) = rope_scaling else {
-        return;
-    };
-    let normalized = rope_scaling_object
-        .get("type")
-        .and_then(JsonValue::as_str)
-        .map_or(JsonValue::Null, |rope_type| {
-            JsonValue::String(rope_type.to_string())
-        });
-    *rope_scaling = normalized;
 }
 
 /// Parse the model's raw output into the typed
@@ -1075,7 +1101,7 @@ fn raw_fact_kind(value: &JsonValue) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
     match payload.downcast::<String>() {
         Ok(message) => *message,
         Err(payload) => match payload.downcast::<&'static str>() {
@@ -1103,7 +1129,6 @@ mod tests {
     use crate::core::conversation::model_lifecycle::{cache_dir_for_alias, resolve_model_alias};
     use safetensors::tensor::{serialize_to_file, Dtype, TensorView};
     use sha2::{Digest, Sha256};
-    use std::collections::HashMap;
     use tokenizers::models::wordlevel::WordLevel;
     use tokenizers::pre_tokenizers::whitespace::Whitespace;
     use tokenizers::Tokenizer;
@@ -1295,12 +1320,18 @@ mod tests {
 
         let mut tokenizer = Tokenizer::new(
             WordLevel::builder()
-                .vocab(HashMap::from([
-                    ("<unk>".to_string(), 0),
-                    ("hello".to_string(), 1),
-                    ("world".to_string(), 2),
-                    ("<eos>".to_string(), 3),
-                ]))
+                // tokenizers 0.21 takes `ahash::AHashMap` here; collect into the
+                // method's parameter type rather than naming the ahash re-export.
+                .vocab(
+                    [
+                        ("<unk>".to_string(), 0_u32),
+                        ("hello".to_string(), 1),
+                        ("world".to_string(), 2),
+                        ("<eos>".to_string(), 3),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
                 .unk_token("<unk>".to_string())
                 .build()
                 .unwrap(),

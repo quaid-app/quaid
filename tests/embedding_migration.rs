@@ -27,12 +27,15 @@
 
 use quaid::commands::embed;
 use quaid::core::db;
-use quaid::core::inference::{embed as embed_text, embedding_to_blob};
+use quaid::core::inference::{embed as embed_text, embedding_to_blob, resolve_model};
 
 fn open_test_db() -> rusqlite::Connection {
     let dir = tempfile::TempDir::new().expect("create temp dir");
     let db_path = dir.path().join("memory.db");
-    let conn = db::open(db_path.to_str().unwrap()).expect("open DB");
+    // This suite uses bge-small (384d) as "model A"; pin it so the seeded
+    // default matches, independent of the production default (Qwen3, 1024d).
+    let conn =
+        db::init(db_path.to_str().unwrap(), &resolve_model("small")).expect("init DB");
     // Leak TempDir to keep file alive
     std::mem::forget(dir);
     conn

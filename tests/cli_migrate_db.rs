@@ -29,6 +29,10 @@ fn run_quaid(home: &Path, args: &[&str]) -> Output {
     common_subprocess::configure_test_command(&mut command);
     command
         .env("HOME", home)
+        // These migration fixtures are small/384d databases; pin the matching
+        // embedding model so the open path doesn't trip the model-mismatch
+        // check against the new default (Qwen3-Embedding-0.6B, 1024d).
+        .env("QUAID_MODEL", "small")
         .env("USERPROFILE", home)
         .args(args)
         .output()

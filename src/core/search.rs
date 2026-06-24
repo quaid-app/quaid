@@ -17,6 +17,7 @@ use super::fts::{sanitize_fts_query, search_fts_tiered, FtsQuery};
 use super::inference::{
     search_vec_canonical_with_namespace_filtered, search_vec_with_namespace_filtered,
 };
+use super::pages::{self, PageKey};
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
 /// Per-call options for [`hybrid_search`].
@@ -86,6 +87,11 @@ pub struct HybridSearch<'a> {
     /// results. When `None`, the cap is read from
     /// `config.search.max_chunks_per_doc_default` (seeded `0` = unlimited).
     pub max_chunks_per_doc: Option<usize>,
+    /// Optional per-call MMR diversity parameter in `[0.0, 1.0]`. When
+    /// `None`, the value is read from `config.search.mmr_lambda` (seeded
+    /// `1.0` = identity: pure relevance ordering, no diversity penalty).
+    /// `1.0` disables MMR; `0.0` is pure diversity selection.
+    pub mmr_lambda: Option<f64>,
 }
 
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
@@ -187,11 +193,32 @@ pub fn hybrid_search(
         None => configured_max_chunks_per_doc(conn)?,
     };
     let merged = dedup_chunks_per_page(merged, max_chunks_per_doc);
+    // Cross-reference boost runs between dedup and the floor so a co-cited
+    // candidate can be rescued above the floor, and so the floor and MMR see
+    // the post-boost score. The pass short-circuits (no `links` lookups) when
+    // the configured weight is `0.0` — the seeded identity default.
+    let (cross_ref_weight, cross_ref_cap) = configured_cross_ref(conn)?;
+    let merged = compute_cross_ref_boost(conn, merged, cross_ref_weight, cross_ref_cap)?;
     let mut merged = filter_below_floor(merged, relevance_floor);
 
     apply_graph_expansion(conn, &mut merged, q.hops, q.collection)?;
 
+    // MMR diversity rerank is the final post-fusion pass. It reads the
+    // configured `search.mmr_lambda` (seeded `1.0` = identity: pure relevance
+    // ordering reproduced bytewise) unless overridden per call.
+    let mmr_lambda = match q.mmr_lambda {
+        Some(value) => value.clamp(0.0, 1.0),
+        None => configured_mmr_lambda(conn)?,
+    };
+    let mut merged = apply_mmr(conn, merged, mmr_lambda, q.limit);
+
     merged.truncate(q.limit);
+
+    // Opt-in extractive reranker: rewrites each result's preview to the most
+    // query-relevant sentence span. Gated behind `search.rerank_extractive`
+    // (seeded `false`); a full no-op at the default. Applied after truncation
+    // so the budget is only spent on rows that survive to the output.
+    let merged = apply_extractive_rerank(conn, trimmed, merged)?;
     Ok(merged)
 }
 
@@ -206,6 +233,50 @@ pub fn configured_relevance_floor(conn: &Connection) -> Result<f64, SearchError>
 /// (`config.search.max_chunks_per_doc_default`, seeded `0` = unlimited).
 pub fn configured_max_chunks_per_doc(conn: &Connection) -> Result<usize, SearchError> {
     read_config_usize(conn, "search.max_chunks_per_doc_default", 0)
+}
+
+/// Read the configured MMR diversity parameter
+/// (`config.search.mmr_lambda`, seeded `1.0` = identity / disabled), clamped
+/// into the valid `[0.0, 1.0]` range.
+pub fn configured_mmr_lambda(conn: &Connection) -> Result<f64, SearchError> {
+    Ok(read_config_f64(conn, "search.mmr_lambda", 1.0)?.clamp(0.0, 1.0))
+}
+
+/// Read the configured cross-reference boost weight and cap
+/// (`config.search.cross_ref_boost_weight`, seeded `0.0` = disabled, and
+/// `config.search.cross_ref_boost_cap`, seeded `0.15`), each clamped into the
+/// valid `[0.0, 1.0]` range.
+pub fn configured_cross_ref(conn: &Connection) -> Result<(f64, f64), SearchError> {
+    let weight = read_config_f64(conn, "search.cross_ref_boost_weight", 0.0)?.clamp(0.0, 1.0);
+    let cap = read_config_f64(conn, "search.cross_ref_boost_cap", 0.15)?.clamp(0.0, 1.0);
+    Ok((weight, cap))
+}
+
+/// Configuration for the opt-in extractive reranker.
+#[derive(Debug, Clone, Copy)]
+pub struct ExtractiveConfig {
+    /// Whether the extractive pass is enabled (`search.rerank_extractive`,
+    /// seeded `false`).
+    pub enabled: bool,
+    /// Number of contiguous sentences to select (`search.rerank_extractive_top_n`,
+    /// seeded `3`).
+    pub top_n: usize,
+    /// Per-chunk wall-clock budget in milliseconds
+    /// (`search.rerank_extractive_budget_ms`, seeded `10`).
+    pub budget_ms: u64,
+}
+
+/// Read the extractive-rerank configuration. Disabled (`enabled = false`) is
+/// the seeded identity default and a full no-op.
+pub fn configured_extractive(conn: &Connection) -> Result<ExtractiveConfig, SearchError> {
+    let enabled = read_config_bool(conn, "search.rerank_extractive", false)?;
+    let top_n = read_config_usize(conn, "search.rerank_extractive_top_n", 3)?;
+    let budget_ms = read_config_u64(conn, "search.rerank_extractive_budget_ms", 10)?;
+    Ok(ExtractiveConfig {
+        enabled,
+        top_n,
+        budget_ms,
+    })
 }
 
 /// Collapse multi-chunk hits from the same page down to at most
@@ -256,6 +327,405 @@ pub fn filter_below_floor(candidates: Vec<SearchResult>, floor: f64) -> Vec<Sear
         .into_iter()
         .filter(|candidate| candidate.score >= floor)
         .collect()
+}
+
+/// Add an additive, capped cross-reference boost to each candidate's `score`
+/// based on active `links` edges incoming from other members of the working
+/// set (depth-1 co-citation).
+///
+/// For each candidate `c`,
+/// `boost(c) = min(weight · Σ edge_weight(s → c), cap)` summed over candidates
+/// `s` in the working set that link to `c` through a currently-valid edge. The
+/// boost is folded into `score` and surfaced on `cross_ref_boost`.
+///
+/// `weight <= 0.0` short-circuits the pass entirely — no `links` lookups are
+/// performed and the input is returned unchanged (the seeded identity
+/// default). The pass degrades gracefully when the graph is sparse or absent:
+/// an empty edge set leaves every candidate untouched. Candidate ordering is
+/// not changed here; the caller re-sorts (via the floor/MMR passes) so the
+/// boost can influence downstream ordering.
+pub fn compute_cross_ref_boost(
+    conn: &Connection,
+    mut candidates: Vec<SearchResult>,
+    weight: f64,
+    cap: f64,
+) -> Result<Vec<SearchResult>, SearchError> {
+    if weight <= 0.0 || candidates.len() < 2 {
+        return Ok(candidates);
+    }
+
+    // Resolve each candidate slug to its page id. Slugs that do not resolve
+    // (e.g. graph-expansion stubs) simply do not participate in co-citation.
+    let mut page_id_by_index: Vec<Option<i64>> = Vec::with_capacity(candidates.len());
+    let mut index_by_page_id: HashMap<i64, usize> = HashMap::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let page_id = resolve_candidate_page_id(conn, &candidate.slug);
+        if let Some(id) = page_id {
+            index_by_page_id.insert(id, index);
+        }
+        page_id_by_index.push(page_id);
+    }
+
+    let candidate_ids: Vec<i64> = page_id_by_index.iter().filter_map(|id| *id).collect();
+    if candidate_ids.len() < 2 {
+        return Ok(candidates);
+    }
+
+    // Single indexed query: active edges whose both endpoints are members of
+    // the working set. Endpoint ids are trusted i64s read from `pages.id`, so
+    // they are inlined as integer literals (injection-safe by construction)
+    // rather than bound one parameter each, mirroring the vector-search path.
+    use std::fmt::Write as _;
+    let mut id_list = String::new();
+    for (position, id) in candidate_ids.iter().enumerate() {
+        if position > 0 {
+            id_list.push(',');
+        }
+        let _ = write!(id_list, "{id}");
+    }
+    let sql = format!(
+        "SELECT from_page_id, to_page_id, edge_weight \
+         FROM links \
+         WHERE from_page_id IN ({id_list}) \
+           AND to_page_id IN ({id_list}) \
+           AND from_page_id != to_page_id \
+           AND (valid_from IS NULL OR valid_from <= date('now')) \
+           AND (valid_until IS NULL OR valid_until >= date('now'))"
+    );
+
+    // Accumulate the raw (pre-cap) boost per target index.
+    let mut raw_boost: HashMap<usize, f64> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (from_id, to_id, edge_weight) = row?;
+            // Both endpoints are guaranteed in the working set by the SQL
+            // filter; skip self-references defensively.
+            if from_id == to_id {
+                continue;
+            }
+            if let Some(&target_index) = index_by_page_id.get(&to_id) {
+                *raw_boost.entry(target_index).or_insert(0.0) += edge_weight;
+            }
+        }
+    }
+
+    // `cap` is already clamped into `[0.0, 1.0]` by `configured_cross_ref`, so
+    // the lower bound never exceeds the upper bound here.
+    let cap = cap.max(0.0);
+    let mut any_boost = false;
+    for (index, candidate) in candidates.iter_mut().enumerate() {
+        if let Some(sum) = raw_boost.get(&index) {
+            let boost = (weight * sum).clamp(0.0, cap);
+            if boost > 0.0 {
+                candidate.cross_ref_boost = boost as f32;
+                candidate.score += boost;
+                any_boost = true;
+            }
+        }
+    }
+
+    // Re-sort only when a boost actually moved a score, so the floor, graph
+    // expansion, and an identity MMR pass all observe the post-boost ranking.
+    // When no boost applied (sparse/empty graph) the list is left untouched,
+    // preserving the bytewise identity path.
+    if any_boost {
+        candidates.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.slug.cmp(&right.slug))
+        });
+    }
+
+    Ok(candidates)
+}
+
+/// Resolve a (possibly canonical) candidate slug to its page id for
+/// cross-reference scoring. Returns `None` when the slug cannot be resolved,
+/// which simply excludes the candidate from co-citation rather than erroring.
+fn resolve_candidate_page_id(conn: &Connection, slug: &str) -> Option<i64> {
+    let (collection_id, resolved_slug) = resolve_slug_key(conn, slug)?;
+    pages::resolve_optional(
+        conn,
+        &PageKey {
+            collection_id,
+            namespace: None,
+            slug: &resolved_slug,
+        },
+    )
+    .ok()
+    .flatten()
+}
+
+/// Apply Maximal Marginal Relevance (MMR) as the final greedy reranking pass
+/// over a post-fusion candidate list.
+///
+/// For each candidate `c`,
+/// `mmr(c) = λ · fused_score(c) − (1 − λ) · max_{s ∈ selected} cosine(c, s)`.
+/// Selection is greedy by maximum MMR score until `k` are chosen or the
+/// candidates are exhausted. Ties break deterministically on
+/// `(fused_score desc, page_id asc, slug asc)`; the slug is the final
+/// tie-break (a stable proxy for `chunk_id asc` since rows carry no chunk id)
+/// so identical inputs always yield identical orderings.
+///
+/// `lambda >= 1.0` is the identity case: it reproduces the pre-change
+/// relevance ordering bytewise (the input is already sorted by
+/// `score desc, slug asc` from the merge step), so the input is returned
+/// untouched and `mmr_score` is left at its inactive default. Candidates
+/// without a stored embedding incur zero diversity penalty.
+pub fn apply_mmr(
+    conn: &Connection,
+    candidates: Vec<SearchResult>,
+    lambda: f64,
+    k: usize,
+) -> Vec<SearchResult> {
+    // Identity: λ == 1.0 is pure relevance ordering. The merge/expansion
+    // steps already produced `score desc, slug asc`; leaving the list and the
+    // `mmr_score` field untouched guarantees bytewise-identical output to the
+    // pre-MMR pipeline.
+    if lambda >= 1.0 || candidates.len() < 2 {
+        return candidates;
+    }
+
+    let limit = if k == 0 {
+        candidates.len()
+    } else {
+        k.min(candidates.len())
+    };
+
+    // Fetch each candidate's representative embedding and page id once. Missing
+    // vectors (failed-to-embed chunks, FTS-only hits) map to `None` and
+    // contribute a zero diversity penalty. The page id feeds the deterministic
+    // tie-break; `i64::MAX` sorts unresolved rows last.
+    let vectors: Vec<Option<Vec<f32>>> = candidates
+        .iter()
+        .map(|candidate| candidate_embedding(conn, &candidate.slug))
+        .collect();
+    let page_ids: Vec<i64> = candidates
+        .iter()
+        .map(|candidate| resolve_candidate_page_id(conn, &candidate.slug).unwrap_or(i64::MAX))
+        .collect();
+
+    let mut remaining: Vec<usize> = (0..candidates.len()).collect();
+    let mut selected: Vec<usize> = Vec::with_capacity(limit);
+    let mut mmr_scores: Vec<f32> = vec![0.0; candidates.len()];
+
+    while !remaining.is_empty() && selected.len() < limit {
+        let mut best_remaining_pos = 0usize;
+        let mut best_mmr = f64::NEG_INFINITY;
+        let mut best_index = remaining[0];
+
+        for (position, &index) in remaining.iter().enumerate() {
+            let diversity = match &vectors[index] {
+                Some(vec_c) => selected
+                    .iter()
+                    .filter_map(|&s| vectors[s].as_ref())
+                    .map(|vec_s| cosine_similarity_f32(vec_c, vec_s))
+                    .fold(0.0_f64, f64::max),
+                None => 0.0,
+            };
+            let mmr = lambda * candidates[index].score - (1.0 - lambda) * diversity;
+
+            let replace = if mmr > best_mmr {
+                true
+            } else if mmr < best_mmr {
+                false
+            } else {
+                // Tie on MMR → (fused_score desc, page_id asc, slug asc).
+                match candidates[index].score.total_cmp(&candidates[best_index].score) {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Less => false,
+                    std::cmp::Ordering::Equal => match page_ids[index].cmp(&page_ids[best_index]) {
+                        std::cmp::Ordering::Less => true,
+                        std::cmp::Ordering::Greater => false,
+                        std::cmp::Ordering::Equal => {
+                            candidates[index].slug < candidates[best_index].slug
+                        }
+                    },
+                }
+            };
+
+            if replace {
+                best_mmr = mmr;
+                best_remaining_pos = position;
+                best_index = index;
+            }
+        }
+
+        mmr_scores[best_index] = best_mmr as f32;
+        selected.push(best_index);
+        remaining.remove(best_remaining_pos);
+    }
+
+    // Reassemble selected candidates in selection order, recording the MMR
+    // score at the moment of selection. Candidates beyond `limit` are dropped
+    // (the caller truncates to `limit` regardless).
+    let mut by_index: HashMap<usize, SearchResult> = candidates.into_iter().enumerate().collect();
+    let mut out: Vec<SearchResult> = Vec::with_capacity(selected.len());
+    for index in selected {
+        if let Some(mut candidate) = by_index.remove(&index) {
+            candidate.mmr_score = Some(mmr_scores[index]);
+            out.push(candidate);
+        }
+    }
+    out
+}
+
+/// Cosine similarity between two `f32` vectors, reusing the same numerically
+/// stable f64-accumulation primitive as the conversation supersede path.
+/// Returns `0.0` for mismatched-length or empty inputs.
+fn cosine_similarity_f32(left: &[f32], right: &[f32]) -> f64 {
+    if left.len() != right.len() || left.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f64;
+    let mut left_norm = 0.0f64;
+    let mut right_norm = 0.0f64;
+    for (l, r) in left.iter().zip(right.iter()) {
+        let l = *l as f64;
+        let r = *r as f64;
+        dot += l * r;
+        left_norm += l * l;
+        right_norm += r * r;
+    }
+    if left_norm == 0.0 || right_norm == 0.0 {
+        0.0
+    } else {
+        dot / (left_norm.sqrt() * right_norm.sqrt())
+    }
+}
+
+/// Read a representative embedding for a candidate page (the first stored
+/// chunk under the active model), decoded from the `vec0` virtual table.
+/// Returns `None` when the slug cannot be resolved or no embedding exists, so
+/// MMR can treat the candidate as a zero-penalty fall-through.
+fn candidate_embedding(conn: &Connection, slug: &str) -> Option<Vec<f32>> {
+    let page_id = resolve_candidate_page_id(conn, slug)?;
+    let (model_name, vec_table) = active_model(conn).ok()?;
+    if !is_safe_vec_table(&vec_table) {
+        return None;
+    }
+    let sql = format!(
+        "SELECT vt.embedding FROM page_embeddings pe \
+         JOIN {vec_table} vt ON vt.rowid = pe.vec_rowid \
+         WHERE pe.page_id = ?1 AND pe.model = ?2 \
+         ORDER BY pe.chunk_index ASC LIMIT 1"
+    );
+    let blob: Vec<u8> = conn
+        .query_row(&sql, rusqlite::params![page_id, model_name], |row| {
+            row.get(0)
+        })
+        .ok()?;
+    blob_to_embedding(&blob)
+}
+
+/// Decode a little-endian `f32` blob (the `vec0` storage format) back into a
+/// vector. Returns `None` when the byte length is not a multiple of 4.
+fn blob_to_embedding(blob: &[u8]) -> Option<Vec<f32>> {
+    if blob.is_empty() || !blob.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(blob.len() / 4);
+    for chunk in blob.chunks_exact(4) {
+        let bytes = [chunk[0], chunk[1], chunk[2], chunk[3]];
+        out.push(f32::from_le_bytes(bytes));
+    }
+    Some(out)
+}
+
+/// Read the active model name and its backing `vec0` table from
+/// `embedding_models`. Returns an error when no active model is configured.
+fn active_model(conn: &Connection) -> Result<(String, String), SearchError> {
+    conn.query_row(
+        "SELECT name, vec_table FROM embedding_models WHERE active = 1 LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .map_err(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => SearchError::Internal {
+            message: "no active embedding model configured".to_owned(),
+        },
+        other => SearchError::from(other),
+    })
+}
+
+/// Guard against SQL injection through the `vec_table` identifier read from
+/// config: only ASCII alphanumerics and underscores are permitted.
+fn is_safe_vec_table(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Apply the opt-in extractive reranker to each result's preview when
+/// `config.search.rerank_extractive` is enabled. For each candidate, the
+/// representative chunk text is segmented into sentences and the most
+/// query-relevant contiguous span replaces the result's `summary` (the
+/// retrieval preview). Disabled is the seeded identity default and a full
+/// no-op — the input is returned untouched without embedding the query.
+///
+/// Embedding failures, short chunks, missing chunk text, or budget timeouts
+/// leave a candidate's preview unchanged; no candidate is ever dropped or
+/// reordered by this pass.
+pub fn apply_extractive_rerank(
+    conn: &Connection,
+    query: &str,
+    mut candidates: Vec<SearchResult>,
+) -> Result<Vec<SearchResult>, SearchError> {
+    let cfg = configured_extractive(conn)?;
+    if !cfg.enabled || cfg.top_n == 0 || candidates.is_empty() {
+        return Ok(candidates);
+    }
+
+    // Embed the query once. If the query cannot be embedded, the pass no-ops
+    // rather than erroring (retrieval already succeeded).
+    let Ok(query_vec) = crate::core::inference::embed_query(query) else {
+        return Ok(candidates);
+    };
+
+    for candidate in candidates.iter_mut() {
+        let Some(chunk_text) = representative_chunk_text(conn, &candidate.slug) else {
+            continue;
+        };
+        let outcome = crate::core::rerank::extractive_rerank(
+            &chunk_text,
+            &query_vec,
+            cfg.top_n,
+            cfg.budget_ms,
+            |sentence| crate::core::inference::embed(sentence).ok(),
+        );
+        if let crate::core::rerank::RerankOutcome::Selected(span) = outcome {
+            candidate.summary = span;
+        }
+    }
+
+    Ok(candidates)
+}
+
+/// Read the representative chunk text for a candidate page (the first stored
+/// chunk under the active model), used as the source text for extractive
+/// reranking. Returns `None` when the slug cannot be resolved or no chunk
+/// exists.
+fn representative_chunk_text(conn: &Connection, slug: &str) -> Option<String> {
+    let page_id = resolve_candidate_page_id(conn, slug)?;
+    let (model_name, _vec_table) = active_model(conn).ok()?;
+    conn.query_row(
+        "SELECT chunk_text FROM page_embeddings \
+         WHERE page_id = ?1 AND model = ?2 \
+         ORDER BY chunk_index ASC LIMIT 1",
+        rusqlite::params![page_id, model_name],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
 }
 
 /// Bounded outbound graph expansion knobs.
@@ -315,6 +785,32 @@ fn read_config_usize(conn: &Connection, key: &str, default: usize) -> Result<usi
             Err(err) => return Err(SearchError::from(err)),
         };
     Ok(value.and_then(|v| v.parse().ok()).unwrap_or(default))
+}
+
+fn read_config_u64(conn: &Connection, key: &str, default: u64) -> Result<u64, SearchError> {
+    let value: Option<String> =
+        match conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
+            row.get(0)
+        }) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) => return Err(SearchError::from(err)),
+        };
+    Ok(value.and_then(|v| v.parse().ok()).unwrap_or(default))
+}
+
+fn read_config_bool(conn: &Connection, key: &str, default: bool) -> Result<bool, SearchError> {
+    let value: Option<String> =
+        match conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| {
+            row.get(0)
+        }) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) => return Err(SearchError::from(err)),
+        };
+    Ok(value
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+        .unwrap_or(default))
 }
 
 /// Apply bounded outbound graph expansion to a ranked candidate list in

@@ -33,6 +33,7 @@ fn memory_query_input(query: &str, hops: Option<u32>) -> MemoryQueryInput {
         hops,
         relevance_floor: None,
         max_chunks_per_doc: None,
+        mmr_lambda: None,
         redact: None,
     }
 }

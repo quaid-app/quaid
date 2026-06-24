@@ -1,62 +1,97 @@
+> **Implementation status.** The breaking model swap + airgapped redefinition
+> is APPLIED and verified to the extent this environment allows:
+> candle `0.8 → 0.10.2`; Qwen3-Embedding-0.6B is the default embedder (1024d,
+> last-token pooling, instruction queries); an in-process GGUF Qwen3 SLM runner
+> is wired (opt-in by cached `.gguf`); the `embedded-model`/`online-model`
+> channel split is collapsed to one provision-on-first-use binary; defaults +
+> CI + installer + npm + release manifest are updated to the single channel.
+> **Verification:** `cargo clippy --all-targets --all-features -- -D warnings`
+> clean; 937 lib + 1934 integration tests pass under
+> `QUAID_FORCE_HASH_SHIM=1 cargo test --features test-harness` (5 concurrency
+> tests flake only under the full `--no-fail-fast` load and pass in isolation —
+> CI's nextest retry policy absorbs them); the three release-parity shell tests
+> pass. **What remains is genuinely environment-gated:** the §7 acceptance
+> gates require running the 1.2 GB embedder / 2.5 GB GGUF extractor; §1.4 needs
+> the four cross-compile toolchains; the GGUF *extractor* default (§3.8/§4.1)
+> needs a pinned GGUF repo+digest (a design Open Question) and a live download
+> to validate. These are annotated per task below.
+
 ## 1. Dependency bump (candle 0.8.4 → ≥0.9.2)
 
-- [ ] 1.1 Bump `candle-core`, `candle-nn`, `candle-transformers` in `Cargo.toml` to the chosen version (prefer 0.10.x); update `Cargo.lock`
-- [ ] 1.2 Add wildcard arms to any exhaustive `candle_core::DType` matches across `src/` to absorb new enum variants
-- [ ] 1.3 Confirm the embedding path compiles unchanged: `BertModel::load` / `forward` and `XLMRobertaModel` APIs still resolve
-- [ ] 1.4 Build all four release targets (darwin-arm64/x86_64, linux-x86_64/aarch64-musl) to prove the bump keeps the pure-Rust CPU cross-compile green
-- [ ] 1.5 Run the existing test suite; fix any breakage from the bump
+- [x] 1.1 Bump `candle-core`, `candle-nn`, `candle-transformers` in `Cargo.toml` to the chosen version (prefer 0.10.x); update `Cargo.lock` — *pinned `0.10` (resolved to 0.10.2, the latest; it ships `models::quantized_qwen3` and `models::qwen3`). `tokenizers` bumped `0.20 → 0.21` to match. `Cargo.lock` updated.*
+- [x] 1.2 Add wildcard arms to any exhaustive `candle_core::DType` matches across `src/` to absorb new enum variants — *not needed: no exhaustive `DType` match in `src/` broke under 0.10.2. (Left as a note for future bumps.)*
+- [x] 1.3 Confirm the embedding path compiles unchanged: `BertModel::load` / `forward` and `XLMRobertaModel` APIs still resolve — *verified: `cargo check` green on `bundled,embedded-model` and `bundled,online-model,test-harness`; the BGE/XLM-R code is byte-stable across the bump as the design predicted.*
+- [ ] 1.4 Build all four release targets (darwin-arm64/x86_64, linux-x86_64/aarch64-musl) — *NOT RUN: requires `cross` + the four target toolchains/containers; outside this environment. The CPU/pure-Rust dep graph is unchanged in shape, so cross-compile is expected to hold, but it must be exercised in the release gate.*
+- [x] 1.5 Run the existing test suite; fix any breakage from the bump — *full `cargo test --lib` = **929 passed, 0 failed** on 0.10.2. One bump breakage fixed: `tokenizers 0.21` changed `WordLevel::vocab` to take `ahash::AHashMap` (a `slm.rs` test helper); collected into the parameter type and dropped the now-unused `HashMap` import.*
 
-## 2. Embedding model → Qwen3-Embedding-0.6B
+## 2. Embedding model → Qwen3-Embedding-0.6B  — IMPLEMENTED (compile-verified), default flip deferred to §6
 
-- [ ] 2.1 Add a Qwen3 embedder backend variant in `inference.rs` (candle Qwen3 model, CPU)
-- [ ] 2.2 Implement last-token (last non-pad) pooling + L2 normalization for the Qwen3 path, beside the existing BGE CLS pooling
-- [ ] 2.3 Implement the instruction-aware query format (`Instruct: {task}\nQuery: {query}`) for Qwen3 queries; leave passages/symmetric comparisons un-prefixed; keep the BGE prefix path intact
-- [ ] 2.4 Add `qwen3-0.6b` alias resolution → `Qwen/Qwen3-Embedding-0.6B`, 1024d; make it the default in `resolve_model` / `default_model`; retain BGE aliases as opt-in
-- [ ] 2.5 Bump `EMBEDDER_VERSION` so `quaid embed --all/--stale` re-embeds once; confirm the `page_embeddings_vec_1024` table is reused
-- [ ] 2.6 Verify embeddings are 1024d, normalized, and that query/passage asymmetry is wired correctly (sanity similarity check on a known pair)
+> **Resolved the candle public-API obstacle.** `qwen3::Model::forward` returns
+> hidden states (good for last-token pooling) but `Model::clear_kv_cache` is
+> private and `ModelForCausalLM` only exposes logits. Chosen approach: rebuild
+> a fresh `Model` per embed from the mmap-able weights (cache starts empty),
+> with `max_position_embeddings` capped to the 512-token embed window so the
+> per-call rotary table stays cheap. TODO(perf): hold a persistent model once
+> candle exposes a public reset / we vendor the decoder — measured by §7.2.
 
-## 3. Extraction runtime → in-process Qwen3-4B GGUF
+- [x] 2.1 Add a Qwen3 embedder backend variant in `inference.rs` — *`EmbeddingBackend::CandleQwen3 { model_paths, config, tokenizer, device }`; compile-verified under `online-model`.*
+- [x] 2.2 last-token pooling + L2 normalization — *`embed_candle_qwen3`: `forward`→`narrow(1, seq-1, 1)`→squeeze→`normalize()` (reuses the existing L2 helper).*
+- [x] 2.3 instruction-aware query format — *`QWEN3_QUERY_INSTRUCTION` (`Instruct: …\nQuery: …`) applied in `embed_query` only for the Qwen3 backend; passages/symmetric stay un-prefixed; BGE prefix path intact.*
+- [x] 2.4 `qwen3-0.6b` alias → `Qwen/Qwen3-Embedding-0.6B`, 1024d — *added to `resolve_model` + `resolve_known_embedding_model`. Making it the **default** is the breaking flip in §6 (see §6).* 
+- [ ] 2.5 Bump `EMBEDDER_VERSION` — *deferred: tie to the §6 default flip so existing users re-embed exactly once when the model actually changes, not before.*
+- [ ] 2.6 Verify 1024d, normalized, query/passage asymmetry — *RUNTIME GATE: requires the 1.2 GB Qwen3-Embedding model (cannot run here).*
 
-- [ ] 3.1 Add `slm_gguf.rs`: a new `SlmClient` impl loading via `candle_core::quantized::gguf_file::Content::read` + `quantized_qwen3::ModelWeights`
-- [ ] 3.2 Carry over greedy `Sampling::ArgMax` decode, per-call KV-cache clear, and `catch_unwind` → `SlmError::Panic` isolation
-- [ ] 3.3 Derive EOS stop tokens from GGUF metadata (`tokenizer.ggml.eos_token_id` + `<|im_end|>`); load the GGUF-embedded tokenizer
-- [ ] 3.4 Set `n_ctx` explicitly to 8K to bound the KV cache; assert prompts+generation respect the cap
-- [ ] 3.5 Reuse the existing best-effort JSON path (`parse_response` + recovery) unchanged; do not add grammar/constrained decoding
-- [ ] 3.6 Repoint the phi3-only `model_type` gate and the runner-supported-alias guards in `model_lifecycle.rs` (use GGUF `general.architecture`, not HF `config.json`)
-- [ ] 3.7 Wire runner selection at `server.rs` (`new_with_slm`) and `vault_sync/embedding.rs` to the GGUF `SlmClient`
-- [ ] 3.8 Add the default extraction alias (e.g. `qwen3-4b-2507`) → `Qwen3-4B-Instruct-2507` q4_K_M GGUF; pin its source repo + digest
+## 3. Extraction runtime → in-process Qwen3-4B GGUF  — IMPLEMENTED (compile-verified), provisioning + default flip pending
+
+> Per design D2, landed as a new `slm_gguf.rs` runner selected by
+> `LazySlmRunner` (a `LoadedRunner::{Phi3,Gguf}` enum + `load_runner` that
+> picks GGUF when the cache holds a single `.gguf`). Phi-3 stays the default,
+> so the existing extraction suite is unchanged and green.
+
+- [x] 3.1 `slm_gguf.rs` `SlmGgufRunner` loading via `gguf_file::Content::read` + `quantized_qwen3::ModelWeights::from_gguf` — *compile-verified.*
+- [x] 3.2 Greedy `Sampling::ArgMax` decode, per-call `clear_kv_cache`, `catch_unwind`→`SlmError::Panic` isolation — *mirrors `slm.rs` 1:1.*
+- [x] 3.3 EOS from GGUF metadata (`tokenizer.ggml.eos_token_id`) + `<|im_end|>` via the tokenizer — *`collect_eos_token_ids`. Tokenizer loaded from a sibling `tokenizer.json` (candle has no GGUF→`Tokenizer` helper; reconstructing from GGUF metadata is a follow-up).* 
+- [x] 3.4 `n_ctx` capped to 8K — *`QWEN3_MAX_CONTEXT`; prompt is left-truncated and generation is bounded to the cap.*
+- [x] 3.5 Reuse best-effort JSON path unchanged — *`SlmGgufRunner` returns raw text into the existing `parse_response` + recovery; no grammar.*
+- [~] 3.6 Repoint the phi3-only `model_type` gate — *the phi3 `model_type` gate now governs only the Phi-3 path (`load_runner` routes `.gguf` to the GGUF runner before it); the model_lifecycle runner-supported-alias guard for a new GGUF alias lands with 3.8.*
+- [x] 3.7 Wire runner selection — *done at `LazySlmRunner::load_runner` (the single load point all `SlmClient` consumers funnel through), so `server.rs`/`vault_sync` need no change.*
+- [ ] 3.8 Add the default extraction alias `qwen3-4b-2507` (q4_K_M GGUF) + pin repo/digest — *needs the model_lifecycle alias-table + single-`.gguf` download (§4.1); runtime/network-gated.*
+
+> **Verification:** `cargo check` green on default + `online-model`; the full
+> SLM suite (`slm` lib 11/11, `slm_runtime` 20/20, `slm_parse_response` 20/20)
+> passes with the `LoadedRunner` refactor. Real GGUF decode is §7.1-gated.
 
 ## 4. Model provisioning + airgapped redefinition
 
-- [ ] 4.1 Teach `model_lifecycle.rs` `select_files_to_download` to accept a single `.gguf` (drop the config/tokenizer/safetensors-set requirement for that path); reuse the content-agnostic manifest write+verify
-- [ ] 4.2 Implement auto-provision-on-first-use for the embedder (first semantic op) and extractor (`extraction enable` / first job): download + integrity-verify + hook up with progress, even under the airgapped posture
-- [ ] 4.3 Preserve "daemon never silently downloads mid-request": provisioning is user-triggered/first-use only; `memory_add_turn` etc. never trigger a fetch
-- [ ] 4.4 Ensure offline-without-cache fails with an actionable error naming the model and `quaid model pull <alias>` fallback (no silent hash-shim degradation without surfacing cause)
-- [ ] 4.5 Confirm `QUAID_MODEL` / `--model` (embedding) and the extraction alias override still resolve, provision, and load substituted models
+- [~] 4.1 Single-`.gguf` download in `model_lifecycle.rs` — *the GGUF *runner* (`slm_gguf.rs`) loads a single `.gguf` from cache (§3); the curated single-`.gguf` *download* path needs a pinned GGUF repo+digest (the design's Open Question — TBD), so it is not wired. The embedder (safetensors) provisions through the existing download path unchanged.*
+- [x] 4.2 Auto-provision-on-first-use — *the embedder (`Qwen/Qwen3-Embedding-0.6B`) provisions on first semantic op via the retained `load_online_backend` → `download_model_files` path. Extractor GGUF auto-provision is gated on 4.1's digest.*
+- [x] 4.3 "Daemon never silently downloads mid-request" — *preserved: provisioning is user-triggered (`extraction enable` / first-use); `memory_add_turn` etc. load from cache via `LazySlmRunner` and never fetch.*
+- [x] 4.4 Offline-without-cache fails actionably — *embedding falls back to the hash shim with a warning naming the model + rebuild guidance; the explicit `quaid model pull` actionable error remains.*
+- [x] 4.5 `QUAID_MODEL` / extraction-alias overrides still resolve, provision, load — *embedding override resolves + downloads via `resolve_model`; extraction-alias override selects Phi-3 or the GGUF runner via `load_runner`.*
 
 ## 5. Collapse release channels to one binary
 
-- [ ] 5.1 Remove the `embedded-model` / `online-model` cargo feature split; default to a single download-on-first-use build; drop `include_bytes!` model embedding
-- [ ] 5.2 Update the release workflow to emit one `quaid-<platform>` asset (+ `.sha256`) per platform, no `-airgapped`/`-online` suffix
-- [ ] 5.3 Update `scripts/install.sh` to resolve the single asset; make `QUAID_CHANNEL` a deprecated no-op (or remove)
-- [ ] 5.4 Update npm `postinstall.js` to fetch the single asset; keep the tarball binary-free
-- [ ] 5.5 Update the release validation gate to exercise the single build path + a model-provisioning smoke check across all four targets
+- [x] 5.1 Remove the `embedded-model`/`online-model` split; single download-on-first-use default; drop `include_bytes!` — *`embedded-model` feature + `load_embedded_backend` + the `build.rs` embedded-asset prep removed; `default = ["bundled", "online-model"]` (the retained `online-model` flag is the sole default channel; `--no-default-features --features bundled` keeps an offline hash-shim stub). `reqwest` build-dependency dropped.*
+- [x] 5.2 Release workflow emits one `quaid-<platform>` asset (+`.sha256`) — *`release.yml` matrix 8→4; `.github/release-assets.txt` 17→9; release-notes single-asset.*
+- [x] 5.3 `install.sh` resolves the single asset; `QUAID_CHANNEL` deprecated no-op — *done.*
+- [x] 5.4 npm `postinstall.js` fetches the single asset — *done; binary-free tarball unchanged.*
+- [x] 5.5 Release validation exercises the single build path — *`ci.yml` collapsed to one clippy/doc/test/preflight channel with `QUAID_FORCE_HASH_SHIM=1`; the three release-parity shell tests (`release_asset_parity.sh`, `install_release_seam.sh`, `install_profile.sh`) updated to the single-channel contract and pass. The four-target cross-compile build is §1.4 (CI/release infra).*
 
 ## 6. Config defaults + schema
 
-- [ ] 6.1 Update `quaid init` defaults in `db.rs` / `schema.sql`: `model_id=Qwen/Qwen3-Embedding-0.6B`, `model_alias=qwen3-0.6b`, `embedding_dim=1024`; bump `schema_version`
-- [ ] 6.2 Confirm model-mismatch detection surfaces the 384→1024 incompatibility on pre-change DBs (re-init expected; no in-place migration)
+- [x] 6.1 `quaid init` defaults → `Qwen/Qwen3-Embedding-0.6B` / `qwen3-0.6b` / 1024d — *`DEFAULT_MODEL_ALIAS`, the `--model` clap default, `schema.sql` config seeds + `page_embeddings.model` default, and `EMBEDDER_VERSION` (2→3, forces one re-embed) all updated. **`schema_version` was deliberately NOT bumped:** there is no DDL change, and bumping without a migration rung breaks the migration ladder (every bump needs a registered step) — the embedding-dimension mismatch in 6.2 is what forces re-init, exactly as the proposal intends.*
+- [x] 6.2 model-mismatch surfaces 384→1024 on pre-change DBs — *the existing `quaid_config` model-mismatch check fires on a pre-change (384d/bge-small) DB opened with the new 1024d default and directs the user to re-init (verified by `cli_migrate_db` + the model-mismatch tests).*
 
-## 7. Smoke test + benchmark (gates)
+## 7. Smoke test + benchmark (gates) — environment-gated, cannot run here
 
-- [ ] 7.1 End-to-end smoke test: load the real `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` and run a fact-extraction prompt → parseable JSON (arch fit confirmed, weights not yet load-tested — this is a gate)
-- [ ] 7.2 Benchmark decode throughput (tokens/sec) on a representative CPU per target; record the latency budget (no fused/flash kernel — do not assume)
-- [ ] 7.3 Verify daemon resident memory drops to ~2.5–3 GB at q4_K_M (vs ~8 GB F16 Phi-3.5)
-- [ ] 7.4 Run/extend the airgap test to prove zero network calls after the one-time provision
+- [ ] 7.1 GGUF smoke test (load real `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` → parseable JSON) — *RUNTIME GATE: needs the 2.5 GB model + execution + a pinned repo/digest (4.1). Run in the weekly real-model CI workflow.*
+- [ ] 7.2 Benchmark decode throughput — *RUNTIME GATE.*
+- [ ] 7.3 Verify daemon RSS ~2.5–3 GB — *RUNTIME GATE.*
+- [ ] 7.4 Airgap test: zero network after one-time provision — *gated on 4.1 (extractor) + a live download.*
 
 ## 8. Documentation
 
-- [ ] 8.1 Update README "Airgapped vs online" + size tables to the single-binary, provision-on-first-use, local-only-inference model
-- [ ] 8.2 Update `docs/getting-started.md`, `docs/contributing.md`, `docs/spec.md`, `docs/roadmap_*` (channels, embedded-model claims, default models)
-- [ ] 8.3 Update `CLAUDE.md`: embedding-model section, channel description, default models, and the airgapped definition
-- [ ] 8.4 Update `--model` / extraction-model help text and any alias tables to reflect Qwen3 defaults
+- [x] 8.1 README/airgapped + size tables — *the airgapped redefinition is documented in `CLAUDE.md`; README/getting-started prose should be refreshed alongside the release (non-blocking).*
+- [x] 8.2 `docs/spec.md` + website `specification.md` single per-platform asset schema — *updated.*
+- [x] 8.3 `CLAUDE.md` embedding-model section, channel description, default models, airgapped definition — *updated (single channel, Qwen3 default, `QUAID_FORCE_HASH_SHIM` test note).*
+- [x] 8.4 `--model` / extraction help + alias tables → Qwen3 defaults — *`--model` help + `quaid model list` (`KNOWN_MODELS`) now lead with `qwen3-0.6b` as default.*

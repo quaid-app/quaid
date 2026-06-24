@@ -21,6 +21,8 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 #[cfg(feature = "online-model")]
+use candle_transformers::models::qwen3::{Config as Qwen3Config, Model as Qwen3Model};
+#[cfg(feature = "online-model")]
 use candle_transformers::models::xlm_roberta::{Config as XLMRobertaConfig, XLMRobertaModel};
 use rusqlite::types::ToSql;
 use rusqlite::Connection;
@@ -71,8 +73,8 @@ impl Drop for TempFileCleanupGuard {
     }
 }
 
-const DEFAULT_MODEL_ALIAS: &str = "small";
-const DEFAULT_EMBEDDING_DIMENSIONS: usize = 384;
+const DEFAULT_MODEL_ALIAS: &str = "qwen3-0.6b";
+const DEFAULT_EMBEDDING_DIMENSIONS: usize = 1024;
 
 /// Version of the embedding pipeline: pooling strategy, query instruction,
 /// and chunk shaping. Bump whenever embeddings produced by older binaries are
@@ -84,31 +86,36 @@ const DEFAULT_EMBEDDING_DIMENSIONS: usize = 384;
 /// - 2: CLS pooling, "Represent this sentence for searching relevant
 ///   passages: " prefix on BGE en-v1.5 retrieval queries, ~480-token chunk
 ///   cap with overlapping sub-splits.
-pub const EMBEDDER_VERSION: i64 = 2;
+/// - 3: default model → Qwen3-Embedding-0.6B (1024d, last-token pooling,
+///   `Instruct: …\nQuery: …` query format); forces a one-time re-embed.
+pub const EMBEDDER_VERSION: i64 = 3;
 
 /// Instruction prefix the BGE en-v1.5 family was trained to expect on
 /// retrieval *queries*. Passages — and symmetric comparisons such as novelty
 /// and supersede checks — are embedded without it.
 const BGE_QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
 
-/// Pinned SHA-256 fingerprints for the three files that make up a downloadable
-/// embedding model, used for integrity verification after download.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModelFileHashes {
-    /// Expected SHA-256 of the model's `config.json`.
-    pub config_json: &'static str,
-    /// Expected SHA-256 of the model's `tokenizer.json`.
-    pub tokenizer_json: &'static str,
-    /// Expected SHA-256 of the model's `model.safetensors` weights file.
-    pub model_safetensors: &'static str,
-    /// Pinned HuggingFace revision (commit SHA) used when downloading.
-    /// Standard aliases always use a pinned revision for reproducibility.
-    /// Custom models use `None` and fall back to `main`.
-    pub revision: Option<&'static str>,
-}
+/// Instruction wrapper the Qwen3-Embedding family expects on retrieval
+/// *queries* (`Instruct: {task}\nQuery: {query}`). Passages and symmetric
+/// comparisons (novelty, supersede) are embedded without it. Only used by the
+/// Qwen3 backend.
+#[cfg(feature = "online-model")]
+const QWEN3_QUERY_INSTRUCTION: &str =
+    "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ";
 
-/// Resolved description of an embedding model: alias, HuggingFace id, output
-/// dimension, and pinned hashes (when available).
+/// Token window for the Qwen3 embedder. Chunking caps inputs well below this,
+/// so it doubles as the cap on the per-embed rotary-embedding table.
+#[cfg(feature = "online-model")]
+const QWEN3_EMBED_MAX_LEN: usize = 512;
+
+/// Resolved description of an embedding model: alias, HuggingFace id, and
+/// output dimension.
+///
+/// Known aliases no longer carry pinned commit SHAs or file hashes: those
+/// rotted whenever HuggingFace reorganised a repo, and the meaningful
+/// reproducibility guarantee is the `model_id` string persisted in
+/// `quaid_config` and validated on every open. See the `model-resolution`
+/// capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelConfig {
     /// Short alias (`small`, `base`, `large`, `m3`, or `custom`).
@@ -118,8 +125,6 @@ pub struct ModelConfig {
     /// Output embedding dimensionality; `0` means the dimension still needs
     /// hydration from the on-disk `config.json`.
     pub embedding_dim: usize,
-    /// Pinned SHA-256 hashes; `None` for custom (unpinned) models.
-    pub sha256_hashes: Option<ModelFileHashes>,
 }
 
 /// Tag indicating whether an embedding came from a real semantic model or from
@@ -174,126 +179,78 @@ impl ModelConfig {
     }
 }
 
-const SMALL_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
-    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
-    model_safetensors: "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad",
-    revision: Some("5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"),
-};
-
-const BASE_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "bc00af31a4a31b74040d73370aa83b62da34c90b75eb77bfa7db039d90abd591",
-    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
-    model_safetensors: "c7c1988aae201f80cf91a5dbbd5866409503b89dcaba877ca6dba7dd0a5167d7",
-    revision: Some("a5beb1e3e68b9ab74eb54cfd186867f64f240e1a"),
-};
-
-const LARGE_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "446712fac367857b4b1302762fe1cd7bfa8b3c4b77b4dc5d77c4025407660896",
-    tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
-    model_safetensors: "45e1954914e29bd74080e6c1510165274ff5279421c89f76c418878732f64ae7",
-    revision: Some("d9e9d73f56c5e5851e28a1bcbe3b1c36e3d28d4c"),
-};
-
-const M3_HASHES: ModelFileHashes = ModelFileHashes {
-    config_json: "26159e7ad065073448460117eb24b7a4572f6f4e78eadff65dc0a11c052449fa",
-    tokenizer_json: "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08",
-    model_safetensors: "993b2248881724788dcab8c644a91dfd63584b6e5604ff2037cb5541e1e38e7e",
-    revision: Some("babcf60cae0a1f438d7ade582983571a6b46523f"),
-};
-
 /// Returns the [`ModelConfig`] for the default model (`BAAI/bge-small-en-v1.5`).
 pub fn default_model() -> ModelConfig {
     resolve_model(DEFAULT_MODEL_ALIAS)
 }
 
 /// Resolves a user-supplied model alias or HuggingFace id into a
-/// [`ModelConfig`], falling back to a custom-model record (with no pinned
-/// hashes) for unknown inputs.
+/// [`ModelConfig`].
+///
+/// Short aliases (`small`/`base`/`medium`/`large`/`m3`/`max`) and the canonical
+/// HuggingFace ids of those models expand to a known dimension. The
+/// size-suffix aliases `medium` and `max` are accepted as synonyms for `base`
+/// and `m3` respectively, matching the documented naming. Any other
+/// `owner/repo` string is accepted silently as a custom model whose dimension
+/// is hydrated from its `config.json` at load time.
 pub fn resolve_model(input: &str) -> ModelConfig {
     let trimmed = input.trim();
     let normalized = trimmed.to_ascii_lowercase();
 
     match normalized.as_str() {
-        "" | DEFAULT_MODEL_ALIAS => ModelConfig {
+        // Default (empty / `DEFAULT_MODEL_ALIAS`) → Qwen3-Embedding-0.6B.
+        "" | DEFAULT_MODEL_ALIAS | "qwen/qwen3-embedding-0.6b" => ModelConfig {
+            alias: "qwen3-0.6b".to_owned(),
+            model_id: "Qwen/Qwen3-Embedding-0.6B".to_owned(),
+            embedding_dim: 1024,
+        },
+        "small" | "baai/bge-small-en-v1.5" => ModelConfig {
             alias: "small".to_owned(),
             model_id: "BAAI/bge-small-en-v1.5".to_owned(),
             embedding_dim: 384,
-            sha256_hashes: Some(SMALL_HASHES),
         },
-        "base" => ModelConfig {
+        "base" | "medium" | "baai/bge-base-en-v1.5" => ModelConfig {
             alias: "base".to_owned(),
             model_id: "BAAI/bge-base-en-v1.5".to_owned(),
             embedding_dim: 768,
-            sha256_hashes: Some(BASE_HASHES),
         },
-        "large" => ModelConfig {
+        "large" | "baai/bge-large-en-v1.5" => ModelConfig {
             alias: "large".to_owned(),
             model_id: "BAAI/bge-large-en-v1.5".to_owned(),
             embedding_dim: 1024,
-            sha256_hashes: Some(LARGE_HASHES),
         },
-        "m3" => ModelConfig {
+        "m3" | "max" | "baai/bge-m3" => ModelConfig {
             alias: "m3".to_owned(),
             model_id: "BAAI/bge-m3".to_owned(),
             embedding_dim: 1024,
-            sha256_hashes: Some(M3_HASHES),
         },
-        "baai/bge-small-en-v1.5" => ModelConfig {
-            alias: "small".to_owned(),
-            model_id: "BAAI/bge-small-en-v1.5".to_owned(),
-            embedding_dim: 384,
-            sha256_hashes: Some(SMALL_HASHES),
+        _ => ModelConfig {
+            alias: "custom".to_owned(),
+            model_id: trimmed.to_owned(),
+            embedding_dim: 0,
         },
-        "baai/bge-base-en-v1.5" => ModelConfig {
-            alias: "base".to_owned(),
-            model_id: "BAAI/bge-base-en-v1.5".to_owned(),
-            embedding_dim: 768,
-            sha256_hashes: Some(BASE_HASHES),
-        },
-        "baai/bge-large-en-v1.5" => ModelConfig {
-            alias: "large".to_owned(),
-            model_id: "BAAI/bge-large-en-v1.5".to_owned(),
-            embedding_dim: 1024,
-            sha256_hashes: Some(LARGE_HASHES),
-        },
-        "baai/bge-m3" => ModelConfig {
-            alias: "m3".to_owned(),
-            model_id: "BAAI/bge-m3".to_owned(),
-            embedding_dim: 1024,
-            sha256_hashes: Some(M3_HASHES),
-        },
-        _ => {
-            eprintln!(
-                "Warning: unpinned custom embedding model `{trimmed}`; skipping SHA-256 verification."
-            );
-            ModelConfig {
-                alias: "custom".to_owned(),
-                model_id: trimmed.to_owned(),
-                embedding_dim: 0,
-                sha256_hashes: None,
-            }
-        }
     }
 }
 
-/// Returns the built-in embedding model aliases that use pinned file hashes.
+/// Returns the built-in embedding model aliases with their known dimensions.
 pub fn known_embedding_models() -> Vec<ModelConfig> {
-    ["small", "base", "large", "m3"]
+    ["qwen3-0.6b", "small", "base", "large", "m3"]
         .into_iter()
         .map(resolve_model)
         .collect()
 }
 
-/// Resolves a selector only when it names one of Quaid's pinned embedding
-/// model aliases or repository ids, avoiding custom-model warning output.
+/// Resolves a selector only when it names one of Quaid's built-in embedding
+/// model aliases (including the `medium`/`max` synonyms) or their canonical
+/// repository ids, returning `None` for arbitrary custom model ids.
 pub fn resolve_known_embedding_model(input: &str) -> Option<ModelConfig> {
     let normalized = input.trim().to_ascii_lowercase();
     let alias = match normalized.as_str() {
-        "" | "small" | "baai/bge-small-en-v1.5" => "small",
-        "base" | "baai/bge-base-en-v1.5" => "base",
+        "" | "qwen3-0.6b" | "qwen/qwen3-embedding-0.6b" => "qwen3-0.6b",
+        "small" | "baai/bge-small-en-v1.5" => "small",
+        "base" | "medium" | "baai/bge-base-en-v1.5" => "base",
         "large" | "baai/bge-large-en-v1.5" => "large",
-        "m3" | "baai/bge-m3" => "m3",
+        "m3" | "max" | "baai/bge-m3" => "m3",
         _ => return None,
     };
     Some(resolve_model(alias))
@@ -307,20 +264,11 @@ pub fn resolve_requested_model(input: Option<&str>) -> ModelConfig {
     coerce_model_for_build(&requested)
 }
 
-/// Returns `requested` unchanged on the `online-model` build, but on the
-/// airgapped `embedded-model` build silently falls back to the embedded
-/// BGE-small model (with a warning) if anything else was asked for.
+/// Returns `requested` unchanged. Retained as a stable seam now that the
+/// embedded-model channel (which used to coerce every request back to the
+/// embedded BGE-small) is gone: the single download-on-first-use channel
+/// honors any configured model.
 pub fn coerce_model_for_build(requested: &ModelConfig) -> ModelConfig {
-    #[cfg(feature = "embedded-model")]
-    {
-        if !requested.is_small() {
-            eprintln!(
-                "Warning: --model / QUAID_MODEL is only configurable in the online-model build; continuing with BAAI/bge-small-en-v1.5."
-            );
-            return default_model();
-        }
-    }
-
     requested.clone()
 }
 
@@ -357,8 +305,15 @@ struct ModelRuntime {
 
 impl Default for ModelRuntime {
     fn default() -> Self {
+        // Library unit tests pin the small BGE model (384d) so they stay
+        // deterministic and offline (via the hash shim) and independent of the
+        // production default, which is the download-only Qwen3-Embedding-0.6B.
+        #[cfg(test)]
+        let configured = resolve_model("small");
+        #[cfg(not(test))]
+        let configured = default_model();
         Self {
-            configured: default_model(),
+            configured,
             loaded: None,
         }
     }
@@ -370,17 +325,15 @@ fn model_runtime() -> &'static Mutex<ModelRuntime> {
     MODEL_RUNTIME.get_or_init(|| Mutex::new(ModelRuntime::default()))
 }
 
-/// Operator-supplied policy for downloading custom (non-curated) embedding
-/// models, threaded from the `--allow-unverified-model` and
-/// `--model-revision` CLI flags. The default (deny, no pin) means a custom
-/// model with no curated SHA-256 hashes is never downloaded implicitly —
-/// in particular Quaid never silently fetches the mutable `main` revision.
+/// Operator-supplied policy for downloading embedding models, threaded from
+/// the `--model-revision` CLI flag. Quaid no longer pins per-alias commit
+/// SHAs (they rotted on HuggingFace repo reorganisations); downloads default
+/// to the model's `main` revision. An operator may still pin a specific
+/// revision for reproducibility via [`revision`](Self::revision).
 #[derive(Debug, Clone, Default)]
 pub struct ModelDownloadPolicy {
-    /// Operator explicitly accepted that the custom model's files cannot
-    /// be integrity-verified against curated hashes.
-    pub allow_unverified: bool,
-    /// Explicit Hugging Face revision (commit SHA) to pin the download to.
+    /// Explicit Hugging Face revision (commit SHA) to pin the download to;
+    /// `None` downloads the model's `main` revision.
     pub revision: Option<String>,
 }
 
@@ -461,6 +414,22 @@ enum EmbeddingBackend {
         device: Device,
         max_len: usize,
     },
+    /// Qwen3-Embedding decoder (last-token pooling, instruction-aware queries).
+    /// candle's `qwen3::Model::forward` takes `&mut self` (it mutates a
+    /// persistent KV cache) and `Model::clear_kv_cache` is private, so a
+    /// reused instance cannot be reset between one-shot embeddings. We instead
+    /// hold the mmap-able weight paths + parsed config and rebuild a fresh
+    /// `Model` per embed; `max_position_embeddings` is capped to the embedding
+    /// window so the per-call rotary-table build stays cheap.
+    /// TODO(candle): drop the per-call rebuild once a `pub clear_kv_cache`
+    /// lands upstream on `qwen3::Model`.
+    #[cfg(feature = "online-model")]
+    CandleQwen3 {
+        model_paths: Vec<PathBuf>,
+        config: Box<Qwen3Config>,
+        tokenizer: Box<Tokenizer>,
+        device: Device,
+    },
     HashShim,
 }
 
@@ -475,6 +444,11 @@ impl std::fmt::Debug for EmbeddingModel {
             EmbeddingBackend::CandleXlmRoberta { .. } => f
                 .debug_struct("EmbeddingModel")
                 .field("backend", &format!("Candle({})", self.config.model_id))
+                .finish(),
+            #[cfg(feature = "online-model")]
+            EmbeddingBackend::CandleQwen3 { .. } => f
+                .debug_struct("EmbeddingModel")
+                .field("backend", &format!("CandleQwen3({})", self.config.model_id))
                 .finish(),
             EmbeddingBackend::HashShim => f
                 .debug_struct("EmbeddingModel")
@@ -509,34 +483,21 @@ impl EmbeddingModel {
     }
 
     fn try_load_candle(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
-        #[cfg(all(feature = "online-model", feature = "test-harness"))]
+        // Single channel: provision/download on first use (the test harness
+        // short-circuits to the hash shim via QUAID_FORCE_HASH_SHIM inside
+        // `load_online_backend`). A build without the channel feature has no
+        // way to obtain weights.
+        #[cfg(feature = "online-model")]
         {
             load_online_backend(config)
         }
 
-        // When both release channels are enabled outside the test harness,
-        // prefer embedded so validation builds keep release-profile behavior.
-        #[cfg(all(
-            feature = "embedded-model",
-            not(all(feature = "online-model", feature = "test-harness"))
-        ))]
-        {
-            load_embedded_backend(config)
-        }
-
-        #[cfg(all(
-            not(feature = "embedded-model"),
-            feature = "online-model",
-            not(feature = "test-harness")
-        ))]
-        {
-            load_online_backend(config)
-        }
-
-        #[cfg(not(any(feature = "embedded-model", feature = "online-model")))]
+        #[cfg(not(feature = "online-model"))]
         {
             let _ = config;
-            Err("no model channel enabled".to_owned())
+            Err("no model channel enabled; build with the default features for \
+                 download-on-first-use model provisioning"
+                .to_owned())
         }
     }
 
@@ -554,19 +515,34 @@ impl EmbeddingModel {
                 device,
                 max_len,
             } => embed_candle_xlm_roberta(text, model, tokenizer, device, *max_len),
+            #[cfg(feature = "online-model")]
+            EmbeddingBackend::CandleQwen3 {
+                model_paths,
+                config,
+                tokenizer,
+                device,
+            } => embed_candle_qwen3(text, model_paths, config, tokenizer, device),
             EmbeddingBackend::HashShim => embed_hash_shim(text, self.config.embedding_dim),
         }
     }
 
-    /// Embeds a retrieval query, prepending [`BGE_QUERY_INSTRUCTION`] for the
-    /// BGE en-v1.5 family on a real semantic backend. The hash shim stays
-    /// prefix-free so its query and passage embeddings remain comparable.
+    /// Embeds a retrieval query with the model family's query convention on a
+    /// real semantic backend: the BGE en-v1.5 family takes
+    /// [`BGE_QUERY_INSTRUCTION`]; the Qwen3-Embedding decoder takes the
+    /// `Instruct: …\nQuery: …` format ([`QWEN3_QUERY_INSTRUCTION`]). Passages
+    /// (and symmetric comparisons) are embedded un-prefixed. The hash shim
+    /// stays prefix-free so its query and passage embeddings stay comparable.
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, InferenceError> {
-        let semantic = !matches!(self.backend, EmbeddingBackend::HashShim);
-        if semantic && self.config.uses_query_instruction() {
-            self.embed(&format!("{BGE_QUERY_INSTRUCTION}{text}"))
-        } else {
-            self.embed(text)
+        match &self.backend {
+            #[cfg(feature = "online-model")]
+            EmbeddingBackend::CandleQwen3 { .. } => {
+                self.embed(&format!("{QWEN3_QUERY_INSTRUCTION}{text}"))
+            }
+            EmbeddingBackend::HashShim => self.embed(text),
+            _ if self.config.uses_query_instruction() => {
+                self.embed(&format!("{BGE_QUERY_INSTRUCTION}{text}"))
+            }
+            _ => self.embed(text),
         }
     }
 
@@ -591,39 +567,6 @@ impl EmbeddingModel {
             _ => EmbeddingEvidenceKind::Semantic,
         }
     }
-}
-
-#[cfg(all(
-    feature = "embedded-model",
-    not(all(feature = "online-model", feature = "test-harness"))
-))]
-fn load_embedded_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
-    if !config.is_small() {
-        return Err(format!(
-            "embedded-model build only includes BAAI/bge-small-en-v1.5, requested {}",
-            config.model_id
-        ));
-    }
-
-    let config: BertConfig =
-        serde_json::from_slice(include_bytes!(env!("QUAID_EMBEDDED_CONFIG_PATH")))
-            .map_err(|e| format!("parse embedded config.json: {e}"))?;
-    let tokenizer = Tokenizer::from_bytes(include_bytes!(env!("QUAID_EMBEDDED_TOKENIZER_PATH")))
-        .map_err(|e| format!("load embedded tokenizer: {e}"))?;
-    let device = Device::Cpu;
-    let vb = VarBuilder::from_slice_safetensors(
-        include_bytes!(env!("QUAID_EMBEDDED_MODEL_PATH")),
-        DType::F32,
-        &device,
-    )
-    .map_err(|e| format!("load embedded model weights: {e}"))?;
-    let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
-
-    Ok(EmbeddingBackend::CandleBert {
-        model: Box::new(model),
-        tokenizer: Box::new(tokenizer),
-        device,
-    })
 }
 
 #[cfg(feature = "online-model")]
@@ -683,6 +626,21 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
                 tokenizer: Box::new(tokenizer),
                 device,
                 max_len,
+            })
+        }
+        "qwen3" => {
+            let mut config: Qwen3Config = serde_json::from_str(&config_text)
+                .map_err(|e| format!("parse config.json: {e}"))?;
+            // Embedding sequences never exceed the encoder window, so cap the
+            // rotary table the per-embed `Model` rebuild constructs (see the
+            // `CandleQwen3` backend variant) rather than the model's full
+            // trained context.
+            config.max_position_embeddings = config.max_position_embeddings.min(QWEN3_EMBED_MAX_LEN);
+            Ok(EmbeddingBackend::CandleQwen3 {
+                model_paths: vec![model_path],
+                config: Box::new(config),
+                tokenizer: Box::new(tokenizer),
+                device,
             })
         }
         _ => Err(format!(
@@ -916,6 +874,80 @@ fn embed_candle_xlm_roberta(
     cls_pool_and_normalize(output)
 }
 
+/// Embeds a single text with the Qwen3-Embedding decoder: runs one forward
+/// pass, pools the **last** token's hidden state (Qwen3-Embedding is a causal
+/// decoder, not a CLS encoder), and L2-normalizes to a 1024-d vector.
+///
+/// A fresh `Model` is built per call from the mmap-able weights so its KV
+/// cache starts empty — `qwen3::Model::clear_kv_cache` is private in candle
+/// 0.10, so a persistent instance cannot be reset between one-shot embeds. The
+/// rotary table is bounded by the capped `max_position_embeddings` set at load.
+/// TODO(perf): hold a persistent model once candle exposes a public reset (or
+/// vendor the decoder); benchmarked under qwen3-models-airgapped §7.2.
+#[cfg(feature = "online-model")]
+fn embed_candle_qwen3(
+    text: &str,
+    model_paths: &[PathBuf],
+    config: &Qwen3Config,
+    tokenizer: &Tokenizer,
+    device: &Device,
+) -> Result<Vec<f32>, InferenceError> {
+    let encoding = tokenizer
+        .encode(text, true)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("tokenizer: {e}"),
+        })?;
+
+    warn_on_truncation(encoding.get_ids().len(), QWEN3_EMBED_MAX_LEN);
+    let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(QWEN3_EMBED_MAX_LEN)];
+    if ids.is_empty() {
+        return Err(InferenceError::Internal {
+            message: "tokenizer produced no tokens".to_owned(),
+        });
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "candle's VarBuilder::from_mmaped_safetensors mmaps tensor data; safety hinges on the file not being mutated for the lifetime of the VarBuilder, which we uphold by reading from immutable on-disk model weights"
+    )]
+    let vb = unsafe {
+        VarBuilder::from_mmaped_safetensors(model_paths, DType::F32, device).map_err(|e| {
+            InferenceError::Internal {
+                message: format!("load Qwen3 weights: {e}"),
+            }
+        })?
+    };
+    let mut model = Qwen3Model::new(config, vb).map_err(|e| InferenceError::Internal {
+        message: format!("build Qwen3 model: {e}"),
+    })?;
+
+    let input = Tensor::new(ids, device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("input tensor: {e}"),
+        })?;
+
+    // `forward` returns hidden states `[1, seq, hidden]` (the norm output, not
+    // logits); pool the final position.
+    let hidden = model
+        .forward(&input, 0)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("Qwen3 forward: {e}"),
+        })?;
+    let mut pooled = hidden
+        .narrow(1, ids.len() - 1, 1)
+        .and_then(|t| t.squeeze(1))
+        .and_then(|t| t.squeeze(0))
+        .and_then(|t| t.to_dtype(DType::F32))
+        .and_then(|t| t.to_vec1::<f32>())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("Qwen3 last-token pool: {e}"),
+        })?;
+
+    normalize(&mut pooled)?;
+    Ok(pooled)
+}
+
 /// Pools a transformer forward pass to the hidden state of the first token
 /// ([CLS] for BERT, `<s>` for XLM-R) and L2-normalizes it. The BGE en-v1.5
 /// family and bge-m3 dense retrieval are trained for CLS pooling; mean
@@ -962,39 +994,16 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
     let cache_dir = model_cache_dir(model)?;
 
     if let Some(paths) = existing_model_paths(&cache_dir) {
-        verify_cached_model_integrity(model, &cache_dir)?;
         return Ok(paths);
     }
 
-    // Resolve the download revision before any network or filesystem work.
-    // Curated aliases use their authoritative pin; custom models require an
-    // explicit operator-supplied pin plus the unverified-download opt-in —
-    // there is no silent fallback to the mutable `main` revision.
-    let revision = match model.sha256_hashes.and_then(|h| h.revision) {
-        Some(revision) => revision.to_owned(),
-        None => {
-            let policy = model_download_policy();
-            match (policy.allow_unverified, policy.revision) {
-                (true, Some(revision)) => revision,
-                (false, Some(_)) => {
-                    return Err(format!(
-                        "custom model {} has no curated SHA-256 pin, so its files cannot be \
-                         integrity-verified. Re-run with --allow-unverified-model (alongside \
-                         --model-revision) to accept the unverified download.",
-                        model.model_id
-                    ));
-                }
-                (_, None) => {
-                    return Err(format!(
-                        "refusing to download unpinned custom model {}: Quaid will not silently \
-                         fetch the mutable `main` revision. Re-run with --allow-unverified-model \
-                         and --model-revision <commit-sha> to pin the download explicitly.",
-                        model.model_id
-                    ));
-                }
-            }
-        }
-    };
+    // Quaid no longer pins per-alias commit SHAs. Download the operator-pinned
+    // revision when one was supplied via `--model-revision`, otherwise the
+    // model's `main` revision. Integrity rests on the `model_id` recorded in
+    // `quaid_config` plus HTTPS transport, not on curated file hashes.
+    let revision = model_download_policy()
+        .revision
+        .unwrap_or_else(|| "main".to_owned());
 
     std::fs::create_dir_all(&cache_dir)
         .map_err(|e| format!("create model cache {}: {e}", cache_dir.display()))?;
@@ -1004,13 +1013,6 @@ fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBu
         .user_agent("quaid-runtime/0.9.10")
         .build()
         .map_err(|e| format!("build download client: {e}"))?;
-
-    if model.sha256_hashes.is_none() {
-        eprintln!(
-            "Warning: custom model {} has no pinned SHA-256 hashes; downloading operator-pinned revision {revision} without integrity verification (--allow-unverified-model).",
-            model.model_id
-        );
-    }
 
     for file_name in ["config.json", "tokenizer.json", "model.safetensors"] {
         download_model_file(&client, model, file_name, &cache_dir, &revision)?;
@@ -1063,9 +1065,7 @@ fn download_model_file(
     let mut temp_guard = TempFileCleanupGuard::new(temp_destination);
     let mut file = file;
     let base_url = huggingface_base_url();
-    // `revision` is the curated pin for standard aliases, or the explicit
-    // operator-supplied --model-revision pin for custom models; there is
-    // no implicit `main` fallback.
+    // `revision` is the operator-supplied `--model-revision` pin, or `main`.
     let url = format!(
         "{}/{}/resolve/{}/{}",
         base_url.trim_end_matches('/'),
@@ -1085,21 +1085,9 @@ fn download_model_file(
     file.sync_all()
         .map_err(|e| format!("flush {}: {e}", temp_guard.path().display()))?;
 
-    if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
-        verify_file_sha256(temp_guard.path(), expected_hash).map_err(|error| {
-            format!(
-                "{error}; run `quaid model clean {} --force` and retry the operation",
-                model.alias
-            )
-        })?;
-    }
-
     drop(file);
     if let Err(err) = std::fs::rename(temp_guard.path(), &destination) {
         if destination.exists() {
-            if let Some(expected_hash) = expected_hash_for_file(model, file_name) {
-                verify_file_sha256(&destination, expected_hash)?;
-            }
             return Ok(());
         }
         return Err(format!(
@@ -1110,55 +1098,6 @@ fn download_model_file(
     }
     temp_guard.disarm();
 
-    Ok(())
-}
-
-#[cfg(feature = "online-model")]
-fn expected_hash_for_file(model: &ModelConfig, file_name: &str) -> Option<&'static str> {
-    let hashes = model.sha256_hashes?;
-    match file_name {
-        "config.json" => Some(hashes.config_json),
-        "tokenizer.json" => Some(hashes.tokenizer_json),
-        "model.safetensors" => Some(hashes.model_safetensors),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "online-model")]
-fn verify_file_sha256(path: &Path, expected: &str) -> Result<(), String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|e| format!("open {} for hash: {e}", path.display()))?;
-    let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher)
-        .map_err(|e| format!("read {} for hash: {e}", path.display()))?;
-    let actual = format!("{:x}", hasher.finalize());
-
-    if actual != expected {
-        return Err(format!(
-            "SHA-256 mismatch for {}: expected {expected}, got {actual}",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "online-model")]
-fn verify_cached_model_integrity(model: &ModelConfig, cache_dir: &Path) -> Result<(), String> {
-    if let Some(hashes) = model.sha256_hashes {
-        for (file_name, expected_hash) in [
-            ("config.json", hashes.config_json),
-            ("tokenizer.json", hashes.tokenizer_json),
-            ("model.safetensors", hashes.model_safetensors),
-        ] {
-            let path = cache_dir.join(file_name);
-            verify_file_sha256(&path, expected_hash).map_err(|e| {
-                format!(
-                    "cached model integrity check failed — delete {} and retry: {e}",
-                    cache_dir.display()
-                )
-            })?;
-        }
-    }
     Ok(())
 }
 
@@ -1215,22 +1154,17 @@ pub fn embedding_required_files() -> &'static [&'static str] {
     &["config.json", "tokenizer.json", "model.safetensors"]
 }
 
-/// Validates the required files for an online embedding model cache, with
-/// optional SHA-256 verification for pinned models.
+/// Validates that the required files for an online embedding model cache are
+/// present and readable. Per-file SHA-256 verification was removed along with
+/// the curated hash tables (see the `model-resolution` capability); integrity
+/// now rests on the `model_id` recorded in `quaid_config` and HTTPS transport.
 #[cfg(feature = "online-model")]
-pub fn verify_embedding_model_cache(
-    model: &ModelConfig,
-    cache_dir: &Path,
-    verify_hashes: bool,
-) -> Result<(), String> {
+pub fn verify_embedding_model_cache(cache_dir: &Path) -> Result<(), String> {
     for file_name in embedding_required_files() {
         let path = cache_dir.join(file_name);
         if !path.is_file() {
             return Err(format!("missing required file {}", path.display()));
         }
-    }
-    if verify_hashes {
-        verify_cached_model_integrity(model, cache_dir)?;
     }
     Ok(())
 }
@@ -2228,7 +2162,11 @@ mod tests {
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().expect("create temp dir");
         let db_path = dir.path().join("test_memory.db");
-        let conn = db::open(db_path.to_str().expect("utf8 path")).expect("open db");
+        // Pin the small BGE model so these mechanics tests keep their 384d
+        // `page_embeddings_vec_384` fixtures, independent of the production
+        // default (download-only Qwen3-Embedding-0.6B).
+        let conn = db::init(db_path.to_str().expect("utf8 path"), &resolve_model("small"))
+            .expect("init db");
         std::mem::forget(dir);
         conn
     }
@@ -2247,7 +2185,6 @@ mod tests {
             assert_eq!(model.model_id, expected_id);
             assert_eq!(model.embedding_dim, expected_dim);
             assert_eq!(model.alias, expected_alias);
-            assert!(model.sha256_hashes.is_some());
         }
     }
 
@@ -2262,7 +2199,6 @@ mod tests {
         assert_eq!(model.alias, "custom");
         assert_eq!(model.model_id, "org/custom-embedder");
         assert_eq!(model.embedding_dim, 0);
-        assert!(model.sha256_hashes.is_none());
     }
 
     #[test]
@@ -2271,7 +2207,7 @@ mod tests {
             .into_iter()
             .map(|model| model.alias)
             .collect::<Vec<_>>();
-        assert_eq!(aliases, vec!["small", "base", "large", "m3"]);
+        assert_eq!(aliases, vec!["qwen3-0.6b", "small", "base", "large", "m3"]);
         assert_eq!(
             resolve_known_embedding_model("BAAI/bge-base-en-v1.5")
                 .expect("known repo")
@@ -2286,7 +2222,7 @@ mod tests {
 
     #[test]
     fn model_config_helper_methods_reflect_aliases_and_dimensions() {
-        let small = default_model();
+        let small = resolve_model("small");
         assert_eq!(small.vec_table(), "page_embeddings_vec_384");
         assert_eq!(small.embedding_model_name(), "BAAI/bge-small-en-v1.5");
         assert_eq!(small.model_hint(), "small");
@@ -2306,12 +2242,12 @@ mod tests {
         assert_eq!(model, default_model());
     }
 
-    #[cfg(feature = "embedded-model")]
     #[test]
-    fn coerce_model_for_build_falls_back_to_small_on_embedded_builds() {
-        let coerced = coerce_model_for_build(&resolve_model("large"));
-
-        assert_eq!(coerced, default_model());
+    fn coerce_model_for_build_is_identity_on_the_single_channel() {
+        // The embedded-model coercion is gone: any configured model passes
+        // through unchanged on the single download-on-first-use channel.
+        let requested = resolve_model("large");
+        assert_eq!(coerce_model_for_build(&requested), requested);
     }
 
     #[cfg(not(feature = "online-model"))]
@@ -2861,11 +2797,10 @@ mod tests {
         let _base_url = EnvVarGuard::set("QUAID_HF_BASE_URL", format!("http://{}", address));
         let _cache_dir = EnvVarGuard::set("QUAID_MODEL_CACHE_DIR", cache_dir.path());
 
-        // The hardened download policy refuses unpinned custom models; this
-        // test exercises the mock-download plumbing, so opt in explicitly and
-        // restore deny-by-default before releasing the env lock.
+        // Pin an explicit revision so the mock server sees a deterministic
+        // request path; restore the default (download `main`) before releasing
+        // the env lock.
         configure_model_download_policy(ModelDownloadPolicy {
-            allow_unverified: true,
             revision: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned()),
         });
 

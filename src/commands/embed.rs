@@ -405,7 +405,14 @@ mod tests {
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().expect("create temp dir");
         let db_path = dir.path().join("test_memory.db");
-        let conn = db::open(db_path.to_str().expect("utf8 path")).expect("open db");
+        // Pin the small BGE model (384d) so these tests keep their
+        // `page_embeddings_vec_384` fixtures, independent of the production
+        // default (Qwen3-Embedding-0.6B).
+        let conn = db::init(
+            db_path.to_str().expect("utf8 path"),
+            &crate::core::inference::resolve_model("small"),
+        )
+        .expect("init db");
         std::mem::forget(dir);
         conn
     }

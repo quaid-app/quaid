@@ -5,8 +5,8 @@ use rusqlite::Connection;
 use super::collections::{self, OpKind, SlugResolution};
 use super::pages::{self, PageKey};
 use super::search::{
-    configured_max_chunks_per_doc, configured_relevance_floor, dedup_chunks_per_page,
-    filter_below_floor,
+    apply_mmr, compute_cross_ref_boost, configured_cross_ref, configured_max_chunks_per_doc,
+    configured_mmr_lambda, configured_relevance_floor, dedup_chunks_per_page, filter_below_floor,
 };
 use super::types::{SearchError, SearchResult};
 
@@ -19,9 +19,11 @@ const MAX_DEPTH: u32 = 3;
 /// Token count is approximated as `(len(compiled_truth) + len(timeline)) / 4`.
 /// Results are deduplicated by slug. Initial results appear first, followed
 /// by expansion results ordered by link distance. The post-fusion quality
-/// passes from `core::search` (per-page dedup, relevance floor) are applied
-/// to the initial set and re-applied on every expansion step; both are
-/// identity no-ops at their seeded config defaults.
+/// passes from `core::search` are applied to the initial set in the same
+/// order as `hybrid_search` — dedup → cross-ref boost → relevance floor →
+/// MMR — while expansion steps re-apply only dedup + floor (boost and MMR are
+/// top-level only). Every pass is an identity no-op at its seeded config
+/// default.
 ///
 /// `collection_filter` restricts expansion to pages belonging to the given
 /// collection ID. Pass `None` to allow cross-collection expansion (CLI path).
@@ -63,16 +65,19 @@ pub fn progressive_retrieve_with_namespace(
             .collect()
     };
 
-    // Apply the same post-fusion quality passes as `hybrid_search` (dedup →
-    // floor) so token-budget expansion sees the same filtered candidate set
-    // as the top-k API. Both passes are identity no-ops at their seeded
-    // defaults. Below-floor candidates are never expanded.
+    // Apply the same ordered post-fusion quality passes as `hybrid_search` on
+    // the initial set: dedup → cross-ref boost → floor → MMR. Each is an
+    // identity no-op at its seeded default. MMR runs exactly once here on the
+    // top-level set (k=0 = no truncation, reorder only) and is NOT re-applied
+    // per expansion step. Below-floor candidates are never expanded.
     let max_chunks_per_doc = configured_max_chunks_per_doc(conn)?;
     let relevance_floor = configured_relevance_floor(conn)?;
-    let initial = filter_below_floor(
-        dedup_chunks_per_page(initial, max_chunks_per_doc),
-        relevance_floor,
-    );
+    let (cross_ref_weight, cross_ref_cap) = configured_cross_ref(conn)?;
+    let mmr_lambda = configured_mmr_lambda(conn)?;
+    let initial = dedup_chunks_per_page(initial, max_chunks_per_doc);
+    let initial = compute_cross_ref_boost(conn, initial, cross_ref_weight, cross_ref_cap)?;
+    let initial = filter_below_floor(initial, relevance_floor);
+    let initial = apply_mmr(conn, initial, mmr_lambda, 0);
     if initial.is_empty() || depth == 0 {
         return Ok(initial);
     }

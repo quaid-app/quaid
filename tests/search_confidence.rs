@@ -279,6 +279,7 @@ fn memory_query_input(query: &str, relevance_floor: Option<f64>) -> MemoryQueryI
         hops: None,
         relevance_floor,
         max_chunks_per_doc: None,
+        mmr_lambda: None,
         redact: None,
     }
 }

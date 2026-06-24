@@ -11,7 +11,6 @@ use quaid::core::conversation::slm::{parse_response, LazySlmRunner, SlmError, Sl
 use quaid::core::types::RawFact;
 use safetensors::tensor::{serialize_to_file, Dtype, TensorView};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tokenizers::models::wordlevel::WordLevel;
 use tokenizers::pre_tokenizers::whitespace::Whitespace;
@@ -212,12 +211,18 @@ fn seed_tiny_phi3_cache(alias: &str) {
 
     let mut tokenizer = Tokenizer::new(
         WordLevel::builder()
-            .vocab(HashMap::from([
-                ("<unk>".to_string(), 0),
-                ("hello".to_string(), 1),
-                ("world".to_string(), 2),
-                ("<eos>".to_string(), 3),
-            ]))
+            // tokenizers 0.21 takes `ahash::AHashMap` here; collect into the
+            // method's parameter type rather than naming the ahash re-export.
+            .vocab(
+                [
+                    ("<unk>".to_string(), 0_u32),
+                    ("hello".to_string(), 1),
+                    ("world".to_string(), 2),
+                    ("<eos>".to_string(), 3),
+                ]
+                .into_iter()
+                .collect(),
+            )
             .unk_token("<unk>".to_string())
             .build()
             .unwrap(),

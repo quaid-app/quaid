@@ -20,7 +20,7 @@
 use quaid::commands::collection::{self, CollectionAction};
 use quaid::commands::embed::run_with_batch;
 use quaid::core::db;
-use quaid::core::inference::search_vec_with_namespace_filtered;
+use quaid::core::inference::{resolve_model, search_vec_with_namespace_filtered};
 use quaid::core::namespace;
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -28,7 +28,10 @@ use uuid::Uuid;
 fn open_test_db() -> Connection {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
-    let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    // Pin the small BGE model (384d) so the `vec_384` fixtures match the active
+    // model's vec table, independent of the production default
+    // (Qwen3-Embedding-0.6B, 1024d).
+    let conn = db::init(db_path.to_str().unwrap(), &resolve_model("small")).unwrap();
     // Keep the temp dir alive for the life of the connection.
     std::mem::forget(dir);
     conn

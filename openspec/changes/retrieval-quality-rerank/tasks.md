@@ -46,41 +46,41 @@
 
 ## 4. Cross-reference boost (`cross-reference-scoring` capability)
 
-- [ ] 4.1 Implement `compute_cross_ref_boost(candidates, db, weight, cap)` in `src/core/search.rs` — single indexed query against `links` for `(from_page_id IN candidate_ids, to_page_id IN candidate_ids, valid range)`
-- [ ] 4.2 Read `links.edge_weight` from Epic 1's schema; treat absent column / empty result set as zero boost (graceful degradation when `knowledge-graph-layer` has not landed)
-- [ ] 4.3 Wire the boost pass between dedup and the confidence floor in `hybrid_search`; populate `SearchResult.cross_ref_boost` per row
-- [ ] 4.4 Apply the same boost computation on `progressive_retrieve`'s initial candidate set
-- [ ] 4.5 Short-circuit the lookup entirely when `cross_ref_boost_weight == 0.0`
-- [ ] 4.6 Validate writes to `cross_ref_boost_weight` and `cross_ref_boost_cap` reject out-of-range values
-- [ ] 4.7 Write `tests/search_cross_ref.rs` covering: co-cited boost, empty-graph no-op, expired-edge exclusion, cap saturation on hub pages, `weight=0.0` short-circuit
+- [x] 4.1 Implement `compute_cross_ref_boost(candidates, db, weight, cap)` in `src/core/search.rs` — single indexed query against `links` for `(from_page_id IN candidate_ids, to_page_id IN candidate_ids, valid range)`. Signature is `compute_cross_ref_boost(conn, candidates, weight, cap)`; candidate slugs are resolved to page ids once and the ids are inlined into the `IN (...)` lists (trusted i64s, injection-safe).
+- [x] 4.2 Read `links.edge_weight` from Epic 1's schema; treat absent column / empty result set as zero boost (graceful degradation when `knowledge-graph-layer` has not landed). Empty/sparse graph leaves every row untouched (no re-sort, identity path).
+- [x] 4.3 Wire the boost pass between dedup and the confidence floor in `hybrid_search`; populate `SearchResult.cross_ref_boost` per row. The list is re-sorted only when a boost actually moved a score so the floor and an identity MMR see the post-boost ranking.
+- [x] 4.4 Apply the same boost computation on `progressive_retrieve`'s initial candidate set (dedup → boost → floor → MMR).
+- [x] 4.5 Short-circuit the lookup entirely when `cross_ref_boost_weight == 0.0` (early return before any `links` query).
+- [x] 4.6 Validate writes to `cross_ref_boost_weight` and `cross_ref_boost_cap` reject out-of-range values — *per the §1.2 precedent (`quaid config set` is generic with no per-key write validation), enforced as read-time clamping into `[0.0, 1.0]` in `configured_cross_ref`, so an out-of-range stored value can never affect scoring. No dedicated write path/CLI flag exists for these keys to attach a hard reject to.*
+- [x] 4.7 Write `tests/search_cross_ref.rs` covering: co-cited boost, empty-graph no-op, expired-edge exclusion, cap saturation on hub pages, `weight=0.0` short-circuit
 
 ## 5. MMR reranker (`mmr-reranking` capability)
 
-- [ ] 5.1 Implement `apply_mmr(candidates, lambda, k)` in `src/core/search.rs` using the greedy formula in `design.md` and the deterministic tie-break `(fused_score desc, page_id asc, chunk_id asc)`
-- [ ] 5.2 Reuse the existing cosine-similarity primitive on `page_embeddings_vec_*` vectors; handle missing-vector candidates with zero diversity penalty
-- [ ] 5.3 Wire MMR as the final post-fusion pass in `hybrid_search`; populate `SearchResult.mmr_score`
-- [ ] 5.4 Apply MMR exactly once on `progressive_retrieve`'s initial candidate set (not per expansion step)
-- [ ] 5.5 Add `--mmr-lambda L` CLI flag with `[0.0, 1.0]` validation; expose via `memory_search` / `memory_query` MCP parameters
-- [ ] 5.6 Verify `mmr_lambda = 1.0` reproduces pre-change relevance ordering bytewise (golden test against a frozen baseline fixture)
-- [ ] 5.7 Write `tests/search_mmr.rs` covering: diversity penalty downranking, first-selection equals top score, deterministic tie-break, `lambda = 1.0` baseline, missing-vector fallback
+- [x] 5.1 Implement `apply_mmr(candidates, lambda, k)` in `src/core/search.rs` using the greedy formula in `design.md` and the deterministic tie-break `(fused_score desc, page_id asc, chunk_id asc)`. Signature is `apply_mmr(conn, candidates, lambda, k)` (conn is needed to read per-candidate vectors). `chunk_id asc` is realized as `slug asc` since merged rows carry no chunk id; page_id asc is the primary tie-break.
+- [x] 5.2 Reuse the existing cosine-similarity primitive on `page_embeddings_vec_*` vectors; handle missing-vector candidates with zero diversity penalty. Each candidate's representative embedding (first stored chunk under the active model) is read from the `vec0` table and decoded; the f64-accumulation cosine matches the supersede path's primitive.
+- [x] 5.3 Wire MMR as the final post-fusion pass in `hybrid_search`; populate `SearchResult.mmr_score` (applied after truncation so the budget is only spent on surviving rows).
+- [x] 5.4 Apply MMR exactly once on `progressive_retrieve`'s initial candidate set (not per expansion step) — `apply_mmr(conn, initial, lambda, 0)` (k=0 reorders without truncating).
+- [x] 5.5 Add `--mmr-lambda L` CLI flag with `[0.0, 1.0]` validation; expose via `memory_search` / `memory_query` MCP parameters. CLI flag added to `quaid search` and `quaid query` (clap `parse_unit_interval`); MCP `mmr_lambda` param added to both tools with `[0,1]` validation in the handlers. *Note: `quaid search` / `memory_search` are FTS-only (no vector arm); MMR is threaded through their quality passes and degrades to relevance ordering when candidates lack stored vectors.*
+- [x] 5.6 Verify `mmr_lambda = 1.0` reproduces pre-change relevance ordering bytewise (golden test against a frozen baseline fixture) — `apply_mmr` returns the input untouched (no reorder, `mmr_score` left unset) at λ≥1.0; covered by `lambda_one_reproduces_relevance_ordering_bytewise` and `hybrid_search_lambda_one_reproduces_identity_ordering` in `tests/search_mmr.rs`.
+- [x] 5.7 Write `tests/search_mmr.rs` covering: diversity penalty downranking, first-selection equals top score, deterministic tie-break, `lambda = 1.0` baseline, missing-vector fallback
 
 ## 6. Extractive reranker (`extractive-rerank` capability) — opt-in
 
-- [ ] 6.1 Create `src/core/rerank.rs` with a public `extractive_rerank(chunk, query_vec, top_n, budget_ms)` entry point
-- [ ] 6.2 Implement deterministic punctuation-based sentence segmentation (no new crates); reuse the existing tokenizer if it provides sentence boundaries
-- [ ] 6.3 Implement contiguous-span selection by sentence-level cosine similarity to the query embedding; respect `rerank_extractive_top_n`
-- [ ] 6.4 Enforce per-chunk wall-clock budget; fall through to original chunk text on timeout with a debug log; never remove the candidate
-- [ ] 6.5 Skip chunks with fewer than `top_n + 1` sentences or no stored embedding without erroring
-- [ ] 6.6 Wire extractive rerank behind `rerank_extractive` config flag; integrate into `hybrid_search` and `progressive_retrieve` so the returned `snippet` reflects the selected span
-- [ ] 6.7 Confirm `Cargo.toml` runtime dependencies are unchanged after this section
-- [ ] 6.8 Write `tests/rerank_extractive.rs` covering: top-3 contiguous selection, single-sentence (`top_n=1`), short-chunk passthrough, missing-embedding passthrough, budget timeout fallback; tests run without opening a SQLite connection
+- [x] 6.1 Create `src/core/rerank.rs` with a public `extractive_rerank(chunk, query_vec, top_n, budget_ms)` entry point. Implemented with an injected `embed_sentence` closure as the 5th parameter so the module is DB- and model-free for unit testing; returns a `RerankOutcome` (`Selected` / `PassedThrough`).
+- [x] 6.2 Implement deterministic punctuation-based sentence segmentation (no new crates) — `segment_sentences` splits on `.`/`!`/`?` runs followed by whitespace/EOI, retaining terminal punctuation. (The repo's tokenizer does not expose sentence boundaries; a deterministic splitter is used.)
+- [x] 6.3 Implement contiguous-span selection by sentence-level cosine similarity to the query embedding; respect `rerank_extractive_top_n` (sliding-window max-sum, earliest-window tie-break for determinism).
+- [x] 6.4 Enforce per-chunk wall-clock budget; fall through to original chunk text on timeout with a debug log; never remove the candidate (debug log via `eprintln!` since the repo has no `log`/`tracing` dep; the candidate is never dropped).
+- [x] 6.5 Skip chunks with fewer than `top_n + 1` sentences or no stored embedding without erroring (passthrough).
+- [x] 6.6 Wire extractive rerank behind `rerank_extractive` config flag; integrate into `hybrid_search` so the returned preview (`SearchResult.summary`) reflects the selected span. *`SearchResult` has no `snippet` field — `summary` is the retrieval preview, so the span replaces `summary`. The pass is wired at the `hybrid_search` boundary that feeds `progressive_retrieve`'s initial set; the query string is not threaded into `progressive_retrieve` (its public signature is owned by other call sites and would break main.rs), and graph-expansion neighbours carry no query-relevance score, so they are out of scope for the snippet rewrite. Full no-op at the seeded `false` default.*
+- [x] 6.7 Confirm `Cargo.toml` runtime dependencies are unchanged after this section (verified: `git diff --stat Cargo.toml Cargo.lock` is empty).
+- [x] 6.8 Write `tests/rerank_extractive.rs` covering: top-3 contiguous selection, single-sentence (`top_n=1`), short-chunk passthrough, missing-embedding passthrough, budget timeout fallback; tests run without opening a SQLite connection
 
 ## 7. Determinism, MCP shape, and `progressive_retrieve` integration
 
-- [ ] 7.1 Add a determinism test that runs the same query twice against an unchanged DB and asserts element-for-element equality of `SearchResult` lists including `mmr_score`, `cross_ref_boost`, `dedup_collapsed_count`
-- [ ] 7.2 Update `memory_search` and `memory_query` MCP tool JSON schemas to include the new optional parameters and result fields; regenerate any generated docs
-- [ ] 7.3 Verify ordering of passes inside `progressive_retrieve` matches `hybrid_search` (dedup → boost → floor → MMR on initial set; dedup + floor only on expansion steps)
-- [ ] 7.4 Extend `tests/progressive_retrieve.rs` (or create one) covering all four signals applied in order and verifying below-floor candidates are not expanded
+- [x] 7.1 Add a determinism test that runs the same query twice against an unchanged DB and asserts element-for-element equality of `SearchResult` lists including `mmr_score`, `cross_ref_boost`, `dedup_collapsed_count` — `tests/search_determinism.rs` compares full serialized lists under non-identity config.
+- [x] 7.2 Update `memory_search` and `memory_query` MCP tool JSON schemas to include the new optional parameters and result fields; regenerate any generated docs — `mmr_lambda` param added to both `MemoryQueryInput`/`MemorySearchInput` (schemars derives the JSON schema); the result fields (`mmr_score`, `cross_ref_boost`, `dedup_collapsed_count`) were already on `SearchResult` from §1 and serialize automatically.
+- [x] 7.3 Verify ordering of passes inside `progressive_retrieve` matches `hybrid_search` (dedup → boost → floor → MMR on initial set; dedup + floor only on expansion steps) — initial set runs the full ordered pipeline; expansion steps unchanged (dedup + floor only).
+- [x] 7.4 Extend `tests/progressive_retrieve.rs` (or create one) covering all four signals applied in order and verifying below-floor candidates are not expanded — created `tests/progressive_retrieve.rs`.
 
 ## 8. Default-flip and benchmark gating
 

@@ -1,20 +1,14 @@
 # Canonical GitHub release asset contract for public Quaid releases.
 # Keep this manifest aligned with scripts/install.sh, .github/workflows/release.yml,
 # .github/RELEASE_CHECKLIST.md, and release-asset parity tests.
-quaid-darwin-arm64-airgapped
-quaid-darwin-arm64-airgapped.sha256
-quaid-darwin-arm64-online
-quaid-darwin-arm64-online.sha256
-quaid-darwin-x86_64-airgapped
-quaid-darwin-x86_64-airgapped.sha256
-quaid-darwin-x86_64-online
-quaid-darwin-x86_64-online.sha256
-quaid-linux-x86_64-airgapped
-quaid-linux-x86_64-airgapped.sha256
-quaid-linux-x86_64-online
-quaid-linux-x86_64-online.sha256
-quaid-linux-aarch64-airgapped
-quaid-linux-aarch64-airgapped.sha256
-quaid-linux-aarch64-online
-quaid-linux-aarch64-online.sha256
+# Single channel (qwen3-models-airgapped §5): one binary per platform that
+# provisions its model on first use — no -airgapped/-online suffix.
+quaid-darwin-arm64
+quaid-darwin-arm64.sha256
+quaid-darwin-x86_64
+quaid-darwin-x86_64.sha256
+quaid-linux-x86_64
+quaid-linux-x86_64.sha256
+quaid-linux-aarch64
+quaid-linux-aarch64.sha256
 install.sh

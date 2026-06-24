@@ -416,6 +416,8 @@ pub struct MemoryQueryInput {
     pub relevance_floor: Option<f64>,
     /// Maximum results retained per page (`0` = unlimited); absent reads `config.search.max_chunks_per_doc_default`
     pub max_chunks_per_doc: Option<u32>,
+    /// MMR diversity parameter (0.0-1.0); `1.0` disables diversity (pure relevance), `0.0` is pure diversity. Absent reads `config.search.mmr_lambda`
+    pub mmr_lambda: Option<f64>,
     /// Scrub machine-shaped secrets from the outbound payload. Omitted
     /// falls back to the `mcp.redact_outbound` config default.
     pub redact: Option<bool>,
@@ -440,6 +442,8 @@ pub struct MemorySearchInput {
     pub relevance_floor: Option<f64>,
     /// Maximum results retained per page (`0` = unlimited); absent reads `config.search.max_chunks_per_doc_default`
     pub max_chunks_per_doc: Option<u32>,
+    /// MMR diversity parameter (0.0-1.0); `1.0` disables diversity (pure relevance), `0.0` is pure diversity. Absent reads `config.search.mmr_lambda`. (FTS-only search has no vector arm, so MMR degrades to relevance ordering.)
+    pub mmr_lambda: Option<f64>,
     /// Scrub machine-shaped secrets from the outbound payload. Omitted
     /// falls back to the `mcp.redact_outbound` config default.
     pub redact: Option<bool>,
@@ -1412,6 +1416,7 @@ mod tests {
                 hops: None,
                 relevance_floor: None,
                 max_chunks_per_doc: None,
+                mmr_lambda: None,
                 redact: None,
             })
             .unwrap();

@@ -31,20 +31,21 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Embedding model alias or Hugging Face model ID
-    #[arg(long, env = "QUAID_MODEL", global = true, default_value = "small")]
+    /// Embedding model alias or Hugging Face model ID. Run `quaid model list`
+    /// to see the built-in aliases, their dimensions, and download sizes.
+    #[arg(long, env = "QUAID_MODEL", global = true, default_value = "qwen3-0.6b")]
     model: String,
 
-    /// Allow downloading a custom model that has no curated SHA-256 pin
-    /// (its files cannot be integrity-verified). Must be combined with
-    /// --model-revision; curated aliases never need it.
+    /// Allow downloading a custom extraction (SLM) model that has no curated
+    /// SHA-256 pin. Applies to `quaid model pull` and extraction; embedding
+    /// models download without a curated pin by default.
     #[arg(long, global = true)]
     allow_unverified_model: bool,
 
-    /// Explicit Hugging Face revision (commit SHA) to pin a custom model
-    /// download to. Required together with --allow-unverified-model for
-    /// custom model ids; Quaid never silently downloads the mutable
-    /// `main` revision.
+    /// Explicit Hugging Face revision (commit SHA) to pin a model download to.
+    /// Optional for embedding models (defaults to the model's `main`
+    /// revision); used with --allow-unverified-model for custom extraction
+    /// model ids.
     #[arg(long, global = true, value_name = "SHA")]
     model_revision: Option<String>,
 
@@ -108,6 +109,9 @@ enum Commands {
         /// Maximum results retained per page; `0` means unlimited. Overrides `config.search.max_chunks_per_doc_default`.
         #[arg(long)]
         max_chunks_per_doc: Option<usize>,
+        /// MMR diversity (0.0-1.0); `1.0` disables diversity (pure relevance), `0.0` is pure diversity. Overrides `config.search.mmr_lambda`.
+        #[arg(long, value_parser = parse_unit_interval)]
+        mmr_lambda: Option<f64>,
     },
     /// Semantic / hybrid query
     Query {
@@ -134,6 +138,9 @@ enum Commands {
         /// Maximum results retained per page; `0` means unlimited. Overrides `config.search.max_chunks_per_doc_default`.
         #[arg(long)]
         max_chunks_per_doc: Option<usize>,
+        /// MMR diversity (0.0-1.0); `1.0` disables diversity (pure relevance), `0.0` is pure diversity. Overrides `config.search.mmr_lambda`.
+        #[arg(long, value_parser = parse_unit_interval)]
+        mmr_lambda: Option<f64>,
     },
     /// Ingest a source document
     Ingest {
@@ -455,7 +462,6 @@ fn validate_flags_from_args(
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     core::inference::configure_model_download_policy(core::inference::ModelDownloadPolicy {
-        allow_unverified: cli.allow_unverified_model,
         revision: cli.model_revision.clone(),
     });
     let requested_model =
@@ -469,6 +475,7 @@ async fn main() -> Result<()> {
         EarlyCommand::Model(action) => {
             return commands::model::run(
                 action,
+                cli.json,
                 cli.allow_unverified_model,
                 cli.model_revision.as_deref(),
             )
@@ -532,6 +539,7 @@ async fn main() -> Result<()> {
             hops,
             relevance_floor,
             max_chunks_per_doc,
+            mmr_lambda,
         } => commands::search::run(
             &db,
             &query,
@@ -544,6 +552,7 @@ async fn main() -> Result<()> {
             hops,
             relevance_floor,
             max_chunks_per_doc,
+            mmr_lambda,
         ),
         Commands::Query {
             query,
@@ -556,6 +565,7 @@ async fn main() -> Result<()> {
             hops,
             relevance_floor,
             max_chunks_per_doc,
+            mmr_lambda,
         } => {
             commands::query::run(
                 &db,
@@ -570,6 +580,7 @@ async fn main() -> Result<()> {
                 hops,
                 relevance_floor,
                 max_chunks_per_doc,
+                mmr_lambda,
             )
             .await
         }

@@ -44,14 +44,122 @@ pub enum ModelAction {
         #[arg(long)]
         force: bool,
     },
+    /// List the built-in embedding model aliases, dimensions, and sizes
+    List,
+}
+
+/// A built-in embedding model alias shown by `quaid model list`.
+///
+/// `size_mb` is the approximate `model.safetensors` download size in MiB; it is
+/// purely informational (Quaid no longer pins or verifies file hashes).
+struct KnownModel {
+    alias: &'static str,
+    model_id: &'static str,
+    dim: usize,
+    size_mb: u32,
+    notes: &'static str,
+}
+
+/// Static table of built-in embedding aliases. Arbitrary Hugging Face
+/// `owner/repo` ids are also accepted; their dimension is detected on first
+/// use and so they are not listed here.
+const KNOWN_MODELS: &[KnownModel] = &[
+    KnownModel {
+        alias: "qwen3-0.6b",
+        model_id: "Qwen/Qwen3-Embedding-0.6B",
+        dim: 1024,
+        size_mb: 1200,
+        notes: "default; last-token pooling, instruction-aware queries",
+    },
+    KnownModel {
+        alias: "small",
+        model_id: "BAAI/bge-small-en-v1.5",
+        dim: 384,
+        size_mb: 130,
+        notes: "compact English BGE model",
+    },
+    KnownModel {
+        alias: "base",
+        model_id: "BAAI/bge-base-en-v1.5",
+        dim: 768,
+        size_mb: 440,
+        notes: "balanced English model",
+    },
+    KnownModel {
+        alias: "medium",
+        model_id: "BAAI/bge-base-en-v1.5",
+        dim: 768,
+        size_mb: 440,
+        notes: "alias for base",
+    },
+    KnownModel {
+        alias: "large",
+        model_id: "BAAI/bge-large-en-v1.5",
+        dim: 1024,
+        size_mb: 1340,
+        notes: "highest-quality English model",
+    },
+    KnownModel {
+        alias: "m3",
+        model_id: "BAAI/bge-m3",
+        dim: 1024,
+        size_mb: 2270,
+        notes: "multilingual",
+    },
+    KnownModel {
+        alias: "max",
+        model_id: "BAAI/bge-m3",
+        dim: 1024,
+        size_mb: 2270,
+        notes: "alias for m3",
+    },
+];
+
+/// Prints the built-in embedding aliases as a text table, or a JSON array when
+/// `json` is set (the global `--json` flag). No network access is performed.
+fn list(json: bool) -> Result<()> {
+    if json {
+        let rows: Vec<serde_json::Value> = KNOWN_MODELS
+            .iter()
+            .map(|model| {
+                serde_json::json!({
+                    "alias": model.alias,
+                    "model_id": model.model_id,
+                    "dim": model.dim,
+                    "size_mb": model.size_mb,
+                    "notes": model.notes,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+
+    println!(
+        "{:<8} {:<26} {:>5} {:>8}  Notes",
+        "Alias", "Hugging Face ID", "Dim", "Size"
+    );
+    for model in KNOWN_MODELS {
+        println!(
+            "{:<8} {:<26} {:>5} {:>5} MB  {}",
+            model.alias, model.model_id, model.dim, model.size_mb, model.notes
+        );
+    }
+    println!(
+        "\nAny other Hugging Face `owner/repo` id is also accepted; its embedding \
+         dimension is detected on first use."
+    );
+    Ok(())
 }
 
 pub fn run(
     action: ModelAction,
+    json: bool,
     allow_unverified_model: bool,
     model_revision: Option<&str>,
 ) -> Result<()> {
     match action {
+        ModelAction::List => list(json),
         ModelAction::Pull { alias } => {
             let cache_dir = pull(&alias, allow_unverified_model, model_revision)?;
             println!("Model cached at {}", cache_dir.display());
@@ -457,6 +565,7 @@ mod tests {
                 verify: false,
             },
             false,
+            false,
             None,
         )
         .expect("status should inspect local cache only");
@@ -485,6 +594,7 @@ mod tests {
                         alias: "phi-3.5-mini".to_owned(),
                     },
                     false,
+                    false,
                     None,
                 )
             })
@@ -497,6 +607,7 @@ mod tests {
                 verbose: false,
                 verify: true,
             },
+            false,
             false,
             None,
         )
@@ -518,6 +629,7 @@ mod tests {
                 all: false,
                 force: true,
             },
+            false,
             false,
             None,
         )

@@ -570,7 +570,7 @@ fn worker_infer_window_uses_default_model_alias_and_token_budget() {
 
     let calls = probe.recorded_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].alias, "phi-3.5-mini");
+    assert_eq!(calls[0].alias, "qwen3-4b-2507");
     assert_eq!(calls[0].max_tokens, DEFAULT_EXTRACTION_MAX_TOKENS);
     assert!(calls[0].prompt.contains("Session: session-42"));
 }

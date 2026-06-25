@@ -141,7 +141,7 @@ fn process_job_should_advance_cursor_and_infer_once_per_window_on_success() {
 
     let calls = probe.recorded_calls();
     assert_eq!(calls.len(), 3);
-    assert_eq!(calls[0].alias, "phi-3.5-mini");
+    assert_eq!(calls[0].alias, "qwen3-4b-2507");
     assert_eq!(calls[0].max_tokens, 128);
     assert!(calls[0]
         .prompt

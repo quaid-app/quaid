@@ -47,7 +47,11 @@ pub const DEFAULT_WORKER_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub const DEFAULT_SLM_IDLE_UNLOAD_TTL: Duration = Duration::from_secs(300);
 
 const DEFAULT_WINDOW_TURNS: usize = 5;
-const DEFAULT_MODEL_ALIAS: &str = "phi-3.5-mini";
+// Fallback used only when a DB predates the `extraction.model_alias` seed; fresh
+// DBs are seeded with this same value in `schema.sql`. The default extractor is
+// the in-process Qwen3-4B-Instruct-2507 q4_K_M GGUF (qwen3-models-airgapped
+// §3.8); `phi-3.5-mini` remains a selectable alias for existing DBs.
+const DEFAULT_MODEL_ALIAS: &str = "qwen3-4b-2507";
 const MAX_RECORDED_PARSE_OUTPUT: usize = 240;
 const EXTRACTION_SYSTEM_PROMPT: &str = concat!(
     "You extract durable facts from conversations. Output JSON only — no prose,\n",

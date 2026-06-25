@@ -137,7 +137,7 @@ fn fresh_v10_schema_includes_conversation_memory_artifacts_and_defaults() {
             ("extraction.max_retries".to_string(), "3".to_string()),
             (
                 "extraction.model_alias".to_string(),
-                "phi-3.5-mini".to_string()
+                "qwen3-4b-2507".to_string()
             ),
             ("extraction.retention_days".to_string(), "30".to_string()),
             ("extraction.window_turns".to_string(), "5".to_string()),

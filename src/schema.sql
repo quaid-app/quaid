@@ -476,7 +476,7 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('corrections.history_on_disk', 'false'),
     ('extraction.max_retries', '3'),
     ('extraction.enabled', 'false'),
-    ('extraction.model_alias', 'phi-3.5-mini'),
+    ('extraction.model_alias', 'qwen3-4b-2507'),
     ('extraction.window_turns', '5'),
     ('extraction.debounce_ms', '5000'),
     ('extraction.idle_close_ms', '60000'),

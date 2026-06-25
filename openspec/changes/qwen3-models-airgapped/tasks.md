@@ -2,9 +2,12 @@
 > is APPLIED and verified to the extent this environment allows:
 > candle `0.8 → 0.10.2`; Qwen3-Embedding-0.6B is the default embedder (1024d,
 > last-token pooling, instruction queries); an in-process GGUF Qwen3 SLM runner
-> is wired (opt-in by cached `.gguf`); the `embedded-model`/`online-model`
-> channel split is collapsed to one provision-on-first-use binary; defaults +
-> CI + installer + npm + release manifest are updated to the single channel.
+> is wired and `qwen3-4b-2507` (Qwen3-4B-Instruct-2507 q4_K_M) is now the
+> **default extractor**, auto-provisioned via a curated multi-source download
+> (weights from the unsloth GGUF repo, tokenizer from the base repo, each pinned
+> by commit SHA); the `embedded-model`/`online-model` channel split is collapsed
+> to one provision-on-first-use binary; defaults + CI + installer + npm + release
+> manifest are updated to the single channel.
 > **Verification:** `cargo clippy --all-targets --all-features -- -D warnings`
 > clean; 937 lib + 1934 integration tests pass under
 > `QUAID_FORCE_HASH_SHIM=1 cargo test --features test-harness` (5 concurrency
@@ -12,9 +15,10 @@
 > CI's nextest retry policy absorbs them); the three release-parity shell tests
 > pass. **What remains is genuinely environment-gated:** the §7 acceptance
 > gates require running the 1.2 GB embedder / 2.5 GB GGUF extractor; §1.4 needs
-> the four cross-compile toolchains; the GGUF *extractor* default (§3.8/§4.1)
-> needs a pinned GGUF repo+digest (a design Open Question) and a live download
-> to validate. These are annotated per task below.
+> the four cross-compile toolchains. The GGUF *extractor* default (§3.8/§4.1) is
+> now wired, pinned by commit SHA, and flipped on — the design's Open Question on
+> the curated extractor source is resolved — so only executing the real model
+> (§7) is left for it. These are annotated per task below.
 
 ## 1. Dependency bump (candle 0.8.4 → ≥0.9.2)
 
@@ -38,7 +42,7 @@
 - [x] 2.2 last-token pooling + L2 normalization — *`embed_candle_qwen3`: `forward`→`narrow(1, seq-1, 1)`→squeeze→`normalize()` (reuses the existing L2 helper).*
 - [x] 2.3 instruction-aware query format — *`QWEN3_QUERY_INSTRUCTION` (`Instruct: …\nQuery: …`) applied in `embed_query` only for the Qwen3 backend; passages/symmetric stay un-prefixed; BGE prefix path intact.*
 - [x] 2.4 `qwen3-0.6b` alias → `Qwen/Qwen3-Embedding-0.6B`, 1024d — *added to `resolve_model` + `resolve_known_embedding_model`. Making it the **default** is the breaking flip in §6 (see §6).* 
-- [ ] 2.5 Bump `EMBEDDER_VERSION` — *deferred: tie to the §6 default flip so existing users re-embed exactly once when the model actually changes, not before.*
+- [x] 2.5 Bump `EMBEDDER_VERSION` — *done with the §6.1 default flip: `inference.rs::EMBEDDER_VERSION` is `3` (was `2`), so existing caches re-embed exactly once now that the default model actually changed to Qwen3-Embedding-0.6B.*
 - [ ] 2.6 Verify 1024d, normalized, query/passage asymmetry — *RUNTIME GATE: requires the 1.2 GB Qwen3-Embedding model (cannot run here).*
 
 ## 3. Extraction runtime → in-process Qwen3-4B GGUF  — IMPLEMENTED (compile-verified), provisioning + default flip pending
@@ -53,9 +57,9 @@
 - [x] 3.3 EOS from GGUF metadata (`tokenizer.ggml.eos_token_id`) + `<|im_end|>` via the tokenizer — *`collect_eos_token_ids`. Tokenizer loaded from a sibling `tokenizer.json` (candle has no GGUF→`Tokenizer` helper; reconstructing from GGUF metadata is a follow-up).* 
 - [x] 3.4 `n_ctx` capped to 8K — *`QWEN3_MAX_CONTEXT`; prompt is left-truncated and generation is bounded to the cap.*
 - [x] 3.5 Reuse best-effort JSON path unchanged — *`SlmGgufRunner` returns raw text into the existing `parse_response` + recovery; no grammar.*
-- [~] 3.6 Repoint the phi3-only `model_type` gate — *the phi3 `model_type` gate now governs only the Phi-3 path (`load_runner` routes `.gguf` to the GGUF runner before it); the model_lifecycle runner-supported-alias guard for a new GGUF alias lands with 3.8.*
+- [x] 3.6 Repoint the phi3-only `model_type` gate — *the phi3 `model_type` gate governs only the Phi-3 path (`load_runner` routes `.gguf` to the GGUF runner before it); the model_lifecycle runner-supported guard now admits `qwen3-4b-2507` (GGUF) while still rejecting the gemma safetensors aliases, and its message advertises both Phi-3 and Qwen3 GGUF support.*
 - [x] 3.7 Wire runner selection — *done at `LazySlmRunner::load_runner` (the single load point all `SlmClient` consumers funnel through), so `server.rs`/`vault_sync` need no change.*
-- [ ] 3.8 Add the default extraction alias `qwen3-4b-2507` (q4_K_M GGUF) + pin repo/digest — *needs the model_lifecycle alias-table + single-`.gguf` download (§4.1); runtime/network-gated.*
+- [x] 3.8 Add the default extraction alias `qwen3-4b-2507` (q4_K_M GGUF) + pin repo/source — *`resolve_model_alias` maps `qwen3-4b-2507` → `unsloth/Qwen3-4B-Instruct-2507-GGUF`; it is now the default in `extractor.rs::DEFAULT_MODEL_ALIAS` and the `schema.sql` `extraction.model_alias` seed (`phi-3.5-mini` stays a selectable alias for pre-existing DBs). Pinned by **immutable commit SHA** rather than a hardcoded per-file digest — consistent with the embedding-model de-pinning decision (digests rot on HF repo reorganisations; CLAUDE.md). Real q4_K_M decode is §7.1-gated.*
 
 > **Verification:** `cargo check` green on default + `online-model`; the full
 > SLM suite (`slm` lib 11/11, `slm_runtime` 20/20, `slm_parse_response` 20/20)
@@ -63,8 +67,8 @@
 
 ## 4. Model provisioning + airgapped redefinition
 
-- [~] 4.1 Single-`.gguf` download in `model_lifecycle.rs` — *the GGUF *runner* (`slm_gguf.rs`) loads a single `.gguf` from cache (§3); the curated single-`.gguf` *download* path needs a pinned GGUF repo+digest (the design's Open Question — TBD), so it is not wired. The embedder (safetensors) provisions through the existing download path unchanged.*
-- [x] 4.2 Auto-provision-on-first-use — *the embedder (`Qwen/Qwen3-Embedding-0.6B`) provisions on first semantic op via the retained `load_online_backend` → `download_model_files` path. Extractor GGUF auto-provision is gated on 4.1's digest.*
+- [x] 4.1 Single-`.gguf` download in `model_lifecycle.rs` — *wired as a curated **multi-source** GGUF install: `gguf_sources_for_alias` + `install_gguf_model_into_dir` fetch exactly the q4_K_M `.gguf` from the unsloth GGUF repo and the sibling `tokenizer.json` from the base `Qwen/Qwen3-4B-Instruct-2507` repo (the GGUF runner needs the HF tokenizer; the unsloth repo ships none). Each file pins its own immutable commit SHA via the new `download_repo_file` primitive (refactored out of `download_artifact`), header-verified and recorded in the manifest. Resolves the design's Open Question (curated extractor source) without a rot-prone hardcoded digest. Real 2.5 GB download is §7.4-gated.*
+- [x] 4.2 Auto-provision-on-first-use — *the embedder (`Qwen/Qwen3-Embedding-0.6B`) provisions on first semantic op via the retained `load_online_backend` → `download_model_files` path; the extractor GGUF now auto-provisions through the §4.1 multi-source curated path on first extraction (or `quaid model pull qwen3-4b-2507`).*
 - [x] 4.3 "Daemon never silently downloads mid-request" — *preserved: provisioning is user-triggered (`extraction enable` / first-use); `memory_add_turn` etc. load from cache via `LazySlmRunner` and never fetch.*
 - [x] 4.4 Offline-without-cache fails actionably — *embedding falls back to the hash shim with a warning naming the model + rebuild guidance; the explicit `quaid model pull` actionable error remains.*
 - [x] 4.5 `QUAID_MODEL` / extraction-alias overrides still resolve, provision, load — *embedding override resolves + downloads via `resolve_model`; extraction-alias override selects Phi-3 or the GGUF runner via `load_runner`.*
@@ -84,10 +88,10 @@
 
 ## 7. Smoke test + benchmark (gates) — environment-gated, cannot run here
 
-- [ ] 7.1 GGUF smoke test (load real `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` → parseable JSON) — *RUNTIME GATE: needs the 2.5 GB model + execution + a pinned repo/digest (4.1). Run in the weekly real-model CI workflow.*
+- [ ] 7.1 GGUF smoke test (load real `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` → parseable JSON) — *RUNTIME GATE: the curated alias + multi-source download are now wired (§3.8/§4.1); only executing the real 2.5 GB model remains. Run in the weekly real-model CI workflow.*
 - [ ] 7.2 Benchmark decode throughput — *RUNTIME GATE.*
 - [ ] 7.3 Verify daemon RSS ~2.5–3 GB — *RUNTIME GATE.*
-- [ ] 7.4 Airgap test: zero network after one-time provision — *gated on 4.1 (extractor) + a live download.*
+- [ ] 7.4 Airgap test: zero network after one-time provision — *RUNTIME GATE: extractor provisioning is wired (§4.1); needs one live multi-GB download then a network-severed run to validate.*
 
 ## 8. Documentation
 

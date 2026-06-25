@@ -3,9 +3,12 @@
 //! HuggingFace with per-file integrity verification. The cache stores a
 //! `manifest.json` describing every fetched artifact's SHA-256 so the
 //! runtime can fail closed when files are missing, partial, or corrupt.
-//! Curated aliases (`phi-3.5-mini`, `gemma-3-1b`, `gemma-3-4b`) are
-//! source-pinned against published digests; arbitrary `<org>/<model>`
-//! repo ids fall back to header-supplied hashes when available.
+//! Safetensors curated aliases (`phi-3.5-mini`, `gemma-3-1b`, `gemma-3-4b`)
+//! are source-pinned against published digests; the GGUF default
+//! (`qwen3-4b-2507`) is a multi-source alias pinned by immutable commit SHA
+//! (weights from the unsloth GGUF repo, tokenizer from the base model repo);
+//! arbitrary `<org>/<model>` repo ids fall back to header-supplied hashes when
+//! available.
 //!
 //! See also: `super::slm` for the SLM runner that consumes the cached
 //! files, `super::extractor` for the worker that loads a model on first
@@ -42,6 +45,60 @@ const DEFAULT_STALE_DOWNLOAD_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const PHI_35_MINI_REVISION: &str = "2fe192450127e6a83f7441aef6e3ca586c338b77";
 const GEMMA_3_1B_REVISION: &str = "dcc83ea841ab6100d6b47a070329e1ba4cf78752";
 const GEMMA_3_4B_REVISION: &str = "093f9f388b31de276ce2de164bdc2081324b9767";
+
+// Curated default GGUF extraction model (Qwen3-4B-Instruct-2507, q4_K_M). Unlike
+// the Phi-3/Gemma safetensors aliases this one is a *multi-source* alias: the
+// quant weights come from the unsloth GGUF repo (which ships only `.gguf`
+// files), while the HF `tokenizer.json` the GGUF runner needs as a sibling
+// comes from the base model repo. Each source pins an immutable commit SHA, so
+// reproducibility holds without hardcoding per-file digests (which rotted on HF
+// repo reorganisations — see the embedding-model note in CLAUDE.md). The GGUF
+// repo's revision is the alias's primary `revision`; the tokenizer source pins
+// its own below.
+const QWEN3_4B_2507_GGUF_REVISION: &str = "a06e946bb6b655725eafa393f4a9745d460374c9";
+#[cfg(feature = "online-model")]
+const QWEN3_4B_2507_TOKENIZER_REVISION: &str = "cdbee75f17c01a7cc42f958dc650907174af0554";
+#[cfg(feature = "online-model")]
+const QWEN3_4B_2507_GGUF_REPO: &str = "unsloth/Qwen3-4B-Instruct-2507-GGUF";
+#[cfg(feature = "online-model")]
+const QWEN3_4B_2507_GGUF_FILE: &str = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
+#[cfg(feature = "online-model")]
+const QWEN3_4B_2507_TOKENIZER_REPO: &str = "Qwen/Qwen3-4B-Instruct-2507";
+
+/// One file fetched for a curated GGUF extraction alias, pinning its own source
+/// repo and immutable commit revision. GGUF weights and the HF tokenizer
+/// usually live in different repos, so each file carries its own source rather
+/// than sharing the alias's single repo/revision.
+#[cfg(feature = "online-model")]
+#[derive(Debug, Clone, Copy)]
+struct GgufSourceFile {
+    /// HuggingFace repo id to fetch this file from.
+    repo_id: &'static str,
+    /// Immutable commit SHA pinned for reproducibility.
+    revision: &'static str,
+    /// Path within `repo_id`, reused as the destination filename in the cache.
+    path: &'static str,
+}
+
+/// Files that make up the curated `qwen3-4b-2507` extraction cache: the q4_K_M
+/// GGUF weights from unsloth plus the base-model `tokenizer.json` (the GGUF
+/// runner loads the HF tokenizer from a sibling file, and the unsloth GGUF repo
+/// ships none). config.json/generation_config.json are intentionally omitted:
+/// `slm_gguf` reads the architecture from the GGUF's `general.architecture`
+/// metadata and the EOS ids from `tokenizer.ggml.eos_token_id` + `<|im_end|>`.
+#[cfg(feature = "online-model")]
+const QWEN3_4B_2507_FILES: &[GgufSourceFile] = &[
+    GgufSourceFile {
+        repo_id: QWEN3_4B_2507_GGUF_REPO,
+        revision: QWEN3_4B_2507_GGUF_REVISION,
+        path: QWEN3_4B_2507_GGUF_FILE,
+    },
+    GgufSourceFile {
+        repo_id: QWEN3_4B_2507_TOKENIZER_REPO,
+        revision: QWEN3_4B_2507_TOKENIZER_REVISION,
+        path: "tokenizer.json",
+    },
+];
 
 // Test-only curated alias. Uses mixed SHA-256 / git-blob-SHA1 pins that match the
 // fixture content in `mock_files(false)` inside tests/model_lifecycle.rs.
@@ -789,6 +846,10 @@ pub fn resolve_model_alias(alias: &str) -> Result<ResolvedModelAlias, ModelLifec
             "google/gemma-3-4b-it".to_owned(),
             Some(GEMMA_3_4B_REVISION.to_owned()),
         ),
+        "qwen3-4b-2507" => (
+            "unsloth/Qwen3-4B-Instruct-2507-GGUF".to_owned(),
+            Some(QWEN3_4B_2507_GGUF_REVISION.to_owned()),
+        ),
         #[cfg(any(test, feature = "test-harness"))]
         TEST_PINNED_ALIAS => (
             "test-org/test-pinned-model".to_owned(),
@@ -836,7 +897,8 @@ fn ensure_alias_supported_by_runner(
         return Err(ModelLifecycleError::UnsupportedByRunner {
             alias: resolved.requested_alias.clone(),
             message:
-                "the local extraction runner only loads Phi-3 models; use `phi-3.5-mini` instead"
+                "the local extraction runner loads Phi-3 (safetensors) and Qwen3 (GGUF) models; \
+                 use `qwen3-4b-2507` (the default) or `phi-3.5-mini` instead"
                     .to_owned(),
         });
     }
@@ -1620,21 +1682,27 @@ fn download_model_online(
             message: format!("build HTTP client: {error}"),
         })?;
 
-    let metadata = source_pins_for_alias(&alias)
-        .is_none()
+    // Curated GGUF aliases and source-pinned safetensors aliases both know
+    // their exact file list up front; only raw repo ids need a metadata fetch
+    // to enumerate siblings.
+    let gguf_sources = gguf_sources_for_alias(&alias);
+    let needs_metadata = gguf_sources.is_none() && source_pins_for_alias(&alias).is_none();
+    let metadata = needs_metadata
         .then(|| fetch_model_metadata(&client, &alias))
         .transpose()?;
-    let planned_file_count = source_pins_for_alias(&alias)
-        .map(|files| files.len())
-        .unwrap_or_else(|| {
-            metadata
-                .as_ref()
-                .map(|metadata| select_files_to_download(metadata, &alias).map(|files| files.len()))
-                .transpose()
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-        });
+    let planned_file_count = if let Some(files) = gguf_sources {
+        files.len()
+    } else if let Some(files) = source_pins_for_alias(&alias) {
+        files.len()
+    } else {
+        metadata
+            .as_ref()
+            .map(|metadata| select_files_to_download(metadata, &alias).map(|files| files.len()))
+            .transpose()
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    };
     progress.planned(&alias, planned_file_count);
 
     let temp_dir = cache_root.join(format!(
@@ -1650,23 +1718,28 @@ fn download_model_online(
     let mut temp_guard = TempDirCleanupGuard::new(temp_dir);
     touch_download_heartbeat(temp_guard.path());
 
-    let install_result = match source_pins_for_alias(&alias) {
-        Some(files) => install_source_pinned_model_into_dir(
-            &client,
-            &alias,
-            files,
-            temp_guard.path(),
-            progress,
-        ),
-        None => {
-            let Some(metadata) = metadata.as_ref() else {
-                return Err(ModelLifecycleError::Metadata {
-                    alias: alias.requested_alias.clone(),
-                    message: "download metadata was not fetched for an unpinned alias".to_owned(),
-                });
-            };
-            let files = select_files_to_download(metadata, &alias)?;
-            install_model_into_dir(&client, &alias, &files, temp_guard.path(), progress)
+    let install_result = if let Some(sources) = gguf_sources {
+        install_gguf_model_into_dir(&client, &alias, sources, temp_guard.path(), progress)
+    } else {
+        match source_pins_for_alias(&alias) {
+            Some(files) => install_source_pinned_model_into_dir(
+                &client,
+                &alias,
+                files,
+                temp_guard.path(),
+                progress,
+            ),
+            None => {
+                let Some(metadata) = metadata.as_ref() else {
+                    return Err(ModelLifecycleError::Metadata {
+                        alias: alias.requested_alias.clone(),
+                        message: "download metadata was not fetched for an unpinned alias"
+                            .to_owned(),
+                    });
+                };
+                let files = select_files_to_download(metadata, &alias)?;
+                install_model_into_dir(&client, &alias, &files, temp_guard.path(), progress)
+            }
         }
     };
     install_result?;
@@ -1752,6 +1825,49 @@ fn install_source_pinned_model_into_dir(
     Ok(())
 }
 
+/// Install a curated multi-source GGUF alias: download each [`GgufSourceFile`]
+/// from its own commit-pinned repo (weights and tokenizer typically live in
+/// different repos), header-verify it, and record the result under the alias's
+/// primary repo/revision in the manifest. Files are verified by the SHA-256
+/// computed during download rather than a hardcoded source pin, so the cache is
+/// still tamper-evident on every subsequent open.
+#[cfg(feature = "online-model")]
+fn install_gguf_model_into_dir(
+    client: &reqwest::blocking::Client,
+    alias: &ResolvedModelAlias,
+    sources: &[GgufSourceFile],
+    temp_dir: &Path,
+    progress: &mut impl ProgressReporter,
+) -> Result<(), ModelLifecycleError> {
+    let mut manifest_files = Vec::with_capacity(sources.len());
+
+    for source in sources {
+        let artifact = download_repo_file(
+            client,
+            alias,
+            source.repo_id,
+            source.revision,
+            source.path,
+            temp_dir,
+            progress,
+        )?;
+        manifest_files.push(cached_file_from_artifact(temp_dir, artifact, alias)?);
+    }
+
+    manifest_files.sort_by(|left, right| left.path.cmp(&right.path));
+    let manifest = CacheManifest {
+        manifest_version: Some(MANIFEST_VERSION),
+        requested_alias: alias.requested_alias.clone(),
+        repo_id: alias.repo_id.clone(),
+        revision: alias.revision.clone(),
+        created_at_unix: Some(download_timestamp_secs()),
+        files: manifest_files,
+    };
+    write_manifest(temp_dir, &manifest, alias)?;
+    verify_cache_manifest_full(temp_dir, alias)?;
+    Ok(())
+}
+
 #[cfg(feature = "online-model")]
 fn cached_file_from_artifact(
     cache_dir: &Path,
@@ -1788,6 +1904,39 @@ fn download_artifact(
     temp_dir: &Path,
     progress: &mut impl ProgressReporter,
 ) -> Result<DownloadedArtifact, ModelLifecycleError> {
+    let revision =
+        alias
+            .revision
+            .as_deref()
+            .ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
+                alias: alias.requested_alias.clone(),
+            })?;
+    download_repo_file(
+        client,
+        alias,
+        &alias.repo_id,
+        revision,
+        relative_path,
+        temp_dir,
+        progress,
+    )
+}
+
+/// Download `relative_path` from `repo_id` at the pinned `revision`, streaming
+/// it into `temp_dir` while computing its SHA-256 and header-verifying the
+/// digest when HuggingFace supplies one. `alias` is used only for cache-key
+/// context and error messages, so multi-source GGUF aliases can fetch a file
+/// from a repo other than `alias.repo_id`.
+#[cfg(feature = "online-model")]
+fn download_repo_file(
+    client: &reqwest::blocking::Client,
+    alias: &ResolvedModelAlias,
+    repo_id: &str,
+    revision: &str,
+    relative_path: &str,
+    temp_dir: &Path,
+    progress: &mut impl ProgressReporter,
+) -> Result<DownloadedArtifact, ModelLifecycleError> {
     let relative_path = normalize_relative_path(relative_path).map_err(|message| {
         ModelLifecycleError::Metadata {
             alias: alias.requested_alias.clone(),
@@ -1805,13 +1954,8 @@ fn download_artifact(
     let url = format!(
         "{}/{}/resolve/{}/{}",
         huggingface_base_url().trim_end_matches('/'),
-        alias.repo_id,
-        alias
-            .revision
-            .as_deref()
-            .ok_or_else(|| ModelLifecycleError::UnpinnedModelRefused {
-                alias: alias.requested_alias.clone(),
-            })?,
+        repo_id,
+        revision,
         relative_path
     );
     let mut response = client
@@ -2093,6 +2237,18 @@ fn source_pins_for_alias(alias: &ResolvedModelAlias) -> Option<&'static [SourceP
         "gemma-3-4b" => Some(GEMMA_3_4B_FILES),
         #[cfg(any(test, feature = "test-harness"))]
         TEST_PINNED_ALIAS => Some(TEST_CURATED_FILES),
+        _ => None,
+    }
+}
+
+/// Curated GGUF aliases that fetch a single quant `.gguf` plus a sibling
+/// tokenizer from (possibly different) commit-pinned repos. Returns `None` for
+/// safetensors/source-pinned aliases and raw repo ids, which take the existing
+/// download paths.
+#[cfg(feature = "online-model")]
+fn gguf_sources_for_alias(alias: &ResolvedModelAlias) -> Option<&'static [GgufSourceFile]> {
+    match alias.requested_alias.to_ascii_lowercase().as_str() {
+        "qwen3-4b-2507" => Some(QWEN3_4B_2507_FILES),
         _ => None,
     }
 }
